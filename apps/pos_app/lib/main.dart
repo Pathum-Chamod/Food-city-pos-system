@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/database_helper.dart';
+import 'services/sync_service.dart';
 import 'providers/cart_provider.dart';
 import 'screens/pos_screen.dart';
 
@@ -11,6 +12,9 @@ void main() async {
   // Initialize the local SQLite DB and inject mock data
   await DatabaseHelper.instance.database;
   await DatabaseHelper.instance.insertMockDataIfEmpty();
+
+  // Start the background sync worker (checks every 30 seconds)
+  SyncService().startSyncWorker();
 
   runApp(
     MultiProvider(
