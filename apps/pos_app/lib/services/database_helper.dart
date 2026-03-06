@@ -1,5 +1,6 @@
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart';
+import 'package:shared/models/product.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -62,5 +63,29 @@ class DatabaseHelper {
         created_at TEXT NOT NULL
       )
     ''');
+  }
+
+  Future<void> insertMockDataIfEmpty() async {
+    final db = await database;
+    final List<Map<String, dynamic>> existing = await db.rawQuery('SELECT COUNT(*) as count FROM products');
+    final count = existing.first['count'] as int;
+    
+    if (count == 0) {
+      final mockProducts = [
+        {'barcode': '4791044000123', 'name': 'Munchee Super Cream Cracker 500g', 'price': 450.0, 'stock': 100, 'updated_at': DateTime.now().toIso8601String()},
+        {'barcode': '4792011001234', 'name': 'Anchor Milk Powder 400g', 'price': 1100.0, 'stock': 50, 'updated_at': DateTime.now().toIso8601String()},
+        {'barcode': '4792022005678', 'name': 'Saman Halmassa 425g', 'price': 650.0, 'stock': 30, 'updated_at': DateTime.now().toIso8601String()},
+        {'barcode': '4793033009999', 'name': 'Kist Strawberry Jam 500g', 'price': 580.0, 'stock': 40, 'updated_at': DateTime.now().toIso8601String()},
+      ];
+      for (var p in mockProducts) {
+        await db.insert('products', p);
+      }
+    }
+  }
+
+  Future<List<Product>> getProducts() async {
+    final db = await database;
+    final maps = await db.query('products');
+    return maps.map((map) => Product.fromMap(map)).toList();
   }
 }
