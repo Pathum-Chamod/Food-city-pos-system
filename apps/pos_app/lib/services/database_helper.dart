@@ -137,4 +137,41 @@ class DatabaseHelper {
       return false; // Checkout failed
     }
   }
+
+  Future<bool> updateProductPriceLocal(String barcode, double newPrice) async {
+    final db = await database;
+    try {
+      await db.transaction((txn) async {
+        final now = DateTime.now().toIso8601String();
+
+        // 1. Update the price in the local database
+        await txn.update(
+          'products',
+          {'price': newPrice, 'updated_at': now},
+          where: 'barcode = ?',
+          whereArgs: [barcode],
+        );
+
+        // 2. Queue the update for the cloud (Spaceship API will read this later)
+        final syncData = jsonEncode({
+          'barcode': barcode,
+          'new_price': newPrice,
+          'updated_at': now,
+          'branch': 'Hikkaduwa',
+          'vendor': 'Alfasoft'
+        });
+
+        await txn.insert('sync_queue', {
+          'type': 'PRICE_UPDATE',
+          'data': syncData,
+          'status': 'pending',
+          'created_at': now,
+        });
+      });
+      return true;
+    } catch (e) {
+      debugPrint("Error updating price: $e");
+      return false;
+    }
+  }
 }

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
 import '../providers/cart_provider.dart';
 import '../services/database_helper.dart';
+import '../widgets/admin_dialogs.dart';
 
 class PosScreen extends StatefulWidget {
   const PosScreen({super.key});
@@ -57,6 +58,19 @@ class _PosScreenState extends State<PosScreen> {
                     child: InkWell(
                       onTap: () {
                         context.read<CartProvider>().addToCart(product);
+                      },
+                      onLongPress: () {
+                        // 1. Ask for Admin PIN
+                        AdminDialogs.showPinDialog(context, () {
+                          // 2. If PIN is correct, show Price Edit Dialog
+                          AdminDialogs.showEditPriceDialog(
+                            context, 
+                            product.barcode, 
+                            product.name, 
+                            product.price, 
+                            () => _loadProducts() // 3. Refresh grid after saving
+                          );
+                        });
                       },
                       child: Padding(
                         padding: const EdgeInsets.all(12.0),
