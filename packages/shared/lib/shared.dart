@@ -1,5 +1,3 @@
-/// A Calculator.
-class Calculator {
-  /// Returns [value] plus 1.
-  int addOne(int value) => value + 1;
-}
+// packages/shared/lib/shared.dart
+export 'models/product.dart';
+export 'models/sync_queue.dart';
