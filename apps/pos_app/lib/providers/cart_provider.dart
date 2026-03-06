@@ -33,4 +33,12 @@ class CartProvider with ChangeNotifier {
     _items.clear();
     notifyListeners();
   }
+
+  List<Map<String, dynamic>> getCartItemsAsMap() {
+    return _items.map((item) => {
+      'product': item.product.toMap(),
+      'quantity': item.quantity,
+      'line_total': item.total,
+    }).toList();
+  }
 }

@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart';
 import 'package:shared/models/product.dart';
@@ -87,5 +89,52 @@ class DatabaseHelper {
     final db = await database;
     final maps = await db.query('products');
     return maps.map((map) => Product.fromMap(map)).toList();
+  }
+
+  Future<bool> processSale(double totalAmount, List<Map<String, dynamic>> cartItems) async {
+    final db = await database;
+    
+    try {
+      // Run everything inside a transaction
+      await db.transaction((txn) async {
+        final now = DateTime.now().toIso8601String();
+
+        // 1. Record the sale locally
+        final saleId = await txn.insert('sales', {
+          'total_amount': totalAmount,
+          'created_at': now,
+        });
+
+        // 2. Deduct local stock so the cashier sees accurate numbers
+        for (var item in cartItems) {
+          await txn.rawUpdate(
+            'UPDATE products SET stock = stock - ? WHERE barcode = ?',
+            [item['quantity'], item['product']['barcode']]
+          );
+        }
+
+        // 3. Package the payload for the Cloud Sync Worker
+        // Adding Alfasoft and Hikkaduwa tags for branch tracking when this scales
+        final syncData = jsonEncode({
+          'local_sale_id': saleId,
+          'total_amount': totalAmount,
+          'branch': 'Hikkaduwa',
+          'vendor': 'Alfasoft',
+          'items': cartItems,
+        });
+
+        // 4. Drop it into the offline buffer
+        await txn.insert('sync_queue', {
+          'type': 'SALE',
+          'data': syncData,
+          'status': 'pending',
+          'created_at': now,
+        });
+      });
+      return true; // Checkout successful!
+    } catch (e) {
+      debugPrint("Checkout Database Error: $e");
+      return false; // Checkout failed
+    }
   }
 }

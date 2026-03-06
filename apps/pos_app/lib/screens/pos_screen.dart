@@ -45,7 +45,7 @@ class _PosScreenState extends State<PosScreen> {
               child: GridView.builder(
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 3,
-                  childAspectRatio: 3 / 2,
+                  childAspectRatio: 4 / 3,
                   crossAxisSpacing: 10,
                   mainAxisSpacing: 10,
                 ),
@@ -59,13 +59,15 @@ class _PosScreenState extends State<PosScreen> {
                         context.read<CartProvider>().addToCart(product);
                       },
                       child: Padding(
-                        padding: const EdgeInsets.all(8.0),
+                        padding: const EdgeInsets.all(12.0),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Flexible(child: Text(product.name, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold))),
-                            const SizedBox(height: 8),
-                            Text('Rs. ${product.price.toStringAsFixed(2)}', style: const TextStyle(color: Colors.green)),
+                            const SizedBox(height: 6),
+                            Text('Rs. ${product.price.toStringAsFixed(2)}', style: const TextStyle(color: Colors.green, fontSize: 15)),
+                            const SizedBox(height: 4),
+                            Text('Stock: ${product.stock}', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
                           ],
                         ),
                       ),
@@ -126,8 +128,43 @@ class _PosScreenState extends State<PosScreen> {
                               padding: const EdgeInsets.symmetric(vertical: 20),
                               backgroundColor: Colors.green,
                             ),
-                            onPressed: cart.items.isEmpty ? null : () {
-                              // Checkout logic will go here
+                            onPressed: cart.items.isEmpty ? null : () async {
+                              // 1. Grab the cart data
+                              final itemsMap = cart.getCartItemsAsMap();
+                              final total = cart.cartTotal;
+                              final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+                              // 2. Process the offline sale
+                              final success = await DatabaseHelper.instance.processSale(total, itemsMap);
+
+                              if (success) {
+                                // 3. Clear the cart UI
+                                cart.clearCart();
+
+                                // 4. Show a success receipt popup
+                                if (!context.mounted) return;
+                                showDialog(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    title: const Text('✅ Payment Successful'),
+                                    content: Text('Total Paid: Rs. ${total.toStringAsFixed(2)}\n\nSale saved locally and queued for cloud sync.'),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(context),
+                                        child: const Text('Next Customer'),
+                                      )
+                                    ],
+                                  ),
+                                );
+                                
+                                // Refresh the product grid to show new stock levels
+                                _loadProducts();
+                              } else {
+                                // Show an error if something broke
+                                scaffoldMessenger.showSnackBar(
+                                  const SnackBar(content: Text('Error processing checkout!'), backgroundColor: Colors.red),
+                                );
+                              }
                             },
                             child: const Text('PAY NOW', style: TextStyle(fontSize: 18, color: Colors.white)),
                           ),
