@@ -65,6 +65,16 @@ class DatabaseHelper {
         created_at TEXT NOT NULL
       )
     ''');
+
+    // 4. Users Table (Employees)
+    await db.execute('''
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        role TEXT NOT NULL,
+        pin TEXT UNIQUE NOT NULL
+      )
+    ''');
   }
 
   Future<void> insertMockDataIfEmpty() async {
@@ -81,6 +91,20 @@ class DatabaseHelper {
       ];
       for (var p in mockProducts) {
         await db.insert('products', p);
+      }
+    }
+
+    // Insert Mock Users if none exist
+    final List<Map<String, dynamic>> existingUsers = await db.rawQuery('SELECT COUNT(*) as count FROM users');
+    final userCount = existingUsers.first['count'] as int;
+
+    if (userCount == 0) {
+      final mockUsers = [
+        {'name': 'Pathum (Manager)', 'role': 'manager', 'pin': '1234'},
+        {'name': 'Amal (Cashier)', 'role': 'cashier', 'pin': '5555'},
+      ];
+      for (var u in mockUsers) {
+        await db.insert('users', u);
       }
     }
   }
@@ -173,5 +197,20 @@ class DatabaseHelper {
       debugPrint("Error updating price: $e");
       return false;
     }
+  }
+
+  Future<Map<String, dynamic>?> authenticateUser(String pin) async {
+    final db = await database;
+    final result = await db.query(
+      'users',
+      where: 'pin = ?',
+      whereArgs: [pin],
+      limit: 1,
+    );
+    
+    if (result.isNotEmpty) {
+      return result.first;
+    }
+    return null; // Wrong PIN
   }
 }

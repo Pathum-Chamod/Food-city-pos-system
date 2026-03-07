@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../providers/cart_provider.dart';
 import '../services/database_helper.dart';
 import '../widgets/admin_dialogs.dart';
@@ -32,8 +33,46 @@ class _PosScreenState extends State<PosScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Supermarket POS - Offline Mode'),
-        backgroundColor: Colors.blueAccent,
+        title: const Text('Supermarket POS'),
+        backgroundColor: Colors.blue[900],
+        foregroundColor: Colors.white,
+        actions: [
+          StreamBuilder<List<ConnectivityResult>>(
+            // Listens to network changes in real-time
+            stream: Connectivity().onConnectivityChanged,
+            builder: (context, snapshot) {
+              final isOffline = snapshot.data?.contains(ConnectivityResult.none) ?? false;
+              
+              return Container(
+                margin: const EdgeInsets.only(right: 16, top: 12, bottom: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: isOffline ? Colors.red[100] : Colors.green[100],
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: isOffline ? Colors.red : Colors.green),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      isOffline ? Icons.cloud_off : Icons.cloud_done, 
+                      color: isOffline ? Colors.red[700] : Colors.green[700],
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      isOffline ? 'OFFLINE (Saving Locally)' : 'ONLINE (Cloud Synced)',
+                      style: TextStyle(
+                        color: isOffline ? Colors.red[900] : Colors.green[900],
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Row(
         children: [
