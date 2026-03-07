@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared/shared.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 class AdminProvider with ChangeNotifier {
   List<Product> _products = [];
@@ -8,42 +10,55 @@ class AdminProvider with ChangeNotifier {
   List<Product> get products => _products;
   bool get isLoading => _isLoading;
 
-  // Mocking the initial fetch from your future Spaceship API
+  // ⚠️ YOUR LIVE SPACESHIP API URL 
+  final String apiUrl = "https://alfasoft.it.com/api/pos_sync.php";
+
+  // 1. Fetch live products from your MySQL Database
   Future<void> fetchProducts() async {
     _isLoading = true;
     notifyListeners();
 
-    await Future.delayed(const Duration(seconds: 1)); // Simulate network delay
-
-    _products = [
-      Product(barcode: '4791044000123', name: 'Munchee Super Cream Cracker 500g', price: 450.0, stock: 100, updatedAt: DateTime.now().toIso8601String()),
-      Product(barcode: '4792011001234', name: 'Anchor Milk Powder 400g', price: 1100.0, stock: 50, updatedAt: DateTime.now().toIso8601String()),
-    ];
+    try {
+      final response = await http.get(Uri.parse('$apiUrl?action=get_products'));
+      
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        _products = data.map((json) => Product.fromMap(json)).toList();
+      } else {
+        debugPrint("Server error: ${response.statusCode}");
+      }
+    } catch (e) {
+      debugPrint("Network error: $e");
+    }
 
     _isLoading = false;
     notifyListeners();
   }
 
-  // Mocking the update push to your future Spaceship API
+  // 2. Push price updates live to the cloud
   Future<bool> updateProductPrice(String barcode, double newPrice) async {
-    final index = _products.indexWhere((p) => p.barcode == barcode);
-    if (index >= 0) {
-      // 1. We will eventually send this to the API via http.put
-      await Future.delayed(const Duration(milliseconds: 500)); 
-      
-      // 2. Update the local memory state
-      final oldProduct = _products[index];
-      _products[index] = Product(
-        id: oldProduct.id,
-        barcode: oldProduct.barcode,
-        name: oldProduct.name,
-        price: newPrice,
-        stock: oldProduct.stock,
-        updatedAt: DateTime.now().toIso8601String(),
+    try {
+      final response = await http.post(
+        Uri.parse('$apiUrl?action=update_price'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "barcode": barcode,
+          "new_price": newPrice
+        }),
       );
-      notifyListeners();
-      return true;
+
+      if (response.statusCode == 200) {
+        final result = json.decode(response.body);
+        if (result['status'] == 'success') {
+          // Refresh the list to show the new price from the database
+          await fetchProducts(); 
+          return true;
+        }
+      }
+      return false;
+    } catch (e) {
+      debugPrint("Update error: $e");
+      return false;
     }
-    return false;
   }
 }
