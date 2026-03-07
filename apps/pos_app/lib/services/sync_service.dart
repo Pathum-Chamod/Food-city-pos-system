@@ -1,28 +1,31 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:http/http.dart' as http;
 import 'database_helper.dart';
 
 class SyncService {
   Timer? _syncTimer;
   bool _isSyncing = false;
 
-  // Start the background worker when the app boots
+  // ⚠️ YOUR LIVE SPACESHIP API URL
+  final String apiUrl = "https://alfasoft.it.com/api/pos_sync.php";
+
   void startSyncWorker() {
-    // Run the check every 30 seconds
+    // Poll the queue every 30 seconds
     _syncTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       _attemptSync();
     });
-    debugPrint("🔄 Background Sync Worker Started...");
+    debugPrint("🔄 Live Background Sync Worker Started...");
   }
 
   Future<void> _attemptSync() async {
-    // 1. Prevent overlapping syncs
     if (_isSyncing) return;
     _isSyncing = true;
 
     try {
-      // 2. Check if we have internet
+      // 1. Check Internet Connection
       var connectivityResult = await (Connectivity().checkConnectivity());
       if (connectivityResult.contains(ConnectivityResult.none)) {
         debugPrint("📴 Offline. Sync skipped.");
@@ -30,7 +33,7 @@ class SyncService {
         return;
       }
 
-      // 3. Internet is available! Get pending items from SQLite
+      // 2. Fetch pending items from local SQLite
       final db = await DatabaseHelper.instance.database;
       final pendingItems = await db.query(
         'sync_queue',
@@ -39,40 +42,61 @@ class SyncService {
       );
 
       if (pendingItems.isEmpty) {
-        // debugPrint("✅ Everything is synced.");
         _isSyncing = false;
-        return;
+        return; // Nothing to sync
       }
 
-      debugPrint("📤 Found ${pendingItems.length} pending items. Attempting upload...");
+      debugPrint("📤 Found ${pendingItems.length} pending items. Pushing to Alfasoft Cloud...");
 
-      // 4. Loop through and upload (Mocking the API call for now)
+      // 3. Process the queue
       for (var item in pendingItems) {
-        bool success = await _mockApiUpload(item['data'].toString());
+        // We pass the entire item (which contains 'type' and 'data') to the upload function
+        bool success = await _uploadToCloud(item);
         
         if (success) {
-          // 5. Update local status to 'synced'
+          // 4. Mark as synced locally so it doesn't upload again
           await db.update(
             'sync_queue',
             {'status': 'synced'},
             where: 'id = ?',
             whereArgs: [item['id']],
           );
-          debugPrint("✅ Item ${item['id']} synced successfully!");
+          debugPrint("✅ Item ${item['id']} (${item['type']}) synced successfully to Spaceship!");
         }
       }
     } catch (e) {
-      debugPrint("❌ Sync Error: $e");
+      debugPrint("❌ Sync Engine Error: $e");
     } finally {
       _isSyncing = false;
     }
   }
 
-  // We will replace this with your real Spaceship API later!
-  Future<bool> _mockApiUpload(String payload) async {
-    // Simulating network delay
-    await Future.delayed(const Duration(seconds: 1));
-    return true; // Pretending the server received it
+  // The real HTTP POST request to your PHP middleman
+  Future<bool> _uploadToCloud(Map<String, dynamic> item) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$apiUrl?action=sync_queue'),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "type": item['type'],
+          "data": item['data'] // The JSON string payload we created during checkout
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final result = jsonDecode(response.body);
+        if (result['status'] == 'success') {
+          return true;
+        } else {
+          debugPrint("⚠️ Cloud DB Error: ${result['message']}");
+          return false;
+        }
+      }
+      return false;
+    } catch (e) {
+      debugPrint("🌐 Network Upload Error: $e");
+      return false;
+    }
   }
 
   void stopSyncWorker() {
