@@ -3,8 +3,10 @@ import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../providers/cart_provider.dart';
+import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 import '../widgets/admin_dialogs.dart';
+import 'login_screen.dart';
 
 class PosScreen extends StatefulWidget {
   const PosScreen({super.key});
@@ -33,7 +35,7 @@ class _PosScreenState extends State<PosScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Supermarket POS'),
+        title: Text('Supermarket POS — ${context.watch<AuthProvider>().currentUser?.name ?? 'Not Logged In'}'),
         backgroundColor: Colors.blue[900],
         foregroundColor: Colors.white,
         actions: [
@@ -44,7 +46,7 @@ class _PosScreenState extends State<PosScreen> {
               final isOffline = snapshot.data?.contains(ConnectivityResult.none) ?? false;
               
               return Container(
-                margin: const EdgeInsets.only(right: 16, top: 12, bottom: 12),
+                margin: const EdgeInsets.only(right: 8, top: 12, bottom: 12),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
                   color: isOffline ? Colors.red[100] : Colors.green[100],
@@ -72,6 +74,20 @@ class _PosScreenState extends State<PosScreen> {
               );
             },
           ),
+          // Logout button
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.white),
+            tooltip: 'Logout',
+            onPressed: () {
+              context.read<AuthProvider>().logout();
+              context.read<CartProvider>().clearCart();
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (context) => const LoginScreen()),
+              );
+            },
+          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Row(
@@ -186,9 +202,10 @@ class _PosScreenState extends State<PosScreen> {
                               final itemsMap = cart.getCartItemsAsMap();
                               final total = cart.cartTotal;
                               final scaffoldMessenger = ScaffoldMessenger.of(context);
+                              final cashierName = context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
 
                               // 2. Process the offline sale
-                              final success = await DatabaseHelper.instance.processSale(total, itemsMap);
+                              final success = await DatabaseHelper.instance.processSale(total, itemsMap, cashierName);
 
                               if (success) {
                                 // 3. Clear the cart UI

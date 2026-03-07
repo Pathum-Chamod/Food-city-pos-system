@@ -115,7 +115,7 @@ class DatabaseHelper {
     return maps.map((map) => Product.fromMap(map)).toList();
   }
 
-  Future<bool> processSale(double totalAmount, List<Map<String, dynamic>> cartItems) async {
+  Future<bool> processSale(double totalAmount, List<Map<String, dynamic>> cartItems, String cashierName) async {
     final db = await database;
     
     try {
@@ -144,6 +144,7 @@ class DatabaseHelper {
           'total_amount': totalAmount,
           'branch': 'Hikkaduwa',
           'vendor': 'Alfasoft',
+          'cashier': cashierName,
           'items': cartItems,
         });
 
