@@ -6,12 +6,34 @@ import 'dart:convert';
 class AdminProvider with ChangeNotifier {
   List<Product> _products = [];
   bool _isLoading = false;
+  double _todayTotalSales = 0.0;
+  List<dynamic> _cashierBreakdown = [];
 
   List<Product> get products => _products;
   bool get isLoading => _isLoading;
+  double get todayTotalSales => _todayTotalSales;
+  List<dynamic> get cashierBreakdown => _cashierBreakdown;
 
   // ⚠️ YOUR LIVE SPACESHIP API URL 
   final String apiUrl = "https://alfasoft.it.com/api/pos_sync.php";
+
+  // 0. Fetch today's sales analytics from the cloud
+  Future<void> fetchDashboardStats() async {
+    try {
+      final response = await http.get(Uri.parse('$apiUrl?action=get_sales'));
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          _todayTotalSales = (data['grand_total'] as num).toDouble();
+          _cashierBreakdown = data['cashier_sales'];
+          notifyListeners();
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching sales stats: $e");
+    }
+  }
 
   // 1. Fetch live products from your MySQL Database
   Future<void> fetchProducts() async {

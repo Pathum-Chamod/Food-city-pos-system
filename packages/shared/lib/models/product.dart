@@ -33,7 +33,7 @@ class Product {
       id: map['id'],
       barcode: map['barcode'],
       name: map['name'],
-      price: map['price'],
+      price: (map['price'] as num).toDouble(),
       stock: map['stock'],
       updatedAt: map['updated_at'],
     );

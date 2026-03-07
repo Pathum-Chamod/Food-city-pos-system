@@ -15,9 +15,10 @@ class _AdminHomeState extends State<AdminHome> {
   @override
   void initState() {
     super.initState();
-    // Fetch products from the "cloud" when the app opens
+    // Fetch products and dashboard stats from the cloud when the app opens
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<AdminProvider>().fetchProducts();
+      context.read<AdminProvider>().fetchDashboardStats();
     });
   }
 
@@ -67,16 +68,102 @@ class _AdminHomeState extends State<AdminHome> {
 
     final List<Widget> pages = [
       // PAGE 1: Dashboard
-      Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+      RefreshIndicator(
+        onRefresh: () async {
+          await provider.fetchDashboardStats();
+        },
+        child: ListView(
+          padding: const EdgeInsets.all(16),
           children: [
-            const Icon(Icons.analytics, size: 80, color: Colors.blue),
-            const SizedBox(height: 20),
-            const Text('Live Store Dashboard', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-            Text('Active Products: ${provider.products.length}', style: const TextStyle(fontSize: 18)),
-            const Text('Today\'s Sales: Rs. 0.00 (Syncing...)', style: TextStyle(fontSize: 18, color: Colors.grey)),
+            // Revenue Card
+            Card(
+              elevation: 4,
+              color: Colors.blue[900],
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    const Icon(Icons.monetization_on, size: 50, color: Colors.white),
+                    const SizedBox(height: 12),
+                    const Text("Today's Revenue", style: TextStyle(fontSize: 16, color: Colors.white70)),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Rs. ${provider.todayTotalSales.toStringAsFixed(2)}',
+                      style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Stats Row
+            Row(
+              children: [
+                Expanded(
+                  child: Card(
+                    elevation: 2,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          const Icon(Icons.inventory_2, size: 30, color: Colors.orange),
+                          const SizedBox(height: 8),
+                          Text('${provider.products.length}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                          const Text('Products', style: TextStyle(color: Colors.grey)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Card(
+                    elevation: 2,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        children: [
+                          const Icon(Icons.receipt_long, size: 30, color: Colors.green),
+                          const SizedBox(height: 8),
+                          Text(
+                            '${provider.cashierBreakdown.fold<int>(0, (sum, c) => sum + int.parse(c['transaction_count'].toString()))}',
+                            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                          ),
+                          const Text('Transactions', style: TextStyle(color: Colors.grey)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // Cashier Breakdown
+            const Text('Sales by Employee', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            if (provider.cashierBreakdown.isEmpty)
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: Text('No sales today yet', style: TextStyle(color: Colors.grey))),
+                ),
+              )
+            else
+              ...provider.cashierBreakdown.map((cashier) => Card(
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: Colors.blue[100],
+                    child: const Icon(Icons.person, color: Colors.blue),
+                  ),
+                  title: Text(cashier['cashier_name'] ?? 'Unknown', style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text('${cashier['transaction_count']} transactions'),
+                  trailing: Text(
+                    'Rs. ${double.parse(cashier['total_sales'].toString()).toStringAsFixed(2)}',
+                    style: const TextStyle(color: Colors.green, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              )),
           ],
         ),
       ),
