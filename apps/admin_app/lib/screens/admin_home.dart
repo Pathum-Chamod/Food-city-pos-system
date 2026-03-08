@@ -239,48 +239,72 @@ class _AdminHomeState extends State<AdminHome> {
       ),
       
       // PAGE 2: Inventory List
-      provider.isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView.builder(
-              itemCount: provider.products.length,
-              itemBuilder: (context, index) {
-                final product = provider.products[index];
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  child: ListTile(
-                    leading: const CircleAvatar(child: Icon(Icons.inventory)),
-                    title: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text('Stock: ${product.stock}  |  Barcode: ${product.barcode}'),
-                    trailing: Text('Rs. ${product.price.toStringAsFixed(2)}', style: const TextStyle(color: Colors.green, fontSize: 16, fontWeight: FontWeight.bold)),
-                    onTap: () => _showEditPriceDialog(context, product.barcode, product.name, product.price),
+      RefreshIndicator(
+        onRefresh: () async {
+          await context.read<AdminProvider>().fetchProducts();
+        },
+        child: provider.isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : provider.products.isEmpty
+                ? ListView( // Use a ListView so you can still pull-to-refresh even if empty
+                    children: const [
+                      SizedBox(height: 200),
+                      Center(child: Text('No products found. Pull down to refresh.', style: TextStyle(color: Colors.grey))),
+                    ],
+                  )
+                : ListView.builder(
+                    itemCount: provider.products.length,
+                    itemBuilder: (context, index) {
+                      final product = provider.products[index];
+                      return Card(
+                        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        child: ListTile(
+                          leading: const CircleAvatar(child: Icon(Icons.inventory)),
+                          title: Text(product.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text('Stock: ${product.stock}  |  Barcode: ${product.barcode}'),
+                          trailing: Text('Rs. ${product.price.toStringAsFixed(2)}', style: const TextStyle(color: Colors.green, fontSize: 16, fontWeight: FontWeight.bold)),
+                          onTap: () => _showEditPriceDialog(context, product.barcode, product.name, product.price),
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
+      ),
       // PAGE 3: Suppliers
-      provider.isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView.builder(
-              itemCount: provider.suppliers.length,
-              itemBuilder: (context, index) {
-                final supplier = provider.suppliers[index];
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  child: ListTile(
-                    leading: const CircleAvatar(
-                      backgroundColor: Colors.orange, 
-                      child: Icon(Icons.local_shipping, color: Colors.white)
-                    ),
-                    title: Text(supplier['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text('Phone: ${supplier['phone']}'),
-                    trailing: ElevatedButton(
-                      onPressed: () => _showReceiveStockDialog(context, supplier['id'], supplier['name']),
-                      child: const Text('Receive'),
-                    ),
+      RefreshIndicator(
+        onRefresh: () async {
+          await context.read<AdminProvider>().fetchSuppliers();
+        },
+        child: provider.isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : provider.suppliers.isEmpty 
+                ? ListView( // Use a ListView so you can still pull-to-refresh even if empty
+                    children: const [
+                      SizedBox(height: 200),
+                      Center(child: Text('No suppliers found. Pull down to refresh.', style: TextStyle(color: Colors.grey))),
+                    ],
+                  )
+                : ListView.builder(
+                    itemCount: provider.suppliers.length,
+                    itemBuilder: (context, index) {
+                      final supplier = provider.suppliers[index];
+                      return Card(
+                        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        child: ListTile(
+                          leading: const CircleAvatar(
+                            backgroundColor: Colors.orange, 
+                            child: Icon(Icons.local_shipping, color: Colors.white)
+                          ),
+                          title: Text(supplier['name'].toString(), style: const TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text('Phone: ${supplier['phone']}'),
+                          trailing: ElevatedButton(
+                            onPressed: () => _showReceiveStockDialog(context, supplier['id'], supplier['name'].toString()),
+                            child: const Text('Receive'),
+                          ),
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
+      ),
     ];
 
     return Scaffold(
@@ -288,6 +312,17 @@ class _AdminHomeState extends State<AdminHome> {
         title: const Text('Manager Cloud Control'),
         backgroundColor: Colors.blue[900],
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh All',
+            onPressed: () {
+              context.read<AdminProvider>().fetchProducts();
+              context.read<AdminProvider>().fetchDashboardStats();
+              context.read<AdminProvider>().fetchSuppliers();
+            },
+          ),
+        ],
       ),
       body: pages[_currentIndex],
       bottomNavigationBar: BottomNavigationBar(
