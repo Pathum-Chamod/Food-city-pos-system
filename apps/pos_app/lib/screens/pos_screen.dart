@@ -158,6 +158,40 @@ class _PosScreenState extends State<PosScreen> {
                   child: Text('Current Order', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                 ),
                 const Divider(height: 1),
+                // Refund Mode Toggle
+                Container(
+                  color: context.watch<CartProvider>().isRefundMode ? Colors.red[50] : Colors.grey[200],
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        context.watch<CartProvider>().isRefundMode ? '🔴 REFUND MODE' : '🛒 Standard Sale',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: context.watch<CartProvider>().isRefundMode ? Colors.red[800] : Colors.black87,
+                        ),
+                      ),
+                      Switch(
+                        value: context.watch<CartProvider>().isRefundMode,
+                        activeThumbColor: Colors.red,
+                        onChanged: (value) {
+                          if (value) {
+                            // Protect refunds with the Manager PIN
+                            AdminDialogs.showPinDialog(context, () {
+                              context.read<CartProvider>().toggleRefundMode(true);
+                            });
+                          } else {
+                            // Anyone can turn it back to a standard sale
+                            context.read<CartProvider>().toggleRefundMode(false);
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
                 Expanded(
                   child: Consumer<CartProvider>(
                     builder: (context, cart, child) {

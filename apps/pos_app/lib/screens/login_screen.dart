@@ -60,18 +60,23 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Widget _buildKey(String value) {
+    final isAction = value == 'CLEAR' || value == 'DEL';
     return Padding(
       padding: const EdgeInsets.all(6.0),
       child: ElevatedButton(
         style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.white,
-          foregroundColor: Colors.black,
+          backgroundColor: isAction ? Colors.grey[200] : Colors.white,
+          foregroundColor: isAction ? Colors.red[700] : Colors.black,
           textStyle: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           elevation: 2,
         ),
         onPressed: () => _onKeyPress(value),
-        child: Text(value),
+        child: value == 'CLEAR'
+            ? const Icon(Icons.refresh, size: 26)
+            : value == 'DEL'
+                ? const Icon(Icons.backspace_outlined, size: 24)
+                : Text(value),
       ),
     );
   }

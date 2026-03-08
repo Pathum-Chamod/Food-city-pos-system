@@ -15,10 +15,11 @@ class _AdminHomeState extends State<AdminHome> {
   @override
   void initState() {
     super.initState();
-    // Fetch products and dashboard stats from the cloud when the app opens
+    // Fetch products, dashboard stats, and suppliers from the cloud
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<AdminProvider>().fetchProducts();
       context.read<AdminProvider>().fetchDashboardStats();
+      context.read<AdminProvider>().fetchSuppliers();
     });
   }
 
@@ -58,6 +59,75 @@ class _AdminHomeState extends State<AdminHome> {
             child: const Text('Push Update'),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showReceiveStockDialog(BuildContext context, dynamic supplierId, String supplierName) {
+    String? selectedBarcode;
+    final qtyController = TextEditingController();
+    final costController = TextEditingController();
+    final products = context.read<AdminProvider>().products;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: Text('Receive from\n$supplierName'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(labelText: 'Select Product', border: OutlineInputBorder()),
+                  isExpanded: true,
+                  items: products.map((p) => DropdownMenuItem(value: p.barcode, child: Text(p.name))).toList(),
+                  onChanged: (val) => setDialogState(() => selectedBarcode = val),
+                ),
+                const SizedBox(height: 15),
+                TextField(
+                  controller: qtyController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Quantity Received', border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 15),
+                TextField(
+                  controller: costController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'Total Cost (Rs.)', border: OutlineInputBorder()),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+              onPressed: () async {
+                if (selectedBarcode != null && qtyController.text.isNotEmpty && costController.text.isNotEmpty) {
+                  final qty = int.tryParse(qtyController.text) ?? 0;
+                  final cost = double.tryParse(costController.text) ?? 0.0;
+                  
+                  if (qty > 0) {
+                    final success = await context.read<AdminProvider>().receiveStock(
+                      selectedBarcode!, qty, int.parse(supplierId.toString()), cost
+                    );
+                    
+                    if (success && dialogContext.mounted) {
+                      Navigator.pop(dialogContext);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Stock added successfully!'), backgroundColor: Colors.green)
+                        );
+                      }
+                    }
+                  }
+                }
+              },
+              child: const Text('Save Stock', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -187,6 +257,30 @@ class _AdminHomeState extends State<AdminHome> {
                 );
               },
             ),
+      // PAGE 3: Suppliers
+      provider.isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView.builder(
+              itemCount: provider.suppliers.length,
+              itemBuilder: (context, index) {
+                final supplier = provider.suppliers[index];
+                return Card(
+                  margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  child: ListTile(
+                    leading: const CircleAvatar(
+                      backgroundColor: Colors.orange, 
+                      child: Icon(Icons.local_shipping, color: Colors.white)
+                    ),
+                    title: Text(supplier['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text('Phone: ${supplier['phone']}'),
+                    trailing: ElevatedButton(
+                      onPressed: () => _showReceiveStockDialog(context, supplier['id'], supplier['name']),
+                      child: const Text('Receive'),
+                    ),
+                  ),
+                );
+              },
+            ),
     ];
 
     return Scaffold(
@@ -202,6 +296,7 @@ class _AdminHomeState extends State<AdminHome> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: 'Dashboard'),
           BottomNavigationBarItem(icon: Icon(Icons.list_alt), label: 'Inventory'),
+          BottomNavigationBarItem(icon: Icon(Icons.local_shipping), label: 'Suppliers'),
         ],
       ),
     );
