@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 import '../providers/admin_provider.dart';
 import 'inventory_history_screen.dart';
+import '../models/stock_adjustment_request.dart';
 
 class AdminHome extends StatefulWidget {
   const AdminHome({super.key});
@@ -432,11 +433,20 @@ class _AdminHomeState extends State<AdminHome> {
                               Navigator.pop(confirmContext);
                               Navigator.pop(dialogContext);
 
-                              final message = adjustmentType == 'increase'
-                                  ? 'Stock adjustment prepared: +$qty for ${product.name}'
-                                  : adjustmentType == 'decrease'
-                                  ? 'Stock adjustment prepared: -$qty for ${product.name}'
-                                  : 'Exact stock prepared: set ${product.name} to $qty';
+                              final adjustmentRequest = StockAdjustmentRequest(
+                                barcode: product.barcode,
+                                adjustmentType: adjustmentType,
+                                quantity: qty,
+                                reason: reason,
+                              );
+
+                              final message =
+                                  adjustmentRequest.adjustmentType == 'increase'
+                                  ? 'Stock adjustment prepared: +${adjustmentRequest.quantity} for ${product.name}'
+                                  : adjustmentRequest.adjustmentType ==
+                                        'decrease'
+                                  ? 'Stock adjustment prepared: -${adjustmentRequest.quantity} for ${product.name}'
+                                  : 'Exact stock prepared: set ${product.name} to ${adjustmentRequest.quantity}';
 
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
