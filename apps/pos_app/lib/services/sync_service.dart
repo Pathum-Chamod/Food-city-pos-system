@@ -9,8 +9,11 @@ class SyncService {
   Timer? _syncTimer;
   bool _isSyncing = false;
 
-  // ⚠️ YOUR LIVE SPACESHIP API URL
-  final String apiUrl = "https://alfasoft.it.com/api/pos_sync.php";
+  // ⚠️ SWITCH BETWEEN LOCAL AND LIVE:
+  // LOCAL (for testing):
+  final String apiUrl = "http://localhost:8080/api/pos_sync.php";
+  // LIVE (for production):
+  // final String apiUrl = "https://alfasoft.it.com/api/pos_sync.php";
 
   void startSyncWorker() {
     // Poll the queue every 30 seconds
@@ -75,7 +78,7 @@ class SyncService {
   Future<bool> _uploadToCloud(Map<String, dynamic> item) async {
     try {
       final response = await http.post(
-        Uri.parse('$apiUrl?action=sync_queue'),
+        Uri.parse('$apiUrl?action=pos_sync'),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
           "type": item['type'],

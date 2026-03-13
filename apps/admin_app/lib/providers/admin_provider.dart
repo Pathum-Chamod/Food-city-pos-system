@@ -20,8 +20,11 @@ class AdminProvider with ChangeNotifier {
   List<dynamic> get cashierBreakdown => _cashierBreakdown;
   List<dynamic> get suppliers => _suppliers;
 
-  // ⚠️ YOUR LIVE SPACESHIP API URL 
-  final String apiUrl = "https://alfasoft.it.com/api/pos_sync.php";
+  // ⚠️ SWITCH BETWEEN LOCAL AND LIVE:
+  // LOCAL (for testing):
+  final String apiUrl = "http://localhost:8080/api/pos_sync.php";
+  // LIVE (for production):
+  // final String apiUrl = "https://alfasoft.it.com/api/pos_sync.php";
 
   Future<void> fetchProducts() async {
     _isLoading = true;
