@@ -173,11 +173,7 @@ class _AdminHomeState extends State<AdminHome> {
                   subtitle: const Text('Manual stock correction'),
                   onTap: () {
                     Navigator.pop(context);
-                    ScaffoldMessenger.of(this.context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Stock adjustment screen coming next.'),
-                      ),
-                    );
+                    _showStockAdjustmentDialog(product);
                   },
                 ),
                 ListTile(
@@ -202,6 +198,220 @@ class _AdminHomeState extends State<AdminHome> {
           ),
         );
       },
+    );
+  }
+
+  void _showStockAdjustmentDialog(Product product) {
+    final qtyController = TextEditingController();
+    final reasonController = TextEditingController();
+    String adjustmentType = 'increase';
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          final enteredQty = int.tryParse(qtyController.text.trim()) ?? 0;
+
+          int resultingStock = product.stock;
+          if (adjustmentType == 'increase') {
+            resultingStock = product.stock + enteredQty;
+          } else if (adjustmentType == 'decrease') {
+            resultingStock = product.stock - enteredQty;
+          } else if (adjustmentType == 'set_exact') {
+            resultingStock = enteredQty;
+          }
+
+          return AlertDialog(
+            title: Text('Adjust Stock\n${product.name}'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Barcode: ${product.barcode}',
+                          style: TextStyle(color: Colors.grey[700]),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Current Stock: ${product.stock}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  DropdownButtonFormField<String>(
+                    value: adjustmentType,
+                    decoration: const InputDecoration(
+                      labelText: 'Adjustment Type',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'increase',
+                        child: Text('Increase Stock'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'decrease',
+                        child: Text('Decrease Stock'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'set_exact',
+                        child: Text('Set Exact Stock'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setDialogState(() {
+                          adjustmentType = value;
+                        });
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 14),
+
+                  TextField(
+                    controller: qtyController,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: InputDecoration(
+                      labelText: adjustmentType == 'set_exact'
+                          ? 'Exact Stock Quantity'
+                          : 'Quantity',
+                      border: const OutlineInputBorder(),
+                      hintText: adjustmentType == 'set_exact'
+                          ? 'Enter final stock value'
+                          : 'Enter quantity',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[50],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'Resulting Stock: $resultingStock',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  TextField(
+                    controller: reasonController,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Reason / Note',
+                      border: OutlineInputBorder(),
+                      hintText: 'e.g. damaged items, manual correction',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: adjustmentType == 'increase'
+                      ? Colors.green
+                      : adjustmentType == 'decrease'
+                      ? Colors.orange
+                      : Colors.blue,
+                ),
+                onPressed: () {
+                  final qty = int.tryParse(qtyController.text.trim()) ?? -1;
+                  final reason = reasonController.text.trim();
+
+                  if (qty < 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Please enter a valid quantity.'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                    return;
+                  }
+
+                  if (adjustmentType != 'set_exact' && qty == 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Quantity must be greater than 0.'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                    return;
+                  }
+
+                  if (adjustmentType == 'decrease' && qty > product.stock) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Cannot reduce more than current stock.'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                    return;
+                  }
+
+                  if (reason.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Please enter a reason for this adjustment.',
+                        ),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                    return;
+                  }
+
+                  Navigator.pop(dialogContext);
+
+                  final message = adjustmentType == 'increase'
+                      ? 'Stock adjustment prepared: +$qty for ${product.name}'
+                      : adjustmentType == 'decrease'
+                      ? 'Stock adjustment prepared: -$qty for ${product.name}'
+                      : 'Exact stock prepared: set ${product.name} to $qty';
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(message),
+                      backgroundColor: Colors.blue,
+                    ),
+                  );
+                },
+                child: const Text(
+                  'Save Adjustment',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -711,7 +921,8 @@ class _AdminHomeState extends State<AdminHome> {
                                 elevation: 2,
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(12),
-                                  onTap: () => _showProductActionsSheet(product),
+                                  onTap: () =>
+                                      _showProductActionsSheet(product),
                                   child: Padding(
                                     padding: const EdgeInsets.all(14),
                                     child: Column(
