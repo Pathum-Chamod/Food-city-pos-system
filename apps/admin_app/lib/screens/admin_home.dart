@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 import '../providers/admin_provider.dart';
-import 'inventory_history_screen.dart';
-import '../models/stock_adjustment_request.dart';
 
 class AdminHome extends StatefulWidget {
   const AdminHome({super.key});
@@ -21,6 +19,7 @@ class _AdminHomeState extends State<AdminHome> {
   @override
   void initState() {
     super.initState();
+    // Fetch products, dashboard stats, and suppliers from the cloud
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<AdminProvider>().fetchProducts();
       context.read<AdminProvider>().fetchDashboardStats();
@@ -76,400 +75,6 @@ class _AdminHomeState extends State<AdminHome> {
             child: const Text('Push Update'),
           ),
         ],
-      ),
-    );
-  }
-
-  void _showProductActionsSheet(Product product) {
-    final statusText = _getStockStatus(product);
-    final statusColor = _getStockStatusColor(product);
-
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  product.name,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Barcode: ${product.barcode}',
-                  style: TextStyle(color: Colors.grey[700]),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: statusColor.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        statusText,
-                        style: TextStyle(
-                          color: statusColor,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      'Stock: ${product.stock}',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    const Spacer(),
-                    Text(
-                      'Rs. ${product.price.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                        color: Colors.green,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(
-                    backgroundColor: Color(0xFFE3F2FD),
-                    child: Icon(Icons.edit, color: Colors.blue),
-                  ),
-                  title: const Text('Update Price'),
-                  subtitle: const Text('Change selling price in cloud'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showEditPriceDialog(
-                      this.context,
-                      product.barcode,
-                      product.name,
-                      product.price,
-                    );
-                  },
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(
-                    backgroundColor: Color(0xFFFFF3E0),
-                    child: Icon(Icons.tune, color: Colors.orange),
-                  ),
-                  title: const Text('Adjust Stock'),
-                  subtitle: const Text('Manual stock correction'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showStockAdjustmentDialog(product);
-                  },
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(
-                    backgroundColor: Color(0xFFEDE7F6),
-                    child: Icon(Icons.history, color: Colors.deepPurple),
-                  ),
-                  title: const Text('View History'),
-                  subtitle: const Text('Inventory movement timeline'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      this.context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            InventoryHistoryScreen(product: product),
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  void _showStockAdjustmentDialog(Product product) {
-    final qtyController = TextEditingController();
-    final reasonController = TextEditingController();
-    String adjustmentType = 'increase';
-
-    showDialog(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) {
-          final enteredQty = int.tryParse(qtyController.text.trim()) ?? 0;
-
-          int resultingStock = product.stock;
-          if (adjustmentType == 'increase') {
-            resultingStock = product.stock + enteredQty;
-          } else if (adjustmentType == 'decrease') {
-            resultingStock = product.stock - enteredQty;
-          } else if (adjustmentType == 'set_exact') {
-            resultingStock = enteredQty;
-          }
-
-          return AlertDialog(
-            title: Text('Adjust Stock\n${product.name}'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Barcode: ${product.barcode}',
-                          style: TextStyle(color: Colors.grey[700]),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          'Current Stock: ${product.stock}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  DropdownButtonFormField<String>(
-                    initialValue: adjustmentType,
-                    decoration: const InputDecoration(
-                      labelText: 'Adjustment Type',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: const [
-                      DropdownMenuItem(
-                        value: 'increase',
-                        child: Text('Increase Stock'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'decrease',
-                        child: Text('Decrease Stock'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'set_exact',
-                        child: Text('Set Exact Stock'),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        setDialogState(() {
-                          adjustmentType = value;
-                        });
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 14),
-
-                  TextField(
-                    controller: qtyController,
-                    keyboardType: TextInputType.number,
-                    onChanged: (_) => setDialogState(() {}),
-                    decoration: InputDecoration(
-                      labelText: adjustmentType == 'set_exact'
-                          ? 'Exact Stock Quantity'
-                          : 'Quantity',
-                      border: const OutlineInputBorder(),
-                      hintText: adjustmentType == 'set_exact'
-                          ? 'Enter final stock value'
-                          : 'Enter quantity',
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.blue[50],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      'Resulting Stock: $resultingStock',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-
-                  TextField(
-                    controller: reasonController,
-                    maxLines: 2,
-                    decoration: const InputDecoration(
-                      labelText: 'Reason / Note',
-                      border: OutlineInputBorder(),
-                      hintText: 'e.g. damaged items, manual correction',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: adjustmentType == 'increase'
-                      ? Colors.green
-                      : adjustmentType == 'decrease'
-                      ? Colors.orange
-                      : Colors.blue,
-                ),
-                onPressed: () {
-                  final qty = int.tryParse(qtyController.text.trim()) ?? -1;
-                  final reason = reasonController.text.trim();
-
-                  if (qty < 0) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Please enter a valid quantity.'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                    return;
-                  }
-
-                  if (adjustmentType != 'set_exact' && qty == 0) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Quantity must be greater than 0.'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                    return;
-                  }
-
-                  if (adjustmentType == 'decrease' && qty > product.stock) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Cannot reduce more than current stock.'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                    return;
-                  }
-
-                  if (reason.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Please enter a reason for this adjustment.',
-                        ),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                    return;
-                  }
-
-                  showDialog(
-                    context: context,
-                    builder: (confirmContext) {
-                      final actionText = adjustmentType == 'increase'
-                          ? 'Increase by $qty'
-                          : adjustmentType == 'decrease'
-                          ? 'Decrease by $qty'
-                          : 'Set exact stock to $qty';
-
-                      return AlertDialog(
-                        title: const Text('Confirm Stock Adjustment'),
-                        content: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              product.name,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text('Action: $actionText'),
-                            const SizedBox(height: 6),
-                            Text('Current Stock: ${product.stock}'),
-                            const SizedBox(height: 6),
-                            Text('Resulting Stock: $resultingStock'),
-                            const SizedBox(height: 12),
-                            Text('Reason: $reason'),
-                          ],
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(confirmContext),
-                            child: const Text('Back'),
-                          ),
-                          ElevatedButton(
-                            onPressed: () {
-                              Navigator.pop(confirmContext);
-                              Navigator.pop(dialogContext);
-
-                              final adjustmentRequest = StockAdjustmentRequest(
-                                barcode: product.barcode,
-                                adjustmentType: adjustmentType,
-                                quantity: qty,
-                                reason: reason,
-                              );
-
-                              final message =
-                                  adjustmentRequest.adjustmentType == 'increase'
-                                  ? 'Stock adjustment prepared: +${adjustmentRequest.quantity} for ${product.name}'
-                                  : adjustmentRequest.adjustmentType ==
-                                        'decrease'
-                                  ? 'Stock adjustment prepared: -${adjustmentRequest.quantity} for ${product.name}'
-                                  : 'Exact stock prepared: set ${product.name} to ${adjustmentRequest.quantity}';
-
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(message),
-                                  backgroundColor: Colors.blue,
-                                ),
-                              );
-                            },
-                            child: const Text('Confirm'),
-                          ),
-                        ],
-                      );
-                    },
-                  );
-                },
-                child: const Text(
-                  'Save Adjustment',
-                  style: TextStyle(color: Colors.white),
-                ),
-              ),
-            ],
-          );
-        },
       ),
     );
   }
@@ -631,67 +236,10 @@ class _AdminHomeState extends State<AdminHome> {
     );
   }
 
-  Widget _buildInventorySummaryCard({
-    required String title,
-    required String value,
-    required IconData icon,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
-          BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2)),
-        ],
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: color.withValues(alpha: 0.12),
-            child: Icon(icon, color: color, size: 20),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  title,
-                  style: TextStyle(color: Colors.grey[700], fontSize: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AdminProvider>();
     final filteredProducts = _getFilteredProducts(provider.products);
-
-    final totalProducts = provider.products.length;
-    final inStockCount = provider.products.where((p) => p.stock > 10).length;
-    final lowStockCount = provider.products
-        .where((p) => p.stock > 0 && p.stock <= 10)
-        .length;
-    final outOfStockCount = provider.products.where((p) => p.stock <= 0).length;
 
     final List<Widget> pages = [
       // PAGE 1: Dashboard
@@ -702,6 +250,7 @@ class _AdminHomeState extends State<AdminHome> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            // Revenue Card
             Card(
               elevation: 4,
               color: Colors.blue[900],
@@ -733,6 +282,8 @@ class _AdminHomeState extends State<AdminHome> {
               ),
             ),
             const SizedBox(height: 16),
+
+            // Stats Row
             Row(
               children: [
                 Expanded(
@@ -796,6 +347,8 @@ class _AdminHomeState extends State<AdminHome> {
               ],
             ),
             const SizedBox(height: 16),
+
+            // Cashier Breakdown
             const Text(
               'Sales by Employee',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -877,41 +430,6 @@ class _AdminHomeState extends State<AdminHome> {
                           });
                         },
                       ),
-                      const SizedBox(height: 12),
-                      GridView.count(
-                        crossAxisCount: 2,
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        crossAxisSpacing: 10,
-                        mainAxisSpacing: 10,
-                        childAspectRatio: 2.7,
-                        children: [
-                          _buildInventorySummaryCard(
-                            title: 'Total Products',
-                            value: '$totalProducts',
-                            icon: Icons.inventory_2,
-                            color: Colors.blue,
-                          ),
-                          _buildInventorySummaryCard(
-                            title: 'In Stock',
-                            value: '$inStockCount',
-                            icon: Icons.check_circle,
-                            color: Colors.green,
-                          ),
-                          _buildInventorySummaryCard(
-                            title: 'Low Stock',
-                            value: '$lowStockCount',
-                            icon: Icons.warning_amber_rounded,
-                            color: Colors.orange,
-                          ),
-                          _buildInventorySummaryCard(
-                            title: 'Out of Stock',
-                            value: '$outOfStockCount',
-                            icon: Icons.cancel,
-                            color: Colors.red,
-                          ),
-                        ],
-                      ),
                       const SizedBox(height: 10),
                       SizedBox(
                         height: 40,
@@ -980,8 +498,12 @@ class _AdminHomeState extends State<AdminHome> {
                                 elevation: 2,
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(12),
-                                  onTap: () =>
-                                      _showProductActionsSheet(product),
+                                  onTap: () => _showEditPriceDialog(
+                                    context,
+                                    product.barcode,
+                                    product.name,
+                                    product.price,
+                                  ),
                                   child: Padding(
                                     padding: const EdgeInsets.all(14),
                                     child: Column(
@@ -1086,7 +608,6 @@ class _AdminHomeState extends State<AdminHome> {
               itemCount: provider.suppliers.length,
               itemBuilder: (context, index) {
                 final supplier = provider.suppliers[index];
-
                 return Card(
                   margin: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -1098,15 +619,15 @@ class _AdminHomeState extends State<AdminHome> {
                       child: Icon(Icons.local_shipping, color: Colors.white),
                     ),
                     title: Text(
-                      supplier.name,
+                      supplier['name'],
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
-                    subtitle: Text('Phone: ${supplier.phone}'),
+                    subtitle: Text('Phone: ${supplier['phone']}'),
                     trailing: ElevatedButton(
                       onPressed: () => _showReceiveStockDialog(
                         context,
-                        supplier.id,
-                        supplier.name,
+                        supplier['id'],
+                        supplier['name'],
                       ),
                       child: const Text('Receive'),
                     ),
