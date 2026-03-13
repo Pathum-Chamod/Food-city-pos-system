@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared/shared.dart';
+import '../models/inventory_history_item.dart';
 
 class InventoryHistoryScreen extends StatelessWidget {
   final Product product;
@@ -11,52 +12,52 @@ class InventoryHistoryScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mockHistory = [
-      {
-        'type': 'receive',
-        'title': 'Stock Received',
-        'subtitle': 'Received from supplier',
-        'quantity': '+24',
-        'date': 'Today, 10:15 AM',
-        'icon': Icons.local_shipping,
-        'color': Colors.green,
-      },
-      {
-        'type': 'sale',
-        'title': 'Sale',
-        'subtitle': 'Sold through POS checkout',
-        'quantity': '-3',
-        'date': 'Today, 9:40 AM',
-        'icon': Icons.point_of_sale,
-        'color': Colors.red,
-      },
-      {
-        'type': 'adjustment',
-        'title': 'Manual Adjustment',
-        'subtitle': 'Stock corrected by manager',
-        'quantity': '+2',
-        'date': 'Yesterday, 6:20 PM',
-        'icon': Icons.tune,
-        'color': Colors.orange,
-      },
-      {
-        'type': 'price_update',
-        'title': 'Price Update',
-        'subtitle': 'Selling price changed',
-        'quantity': 'Rs. ${product.price.toStringAsFixed(2)}',
-        'date': 'Yesterday, 4:05 PM',
-        'icon': Icons.edit,
-        'color': Colors.blue,
-      },
-      {
-        'type': 'refund',
-        'title': 'Refund',
-        'subtitle': 'Returned item added back to stock',
-        'quantity': '+1',
-        'date': 'Yesterday, 11:50 AM',
-        'icon': Icons.assignment_return,
-        'color': Colors.deepPurple,
-      },
+    final List<InventoryHistoryItem> mockHistory = [
+      InventoryHistoryItem(
+        type: 'receive',
+        title: 'Stock Received',
+        subtitle: 'Received from supplier',
+        quantityText: '+24',
+        dateText: 'Today, 10:15 AM',
+        icon: Icons.local_shipping,
+        color: Colors.green,
+      ),
+      InventoryHistoryItem(
+        type: 'sale',
+        title: 'Sale',
+        subtitle: 'Sold through POS checkout',
+        quantityText: '-3',
+        dateText: 'Today, 9:40 AM',
+        icon: Icons.point_of_sale,
+        color: Colors.red,
+      ),
+      InventoryHistoryItem(
+        type: 'adjustment',
+        title: 'Manual Adjustment',
+        subtitle: 'Stock corrected by manager',
+        quantityText: '+2',
+        dateText: 'Yesterday, 6:20 PM',
+        icon: Icons.tune,
+        color: Colors.orange,
+      ),
+      InventoryHistoryItem(
+        type: 'price_update',
+        title: 'Price Update',
+        subtitle: 'Selling price changed',
+        quantityText: 'Rs. ${product.price.toStringAsFixed(2)}',
+        dateText: 'Yesterday, 4:05 PM',
+        icon: Icons.edit,
+        color: Colors.blue,
+      ),
+      InventoryHistoryItem(
+        type: 'refund',
+        title: 'Refund',
+        subtitle: 'Returned item added back to stock',
+        quantityText: '+1',
+        dateText: 'Yesterday, 11:50 AM',
+        icon: Icons.assignment_return,
+        color: Colors.deepPurple,
+      ),
     ];
 
     return Scaffold(
@@ -144,7 +145,6 @@ class InventoryHistoryScreen extends StatelessWidget {
                     itemCount: mockHistory.length,
                     itemBuilder: (context, index) {
                       final item = mockHistory[index];
-                      final color = item['color'] as Color;
 
                       return Card(
                         margin: const EdgeInsets.symmetric(
@@ -154,14 +154,14 @@ class InventoryHistoryScreen extends StatelessWidget {
                         child: ListTile(
                           contentPadding: const EdgeInsets.all(12),
                           leading: CircleAvatar(
-                            backgroundColor: color.withOpacity(0.12),
+                            backgroundColor: item.color.withOpacity(0.12),
                             child: Icon(
-                              item['icon'] as IconData,
-                              color: color,
+                              item.icon,
+                              color: item.color,
                             ),
                           ),
                           title: Text(
-                            item['title'] as String,
+                            item.title,
                             style: const TextStyle(
                               fontWeight: FontWeight.bold,
                             ),
@@ -169,13 +169,13 @@ class InventoryHistoryScreen extends StatelessWidget {
                           subtitle: Padding(
                             padding: const EdgeInsets.only(top: 4),
                             child: Text(
-                              '${item['subtitle']}\n${item['date']}',
+                              '${item.subtitle}\n${item.dateText}',
                             ),
                           ),
                           trailing: Text(
-                            item['quantity'] as String,
+                            item.quantityText,
                             style: TextStyle(
-                              color: color,
+                              color: item.color,
                               fontWeight: FontWeight.bold,
                               fontSize: 15,
                             ),
