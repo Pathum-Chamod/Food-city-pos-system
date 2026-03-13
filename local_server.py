@@ -235,6 +235,7 @@ class APIHandler(BaseHTTPRequestHandler):
 def main():
     init_db()
     port = 8080
+    HTTPServer.allow_reuse_address = True
     server = HTTPServer(("0.0.0.0", port), APIHandler)
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
