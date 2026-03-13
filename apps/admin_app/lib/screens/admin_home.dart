@@ -494,101 +494,228 @@ class _AdminHomeState extends State<AdminHome> {
     final qtyController = TextEditingController();
     final costController = TextEditingController();
     final products = context.read<AdminProvider>().products;
+    bool isSubmitting = false;
 
     showDialog(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) => AlertDialog(
-          title: Text('Receive from\n$supplierName'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField<String>(
-                  decoration: const InputDecoration(
-                    labelText: 'Select Product',
-                    border: OutlineInputBorder(),
-                  ),
-                  isExpanded: true,
-                  items: products
-                      .map(
-                        (p) => DropdownMenuItem(
-                          value: p.barcode,
-                          child: Text(p.name),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (val) =>
-                      setDialogState(() => selectedBarcode = val),
-                ),
-                const SizedBox(height: 15),
-                TextField(
-                  controller: qtyController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Quantity Received',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 15),
-                TextField(
-                  controller: costController,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Total Cost (Rs.)',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-              onPressed: () async {
-                if (selectedBarcode != null &&
-                    qtyController.text.isNotEmpty &&
-                    costController.text.isNotEmpty) {
-                  final qty = int.tryParse(qtyController.text) ?? 0;
-                  final cost = double.tryParse(costController.text) ?? 0.0;
+        builder: (dialogContext, setDialogState) {
+          final selectedProduct = products.cast<Product?>().firstWhere(
+            (p) => p?.barcode == selectedBarcode,
+            orElse: () => null,
+          );
 
-                  if (qty > 0) {
-                    final success = await context
-                        .read<AdminProvider>()
-                        .receiveStock(
-                          selectedBarcode!,
-                          qty,
-                          int.parse(supplierId.toString()),
-                          cost,
-                        );
+          final qty = int.tryParse(qtyController.text.trim()) ?? 0;
+          final cost = double.tryParse(costController.text.trim()) ?? 0.0;
+          final projectedStock = selectedProduct != null
+              ? selectedProduct.stock + qty
+              : null;
 
-                    if (success && dialogContext.mounted) {
-                      Navigator.pop(dialogContext);
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Stock added successfully!'),
-                            backgroundColor: Colors.green,
+          return AlertDialog(
+            title: Text('Receive from\n$supplierName'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    decoration: const InputDecoration(
+                      labelText: 'Select Product',
+                      border: OutlineInputBorder(),
+                    ),
+                    isExpanded: true,
+                    value: selectedBarcode,
+                    items: products
+                        .map(
+                          (p) => DropdownMenuItem(
+                            value: p.barcode,
+                            child: Text(p.name),
                           ),
-                        );
-                      }
-                    }
-                  }
-                }
-              },
-              child: const Text(
-                'Save Stock',
-                style: TextStyle(color: Colors.white),
+                        )
+                        .toList(),
+                    onChanged: isSubmitting
+                        ? null
+                        : (val) => setDialogState(() => selectedBarcode = val),
+                  ),
+                  const SizedBox(height: 14),
+
+                  if (selectedProduct != null)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            selectedProduct.name,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 6),
+                          Text('Barcode: ${selectedProduct.barcode}'),
+                          const SizedBox(height: 6),
+                          Text('Current Stock: ${selectedProduct.stock}'),
+                          if (qty > 0) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              'Projected Stock: $projectedStock',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+
+                  TextField(
+                    controller: qtyController,
+                    enabled: !isSubmitting,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Quantity Received',
+                      border: OutlineInputBorder(),
+                      hintText: 'Enter received quantity',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  TextField(
+                    controller: costController,
+                    enabled: !isSubmitting,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Total Cost (Rs.)',
+                      border: OutlineInputBorder(),
+                      hintText: 'Enter total supplier cost',
+                    ),
+                  ),
+
+                  if (qty > 0 && cost > 0) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[50],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        'Estimated Unit Cost: Rs. ${(cost / qty).toStringAsFixed(2)}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-          ],
-        ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting
+                    ? null
+                    : () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                        if (selectedBarcode == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Please select a product.'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                          return;
+                        }
+
+                        final qty =
+                            int.tryParse(qtyController.text.trim()) ?? 0;
+                        final cost =
+                            double.tryParse(costController.text.trim()) ?? -1;
+
+                        if (qty <= 0) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Quantity must be greater than 0.'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                          return;
+                        }
+
+                        if (cost < 0) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Please enter a valid cost.'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                          return;
+                        }
+
+                        setDialogState(() {
+                          isSubmitting = true;
+                        });
+
+                        final success = await context
+                            .read<AdminProvider>()
+                            .receiveStock(
+                              selectedBarcode!,
+                              qty,
+                              int.parse(supplierId.toString()),
+                              cost,
+                            );
+
+                        if (!context.mounted) return;
+
+                        if (success && dialogContext.mounted) {
+                          Navigator.pop(dialogContext);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Stock added successfully!'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        } else {
+                          setDialogState(() {
+                            isSubmitting = false;
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Failed to add stock.'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      },
+                child: isSubmitting
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text(
+                        'Save Stock',
+                        style: TextStyle(color: Colors.white),
+                      ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -689,6 +816,117 @@ class _AdminHomeState extends State<AdminHome> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildLowStockSection(List<Product> products) {
+    final lowStockProducts =
+        products.where((p) => p.stock > 0 && p.stock <= 10).toList()
+          ..sort((a, b) => a.stock.compareTo(b.stock));
+
+    final outOfStockProducts = products.where((p) => p.stock <= 0).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Inventory Alerts',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+
+        if (outOfStockProducts.isNotEmpty) ...[
+          Card(
+            color: Colors.red[50],
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: Colors.red),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '${outOfStockProducts.length} product(s) are out of stock',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.red,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+
+        if (lowStockProducts.isEmpty && outOfStockProducts.isEmpty)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Row(
+                children: const [
+                  Icon(Icons.check_circle, color: Colors.green),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'All products are stocked well right now.',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else
+          ...lowStockProducts
+              .take(5)
+              .map(
+                (product) => Card(
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: Colors.orange.withOpacity(0.12),
+                      child: const Icon(
+                        Icons.inventory_2,
+                        color: Colors.orange,
+                      ),
+                    ),
+                    title: Text(
+                      product.name,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text('Barcode: ${product.barcode}'),
+                    trailing: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'Stock: ${product.stock}',
+                        style: const TextStyle(
+                          color: Colors.orange,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    onTap: () => _showProductActionsSheet(product),
+                  ),
+                ),
+              ),
+
+        if (lowStockProducts.length > 5)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              '+${lowStockProducts.length - 5} more low stock item(s)',
+              style: TextStyle(color: Colors.grey[700]),
+            ),
+          ),
+      ],
     );
   }
 
@@ -806,6 +1044,8 @@ class _AdminHomeState extends State<AdminHome> {
                 ),
               ],
             ),
+            const SizedBox(height: 16),
+            _buildLowStockSection(provider.products),
             const SizedBox(height: 16),
             const Text(
               'Sales by Employee',
