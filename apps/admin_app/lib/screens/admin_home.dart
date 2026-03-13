@@ -19,7 +19,6 @@ class _AdminHomeState extends State<AdminHome> {
   @override
   void initState() {
     super.initState();
-    // Fetch products, dashboard stats, and suppliers from the cloud
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<AdminProvider>().fetchProducts();
       context.read<AdminProvider>().fetchDashboardStats();
@@ -33,9 +32,7 @@ class _AdminHomeState extends State<AdminHome> {
     String name,
     double currentPrice,
   ) {
-    final priceController = TextEditingController(
-      text: currentPrice.toString(),
-    );
+    final priceController = TextEditingController(text: currentPrice.toString());
 
     showDialog(
       context: context,
@@ -236,10 +233,73 @@ class _AdminHomeState extends State<AdminHome> {
     );
   }
 
+  Widget _buildInventorySummaryCard({
+    required String title,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 6,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: color.withOpacity(0.12),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: Colors.grey[700],
+                    fontSize: 12,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AdminProvider>();
     final filteredProducts = _getFilteredProducts(provider.products);
+
+    final totalProducts = provider.products.length;
+    final inStockCount = provider.products.where((p) => p.stock > 10).length;
+    final lowStockCount =
+        provider.products.where((p) => p.stock > 0 && p.stock <= 10).length;
+    final outOfStockCount = provider.products.where((p) => p.stock <= 0).length;
 
     final List<Widget> pages = [
       // PAGE 1: Dashboard
@@ -250,7 +310,6 @@ class _AdminHomeState extends State<AdminHome> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            // Revenue Card
             Card(
               elevation: 4,
               color: Colors.blue[900],
@@ -282,8 +341,6 @@ class _AdminHomeState extends State<AdminHome> {
               ),
             ),
             const SizedBox(height: 16),
-
-            // Stats Row
             Row(
               children: [
                 Expanded(
@@ -347,8 +404,6 @@ class _AdminHomeState extends State<AdminHome> {
               ],
             ),
             const SizedBox(height: 16),
-
-            // Cashier Breakdown
             const Text(
               'Sales by Employee',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -429,6 +484,41 @@ class _AdminHomeState extends State<AdminHome> {
                             _inventorySearch = value;
                           });
                         },
+                      ),
+                      const SizedBox(height: 12),
+                     GridView.count(
+                        crossAxisCount: 2,
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                        childAspectRatio: 2.7,
+                        children: [
+                          _buildInventorySummaryCard(
+                            title: 'Total Products',
+                            value: '$totalProducts',
+                            icon: Icons.inventory_2,
+                            color: Colors.blue,
+                          ),
+                          _buildInventorySummaryCard(
+                            title: 'In Stock',
+                            value: '$inStockCount',
+                            icon: Icons.check_circle,
+                            color: Colors.green,
+                          ),
+                          _buildInventorySummaryCard(
+                            title: 'Low Stock',
+                            value: '$lowStockCount',
+                            icon: Icons.warning_amber_rounded,
+                            color: Colors.orange,
+                          ),
+                          _buildInventorySummaryCard(
+                            title: 'Out of Stock',
+                            value: '$outOfStockCount',
+                            icon: Icons.cancel,
+                            color: Colors.red,
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 10),
                       SizedBox(
@@ -565,8 +655,8 @@ class _AdminHomeState extends State<AdminHome> {
                                                     vertical: 6,
                                                   ),
                                               decoration: BoxDecoration(
-                                                color: statusColor.withValues(
-                                                  alpha: 0.12,
+                                                color: statusColor.withOpacity(
+                                                  0.12,
                                                 ),
                                                 borderRadius:
                                                     BorderRadius.circular(20),
