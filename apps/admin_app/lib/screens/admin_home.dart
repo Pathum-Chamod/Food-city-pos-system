@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 import '../providers/admin_provider.dart';
+import 'inventory_history_screen.dart';
 
 class AdminHome extends StatefulWidget {
   const AdminHome({super.key});
@@ -186,9 +187,10 @@ class _AdminHomeState extends State<AdminHome> {
                   subtitle: const Text('Inventory movement timeline'),
                   onTap: () {
                     Navigator.pop(context);
-                    ScaffoldMessenger.of(this.context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Inventory history screen coming next.'),
+                    Navigator.push(
+                      this.context,
+                      MaterialPageRoute(
+                        builder: (_) => InventoryHistoryScreen(product: product),
                       ),
                     );
                   },
