@@ -7,7 +7,7 @@ import 'package:shared/shared.dart';
 import '../models/supplier.dart';
 
 class AdminProvider with ChangeNotifier {
-  // Cloud-fetched product inventory
+  // Product inventory fetched from backend
   List<Product> _products = [];
 
   // Shared loading state for admin screens
@@ -26,10 +26,13 @@ class AdminProvider with ChangeNotifier {
   List<dynamic> get cashierBreakdown => _cashierBreakdown;
   List<Supplier> get suppliers => _suppliers;
 
-  // Main backend API endpoint
-  final String apiUrl = "https://alfasoft.it.com/api/pos_sync.php";
+  // Local Python backend for Windows desktop development
+  final String apiUrl = "http://127.0.0.1:8080/api/pos_sync.php";
 
-  // Fetch product master list from cloud
+  // If you run admin_app on Android emulator instead, use this:
+  // final String apiUrl = "http://10.0.2.2:8080/api/pos_sync.php";
+
+  // Fetch product master list
   Future<void> fetchProducts() async {
     _isLoading = true;
     notifyListeners();
@@ -85,7 +88,7 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
-  // Update a product selling price in cloud
+  // Update a product selling price
   Future<bool> updateProductPrice(String barcode, double newPrice) async {
     try {
       final response = await http.post(
@@ -113,7 +116,7 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
-  // Submit stock receiving data for a supplier delivery
+  // Submit stock receiving data
   Future<bool> receiveStock(
     String barcode,
     int quantity,
