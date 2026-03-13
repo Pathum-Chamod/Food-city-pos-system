@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared/shared.dart';
 
+import '../models/inventory_history_item.dart';
+import '../models/stock_adjustment_request.dart';
 import '../models/supplier.dart';
 
 class AdminProvider with ChangeNotifier {
@@ -26,11 +28,11 @@ class AdminProvider with ChangeNotifier {
   List<dynamic> get cashierBreakdown => _cashierBreakdown;
   List<Supplier> get suppliers => _suppliers;
 
-  // Local Python backend for Windows desktop development
-  final String apiUrl = "http://127.0.0.1:8080/api/pos_sync.php";
+  // Local Python backend for Android emulator
+  final String apiUrl = "http://10.0.2.2:8080/api/pos_sync.php";
 
-  // If you run admin_app on Android emulator instead, use this:
-  // final String apiUrl = "http://10.0.2.2:8080/api/pos_sync.php";
+  // If you run admin_app on Windows desktop instead, use this:
+  // final String apiUrl = "http://127.0.0.1:8080/api/pos_sync.php";
 
   // Fetch product master list
   Future<void> fetchProducts() async {
@@ -148,6 +150,140 @@ class AdminProvider with ChangeNotifier {
     } catch (e) {
       debugPrint("Stock update error: $e");
       return false;
+    }
+  }
+
+  // Submit manual stock adjustment
+  Future<bool> adjustStock(StockAdjustmentRequest request) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$apiUrl?action=adjust_stock'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode(request.toMap()),
+      );
+
+      if (response.statusCode == 200) {
+        final result = json.decode(response.body);
+
+        if (result['status'] == 'success') {
+          await fetchProducts();
+          return true;
+        }
+      }
+
+      return false;
+    } catch (e) {
+      debugPrint("Adjust stock error: $e");
+      return false;
+    }
+  }
+
+  // Fetch real inventory history for a product
+  Future<List<InventoryHistoryItem>> fetchInventoryHistory(
+    String barcode,
+  ) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$apiUrl?action=get_inventory_history&barcode=$barcode'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['status'] == 'success') {
+          final List<dynamic> history = data['history'] ?? [];
+
+          return history
+              .map(
+                (item) => _mapHistoryItem(item as Map<String, dynamic>),
+              )
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint("Inventory history fetch error: $e");
+    }
+
+    return [];
+  }
+
+  InventoryHistoryItem _mapHistoryItem(Map<String, dynamic> item) {
+    final String movementType = item['movement_type']?.toString() ?? '';
+    final int quantity = int.tryParse(item['quantity'].toString()) ?? 0;
+    final String reason = item['reason']?.toString() ?? '';
+    final String createdAt = item['created_at']?.toString() ?? '';
+
+    return InventoryHistoryItem(
+      type: movementType,
+      title: _historyTitle(movementType),
+      subtitle: reason.isNotEmpty ? reason : 'Inventory activity',
+      quantityText: _historyQuantityText(movementType, quantity),
+      dateText: createdAt,
+      icon: _historyIcon(movementType),
+      color: _historyColor(movementType),
+    );
+  }
+
+  String _historyTitle(String movementType) {
+    switch (movementType) {
+      case 'sale':
+        return 'Sale';
+      case 'refund':
+        return 'Refund';
+      case 'stock_in':
+        return 'Stock Received';
+      case 'adjustment':
+        return 'Manual Adjustment';
+      case 'price_update':
+        return 'Price Update';
+      default:
+        return 'Inventory Activity';
+    }
+  }
+
+  String _historyQuantityText(String movementType, int quantity) {
+    if (movementType == 'price_update') {
+      return '—';
+    }
+
+    if (quantity > 0) {
+      return '+$quantity';
+    }
+
+    return quantity.toString();
+  }
+
+  IconData _historyIcon(String movementType) {
+    switch (movementType) {
+      case 'sale':
+        return Icons.point_of_sale;
+      case 'refund':
+        return Icons.assignment_return;
+      case 'stock_in':
+        return Icons.local_shipping;
+      case 'adjustment':
+        return Icons.tune;
+      case 'price_update':
+        return Icons.edit;
+      default:
+        return Icons.inventory_2_outlined;
+    }
+  }
+
+  Color _historyColor(String movementType) {
+    switch (movementType) {
+      case 'sale':
+        return Colors.red;
+      case 'refund':
+        return Colors.deepPurple;
+      case 'stock_in':
+        return Colors.green;
+      case 'adjustment':
+        return Colors.orange;
+      case 'price_update':
+        return Colors.blue;
+      default:
+        return Colors.grey;
     }
   }
 }

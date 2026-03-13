@@ -257,7 +257,6 @@ class _AdminHomeState extends State<AdminHome> {
                     ),
                   ),
                   const SizedBox(height: 16),
-
                   DropdownButtonFormField<String>(
                     value: adjustmentType,
                     decoration: const InputDecoration(
@@ -287,7 +286,6 @@ class _AdminHomeState extends State<AdminHome> {
                     },
                   ),
                   const SizedBox(height: 14),
-
                   TextField(
                     controller: qtyController,
                     keyboardType: TextInputType.number,
@@ -303,7 +301,6 @@ class _AdminHomeState extends State<AdminHome> {
                     ),
                   ),
                   const SizedBox(height: 14),
-
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
@@ -320,7 +317,6 @@ class _AdminHomeState extends State<AdminHome> {
                     ),
                   ),
                   const SizedBox(height: 14),
-
                   TextField(
                     controller: reasonController,
                     maxLines: 2,
@@ -429,10 +425,7 @@ class _AdminHomeState extends State<AdminHome> {
                             child: const Text('Back'),
                           ),
                           ElevatedButton(
-                            onPressed: () {
-                              Navigator.pop(confirmContext);
-                              Navigator.pop(dialogContext);
-
+                            onPressed: () async {
                               final adjustmentRequest = StockAdjustmentRequest(
                                 barcode: product.barcode,
                                 adjustmentType: adjustmentType,
@@ -440,20 +433,38 @@ class _AdminHomeState extends State<AdminHome> {
                                 reason: reason,
                               );
 
-                              final message =
-                                  adjustmentRequest.adjustmentType == 'increase'
-                                  ? 'Stock adjustment prepared: +${adjustmentRequest.quantity} for ${product.name}'
-                                  : adjustmentRequest.adjustmentType ==
-                                        'decrease'
-                                  ? 'Stock adjustment prepared: -${adjustmentRequest.quantity} for ${product.name}'
-                                  : 'Exact stock prepared: set ${product.name} to ${adjustmentRequest.quantity}';
+                              final success = await context
+                                  .read<AdminProvider>()
+                                  .adjustStock(adjustmentRequest);
 
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(message),
-                                  backgroundColor: Colors.blue,
-                                ),
-                              );
+                              if (!mounted) return;
+
+                              Navigator.pop(confirmContext);
+                              Navigator.pop(dialogContext);
+
+                              if (success) {
+                                final message = adjustmentType == 'increase'
+                                    ? 'Stock increased successfully.'
+                                    : adjustmentType == 'decrease'
+                                    ? 'Stock decreased successfully.'
+                                    : 'Exact stock updated successfully.';
+
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(message),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Failed to save stock adjustment.',
+                                    ),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
                             },
                             child: const Text('Confirm'),
                           ),
