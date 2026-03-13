@@ -32,7 +32,9 @@ class _AdminHomeState extends State<AdminHome> {
     String name,
     double currentPrice,
   ) {
-    final priceController = TextEditingController(text: currentPrice.toString());
+    final priceController = TextEditingController(
+      text: currentPrice.toString(),
+    );
 
     showDialog(
       context: context,
@@ -73,6 +75,133 @@ class _AdminHomeState extends State<AdminHome> {
           ),
         ],
       ),
+    );
+  }
+
+  void _showProductActionsSheet(Product product) {
+    final statusText = _getStockStatus(product);
+    final statusColor = _getStockStatusColor(product);
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  product.name,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Barcode: ${product.barcode}',
+                  style: TextStyle(color: Colors.grey[700]),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: statusColor.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        statusText,
+                        style: TextStyle(
+                          color: statusColor,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Stock: ${product.stock}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const Spacer(),
+                    Text(
+                      'Rs. ${product.price.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        color: Colors.green,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFFE3F2FD),
+                    child: Icon(Icons.edit, color: Colors.blue),
+                  ),
+                  title: const Text('Update Price'),
+                  subtitle: const Text('Change selling price in cloud'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showEditPriceDialog(
+                      this.context,
+                      product.barcode,
+                      product.name,
+                      product.price,
+                    );
+                  },
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFFFFF3E0),
+                    child: Icon(Icons.tune, color: Colors.orange),
+                  ),
+                  title: const Text('Adjust Stock'),
+                  subtitle: const Text('Manual stock correction'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Stock adjustment screen coming next.'),
+                      ),
+                    );
+                  },
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0xFFEDE7F6),
+                    child: Icon(Icons.history, color: Colors.deepPurple),
+                  ),
+                  title: const Text('View History'),
+                  subtitle: const Text('Inventory movement timeline'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Inventory history screen coming next.'),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -245,11 +374,7 @@ class _AdminHomeState extends State<AdminHome> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
         boxShadow: const [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 6,
-            offset: Offset(0, 2),
-          ),
+          BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2)),
         ],
       ),
       child: Row(
@@ -275,10 +400,7 @@ class _AdminHomeState extends State<AdminHome> {
                 const SizedBox(height: 2),
                 Text(
                   title,
-                  style: TextStyle(
-                    color: Colors.grey[700],
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: Colors.grey[700], fontSize: 12),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -297,8 +419,9 @@ class _AdminHomeState extends State<AdminHome> {
 
     final totalProducts = provider.products.length;
     final inStockCount = provider.products.where((p) => p.stock > 10).length;
-    final lowStockCount =
-        provider.products.where((p) => p.stock > 0 && p.stock <= 10).length;
+    final lowStockCount = provider.products
+        .where((p) => p.stock > 0 && p.stock <= 10)
+        .length;
     final outOfStockCount = provider.products.where((p) => p.stock <= 0).length;
 
     final List<Widget> pages = [
@@ -486,7 +609,7 @@ class _AdminHomeState extends State<AdminHome> {
                         },
                       ),
                       const SizedBox(height: 12),
-                     GridView.count(
+                      GridView.count(
                         crossAxisCount: 2,
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
@@ -588,12 +711,7 @@ class _AdminHomeState extends State<AdminHome> {
                                 elevation: 2,
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(12),
-                                  onTap: () => _showEditPriceDialog(
-                                    context,
-                                    product.barcode,
-                                    product.name,
-                                    product.price,
-                                  ),
+                                  onTap: () => _showProductActionsSheet(product),
                                   child: Padding(
                                     padding: const EdgeInsets.all(14),
                                     child: Column(
