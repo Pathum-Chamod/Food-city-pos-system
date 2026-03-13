@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
-import '../models/inventory_history_item.dart';
 
-class InventoryHistoryScreen extends StatelessWidget {
+import '../models/inventory_history_item.dart';
+import '../providers/admin_provider.dart';
+
+class InventoryHistoryScreen extends StatefulWidget {
   final Product product;
 
   const InventoryHistoryScreen({
@@ -11,54 +14,39 @@ class InventoryHistoryScreen extends StatelessWidget {
   });
 
   @override
+  State<InventoryHistoryScreen> createState() => _InventoryHistoryScreenState();
+}
+
+class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
+  bool _isLoading = true;
+  List<InventoryHistoryItem> _history = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHistory();
+  }
+
+  Future<void> _loadHistory() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    final history = await context.read<AdminProvider>().fetchInventoryHistory(
+      widget.product.barcode,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _history = history;
+      _isLoading = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final List<InventoryHistoryItem> mockHistory = [
-      InventoryHistoryItem(
-        type: 'receive',
-        title: 'Stock Received',
-        subtitle: 'Received from supplier',
-        quantityText: '+24',
-        dateText: 'Today, 10:15 AM',
-        icon: Icons.local_shipping,
-        color: Colors.green,
-      ),
-      InventoryHistoryItem(
-        type: 'sale',
-        title: 'Sale',
-        subtitle: 'Sold through POS checkout',
-        quantityText: '-3',
-        dateText: 'Today, 9:40 AM',
-        icon: Icons.point_of_sale,
-        color: Colors.red,
-      ),
-      InventoryHistoryItem(
-        type: 'adjustment',
-        title: 'Manual Adjustment',
-        subtitle: 'Stock corrected by manager',
-        quantityText: '+2',
-        dateText: 'Yesterday, 6:20 PM',
-        icon: Icons.tune,
-        color: Colors.orange,
-      ),
-      InventoryHistoryItem(
-        type: 'price_update',
-        title: 'Price Update',
-        subtitle: 'Selling price changed',
-        quantityText: 'Rs. ${product.price.toStringAsFixed(2)}',
-        dateText: 'Yesterday, 4:05 PM',
-        icon: Icons.edit,
-        color: Colors.blue,
-      ),
-      InventoryHistoryItem(
-        type: 'refund',
-        title: 'Refund',
-        subtitle: 'Returned item added back to stock',
-        quantityText: '+1',
-        dateText: 'Yesterday, 11:50 AM',
-        icon: Icons.assignment_return,
-        color: Colors.deepPurple,
-      ),
-    ];
+    final product = widget.product;
 
     return Scaffold(
       appBar: AppBar(
@@ -133,57 +121,91 @@ class InventoryHistoryScreen extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: mockHistory.isEmpty
-                ? const Center(
-                    child: Text(
-                      'No inventory history available',
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    itemCount: mockHistory.length,
-                    itemBuilder: (context, index) {
-                      final item = mockHistory[index];
+            child: RefreshIndicator(
+              onRefresh: _loadHistory,
+              child: _isLoading
+                  ? ListView(
+                      children: const [
+                        SizedBox(height: 180),
+                        Center(child: CircularProgressIndicator()),
+                      ],
+                    )
+                  : _history.isEmpty
+                  ? ListView(
+                      children: const [
+                        SizedBox(height: 140),
+                        Center(
+                          child: Column(
+                            children: [
+                              Icon(
+                                Icons.history,
+                                size: 54,
+                                color: Colors.grey,
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                'No inventory history available',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                              SizedBox(height: 6),
+                              Text(
+                                'Stock movements will appear here',
+                                style: TextStyle(color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      itemCount: _history.length,
+                      itemBuilder: (context, index) {
+                        final item = _history[index];
 
-                      return Card(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.all(12),
-                          leading: CircleAvatar(
-                            backgroundColor: item.color.withOpacity(0.12),
-                            child: Icon(
-                              item.icon,
-                              color: item.color,
+                        return Card(
+                          margin: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.all(12),
+                            leading: CircleAvatar(
+                              backgroundColor: item.color.withOpacity(0.12),
+                              child: Icon(
+                                item.icon,
+                                color: item.color,
+                              ),
+                            ),
+                            title: Text(
+                              item.title,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            subtitle: Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                '${item.subtitle}\n${item.dateText}',
+                              ),
+                            ),
+                            trailing: Text(
+                              item.quantityText,
+                              style: TextStyle(
+                                color: item.color,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
                             ),
                           ),
-                          title: Text(
-                            item.title,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          subtitle: Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Text(
-                              '${item.subtitle}\n${item.dateText}',
-                            ),
-                          ),
-                          trailing: Text(
-                            item.quantityText,
-                            style: TextStyle(
-                              color: item.color,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                        );
+                      },
+                    ),
+            ),
           ),
         ],
       ),
