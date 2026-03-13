@@ -216,9 +216,9 @@ class AdminProvider with ChangeNotifier {
     return InventoryHistoryItem(
       type: movementType,
       title: _historyTitle(movementType),
-      subtitle: reason.isNotEmpty ? reason : 'Inventory activity',
+      subtitle: _historySubtitle(movementType, reason, quantity),
       quantityText: _historyQuantityText(movementType, quantity),
-      dateText: createdAt,
+      dateText: _formatHistoryDate(createdAt),
       icon: _historyIcon(movementType),
       color: _historyColor(movementType),
     );
@@ -241,6 +241,29 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
+  String _historySubtitle(String movementType, String reason, int quantity) {
+    if (reason.isNotEmpty) {
+      return reason;
+    }
+
+    switch (movementType) {
+      case 'sale':
+        return 'Item sold through POS';
+      case 'refund':
+        return 'Item returned to stock';
+      case 'stock_in':
+        return 'Stock received from supplier';
+      case 'adjustment':
+        return quantity >= 0
+            ? 'Manual stock increase'
+            : 'Manual stock decrease';
+      case 'price_update':
+        return 'Selling price changed';
+      default:
+        return 'Inventory activity';
+    }
+  }
+
   String _historyQuantityText(String movementType, int quantity) {
     if (movementType == 'price_update') {
       return '—';
@@ -251,6 +274,24 @@ class AdminProvider with ChangeNotifier {
     }
 
     return quantity.toString();
+  }
+
+  String _formatHistoryDate(String rawDate) {
+    try {
+      final dateTime = DateTime.parse(rawDate);
+
+      String twoDigits(int value) => value.toString().padLeft(2, '0');
+
+      final day = twoDigits(dateTime.day);
+      final month = twoDigits(dateTime.month);
+      final year = dateTime.year;
+      final hour = twoDigits(dateTime.hour);
+      final minute = twoDigits(dateTime.minute);
+
+      return '$day/$month/$year  $hour:$minute';
+    } catch (_) {
+      return rawDate;
+    }
   }
 
   IconData _historyIcon(String movementType) {
