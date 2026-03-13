@@ -190,7 +190,8 @@ class _AdminHomeState extends State<AdminHome> {
                     Navigator.push(
                       this.context,
                       MaterialPageRoute(
-                        builder: (_) => InventoryHistoryScreen(product: product),
+                        builder: (_) =>
+                            InventoryHistoryScreen(product: product),
                       ),
                     );
                   },
@@ -390,19 +391,65 @@ class _AdminHomeState extends State<AdminHome> {
                     return;
                   }
 
-                  Navigator.pop(dialogContext);
+                  showDialog(
+                    context: context,
+                    builder: (confirmContext) {
+                      final actionText = adjustmentType == 'increase'
+                          ? 'Increase by $qty'
+                          : adjustmentType == 'decrease'
+                          ? 'Decrease by $qty'
+                          : 'Set exact stock to $qty';
 
-                  final message = adjustmentType == 'increase'
-                      ? 'Stock adjustment prepared: +$qty for ${product.name}'
-                      : adjustmentType == 'decrease'
-                      ? 'Stock adjustment prepared: -$qty for ${product.name}'
-                      : 'Exact stock prepared: set ${product.name} to $qty';
+                      return AlertDialog(
+                        title: const Text('Confirm Stock Adjustment'),
+                        content: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              product.name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text('Action: $actionText'),
+                            const SizedBox(height: 6),
+                            Text('Current Stock: ${product.stock}'),
+                            const SizedBox(height: 6),
+                            Text('Resulting Stock: $resultingStock'),
+                            const SizedBox(height: 12),
+                            Text('Reason: $reason'),
+                          ],
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(confirmContext),
+                            child: const Text('Back'),
+                          ),
+                          ElevatedButton(
+                            onPressed: () {
+                              Navigator.pop(confirmContext);
+                              Navigator.pop(dialogContext);
 
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(message),
-                      backgroundColor: Colors.blue,
-                    ),
+                              final message = adjustmentType == 'increase'
+                                  ? 'Stock adjustment prepared: +$qty for ${product.name}'
+                                  : adjustmentType == 'decrease'
+                                  ? 'Stock adjustment prepared: -$qty for ${product.name}'
+                                  : 'Exact stock prepared: set ${product.name} to $qty';
+
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(message),
+                                  backgroundColor: Colors.blue,
+                                ),
+                              );
+                            },
+                            child: const Text('Confirm'),
+                          ),
+                        ],
+                      );
+                    },
                   );
                 },
                 child: const Text(
