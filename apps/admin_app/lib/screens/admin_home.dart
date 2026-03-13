@@ -1076,6 +1076,7 @@ class _AdminHomeState extends State<AdminHome> {
               itemCount: provider.suppliers.length,
               itemBuilder: (context, index) {
                 final supplier = provider.suppliers[index];
+
                 return Card(
                   margin: const EdgeInsets.symmetric(
                     horizontal: 10,
@@ -1087,15 +1088,15 @@ class _AdminHomeState extends State<AdminHome> {
                       child: Icon(Icons.local_shipping, color: Colors.white),
                     ),
                     title: Text(
-                      supplier['name'],
+                      supplier.name,
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
-                    subtitle: Text('Phone: ${supplier['phone']}'),
+                    subtitle: Text('Phone: ${supplier.phone}'),
                     trailing: ElevatedButton(
                       onPressed: () => _showReceiveStockDialog(
                         context,
-                        supplier['id'],
-                        supplier['name'],
+                        supplier.id,
+                        supplier.name,
                       ),
                       child: const Text('Receive'),
                     ),
