@@ -9,7 +9,6 @@ Endpoint: http://localhost:8080/api/pos_sync.php
 import json
 import os
 import sqlite3
-from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -43,7 +42,7 @@ def log_inventory_history(
             reference_id,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'))
         """,
         (
             barcode,
@@ -133,16 +132,16 @@ def init_db():
     # Seed mock products if empty
     if c.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
         products = [
-            ("8901234567890", "Munchee Cream Crackers", 450.00, 100),
-            ("8901234567891", "Anchor Milk Powder 1kg", 1890.00, 50),
-            ("8901234567892", "Raigam Soya Meat", 320.00, 75),
-            ("8901234567893", "Signal Toothpaste", 280.00, 60),
+            ("4791044000123", "Munchee Super Cream Cracker 500g", 450.00, 100),
+            ("4792011001234", "Anchor Milk Powder 400g", 1100.00, 50),
+            ("4792022005678", "Saman Halmassa 425g", 650.00, 30),
+            ("4793033009999", "Kist Strawberry Jam 500g", 580.00, 40),
         ]
         for barcode, name, price, stock in products:
             c.execute(
                 """
                 INSERT INTO products (barcode, name, price, stock, updated_at)
-                VALUES (?, ?, ?, ?, datetime('now'))
+                VALUES (?, ?, ?, ?, datetime('now','localtime'))
                 """,
                 (barcode, name, price, stock),
             )
@@ -192,17 +191,15 @@ class APIHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(result).encode())
 
         elif action == "get_sales":
-            today = date.today().isoformat()
             rows = c.execute(
                 """
                 SELECT cashier_name,
                        SUM(total_amount) AS total_sales,
                        COUNT(id) AS transaction_count
                 FROM sales
-                WHERE DATE(created_at) = ?
+                WHERE DATE(created_at) = DATE('now','localtime')
                 GROUP BY cashier_name
-                """,
-                (today,),
+                """
             ).fetchall()
 
             cashier_sales = [dict(r) for r in rows]
@@ -291,7 +288,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         items,
                         created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, datetime('now'))
+                    VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))
                     """,
                     (
                         data.get("total_amount", 0),
@@ -303,21 +300,18 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 sale_id = c.lastrowid
 
-                # Deduct or add stock based on item quantity
-                # Regular sale qty is positive  -> stock decreases
-                # Refund qty is negative        -> stock increases
                 for item in data.get("items", []):
                     product = item.get("product", {})
                     barcode = product.get("barcode", "")
                     qty = int(item.get("quantity", 0))
 
                     if barcode:
-                        stock_delta = -qty  # sale => negative, refund => positive
+                        stock_delta = -qty
 
                         c.execute(
                             """
                             UPDATE products
-                            SET stock = stock + ?, updated_at = datetime('now')
+                            SET stock = stock + ?, updated_at = datetime('now','localtime')
                             WHERE barcode = ?
                             """,
                             (stock_delta, barcode),
@@ -354,7 +348,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 c.execute(
                     """
                     UPDATE products
-                    SET price = ?, updated_at = datetime('now')
+                    SET price = ?, updated_at = datetime('now','localtime')
                     WHERE barcode = ?
                     """,
                     (new_price, barcode),
@@ -386,7 +380,7 @@ class APIHandler(BaseHTTPRequestHandler):
             c.execute(
                 """
                 UPDATE products
-                SET price = ?, updated_at = datetime('now')
+                SET price = ?, updated_at = datetime('now','localtime')
                 WHERE barcode = ?
                 """,
                 (new_price, barcode),
@@ -415,8 +409,14 @@ class APIHandler(BaseHTTPRequestHandler):
 
             c.execute(
                 """
-                INSERT INTO stock_receipts (barcode, quantity, supplier_id, cost)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO stock_receipts (
+                    barcode,
+                    quantity,
+                    supplier_id,
+                    cost,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, datetime('now','localtime'))
                 """,
                 (barcode, quantity, supplier_id, cost),
             )
@@ -425,7 +425,7 @@ class APIHandler(BaseHTTPRequestHandler):
             c.execute(
                 """
                 UPDATE products
-                SET stock = stock + ?, updated_at = datetime('now')
+                SET stock = stock + ?, updated_at = datetime('now','localtime')
                 WHERE barcode = ?
                 """,
                 (quantity, barcode),
@@ -506,7 +506,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     c.execute(
                         """
                         UPDATE products
-                        SET stock = ?, updated_at = datetime('now')
+                        SET stock = ?, updated_at = datetime('now','localtime')
                         WHERE barcode = ?
                         """,
                         (resulting_stock, barcode),
@@ -546,7 +546,6 @@ class APIHandler(BaseHTTPRequestHandler):
         conn.close()
 
     def log_message(self, format, *args):
-        # Custom log format
         print(f"  📡 {args[0]}")
 
 
