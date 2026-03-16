@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/database_helper.dart';
+import 'refund_transaction_screen.dart';
 
 class TransactionHistoryScreen extends StatefulWidget {
   const TransactionHistoryScreen({super.key});
@@ -28,11 +29,33 @@ class TransactionHistoryScreen extends StatefulWidget {
       return;
     }
 
-    await showTransactionReceiptDialog(
+    final action = await showTransactionReceiptDialog(
       context,
       summary: summary,
       items: items,
     );
+
+    if (!context.mounted) return;
+
+    final type =
+        (summary['transaction_type'] ?? 'sale').toString().toLowerCase();
+
+    if (action == 'refund' && type == 'sale') {
+      final refundSaleId = await Navigator.push<int>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => RefundTransactionScreen(
+            originalSaleId: saleId,
+          ),
+        ),
+      );
+
+      if (!context.mounted) return;
+
+      if (refundSaleId != null) {
+        await showReceiptDialogForTransaction(context, refundSaleId);
+      }
+    }
   }
 }
 
@@ -155,6 +178,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                                     0;
                             final createdAt =
                                 (tx['created_at'] ?? '').toString();
+                            final originalSaleId = tx['original_sale_id'];
 
                             return Card(
                               margin: const EdgeInsets.symmetric(
@@ -205,6 +229,11 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                                       Text(
                                         'Time: ${_formatDateTime(createdAt)}',
                                       ),
+                                      if (type == 'refund' &&
+                                          originalSaleId != null) ...[
+                                        const SizedBox(height: 4),
+                                        Text('Refund of Sale #$originalSaleId'),
+                                      ],
                                       const SizedBox(height: 8),
                                       Text(
                                         'Total: Rs. ${totalAbs.toStringAsFixed(2)}',
@@ -223,6 +252,9 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                                     context,
                                     id as int,
                                   );
+                                  if (mounted) {
+                                    _loadTransactions();
+                                  }
                                 },
                               ),
                             );
@@ -236,7 +268,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   }
 }
 
-Future<void> showTransactionReceiptDialog(
+Future<String?> showTransactionReceiptDialog(
   BuildContext context, {
   required Map<String, dynamic> summary,
   required List<Map<String, dynamic>> items,
@@ -262,8 +294,10 @@ Future<void> showTransactionReceiptDialog(
   final cashier = (summary['cashier_name'] ?? 'Unknown').toString();
   final createdAt = (summary['created_at'] ?? '').toString();
   final transactionId = summary['id'];
+  final originalSaleId = summary['original_sale_id'];
+  final refundReason = (summary['refund_reason'] ?? '').toString();
 
-  await showDialog(
+  return showDialog<String>(
     context: context,
     builder: (context) {
       return AlertDialog(
@@ -286,6 +320,14 @@ Future<void> showTransactionReceiptDialog(
                 Text('Type: ${isRefund ? 'Refund' : 'Sale'}'),
                 Text('Cashier: $cashier'),
                 Text('Date/Time: ${formatDateTime(createdAt)}'),
+                if (isRefund && originalSaleId != null) ...[
+                  const SizedBox(height: 4),
+                  Text('Refund of Sale #: $originalSaleId'),
+                ],
+                if (isRefund && refundReason.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text('Reason: $refundReason'),
+                ],
                 const SizedBox(height: 14),
                 const Divider(),
                 const SizedBox(height: 6),
@@ -354,6 +396,11 @@ Future<void> showTransactionReceiptDialog(
           ),
         ),
         actions: [
+          if (!isRefund)
+            OutlinedButton(
+              onPressed: () => Navigator.pop(context, 'refund'),
+              child: const Text('Refund Items'),
+            ),
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Close'),
