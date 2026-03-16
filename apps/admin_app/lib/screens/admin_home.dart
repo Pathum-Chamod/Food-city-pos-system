@@ -488,9 +488,10 @@ class _AdminHomeState extends State<AdminHome> {
   void _showReceiveStockDialog(
     BuildContext context,
     dynamic supplierId,
-    String supplierName,
-  ) {
-    String? selectedBarcode;
+    String supplierName, {
+    String? initialBarcode,
+  }) {
+    String? selectedBarcode = initialBarcode;
     final qtyController = TextEditingController();
     final costController = TextEditingController();
     final products = context.read<AdminProvider>().products;
@@ -537,7 +538,6 @@ class _AdminHomeState extends State<AdminHome> {
                         : (val) => setDialogState(() => selectedBarcode = val),
                   ),
                   const SizedBox(height: 14),
-
                   if (selectedProduct != null)
                     Container(
                       width: double.infinity,
@@ -571,7 +571,6 @@ class _AdminHomeState extends State<AdminHome> {
                         ],
                       ),
                     ),
-
                   TextField(
                     controller: qtyController,
                     enabled: !isSubmitting,
@@ -584,7 +583,6 @@ class _AdminHomeState extends State<AdminHome> {
                     ),
                   ),
                   const SizedBox(height: 14),
-
                   TextField(
                     controller: costController,
                     enabled: !isSubmitting,
@@ -598,7 +596,6 @@ class _AdminHomeState extends State<AdminHome> {
                       hintText: 'Enter total supplier cost',
                     ),
                   ),
-
                   if (qty > 0 && cost > 0) ...[
                     const SizedBox(height: 14),
                     Container(
@@ -720,6 +717,71 @@ class _AdminHomeState extends State<AdminHome> {
     );
   }
 
+  void _showQuickRestockSupplierPicker(Product product) {
+    final suppliers = context.read<AdminProvider>().suppliers;
+
+    if (suppliers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No suppliers available.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Choose supplier for\n${product.name}',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ...suppliers.map(
+                  (supplier) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const CircleAvatar(
+                      backgroundColor: Colors.orange,
+                      child: Icon(Icons.local_shipping, color: Colors.white),
+                    ),
+                    title: Text(
+                      supplier.name,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text('Phone: ${supplier.phone}'),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      _showReceiveStockDialog(
+                        context,
+                        supplier.id,
+                        supplier.name,
+                        initialBarcode: product.barcode,
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   List<Product> _getFilteredProducts(List<Product> products) {
     final query = _inventorySearch.trim().toLowerCase();
 
@@ -835,31 +897,6 @@ class _AdminHomeState extends State<AdminHome> {
         ),
         const SizedBox(height: 8),
 
-        if (outOfStockProducts.isNotEmpty) ...[
-          Card(
-            color: Colors.red[50],
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Row(
-                children: [
-                  const Icon(Icons.warning_amber_rounded, color: Colors.red),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      '${outOfStockProducts.length} product(s) are out of stock',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.red,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-        ],
-
         if (lowStockProducts.isEmpty && outOfStockProducts.isEmpty)
           Card(
             child: Padding(
@@ -878,55 +915,148 @@ class _AdminHomeState extends State<AdminHome> {
               ),
             ),
           )
-        else
-          ...lowStockProducts
-              .take(5)
-              .map(
-                (product) => Card(
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: Colors.orange.withOpacity(0.12),
-                      child: const Icon(
-                        Icons.inventory_2,
-                        color: Colors.orange,
-                      ),
-                    ),
-                    title: Text(
-                      product.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: Text('Barcode: ${product.barcode}'),
-                    trailing: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
+        else ...[
+          if (outOfStockProducts.isNotEmpty) ...[
+            Card(
+              color: Colors.red[50],
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning_amber_rounded, color: Colors.red),
+                    const SizedBox(width: 10),
+                    Expanded(
                       child: Text(
-                        'Stock: ${product.stock}',
+                        '${outOfStockProducts.length} product(s) are out of stock',
                         style: const TextStyle(
-                          color: Colors.orange,
                           fontWeight: FontWeight.bold,
+                          color: Colors.red,
                         ),
                       ),
                     ),
-                    onTap: () => _showProductActionsSheet(product),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            ...outOfStockProducts
+                .take(5)
+                .map(
+                  (product) => _buildInventoryAlertTile(
+                    product: product,
+                    color: Colors.red,
+                    badgeText: 'Stock: 0',
+                  ),
+                ),
+            if (outOfStockProducts.length > 5)
+              Padding(
+                padding: const EdgeInsets.only(top: 6, bottom: 10),
+                child: Text(
+                  '+${outOfStockProducts.length - 5} more out of stock item(s)',
+                  style: TextStyle(color: Colors.grey[700]),
+                ),
+              ),
+            const SizedBox(height: 6),
+          ],
+
+          if (lowStockProducts.isNotEmpty) ...[
+            Card(
+              color: Colors.orange[50],
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline, color: Colors.orange),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '${lowStockProducts.length} product(s) are low in stock',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            ...lowStockProducts
+                .take(5)
+                .map(
+                  (product) => _buildInventoryAlertTile(
+                    product: product,
+                    color: Colors.orange,
+                    badgeText: 'Stock: ${product.stock}',
+                  ),
+                ),
+            if (lowStockProducts.length > 5)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  '+${lowStockProducts.length - 5} more low stock item(s)',
+                  style: TextStyle(color: Colors.grey[700]),
+                ),
+              ),
+          ],
+        ],
+      ],
+    );
+  }
+
+  Widget _buildInventoryAlertTile({
+    required Product product,
+    required Color color,
+    required String badgeText,
+  }) {
+    return Card(
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: color.withOpacity(0.12),
+          child: Icon(Icons.inventory_2, color: color),
+        ),
+        title: Text(
+          product.name,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text('Barcode: ${product.barcode}'),
+        trailing: SizedBox(
+          width: 120,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  badgeText,
+                  style: TextStyle(color: color, fontWeight: FontWeight.bold),
+                ),
+              ),
+              const SizedBox(height: 6),
+              GestureDetector(
+                onTap: () => _showQuickRestockSupplierPicker(product),
+                child: const Text(
+                  'Restock',
+                  style: TextStyle(
+                    color: Colors.blue,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
-
-        if (lowStockProducts.length > 5)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              '+${lowStockProducts.length - 5} more low stock item(s)',
-              style: TextStyle(color: Colors.grey[700]),
-            ),
+            ],
           ),
-      ],
+        ),
+        onTap: () => _showProductActionsSheet(product),
+      ),
     );
   }
 
