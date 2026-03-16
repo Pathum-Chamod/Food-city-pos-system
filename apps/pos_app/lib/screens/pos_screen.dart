@@ -10,6 +10,7 @@ import '../providers/cart_provider.dart';
 import '../services/database_helper.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
+import 'checkout_payment_dialog.dart';
 import 'login_screen.dart';
 import 'transaction_history_screen.dart';
 
@@ -230,15 +231,36 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _handleCheckout(CartProvider cart) async {
     if (cart.items.isEmpty || _isProcessingCheckout) return;
 
-    setState(() {
-      _isProcessingCheckout = true;
-    });
-
     final cashierName =
         context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
     final isRefund = cart.isRefundMode;
     final displayTotal = cart.cartTotal;
     final itemsMap = cart.getCartItemsAsMap();
+
+    String? paymentMethod;
+    double? amountTendered;
+    double? changeAmount;
+
+    if (!isRefund) {
+      final paymentResult = await showCheckoutPaymentDialog(
+        context,
+        totalAmount: displayTotal,
+      );
+
+      if (paymentResult == null) {
+        _focusBarcodeField();
+        return;
+      }
+
+      paymentMethod = paymentResult['payment_method']?.toString();
+      amountTendered =
+          (paymentResult['amount_tendered'] as num?)?.toDouble();
+      changeAmount = (paymentResult['change_amount'] as num?)?.toDouble();
+    }
+
+    setState(() {
+      _isProcessingCheckout = true;
+    });
 
     try {
       final saleId = await DatabaseHelper.instance.processTransaction(
@@ -246,6 +268,9 @@ class _PosScreenState extends State<PosScreen> {
         cartItems: itemsMap,
         cashierName: cashierName,
         isRefund: isRefund,
+        paymentMethod: paymentMethod,
+        amountTendered: amountTendered,
+        changeAmount: changeAmount,
       );
 
       cart.clearCart();

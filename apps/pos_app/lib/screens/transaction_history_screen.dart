@@ -112,6 +112,19 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     }
   }
 
+  String _paymentLabel(String? method) {
+    switch ((method ?? '').toLowerCase()) {
+      case 'cash':
+        return 'Cash';
+      case 'card':
+        return 'Card';
+      case 'refund':
+        return 'Refund';
+      default:
+        return 'N/A';
+    }
+  }
+
   Widget _buildFilterChip(String value, String label) {
     final selected = _filter == value;
 
@@ -179,6 +192,8 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                             final createdAt =
                                 (tx['created_at'] ?? '').toString();
                             final originalSaleId = tx['original_sale_id'];
+                            final paymentMethod =
+                                (tx['payment_method'] ?? '').toString();
 
                             return Card(
                               margin: const EdgeInsets.symmetric(
@@ -226,14 +241,19 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                                       const SizedBox(height: 4),
                                       Text('Items: $itemQty'),
                                       const SizedBox(height: 4),
-                                      Text(
-                                        'Time: ${_formatDateTime(createdAt)}',
-                                      ),
+                                      if (type == 'sale')
+                                        Text(
+                                          'Payment: ${_paymentLabel(paymentMethod)}',
+                                        ),
                                       if (type == 'refund' &&
                                           originalSaleId != null) ...[
                                         const SizedBox(height: 4),
                                         Text('Refund of Sale #$originalSaleId'),
                                       ],
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Time: ${_formatDateTime(createdAt)}',
+                                      ),
                                       const SizedBox(height: 8),
                                       Text(
                                         'Total: Rs. ${totalAbs.toStringAsFixed(2)}',
@@ -287,6 +307,19 @@ Future<String?> showTransactionReceiptDialog(
     }
   }
 
+  String paymentLabel(String? method) {
+    switch ((method ?? '').toLowerCase()) {
+      case 'cash':
+        return 'Cash';
+      case 'card':
+        return 'Card';
+      case 'refund':
+        return 'Refund';
+      default:
+        return 'N/A';
+    }
+  }
+
   final transactionType =
       (summary['transaction_type'] ?? 'sale').toString().toLowerCase();
   final isRefund = transactionType == 'refund';
@@ -296,6 +329,10 @@ Future<String?> showTransactionReceiptDialog(
   final transactionId = summary['id'];
   final originalSaleId = summary['original_sale_id'];
   final refundReason = (summary['refund_reason'] ?? '').toString();
+  final paymentMethod = (summary['payment_method'] ?? '').toString();
+  final amountTendered =
+      ((summary['amount_tendered'] as num?) ?? 0).toDouble();
+  final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
 
   return showDialog<String>(
     context: context,
@@ -320,6 +357,26 @@ Future<String?> showTransactionReceiptDialog(
                 Text('Type: ${isRefund ? 'Refund' : 'Sale'}'),
                 Text('Cashier: $cashier'),
                 Text('Date/Time: ${formatDateTime(createdAt)}'),
+                if (!isRefund) ...[
+                  const SizedBox(height: 4),
+                  Text('Payment Method: ${paymentLabel(paymentMethod)}'),
+                  if (paymentMethod == 'cash') ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Amount Tendered: Rs. ${amountTendered.toStringAsFixed(2)}',
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Change: Rs. ${changeAmount.toStringAsFixed(2)}',
+                    ),
+                  ],
+                  if (paymentMethod == 'card') ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Amount Charged: Rs. ${total.toStringAsFixed(2)}',
+                    ),
+                  ],
+                ],
                 if (isRefund && originalSaleId != null) ...[
                   const SizedBox(height: 4),
                   Text('Refund of Sale #: $originalSaleId'),

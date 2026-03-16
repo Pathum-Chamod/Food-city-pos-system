@@ -29,7 +29,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 3,
+        version: 4,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -59,6 +59,9 @@ class DatabaseHelper {
         transaction_type TEXT NOT NULL DEFAULT 'sale',
         original_sale_id INTEGER,
         refund_reason TEXT,
+        payment_method TEXT,
+        amount_tendered REAL,
+        change_amount REAL,
         created_at TEXT NOT NULL
       )
     ''');
@@ -125,6 +128,12 @@ class DatabaseHelper {
     if (oldVersion < 3) {
       await _addColumnIfMissing(db, 'sales', 'original_sale_id', 'INTEGER');
       await _addColumnIfMissing(db, 'sales', 'refund_reason', 'TEXT');
+    }
+
+    if (oldVersion < 4) {
+      await _addColumnIfMissing(db, 'sales', 'payment_method', 'TEXT');
+      await _addColumnIfMissing(db, 'sales', 'amount_tendered', 'REAL');
+      await _addColumnIfMissing(db, 'sales', 'change_amount', 'REAL');
     }
   }
 
@@ -322,6 +331,9 @@ class DatabaseHelper {
     required List<Map<String, dynamic>> cartItems,
     required String cashierName,
     required bool isRefund,
+    String? paymentMethod,
+    double? amountTendered,
+    double? changeAmount,
   }) async {
     final db = await database;
 
@@ -337,7 +349,28 @@ class DatabaseHelper {
         final transactionType = isRefund ? 'refund' : 'sale';
         final signedTotal = isRefund ? -totalAmount.abs() : totalAmount.abs();
 
+        String? resolvedPaymentMethod = paymentMethod;
+        double? resolvedAmountTendered = amountTendered;
+        double resolvedChangeAmount = changeAmount ?? 0.0;
+
         if (!isRefund) {
+          if (resolvedPaymentMethod == null ||
+              (resolvedPaymentMethod != 'cash' &&
+                  resolvedPaymentMethod != 'card')) {
+            throw Exception('Valid payment method is required.');
+          }
+
+          if (resolvedPaymentMethod == 'cash') {
+            if (resolvedAmountTendered == null ||
+                resolvedAmountTendered < totalAmount) {
+              throw Exception('Cash amount is not enough.');
+            }
+            resolvedChangeAmount = resolvedAmountTendered - totalAmount;
+          } else {
+            resolvedAmountTendered = totalAmount;
+            resolvedChangeAmount = 0.0;
+          }
+
           for (final item in cartItems) {
             final productMap =
                 Map<String, dynamic>.from(item['product'] as Map);
@@ -370,6 +403,10 @@ class DatabaseHelper {
               );
             }
           }
+        } else {
+          resolvedPaymentMethod = 'refund';
+          resolvedAmountTendered = null;
+          resolvedChangeAmount = 0.0;
         }
 
         saleId = await txn.insert('sales', {
@@ -378,6 +415,9 @@ class DatabaseHelper {
           'transaction_type': transactionType,
           'original_sale_id': null,
           'refund_reason': null,
+          'payment_method': resolvedPaymentMethod,
+          'amount_tendered': resolvedAmountTendered,
+          'change_amount': resolvedChangeAmount,
           'created_at': now,
         });
 
@@ -427,6 +467,9 @@ class DatabaseHelper {
           'vendor': 'Alfasoft',
           'cashier': cashierName,
           'transaction_type': transactionType,
+          'payment_method': resolvedPaymentMethod,
+          'amount_tendered': resolvedAmountTendered,
+          'change_amount': resolvedChangeAmount,
           'items': cartItems,
         });
 
@@ -501,6 +544,9 @@ class DatabaseHelper {
           'transaction_type': 'refund',
           'original_sale_id': originalSaleId,
           'refund_reason': refundReason.trim(),
+          'payment_method': 'refund',
+          'amount_tendered': null,
+          'change_amount': 0.0,
           'created_at': now,
         });
 
@@ -587,6 +633,9 @@ class DatabaseHelper {
           'vendor': 'Alfasoft',
           'cashier': cashierName,
           'transaction_type': 'refund',
+          'payment_method': 'refund',
+          'amount_tendered': null,
+          'change_amount': 0.0,
           'original_sale_id': originalSaleId,
           'refund_reason': refundReason.trim(),
           'items': syncItems,
@@ -687,13 +736,26 @@ class DatabaseHelper {
         s.transaction_type,
         s.original_sale_id,
         s.refund_reason,
+        s.payment_method,
+        s.amount_tendered,
+        s.change_amount,
         s.created_at,
         COUNT(si.id) AS item_line_count,
         COALESCE(SUM(si.quantity), 0) AS item_quantity_total
       FROM sales s
       LEFT JOIN sale_items si ON si.sale_id = s.id
       $whereClause
-      GROUP BY s.id, s.total_amount, s.cashier_name, s.transaction_type, s.original_sale_id, s.refund_reason, s.created_at
+      GROUP BY
+        s.id,
+        s.total_amount,
+        s.cashier_name,
+        s.transaction_type,
+        s.original_sale_id,
+        s.refund_reason,
+        s.payment_method,
+        s.amount_tendered,
+        s.change_amount,
+        s.created_at
       ORDER BY datetime(s.created_at) DESC, s.id DESC
       LIMIT ?
       ''',
@@ -709,6 +771,9 @@ class DatabaseHelper {
             'transaction_type': row['transaction_type'],
             'original_sale_id': row['original_sale_id'],
             'refund_reason': row['refund_reason'],
+            'payment_method': row['payment_method'],
+            'amount_tendered': row['amount_tendered'],
+            'change_amount': row['change_amount'],
             'created_at': row['created_at'],
             'item_line_count': row['item_line_count'],
             'item_quantity_total': row['item_quantity_total'],
@@ -729,13 +794,26 @@ class DatabaseHelper {
         s.transaction_type,
         s.original_sale_id,
         s.refund_reason,
+        s.payment_method,
+        s.amount_tendered,
+        s.change_amount,
         s.created_at,
         COUNT(si.id) AS item_line_count,
         COALESCE(SUM(si.quantity), 0) AS item_quantity_total
       FROM sales s
       LEFT JOIN sale_items si ON si.sale_id = s.id
       WHERE s.id = ?
-      GROUP BY s.id, s.total_amount, s.cashier_name, s.transaction_type, s.original_sale_id, s.refund_reason, s.created_at
+      GROUP BY
+        s.id,
+        s.total_amount,
+        s.cashier_name,
+        s.transaction_type,
+        s.original_sale_id,
+        s.refund_reason,
+        s.payment_method,
+        s.amount_tendered,
+        s.change_amount,
+        s.created_at
       LIMIT 1
       ''',
       [saleId],
@@ -752,6 +830,9 @@ class DatabaseHelper {
       'transaction_type': row['transaction_type'],
       'original_sale_id': row['original_sale_id'],
       'refund_reason': row['refund_reason'],
+      'payment_method': row['payment_method'],
+      'amount_tendered': row['amount_tendered'],
+      'change_amount': row['change_amount'],
       'created_at': row['created_at'],
       'item_line_count': row['item_line_count'],
       'item_quantity_total': row['item_quantity_total'],
