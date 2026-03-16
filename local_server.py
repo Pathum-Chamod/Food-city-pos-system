@@ -278,6 +278,66 @@ class APIHandler(BaseHTTPRequestHandler):
                 data = json.loads(data)
 
             if sync_type == "SALE":
+                transaction_type = str(data.get("transaction_type", "sale")).lower()
+                items = data.get("items", [])
+
+                # Validate all items before writing anything
+                for item in items:
+                    product = item.get("product", {})
+                    barcode = str(product.get("barcode", "")).strip()
+                    qty = int(item.get("quantity", 0))
+
+                    if not barcode:
+                        self._set_headers(400)
+                        self.wfile.write(
+                            json.dumps(
+                                {"status": "error", "message": "Missing product barcode"}
+                            ).encode()
+                        )
+                        conn.close()
+                        return
+
+                    if qty <= 0:
+                        self._set_headers(400)
+                        self.wfile.write(
+                            json.dumps(
+                                {"status": "error", "message": f"Invalid quantity for {barcode}"}
+                            ).encode()
+                        )
+                        conn.close()
+                        return
+
+                    row = c.execute(
+                        "SELECT stock FROM products WHERE barcode = ?",
+                        (barcode,),
+                    ).fetchone()
+
+                    if not row:
+                        self._set_headers(404)
+                        self.wfile.write(
+                            json.dumps(
+                                {"status": "error", "message": f"Product not found: {barcode}"}
+                            ).encode()
+                        )
+                        conn.close()
+                        return
+
+                    current_stock = int(row["stock"])
+
+                    if transaction_type == "sale" and current_stock < qty:
+                        self._set_headers(400)
+                        self.wfile.write(
+                            json.dumps(
+                                {
+                                    "status": "error",
+                                    "message": f"Insufficient backend stock for {barcode}. Available: {current_stock}, requested: {qty}",
+                                }
+                            ).encode()
+                        )
+                        conn.close()
+                        return
+
+                # Insert sale/refund record
                 c.execute(
                     """
                     INSERT INTO sales (
@@ -295,48 +355,48 @@ class APIHandler(BaseHTTPRequestHandler):
                         data.get("cashier", "Unknown"),
                         data.get("branch", ""),
                         data.get("vendor", ""),
-                        json.dumps(data.get("items", [])),
+                        json.dumps(items),
                     ),
                 )
                 sale_id = c.lastrowid
 
-                for item in data.get("items", []):
+                # Apply stock changes + log history
+                for item in items:
                     product = item.get("product", {})
-                    barcode = product.get("barcode", "")
+                    barcode = str(product.get("barcode", "")).strip()
                     qty = int(item.get("quantity", 0))
 
-                    if barcode:
-                        stock_delta = -qty
+                    stock_delta = qty if transaction_type == "refund" else -qty
 
-                        c.execute(
-                            """
-                            UPDATE products
-                            SET stock = stock + ?, updated_at = datetime('now','localtime')
-                            WHERE barcode = ?
-                            """,
-                            (stock_delta, barcode),
-                        )
+                    c.execute(
+                        """
+                        UPDATE products
+                        SET stock = stock + ?, updated_at = datetime('now','localtime')
+                        WHERE barcode = ?
+                        """,
+                        (stock_delta, barcode),
+                    )
 
-                        movement_type = "sale" if stock_delta < 0 else "refund"
-                        reason = (
-                            f"Sold through POS by {data.get('cashier', 'Unknown')}"
-                            if movement_type == "sale"
-                            else f"Refund processed by {data.get('cashier', 'Unknown')}"
-                        )
+                    movement_type = "refund" if transaction_type == "refund" else "sale"
+                    reason = (
+                        f"Refund processed by {data.get('cashier', 'Unknown')}"
+                        if transaction_type == "refund"
+                        else f"Sold through POS by {data.get('cashier', 'Unknown')}"
+                    )
 
-                        log_inventory_history(
-                            c,
-                            barcode=barcode,
-                            movement_type=movement_type,
-                            quantity=stock_delta,
-                            reason=reason,
-                            reference_type="sale",
-                            reference_id=sale_id,
-                        )
+                    log_inventory_history(
+                        c,
+                        barcode=barcode,
+                        movement_type=movement_type,
+                        quantity=stock_delta,
+                        reason=reason,
+                        reference_type="sale",
+                        reference_id=sale_id,
+                    )
 
                 conn.commit()
                 print(
-                    f"  ✅ SALE synced: Rs.{data.get('total_amount', 0)} by {data.get('cashier', 'Unknown')}"
+                    f"  ✅ {transaction_type.upper()} synced: Rs.{data.get('total_amount', 0)} by {data.get('cashier', 'Unknown')}"
                 )
                 self._set_headers()
                 self.wfile.write(json.dumps({"status": "success"}).encode())

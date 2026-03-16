@@ -8,6 +8,12 @@ import 'package:http/http.dart' as http;
 import 'database_helper.dart';
 
 class SyncService {
+  SyncService._internal();
+
+  static final SyncService _instance = SyncService._internal();
+
+  factory SyncService() => _instance;
+
   Timer? _syncTimer;
   bool _isSyncing = false;
 
@@ -21,48 +27,48 @@ class SyncService {
       apiUrl.contains('127.0.0.1') || apiUrl.contains('localhost');
 
   void startSyncWorker() {
-    // Poll the queue every 30 seconds
-    _syncTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      _attemptSync();
+    if (_syncTimer?.isActive ?? false) return;
+
+    _syncTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      syncNow();
     });
+
+    syncNow();
     debugPrint("🔄 Background Sync Worker Started...");
   }
 
-  Future<void> _attemptSync() async {
-    if (_isSyncing) return;
+  Future<int> syncNow() async {
+    if (_isSyncing) return 0;
     _isSyncing = true;
 
+    int syncedCount = 0;
+
     try {
-      // For live/cloud mode, require internet connectivity.
-      // For local Python backend mode, skip this check because loopback works
-      // even without external internet.
       if (!_isLocalServer) {
         final connectivityResult = await Connectivity().checkConnectivity();
         if (connectivityResult.contains(ConnectivityResult.none)) {
           debugPrint("📴 Offline. Sync skipped.");
-          _isSyncing = false;
-          return;
+          return 0;
         }
       }
 
-      // Fetch pending sync items from local SQLite
       final db = await DatabaseHelper.instance.database;
+
       final pendingItems = await db.query(
         'sync_queue',
         where: 'status = ?',
         whereArgs: ['pending'],
+        orderBy: 'id ASC',
       );
 
       if (pendingItems.isEmpty) {
-        _isSyncing = false;
-        return;
+        return 0;
       }
 
       debugPrint(
         "📤 Found ${pendingItems.length} pending items. Pushing sync queue...",
       );
 
-      // Upload each pending item
       for (final item in pendingItems) {
         final success = await _uploadToBackend(item);
 
@@ -73,19 +79,23 @@ class SyncService {
             where: 'id = ?',
             whereArgs: [item['id']],
           );
+
+          syncedCount++;
           debugPrint(
             "✅ Item ${item['id']} (${item['type']}) synced successfully.",
           );
         }
       }
+
+      return syncedCount;
     } catch (e) {
       debugPrint("❌ Sync Engine Error: $e");
+      return syncedCount;
     } finally {
       _isSyncing = false;
     }
   }
 
-  // Upload one queued event to backend
   Future<bool> _uploadToBackend(Map<String, dynamic> item) async {
     try {
       final response = await http.post(
@@ -118,5 +128,6 @@ class SyncService {
 
   void stopSyncWorker() {
     _syncTimer?.cancel();
+    _syncTimer = null;
   }
 }

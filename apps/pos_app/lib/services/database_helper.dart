@@ -1,8 +1,9 @@
 import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart';
 import 'package:shared/models/product.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -17,24 +18,26 @@ class DatabaseHelper {
   }
 
   Future<Database> _initDB(String filePath) async {
-    // Initialize FFI for macOS/Windows desktop
     sqfliteFfiInit();
-    var databaseFactory = databaseFactoryFfi;
-    
+    final databaseFactory = databaseFactoryFfi;
+
     final dbPath = await databaseFactory.getDatabasesPath();
     final path = join(dbPath, filePath);
 
-    return await databaseFactory.openDatabase(
+    return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
+        onConfigure: (db) async {
+          await db.execute('PRAGMA foreign_keys = ON');
+        },
         onCreate: _createDB,
+        onUpgrade: _upgradeDB,
       ),
     );
   }
 
-  Future _createDB(Database db, int version) async {
-    // 1. Products Table
+  Future<void> _createDB(Database db, int version) async {
     await db.execute('''
       CREATE TABLE products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,16 +49,30 @@ class DatabaseHelper {
       )
     ''');
 
-    // 2. Sales Table
     await db.execute('''
       CREATE TABLE sales (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         total_amount REAL NOT NULL,
+        cashier_name TEXT,
+        transaction_type TEXT NOT NULL DEFAULT 'sale',
         created_at TEXT NOT NULL
       )
     ''');
 
-    // 3. Sync Queue Table (The Offline Buffer)
+    await db.execute('''
+      CREATE TABLE sale_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sale_id INTEGER NOT NULL,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        unit_price REAL NOT NULL,
+        quantity INTEGER NOT NULL,
+        line_total REAL NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE
+      )
+    ''');
+
     await db.execute('''
       CREATE TABLE sync_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,7 +83,6 @@ class DatabaseHelper {
       )
     ''');
 
-    // 4. Users Table (Employees)
     await db.execute('''
       CREATE TABLE users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,78 +93,231 @@ class DatabaseHelper {
     ''');
   }
 
+  Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS sale_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sale_id INTEGER NOT NULL,
+          barcode TEXT NOT NULL,
+          product_name TEXT NOT NULL,
+          unit_price REAL NOT NULL,
+          quantity INTEGER NOT NULL,
+          line_total REAL NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE
+        )
+      ''');
+
+      await _addColumnIfMissing(db, 'sales', 'cashier_name', 'TEXT');
+      await _addColumnIfMissing(
+        db,
+        'sales',
+        'transaction_type',
+        "TEXT NOT NULL DEFAULT 'sale'",
+      );
+    }
+  }
+
+  Future<void> _addColumnIfMissing(
+    Database db,
+    String table,
+    String column,
+    String definition,
+  ) async {
+    final columns = await db.rawQuery('PRAGMA table_info($table)');
+    final exists = columns.any((c) => c['name'] == column);
+
+    if (!exists) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
+    }
+  }
+
   Future<void> insertMockDataIfEmpty() async {
     final db = await database;
-    final List<Map<String, dynamic>> existing = await db.rawQuery('SELECT COUNT(*) as count FROM products');
-    final count = existing.first['count'] as int;
-    
-    if (count == 0) {
+
+    final existingProducts =
+        await db.rawQuery('SELECT COUNT(*) as count FROM products');
+    final productCount = existingProducts.first['count'] as int;
+
+    if (productCount == 0) {
       final mockProducts = [
-        {'barcode': '4791044000123', 'name': 'Munchee Super Cream Cracker 500g', 'price': 450.0, 'stock': 100, 'updated_at': DateTime.now().toIso8601String()},
-        {'barcode': '4792011001234', 'name': 'Anchor Milk Powder 400g', 'price': 1100.0, 'stock': 50, 'updated_at': DateTime.now().toIso8601String()},
-        {'barcode': '4792022005678', 'name': 'Saman Halmassa 425g', 'price': 650.0, 'stock': 30, 'updated_at': DateTime.now().toIso8601String()},
-        {'barcode': '4793033009999', 'name': 'Kist Strawberry Jam 500g', 'price': 580.0, 'stock': 40, 'updated_at': DateTime.now().toIso8601String()},
+        {
+          'barcode': '4791044000123',
+          'name': 'Munchee Super Cream Cracker 500g',
+          'price': 450.0,
+          'stock': 100,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        {
+          'barcode': '4792011001234',
+          'name': 'Anchor Milk Powder 400g',
+          'price': 1100.0,
+          'stock': 50,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        {
+          'barcode': '4792022005678',
+          'name': 'Saman Halmassa 425g',
+          'price': 650.0,
+          'stock': 30,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        {
+          'barcode': '4793033009999',
+          'name': 'Kist Strawberry Jam 500g',
+          'price': 580.0,
+          'stock': 40,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
       ];
-      for (var p in mockProducts) {
-        await db.insert('products', p);
+
+      for (final product in mockProducts) {
+        await db.insert('products', product);
       }
     }
 
-    // Insert Mock Users if none exist
-    final List<Map<String, dynamic>> existingUsers = await db.rawQuery('SELECT COUNT(*) as count FROM users');
+    final existingUsers =
+        await db.rawQuery('SELECT COUNT(*) as count FROM users');
     final userCount = existingUsers.first['count'] as int;
 
     if (userCount == 0) {
       final mockUsers = [
-        {'name': 'Pathum (Manager)', 'role': 'manager', 'pin': '1234'},
-        {'name': 'Amal (Cashier)', 'role': 'cashier', 'pin': '5555'},
+        {
+          'name': 'Pathum (Manager)',
+          'role': 'manager',
+          'pin': '1234',
+        },
+        {
+          'name': 'Amal (Cashier)',
+          'role': 'cashier',
+          'pin': '5555',
+        },
       ];
-      for (var u in mockUsers) {
-        await db.insert('users', u);
+
+      for (final user in mockUsers) {
+        await db.insert('users', user);
       }
     }
   }
 
   Future<List<Product>> getProducts() async {
     final db = await database;
-    final maps = await db.query('products');
+    final maps = await db.query('products', orderBy: 'name ASC');
     return maps.map((map) => Product.fromMap(map)).toList();
   }
 
-  Future<bool> processSale(double totalAmount, List<Map<String, dynamic>> cartItems, String cashierName) async {
+  Future<void> processTransaction({
+    required double totalAmount,
+    required List<Map<String, dynamic>> cartItems,
+    required String cashierName,
+    required bool isRefund,
+  }) async {
     final db = await database;
-    
+
+    if (cartItems.isEmpty) {
+      throw Exception('Cart is empty.');
+    }
+
     try {
-      // Run everything inside a transaction
       await db.transaction((txn) async {
         final now = DateTime.now().toIso8601String();
+        final transactionType = isRefund ? 'refund' : 'sale';
+        final signedTotal = isRefund ? -totalAmount.abs() : totalAmount.abs();
 
-        // 1. Record the sale locally
+        // Validate stock only for sales.
+        if (!isRefund) {
+          for (final item in cartItems) {
+            final productMap =
+                Map<String, dynamic>.from(item['product'] as Map);
+            final barcode = productMap['barcode']?.toString() ?? '';
+            final productName =
+                productMap['name']?.toString() ?? 'Unknown product';
+            final quantity = (item['quantity'] as num?)?.toInt() ?? 0;
+
+            if (quantity <= 0) {
+              throw Exception('Invalid quantity for $productName.');
+            }
+
+            final rows = await txn.query(
+              'products',
+              columns: ['stock'],
+              where: 'barcode = ?',
+              whereArgs: [barcode],
+              limit: 1,
+            );
+
+            if (rows.isEmpty) {
+              throw Exception('$productName was not found in local POS database.');
+            }
+
+            final availableStock = (rows.first['stock'] as num).toInt();
+
+            if (availableStock < quantity) {
+              throw Exception(
+                'Insufficient stock for $productName. Available: $availableStock, requested: $quantity.',
+              );
+            }
+          }
+        }
+
         final saleId = await txn.insert('sales', {
-          'total_amount': totalAmount,
+          'total_amount': signedTotal,
+          'cashier_name': cashierName,
+          'transaction_type': transactionType,
           'created_at': now,
         });
 
-        // 2. Deduct local stock so the cashier sees accurate numbers
-        for (var item in cartItems) {
-          await txn.rawUpdate(
-            'UPDATE products SET stock = stock - ? WHERE barcode = ?',
-            [item['quantity'], item['product']['barcode']]
+        for (final item in cartItems) {
+          final productMap = Map<String, dynamic>.from(item['product'] as Map);
+          final barcode = productMap['barcode']?.toString() ?? '';
+          final productName =
+              productMap['name']?.toString() ?? 'Unknown product';
+          final unitPrice = (productMap['price'] as num).toDouble();
+          final quantity = (item['quantity'] as num).toInt();
+
+          if (quantity <= 0) {
+            throw Exception('Invalid quantity for $productName.');
+          }
+
+          final stockDelta = isRefund ? quantity : -quantity;
+          final signedLineTotal =
+              unitPrice * quantity * (isRefund ? -1 : 1);
+
+          final updatedCount = await txn.rawUpdate(
+            '''
+            UPDATE products
+            SET stock = stock + ?, updated_at = ?
+            WHERE barcode = ?
+            ''',
+            [stockDelta, now, barcode],
           );
+
+          if (updatedCount == 0) {
+            throw Exception('$productName was not found in local POS database.');
+          }
+
+          await txn.insert('sale_items', {
+            'sale_id': saleId,
+            'barcode': barcode,
+            'product_name': productName,
+            'unit_price': unitPrice,
+            'quantity': quantity,
+            'line_total': signedLineTotal,
+            'created_at': now,
+          });
         }
 
-        // 3. Package the payload for the Cloud Sync Worker
-        // Adding Alfasoft and Hikkaduwa tags for branch tracking when this scales
         final syncData = jsonEncode({
           'local_sale_id': saleId,
-          'total_amount': totalAmount,
+          'total_amount': signedTotal,
           'branch': 'Hikkaduwa',
           'vendor': 'Alfasoft',
           'cashier': cashierName,
+          'transaction_type': transactionType,
           'items': cartItems,
         });
 
-        // 4. Drop it into the offline buffer
         await txn.insert('sync_queue', {
           'type': 'SALE',
           'data': syncData,
@@ -156,34 +325,35 @@ class DatabaseHelper {
           'created_at': now,
         });
       });
-      return true; // Checkout successful!
     } catch (e) {
-      debugPrint("Checkout Database Error: $e");
-      return false; // Checkout failed
+      debugPrint('Checkout Database Error: $e');
+      rethrow;
     }
   }
 
   Future<bool> updateProductPriceLocal(String barcode, double newPrice) async {
     final db = await database;
+
     try {
       await db.transaction((txn) async {
         final now = DateTime.now().toIso8601String();
 
-        // 1. Update the price in the local database
         await txn.update(
           'products',
-          {'price': newPrice, 'updated_at': now},
+          {
+            'price': newPrice,
+            'updated_at': now,
+          },
           where: 'barcode = ?',
           whereArgs: [barcode],
         );
 
-        // 2. Queue the update for the cloud (Spaceship API will read this later)
         final syncData = jsonEncode({
           'barcode': barcode,
           'new_price': newPrice,
           'updated_at': now,
           'branch': 'Hikkaduwa',
-          'vendor': 'Alfasoft'
+          'vendor': 'Alfasoft',
         });
 
         await txn.insert('sync_queue', {
@@ -193,25 +363,28 @@ class DatabaseHelper {
           'created_at': now,
         });
       });
+
       return true;
     } catch (e) {
-      debugPrint("Error updating price: $e");
+      debugPrint('Error updating price: $e');
       return false;
     }
   }
 
   Future<Map<String, dynamic>?> authenticateUser(String pin) async {
     final db = await database;
+
     final result = await db.query(
       'users',
       where: 'pin = ?',
       whereArgs: [pin],
       limit: 1,
     );
-    
+
     if (result.isNotEmpty) {
       return result.first;
     }
-    return null; // Wrong PIN
+
+    return null;
   }
 }
