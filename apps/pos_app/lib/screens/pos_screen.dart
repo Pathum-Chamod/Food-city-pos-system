@@ -26,18 +26,41 @@ class _PosScreenState extends State<PosScreen> {
   bool _isRefreshingProducts = false;
   Timer? _productRefreshTimer;
 
+  final TextEditingController _barcodeController = TextEditingController();
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _barcodeFocusNode = FocusNode();
+  final FocusNode _searchFocusNode = FocusNode();
+
+  String _searchQuery = '';
+
   @override
   void initState() {
     super.initState();
     _loadProducts(showLoader: true);
     _refreshProductsFromBackendAndReload(silentOnFailure: true);
     _startAutoRefresh();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusBarcodeField();
+    });
   }
 
   @override
   void dispose() {
     _productRefreshTimer?.cancel();
+    _barcodeController.dispose();
+    _searchController.dispose();
+    _barcodeFocusNode.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  void _focusBarcodeField() {
+    if (!mounted) return;
+    Future.delayed(const Duration(milliseconds: 50), () {
+      if (!mounted) return;
+      _barcodeFocusNode.requestFocus();
+    });
   }
 
   void _startAutoRefresh() {
@@ -113,6 +136,65 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  Product? _findProductByBarcode(String barcode) {
+    final trimmed = barcode.trim();
+    if (trimmed.isEmpty) return null;
+
+    try {
+      return _products.firstWhere((product) => product.barcode == trimmed);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Product? _getCurrentProduct(String barcode) {
+    try {
+      return _products.firstWhere((product) => product.barcode == barcode);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  int _getCurrentStock(String barcode, {int fallback = 0}) {
+    return _getCurrentProduct(barcode)?.stock ?? fallback;
+  }
+
+  List<Product> get _filteredProducts {
+    final query = _searchQuery.trim().toLowerCase();
+
+    if (query.isEmpty) return _products;
+
+    return _products.where((product) {
+      return product.name.toLowerCase().contains(query) ||
+          product.barcode.toLowerCase().contains(query);
+    }).toList();
+  }
+
+  void _handleBarcodeSubmit(CartProvider cart) {
+    final barcode = _barcodeController.text.trim();
+
+    if (barcode.isEmpty) {
+      _focusBarcodeField();
+      return;
+    }
+
+    final product = _findProductByBarcode(barcode);
+
+    if (product == null) {
+      _barcodeController.clear();
+      _showInfoMessage(
+        'Product not found for barcode: $barcode',
+        backgroundColor: Colors.red,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    _handleProductTap(product, cart);
+    _barcodeController.clear();
+    _focusBarcodeField();
+  }
+
   void _handleProductTap(Product product, CartProvider cart) {
     if (!cart.isRefundMode && product.stock <= 0) {
       _showInfoMessage(
@@ -133,6 +215,7 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     cart.addToCart(product);
+    _focusBarcodeField();
   }
 
   Future<void> _handleCheckout(CartProvider cart) async {
@@ -163,8 +246,7 @@ class _PosScreenState extends State<PosScreen> {
 
       if (!mounted) return;
 
-      final title =
-          isRefund ? '✅ Refund Completed' : '✅ Payment Successful';
+      final title = isRefund ? '✅ Refund Completed' : '✅ Payment Successful';
       final amountLabel = isRefund ? 'Refund Amount' : 'Total Paid';
 
       showDialog(
@@ -177,7 +259,10 @@ class _PosScreenState extends State<PosScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () {
+                Navigator.pop(context);
+                _focusBarcodeField();
+              },
               child: const Text('Next Customer'),
             ),
           ],
@@ -192,6 +277,7 @@ class _PosScreenState extends State<PosScreen> {
         message.isEmpty ? 'Error processing checkout.' : message,
         backgroundColor: Colors.red,
       );
+      _focusBarcodeField();
     } finally {
       if (mounted) {
         setState(() {
@@ -201,8 +287,138 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
+  Widget _buildTopToolbar(CartProvider cart) {
+    return Container(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: TextField(
+                  controller: _barcodeController,
+                  focusNode: _barcodeFocusNode,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _handleBarcodeSubmit(cart),
+                  decoration: InputDecoration(
+                    labelText: 'Scan / Enter Barcode',
+                    hintText: 'Example: 4791044000123',
+                    prefixIcon: const Icon(Icons.qr_code_scanner),
+                    suffixIcon: _barcodeController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Clear barcode',
+                            onPressed: () {
+                              _barcodeController.clear();
+                              setState(() {});
+                              _focusBarcodeField();
+                            },
+                            icon: const Icon(Icons.close),
+                          ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: Colors.white,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                height: 56,
+                child: ElevatedButton.icon(
+                  onPressed: () => _handleBarcodeSubmit(cart),
+                  icon: const Icon(Icons.add_shopping_cart),
+                  label: const Text('Add'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue[800],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  decoration: InputDecoration(
+                    labelText: 'Search Products',
+                    hintText: 'Search by name or barcode',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchQuery.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Clear search',
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {
+                                _searchQuery = '';
+                              });
+                              _focusBarcodeField();
+                            },
+                            icon: const Icon(Icons.close),
+                          ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    filled: true,
+                    fillColor: Colors.white,
+                  ),
+                  onChanged: (value) {
+                    setState(() {
+                      _searchQuery = value;
+                    });
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Text(
+                'Showing ${_filteredProducts.length} of ${_products.length} products',
+                style: TextStyle(
+                  color: Colors.grey[700],
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              if (_searchQuery.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.blue[50],
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    'Filter: "${_searchQuery.trim()}"',
+                    style: TextStyle(
+                      color: Colors.blue[800],
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildProductCard(Product product, CartProvider cart) {
     final isOutOfStock = product.stock <= 0 && !cart.isRefundMode;
+    final cartQty = cart.getQuantityFor(product.barcode);
 
     return Card(
       elevation: 2,
@@ -227,49 +443,89 @@ class _PosScreenState extends State<PosScreen> {
         child: Container(
           color: isOutOfStock ? Colors.grey[200] : Colors.white,
           padding: const EdgeInsets.all(12.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+          child: Stack(
             children: [
-              Flexible(
-                child: Text(
-                  product.name,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: isOutOfStock ? Colors.grey[600] : Colors.black87,
+              Positioned.fill(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        product.name,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color:
+                              isOutOfStock ? Colors.grey[600] : Colors.black87,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Rs. ${product.price.toStringAsFixed(2)}',
+                      style: TextStyle(
+                        color: isOutOfStock ? Colors.grey : Colors.green,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      product.barcode,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 11,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isOutOfStock ? Colors.red[50] : Colors.blue[50],
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        isOutOfStock ? 'Out of Stock' : 'Stock: ${product.stock}',
+                        style: TextStyle(
+                          color:
+                              isOutOfStock ? Colors.red[700] : Colors.blue[700],
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (cartQty > 0)
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.orange[700],
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      'In Cart: $cartQty',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Rs. ${product.price.toStringAsFixed(2)}',
-                style: TextStyle(
-                  color: isOutOfStock ? Colors.grey : Colors.green,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: isOutOfStock ? Colors.red[50] : Colors.blue[50],
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  isOutOfStock ? 'Out of Stock' : 'Stock: ${product.stock}',
-                  style: TextStyle(
-                    color: isOutOfStock ? Colors.red[700] : Colors.blue[700],
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
             ],
           ),
         ),
@@ -278,6 +534,11 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Widget _buildCartItemRow(CartProvider cart, CartItem item) {
+    final currentStock = _getCurrentStock(
+      item.product.barcode,
+      fallback: item.product.stock,
+    );
+
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Padding(
@@ -296,6 +557,7 @@ class _PosScreenState extends State<PosScreen> {
                   tooltip: 'Remove item',
                   onPressed: () {
                     cart.removeItem(item.product.barcode);
+                    _focusBarcodeField();
                   },
                   icon: const Icon(Icons.delete_outline, color: Colors.red),
                 ),
@@ -311,6 +573,7 @@ class _PosScreenState extends State<PosScreen> {
                 IconButton(
                   onPressed: () {
                     cart.decreaseQuantity(item.product.barcode);
+                    _focusBarcodeField();
                   },
                   icon: const Icon(Icons.remove_circle_outline),
                 ),
@@ -323,8 +586,7 @@ class _PosScreenState extends State<PosScreen> {
                 ),
                 IconButton(
                   onPressed: () {
-                    if (!cart.isRefundMode &&
-                        item.quantity >= item.product.stock) {
+                    if (!cart.isRefundMode && item.quantity >= currentStock) {
                       _showInfoMessage(
                         'Cannot exceed available stock for ${item.product.name}.',
                         backgroundColor: Colors.red,
@@ -333,11 +595,23 @@ class _PosScreenState extends State<PosScreen> {
                     }
 
                     cart.increaseQuantity(item.product.barcode);
+                    _focusBarcodeField();
                   },
                   icon: const Icon(Icons.add_circle_outline),
                 ),
               ],
             ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Available Stock: $currentStock',
+                style: TextStyle(
+                  color: Colors.grey[600],
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
             Align(
               alignment: Alignment.centerRight,
               child: Text(
@@ -448,30 +722,45 @@ class _PosScreenState extends State<PosScreen> {
             child: Container(
               color: Colors.grey[100],
               padding: const EdgeInsets.all(16.0),
-              child: _isLoadingProducts
-                  ? const Center(child: CircularProgressIndicator())
-                  : _products.isEmpty
-                      ? const Center(
-                          child: Text('No products available in local POS DB'),
-                        )
-                      : GridView.builder(
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 3,
-                            childAspectRatio: 4 / 3,
-                            crossAxisSpacing: 10,
-                            mainAxisSpacing: 10,
-                          ),
-                          itemCount: _products.length,
-                          itemBuilder: (context, index) {
-                            final product = _products[index];
-                            return _buildProductCard(product, cart);
-                          },
-                        ),
+              child: Column(
+                children: [
+                  _buildTopToolbar(cart),
+                  Expanded(
+                    child: _isLoadingProducts
+                        ? const Center(child: CircularProgressIndicator())
+                        : _products.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  'No products available in local POS DB',
+                                ),
+                              )
+                            : _filteredProducts.isEmpty
+                                ? const Center(
+                                    child: Text(
+                                      'No products match your search',
+                                    ),
+                                  )
+                                : GridView.builder(
+                                    gridDelegate:
+                                        const SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: 3,
+                                      childAspectRatio: 4 / 3,
+                                      crossAxisSpacing: 10,
+                                      mainAxisSpacing: 10,
+                                    ),
+                                    itemCount: _filteredProducts.length,
+                                    itemBuilder: (context, index) {
+                                      final product = _filteredProducts[index];
+                                      return _buildProductCard(product, cart);
+                                    },
+                                  ),
+                  ),
+                ],
+              ),
             ),
           ),
           Container(
-            width: 380,
+            width: 390,
             color: Colors.white,
             child: Column(
               children: [
@@ -516,9 +805,11 @@ class _PosScreenState extends State<PosScreen> {
                               context
                                   .read<CartProvider>()
                                   .toggleRefundMode(true);
+                              _focusBarcodeField();
                             });
                           } else {
                             context.read<CartProvider>().toggleRefundMode(false);
+                            _focusBarcodeField();
                           }
                         },
                       ),
@@ -566,6 +857,7 @@ class _PosScreenState extends State<PosScreen> {
                             ? null
                             : () {
                                 context.read<CartProvider>().clearCart();
+                                _focusBarcodeField();
                               },
                         child: const Text('CLEAR CART'),
                       ),
