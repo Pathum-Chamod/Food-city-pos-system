@@ -29,7 +29,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 6,
+        version: 7,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -37,6 +37,37 @@ class DatabaseHelper {
         onUpgrade: _upgradeDB,
       ),
     );
+  }
+
+  double _roundMoney(num value) {
+    return double.parse(value.toStringAsFixed(2));
+  }
+
+  String _normalizeDiscountType(String? value) {
+    if (value == 'fixed') return 'fixed';
+    if (value == 'percent') return 'percent';
+    return 'none';
+  }
+
+  double _calculateDiscountAmount({
+    required double subtotal,
+    required String discountType,
+    required double discountValue,
+  }) {
+    if (subtotal <= 0) return 0.0;
+
+    if (discountType == 'fixed') {
+      final safeValue = discountValue < 0 ? 0.0 : discountValue;
+      return _roundMoney(safeValue > subtotal ? subtotal : safeValue);
+    }
+
+    if (discountType == 'percent') {
+      final safeValue = discountValue < 0 ? 0.0 : discountValue;
+      final capped = safeValue > 100 ? 100.0 : safeValue;
+      return _roundMoney(subtotal * (capped / 100));
+    }
+
+    return 0.0;
   }
 
   Future<void> _createDB(Database db, int version) async {
@@ -54,6 +85,10 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE sales (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subtotal_amount REAL NOT NULL DEFAULT 0,
+        discount_type TEXT NOT NULL DEFAULT 'none',
+        discount_value REAL NOT NULL DEFAULT 0,
+        discount_amount REAL NOT NULL DEFAULT 0,
         total_amount REAL NOT NULL,
         cashier_name TEXT,
         transaction_type TEXT NOT NULL DEFAULT 'sale',
@@ -74,6 +109,8 @@ class DatabaseHelper {
         product_name TEXT NOT NULL,
         unit_price REAL NOT NULL,
         quantity INTEGER NOT NULL,
+        base_line_total REAL NOT NULL DEFAULT 0,
+        item_discount_amount REAL NOT NULL DEFAULT 0,
         line_total REAL NOT NULL,
         created_at TEXT NOT NULL,
         FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE
@@ -100,6 +137,8 @@ class DatabaseHelper {
         cart_name TEXT NOT NULL,
         cashier_name TEXT NOT NULL,
         is_refund_mode INTEGER NOT NULL DEFAULT 0,
+        discount_type TEXT NOT NULL DEFAULT 'none',
+        discount_value REAL NOT NULL DEFAULT 0,
         items_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -191,6 +230,59 @@ class DatabaseHelper {
         )
       ''');
     }
+
+    if (oldVersion < 7) {
+      await _addColumnIfMissing(
+        db,
+        'sales',
+        'subtotal_amount',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sales',
+        'discount_type',
+        "TEXT NOT NULL DEFAULT 'none'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sales',
+        'discount_value',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sales',
+        'discount_amount',
+        "REAL NOT NULL DEFAULT 0",
+      );
+
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'base_line_total',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'item_discount_amount',
+        "REAL NOT NULL DEFAULT 0",
+      );
+
+      await _addColumnIfMissing(
+        db,
+        'held_carts',
+        'discount_type',
+        "TEXT NOT NULL DEFAULT 'none'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'held_carts',
+        'discount_value',
+        "REAL NOT NULL DEFAULT 0",
+      );
+    }
   }
 
   Future<void> _addColumnIfMissing(
@@ -210,8 +302,9 @@ class DatabaseHelper {
   Future<void> insertMockDataIfEmpty() async {
     final db = await database;
 
-    final existingProducts =
-        await db.rawQuery('SELECT COUNT(*) as count FROM products');
+    final existingProducts = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM products',
+    );
     final productCount = existingProducts.first['count'] as int;
 
     if (productCount == 0) {
@@ -251,22 +344,15 @@ class DatabaseHelper {
       }
     }
 
-    final existingUsers =
-        await db.rawQuery('SELECT COUNT(*) as count FROM users');
+    final existingUsers = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM users',
+    );
     final userCount = existingUsers.first['count'] as int;
 
     if (userCount == 0) {
       final mockUsers = [
-        {
-          'name': 'Pathum (Manager)',
-          'role': 'manager',
-          'pin': '1234',
-        },
-        {
-          'name': 'Amal (Cashier)',
-          'role': 'cashier',
-          'pin': '5555',
-        },
+        {'name': 'Pathum (Manager)', 'role': 'manager', 'pin': '1234'},
+        {'name': 'Amal (Cashier)', 'role': 'cashier', 'pin': '5555'},
       ];
 
       for (final user in mockUsers) {
@@ -301,17 +387,13 @@ class DatabaseHelper {
       final batch = txn.batch();
 
       for (final product in backendProducts) {
-        batch.insert(
-          'products',
-          {
-            'barcode': product.barcode,
-            'name': product.name,
-            'price': product.price,
-            'stock': product.stock,
-            'updated_at': product.updatedAt,
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+        batch.insert('products', {
+          'barcode': product.barcode,
+          'name': product.name,
+          'price': product.price,
+          'stock': product.stock,
+          'updated_at': product.updatedAt,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
 
       await batch.commit(noResult: true);
@@ -336,21 +418,25 @@ class DatabaseHelper {
 
         if (type == 'SALE') {
           final data = Map<String, dynamic>.from(decodedData as Map);
-          final transactionType =
-              (data['transaction_type'] ?? 'sale').toString().toLowerCase();
+          final transactionType = (data['transaction_type'] ?? 'sale')
+              .toString()
+              .toLowerCase();
           final items = (data['items'] as List?) ?? [];
 
           for (final rawItem in items) {
             final item = Map<String, dynamic>.from(rawItem as Map);
-            final productMap = Map<String, dynamic>.from(item['product'] as Map);
+            final productMap = Map<String, dynamic>.from(
+              item['product'] as Map,
+            );
 
             final barcode = productMap['barcode']?.toString() ?? '';
             final quantity = (item['quantity'] as num?)?.toInt() ?? 0;
 
             if (barcode.isEmpty || quantity <= 0) continue;
 
-            final stockDelta =
-                transactionType == 'refund' ? quantity : -quantity;
+            final stockDelta = transactionType == 'refund'
+                ? quantity
+                : -quantity;
 
             await txn.rawUpdate(
               '''
@@ -370,10 +456,7 @@ class DatabaseHelper {
 
           await txn.update(
             'products',
-            {
-              'price': newPrice,
-              'updated_at': DateTime.now().toIso8601String(),
-            },
+            {'price': newPrice, 'updated_at': DateTime.now().toIso8601String()},
             where: 'barcode = ?',
             whereArgs: [barcode],
           );
@@ -383,6 +466,7 @@ class DatabaseHelper {
   }
 
   Future<int> processTransaction({
+    required double subtotalAmount,
     required double totalAmount,
     required List<Map<String, dynamic>> cartItems,
     required String cashierName,
@@ -390,6 +474,9 @@ class DatabaseHelper {
     String? paymentMethod,
     double? amountTendered,
     double? changeAmount,
+    String discountType = 'none',
+    double discountValue = 0.0,
+    double? discountAmount,
   }) async {
     final db = await database;
 
@@ -403,7 +490,29 @@ class DatabaseHelper {
       await db.transaction((txn) async {
         final now = DateTime.now().toIso8601String();
         final transactionType = isRefund ? 'refund' : 'sale';
-        final signedTotal = isRefund ? -totalAmount.abs() : totalAmount.abs();
+
+        final resolvedSubtotal = _roundMoney(
+          isRefund ? totalAmount.abs() : subtotalAmount.abs(),
+        );
+
+        final resolvedDiscountType = isRefund
+            ? 'none'
+            : _normalizeDiscountType(discountType);
+        final resolvedDiscountValue = isRefund ? 0.0 : discountValue;
+        final resolvedDiscountAmount = isRefund
+            ? 0.0
+            : _calculateDiscountAmount(
+                subtotal: resolvedSubtotal,
+                discountType: resolvedDiscountType,
+                discountValue: resolvedDiscountValue,
+              );
+
+        final resolvedFinalTotal = isRefund
+            ? resolvedSubtotal
+            : _roundMoney(resolvedSubtotal - resolvedDiscountAmount);
+
+        final signedTotal = isRefund ? -resolvedFinalTotal : resolvedFinalTotal;
+        final signedSubtotal = isRefund ? -resolvedSubtotal : resolvedSubtotal;
 
         String? resolvedPaymentMethod = paymentMethod;
         double? resolvedAmountTendered = amountTendered;
@@ -418,18 +527,21 @@ class DatabaseHelper {
 
           if (resolvedPaymentMethod == 'cash') {
             if (resolvedAmountTendered == null ||
-                resolvedAmountTendered < totalAmount) {
+                resolvedAmountTendered < resolvedFinalTotal) {
               throw Exception('Cash amount is not enough.');
             }
-            resolvedChangeAmount = resolvedAmountTendered - totalAmount;
+            resolvedChangeAmount = _roundMoney(
+              resolvedAmountTendered - resolvedFinalTotal,
+            );
           } else {
-            resolvedAmountTendered = totalAmount;
+            resolvedAmountTendered = resolvedFinalTotal;
             resolvedChangeAmount = 0.0;
           }
 
           for (final item in cartItems) {
-            final productMap =
-                Map<String, dynamic>.from(item['product'] as Map);
+            final productMap = Map<String, dynamic>.from(
+              item['product'] as Map,
+            );
             final barcode = productMap['barcode']?.toString() ?? '';
             final productName =
                 productMap['name']?.toString() ?? 'Unknown product';
@@ -468,6 +580,10 @@ class DatabaseHelper {
         }
 
         saleId = await txn.insert('sales', {
+          'subtotal_amount': signedSubtotal,
+          'discount_type': resolvedDiscountType,
+          'discount_value': resolvedDiscountValue,
+          'discount_amount': resolvedDiscountAmount,
           'total_amount': signedTotal,
           'cashier_name': cashierName,
           'transaction_type': transactionType,
@@ -479,7 +595,11 @@ class DatabaseHelper {
           'created_at': now,
         });
 
-        for (final item in cartItems) {
+        final saleItemInputs = <Map<String, dynamic>>[];
+        double remainingDiscountToAllocate = resolvedDiscountAmount;
+
+        for (int i = 0; i < cartItems.length; i++) {
+          final item = cartItems[i];
           final productMap = Map<String, dynamic>.from(item['product'] as Map);
           final barcode = productMap['barcode']?.toString() ?? '';
           final productName =
@@ -487,12 +607,57 @@ class DatabaseHelper {
           final unitPrice = (productMap['price'] as num).toDouble();
           final quantity = (item['quantity'] as num).toInt();
 
-          if (quantity <= 0) {
-            throw Exception('Invalid quantity for $productName.');
+          final baseLineTotal = _roundMoney(unitPrice * quantity);
+
+          double itemDiscount = 0.0;
+
+          if (!isRefund && resolvedDiscountAmount > 0) {
+            if (i == cartItems.length - 1) {
+              itemDiscount = remainingDiscountToAllocate;
+            } else {
+              final share = resolvedSubtotal <= 0
+                  ? 0.0
+                  : resolvedDiscountAmount * (baseLineTotal / resolvedSubtotal);
+              itemDiscount = _roundMoney(share);
+
+              if (itemDiscount > remainingDiscountToAllocate) {
+                itemDiscount = remainingDiscountToAllocate;
+              }
+            }
           }
 
+          itemDiscount = itemDiscount > baseLineTotal
+              ? baseLineTotal
+              : itemDiscount;
+          remainingDiscountToAllocate = _roundMoney(
+            remainingDiscountToAllocate - itemDiscount,
+          );
+
+          final finalLineTotal = isRefund
+              ? -baseLineTotal
+              : _roundMoney(baseLineTotal - itemDiscount);
+
+          saleItemInputs.add({
+            'barcode': barcode,
+            'product_name': productName,
+            'unit_price': unitPrice,
+            'quantity': quantity,
+            'base_line_total': baseLineTotal,
+            'item_discount_amount': isRefund ? 0.0 : itemDiscount,
+            'line_total': finalLineTotal,
+          });
+        }
+
+        for (final item in saleItemInputs) {
+          final barcode = item['barcode'] as String;
+          final productName = item['product_name'] as String;
+          final unitPrice = item['unit_price'] as double;
+          final quantity = item['quantity'] as int;
+          final baseLineTotal = item['base_line_total'] as double;
+          final itemDiscount = item['item_discount_amount'] as double;
+          final finalLineTotal = item['line_total'] as double;
+
           final stockDelta = isRefund ? quantity : -quantity;
-          final signedLineTotal = unitPrice * quantity * (isRefund ? -1 : 1);
 
           final updatedCount = await txn.rawUpdate(
             '''
@@ -515,13 +680,19 @@ class DatabaseHelper {
             'product_name': productName,
             'unit_price': unitPrice,
             'quantity': quantity,
-            'line_total': signedLineTotal,
+            'base_line_total': baseLineTotal,
+            'item_discount_amount': itemDiscount,
+            'line_total': finalLineTotal,
             'created_at': now,
           });
         }
 
         final syncData = jsonEncode({
           'local_sale_id': saleId,
+          'subtotal_amount': signedSubtotal,
+          'discount_type': resolvedDiscountType,
+          'discount_value': resolvedDiscountValue,
+          'discount_amount': resolvedDiscountAmount,
           'total_amount': signedTotal,
           'branch': 'Hikkaduwa',
           'vendor': 'Alfasoft',
@@ -580,17 +751,18 @@ class DatabaseHelper {
         }
 
         final originalSale = originalSaleRows.first;
-        final originalType =
-            (originalSale['transaction_type'] ?? 'sale')
-                .toString()
-                .toLowerCase();
+        final originalType = (originalSale['transaction_type'] ?? 'sale')
+            .toString()
+            .toLowerCase();
 
         if (originalType != 'sale') {
           throw Exception('Only sale transactions can be refunded.');
         }
 
-        final refundableItems =
-            await _getRefundableItemsForSaleExecutor(txn, originalSaleId);
+        final refundableItems = await _getRefundableItemsForSaleExecutor(
+          txn,
+          originalSaleId,
+        );
 
         final refundableMap = <String, Map<String, dynamic>>{
           for (final item in refundableItems)
@@ -601,7 +773,11 @@ class DatabaseHelper {
         final now = DateTime.now().toIso8601String();
 
         refundSaleId = await txn.insert('sales', {
-          'total_amount': 0,
+          'subtotal_amount': 0.0,
+          'discount_type': 'none',
+          'discount_value': 0.0,
+          'discount_amount': 0.0,
+          'total_amount': 0.0,
           'cashier_name': cashierName,
           'transaction_type': 'refund',
           'original_sale_id': originalSaleId,
@@ -632,6 +808,9 @@ class DatabaseHelper {
 
           final refundableQty =
               (refundableData['refundable_quantity'] as num?)?.toInt() ?? 0;
+          final remainingRefundableTotal =
+              ((refundableData['remaining_refundable_total'] as num?) ?? 0)
+                  .toDouble();
 
           if (quantity > refundableQty) {
             final productName =
@@ -644,8 +823,8 @@ class DatabaseHelper {
 
           final productName =
               (refundableData['product_name'] ?? 'Unknown product').toString();
-          final unitPrice =
-              ((refundableData['unit_price'] as num?) ?? 0).toDouble();
+          final unitPrice = ((refundableData['refund_unit_price'] as num?) ?? 0)
+              .toDouble();
 
           final updatedCount = await txn.rawUpdate(
             '''
@@ -662,8 +841,16 @@ class DatabaseHelper {
             );
           }
 
-          final lineTotal = -(unitPrice * quantity);
-          refundTotal += unitPrice * quantity;
+          double refundLineTotal;
+          if (quantity == refundableQty) {
+            refundLineTotal = _roundMoney(remainingRefundableTotal);
+          } else {
+            refundLineTotal = _roundMoney(
+              remainingRefundableTotal * (quantity / refundableQty),
+            );
+          }
+
+          refundTotal += refundLineTotal;
 
           await txn.insert('sale_items', {
             'sale_id': refundSaleId,
@@ -671,7 +858,9 @@ class DatabaseHelper {
             'product_name': productName,
             'unit_price': unitPrice,
             'quantity': quantity,
-            'line_total': lineTotal,
+            'base_line_total': refundLineTotal,
+            'item_discount_amount': 0.0,
+            'line_total': -refundLineTotal,
             'created_at': now,
           });
 
@@ -682,19 +871,25 @@ class DatabaseHelper {
               'price': unitPrice,
             },
             'quantity': quantity,
-            'line_total': lineTotal,
+            'line_total': -refundLineTotal,
           });
         }
 
+        refundTotal = _roundMoney(refundTotal);
+
         await txn.update(
           'sales',
-          {'total_amount': -refundTotal},
+          {'subtotal_amount': -refundTotal, 'total_amount': -refundTotal},
           where: 'id = ?',
           whereArgs: [refundSaleId],
         );
 
         final syncData = jsonEncode({
           'local_sale_id': refundSaleId,
+          'subtotal_amount': -refundTotal,
+          'discount_type': 'none',
+          'discount_value': 0.0,
+          'discount_amount': 0.0,
           'total_amount': -refundTotal,
           'branch': 'Hikkaduwa',
           'vendor': 'Alfasoft',
@@ -732,10 +927,7 @@ class DatabaseHelper {
 
         await txn.update(
           'products',
-          {
-            'price': newPrice,
-            'updated_at': now,
-          },
+          {'price': newPrice, 'updated_at': now},
           where: 'barcode = ?',
           whereArgs: [barcode],
         );
@@ -798,6 +990,10 @@ class DatabaseHelper {
       '''
       SELECT
         s.id,
+        s.subtotal_amount,
+        s.discount_type,
+        s.discount_value,
+        s.discount_amount,
         s.total_amount,
         s.cashier_name,
         s.transaction_type,
@@ -814,6 +1010,10 @@ class DatabaseHelper {
       $whereClause
       GROUP BY
         s.id,
+        s.subtotal_amount,
+        s.discount_type,
+        s.discount_value,
+        s.discount_amount,
         s.total_amount,
         s.cashier_name,
         s.transaction_type,
@@ -833,6 +1033,10 @@ class DatabaseHelper {
         .map(
           (row) => {
             'id': row['id'],
+            'subtotal_amount': row['subtotal_amount'],
+            'discount_type': row['discount_type'],
+            'discount_value': row['discount_value'],
+            'discount_amount': row['discount_amount'],
             'total_amount': row['total_amount'],
             'cashier_name': row['cashier_name'],
             'transaction_type': row['transaction_type'],
@@ -856,6 +1060,10 @@ class DatabaseHelper {
       '''
       SELECT
         s.id,
+        s.subtotal_amount,
+        s.discount_type,
+        s.discount_value,
+        s.discount_amount,
         s.total_amount,
         s.cashier_name,
         s.transaction_type,
@@ -872,6 +1080,10 @@ class DatabaseHelper {
       WHERE s.id = ?
       GROUP BY
         s.id,
+        s.subtotal_amount,
+        s.discount_type,
+        s.discount_value,
+        s.discount_amount,
         s.total_amount,
         s.cashier_name,
         s.transaction_type,
@@ -892,6 +1104,10 @@ class DatabaseHelper {
 
     return {
       'id': row['id'],
+      'subtotal_amount': row['subtotal_amount'],
+      'discount_type': row['discount_type'],
+      'discount_value': row['discount_value'],
+      'discount_amount': row['discount_amount'],
       'total_amount': row['total_amount'],
       'cashier_name': row['cashier_name'],
       'transaction_type': row['transaction_type'],
@@ -925,6 +1141,8 @@ class DatabaseHelper {
             'product_name': row['product_name'],
             'unit_price': row['unit_price'],
             'quantity': row['quantity'],
+            'base_line_total': row['base_line_total'],
+            'item_discount_amount': row['item_discount_amount'],
             'line_total': row['line_total'],
             'created_at': row['created_at'],
           },
@@ -954,10 +1172,9 @@ class DatabaseHelper {
       throw Exception('Original sale not found.');
     }
 
-    final saleType =
-        (saleRows.first['transaction_type'] ?? 'sale')
-            .toString()
-            .toLowerCase();
+    final saleType = (saleRows.first['transaction_type'] ?? 'sale')
+        .toString()
+        .toLowerCase();
 
     if (saleType != 'sale') {
       throw Exception('Only sale transactions can be refunded.');
@@ -969,7 +1186,8 @@ class DatabaseHelper {
         barcode,
         product_name,
         unit_price,
-        SUM(quantity) AS original_quantity
+        SUM(quantity) AS original_quantity,
+        COALESCE(SUM(ABS(line_total)), 0) AS original_net_total
       FROM sale_items
       WHERE sale_id = ?
       GROUP BY barcode, product_name, unit_price
@@ -982,7 +1200,8 @@ class DatabaseHelper {
       '''
       SELECT
         si.barcode,
-        COALESCE(SUM(si.quantity), 0) AS refunded_quantity
+        COALESCE(SUM(si.quantity), 0) AS refunded_quantity,
+        COALESCE(SUM(ABS(si.line_total)), 0) AS refunded_total
       FROM sales s
       INNER JOIN sale_items si ON si.sale_id = s.id
       WHERE s.transaction_type = 'refund'
@@ -992,17 +1211,33 @@ class DatabaseHelper {
       [saleId],
     );
 
-    final refundedMap = <String, int>{
+    final refundedMap = <String, Map<String, dynamic>>{
       for (final row in refundedItems)
-        (row['barcode'] ?? '').toString():
-            (row['refunded_quantity'] as num?)?.toInt() ?? 0,
+        (row['barcode'] ?? '').toString(): {
+          'refunded_quantity': (row['refunded_quantity'] as num?)?.toInt() ?? 0,
+          'refunded_total': ((row['refunded_total'] as num?) ?? 0).toDouble(),
+        },
     };
 
     return originalItems.map((row) {
       final barcode = (row['barcode'] ?? '').toString();
       final originalQty = (row['original_quantity'] as num?)?.toInt() ?? 0;
-      final refundedQty = refundedMap[barcode] ?? 0;
+      final originalNetTotal = ((row['original_net_total'] as num?) ?? 0)
+          .toDouble();
+
+      final refundedQty =
+          (refundedMap[barcode]?['refunded_quantity'] as int?) ?? 0;
+      final refundedTotal =
+          (refundedMap[barcode]?['refunded_total'] as double?) ?? 0.0;
+
       final refundableQty = originalQty - refundedQty;
+      final remainingRefundableTotal = _roundMoney(
+        originalNetTotal - refundedTotal,
+      );
+
+      final refundUnitPrice = refundableQty > 0
+          ? _roundMoney(remainingRefundableTotal / refundableQty)
+          : 0.0;
 
       return {
         'barcode': barcode,
@@ -1011,6 +1246,10 @@ class DatabaseHelper {
         'original_quantity': originalQty,
         'refunded_quantity': refundedQty,
         'refundable_quantity': refundableQty < 0 ? 0 : refundableQty,
+        'remaining_refundable_total': remainingRefundableTotal < 0
+            ? 0.0
+            : remainingRefundableTotal,
+        'refund_unit_price': refundUnitPrice,
       };
     }).toList();
   }
@@ -1108,10 +1347,7 @@ class DatabaseHelper {
       openingCash: ((shift['opening_cash'] as num?) ?? 0).toDouble(),
     );
 
-    return {
-      ...shift,
-      ...stats,
-    };
+    return {...shift, ...stats};
   }
 
   Future<Map<String, dynamic>> closeShift({
@@ -1151,8 +1387,7 @@ class DatabaseHelper {
           closedAt: closedAt,
         );
 
-        final expectedCash =
-            ((stats['expected_cash'] as num?) ?? 0).toDouble();
+        final expectedCash = ((stats['expected_cash'] as num?) ?? 0).toDouble();
         final variance = closingCash - expectedCash;
 
         await txn.update(
@@ -1208,8 +1443,7 @@ class DatabaseHelper {
         AND datetime(created_at) <= datetime(?)
       ''',
       [cashierName, openedAt, endTime],
-    ))
-        .first;
+    )).first;
 
     final cardSalesRow = (await executor.rawQuery(
       '''
@@ -1224,8 +1458,7 @@ class DatabaseHelper {
         AND datetime(created_at) <= datetime(?)
       ''',
       [cashierName, openedAt, endTime],
-    ))
-        .first;
+    )).first;
 
     final refundCountRow = (await executor.rawQuery(
       '''
@@ -1237,8 +1470,7 @@ class DatabaseHelper {
         AND datetime(created_at) <= datetime(?)
       ''',
       [cashierName, openedAt, endTime],
-    ))
-        .first;
+    )).first;
 
     final transactionCountRow = (await executor.rawQuery(
       '''
@@ -1249,8 +1481,7 @@ class DatabaseHelper {
         AND datetime(created_at) <= datetime(?)
       ''',
       [cashierName, openedAt, endTime],
-    ))
-        .first;
+    )).first;
 
     final cashRefundRow = (await executor.rawQuery(
       '''
@@ -1265,8 +1496,7 @@ class DatabaseHelper {
         AND datetime(r.created_at) <= datetime(?)
       ''',
       [cashierName, openedAt, endTime],
-    ))
-        .first;
+    )).first;
 
     final cashSalesTotal = ((cashSalesRow['total'] as num?) ?? 0).toDouble();
     final cardSalesTotal = ((cardSalesRow['total'] as num?) ?? 0).toDouble();
@@ -1281,8 +1511,7 @@ class DatabaseHelper {
       'cash_sale_count': (cashSalesRow['count'] as num?)?.toInt() ?? 0,
       'card_sale_count': (cardSalesRow['count'] as num?)?.toInt() ?? 0,
       'refund_count': (refundCountRow['count'] as num?)?.toInt() ?? 0,
-      'transaction_count':
-          (transactionCountRow['count'] as num?)?.toInt() ?? 0,
+      'transaction_count': (transactionCountRow['count'] as num?)?.toInt() ?? 0,
       'expected_cash': expectedCash,
     };
   }
@@ -1291,6 +1520,8 @@ class DatabaseHelper {
     required String cartName,
     required String cashierName,
     required bool isRefundMode,
+    required String discountType,
+    required double discountValue,
     required List<Map<String, dynamic>> items,
   }) async {
     final db = await database;
@@ -1306,6 +1537,10 @@ class DatabaseHelper {
       'cart_name': safeName,
       'cashier_name': cashierName,
       'is_refund_mode': isRefundMode ? 1 : 0,
+      'discount_type': isRefundMode
+          ? 'none'
+          : _normalizeDiscountType(discountType),
+      'discount_value': isRefundMode ? 0.0 : discountValue,
       'items_json': jsonEncode(items),
       'created_at': now,
       'updated_at': now,
@@ -1335,7 +1570,7 @@ class DatabaseHelper {
       }
 
       int itemCount = 0;
-      double totalAmount = 0;
+      double subtotal = 0;
 
       for (final raw in decoded) {
         final item = Map<String, dynamic>.from(raw as Map);
@@ -1343,16 +1578,30 @@ class DatabaseHelper {
         final lineTotal = ((item['line_total'] as num?) ?? 0).toDouble();
 
         itemCount += quantity;
-        totalAmount += lineTotal.abs();
+        subtotal += lineTotal.abs();
       }
+
+      final isRefundMode = ((row['is_refund_mode'] as num?) ?? 0).toInt() == 1;
+      final discountType = (row['discount_type'] ?? 'none').toString();
+      final discountValue = ((row['discount_value'] as num?) ?? 0).toDouble();
+
+      final discountAmount = isRefundMode
+          ? 0.0
+          : _calculateDiscountAmount(
+              subtotal: subtotal,
+              discountType: discountType,
+              discountValue: discountValue,
+            );
 
       return {
         'id': row['id'],
         'cart_name': row['cart_name'],
         'cashier_name': row['cashier_name'],
-        'is_refund_mode': ((row['is_refund_mode'] as num?) ?? 0).toInt() == 1,
+        'is_refund_mode': isRefundMode,
+        'discount_type': discountType,
+        'discount_value': discountValue,
         'item_count': itemCount,
-        'total_amount': totalAmount,
+        'total_amount': _roundMoney(subtotal - discountAmount),
         'created_at': row['created_at'],
         'updated_at': row['updated_at'],
       };
@@ -1405,6 +1654,8 @@ class DatabaseHelper {
         'cart_name': row['cart_name'],
         'cashier_name': row['cashier_name'],
         'is_refund_mode': ((row['is_refund_mode'] as num?) ?? 0).toInt() == 1,
+        'discount_type': (row['discount_type'] ?? 'none').toString(),
+        'discount_value': ((row['discount_value'] as num?) ?? 0).toDouble(),
         'items': decodedItems,
         'created_at': row['created_at'],
         'updated_at': row['updated_at'],

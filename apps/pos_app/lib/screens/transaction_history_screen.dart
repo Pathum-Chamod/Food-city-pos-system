@@ -194,6 +194,10 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                             final originalSaleId = tx['original_sale_id'];
                             final paymentMethod =
                                 (tx['payment_method'] ?? '').toString();
+                            final discountAmount =
+                                ((tx['discount_amount'] as num?) ?? 0)
+                                    .toDouble()
+                                    .abs();
 
                             return Card(
                               margin: const EdgeInsets.symmetric(
@@ -244,6 +248,18 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                                       if (type == 'sale')
                                         Text(
                                           'Payment: ${_paymentLabel(paymentMethod)}',
+                                        ),
+                                      if (type == 'sale' && discountAmount > 0)
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(top: 4),
+                                          child: Text(
+                                            'Discount: Rs. ${discountAmount.toStringAsFixed(2)}',
+                                            style: const TextStyle(
+                                              color: Colors.red,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
                                         ),
                                       if (type == 'refund' &&
                                           originalSaleId != null) ...[
@@ -323,6 +339,13 @@ Future<String?> showTransactionReceiptDialog(
   final transactionType =
       (summary['transaction_type'] ?? 'sale').toString().toLowerCase();
   final isRefund = transactionType == 'refund';
+  final subtotal =
+      ((summary['subtotal_amount'] as num?) ?? 0).toDouble().abs();
+  final discountType = (summary['discount_type'] ?? 'none').toString();
+  final discountValue =
+      ((summary['discount_value'] as num?) ?? 0).toDouble();
+  final discountAmount =
+      ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
   final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
   final cashier = (summary['cashier_name'] ?? 'Unknown').toString();
   final createdAt = (summary['created_at'] ?? '').toString();
@@ -333,6 +356,17 @@ Future<String?> showTransactionReceiptDialog(
   final amountTendered =
       ((summary['amount_tendered'] as num?) ?? 0).toDouble();
   final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
+
+  String discountLabel() {
+    if (discountAmount <= 0) return '';
+    if (discountType == 'percent') {
+      return '${discountValue.toStringAsFixed(discountValue % 1 == 0 ? 0 : 2)}%';
+    }
+    if (discountType == 'fixed') {
+      return 'Rs. ${discountValue.toStringAsFixed(2)}';
+    }
+    return '';
+  }
 
   return showDialog<String>(
     context: context,
@@ -394,8 +428,16 @@ Future<String?> showTransactionReceiptDialog(
                   final qty = (item['quantity'] as num?)?.toInt() ?? 0;
                   final unitPrice =
                       ((item['unit_price'] as num?) ?? 0).toDouble();
-                  final lineTotal =
+                  final baseLineTotal =
+                      ((item['base_line_total'] as num?) ?? 0).toDouble();
+                  final itemDiscount =
+                      ((item['item_discount_amount'] as num?) ?? 0).toDouble();
+                  final finalLineTotal =
                       ((item['line_total'] as num?) ?? 0).toDouble().abs();
+
+                  final shownLineTotal = isRefund
+                      ? finalLineTotal
+                      : (baseLineTotal > 0 ? baseLineTotal : finalLineTotal);
 
                   return Container(
                     margin: const EdgeInsets.only(bottom: 12),
@@ -422,11 +464,21 @@ Future<String?> showTransactionReceiptDialog(
                         ),
                         const SizedBox(height: 4),
                         Text('Qty: $qty × Rs. ${unitPrice.toStringAsFixed(2)}'),
+                        if (!isRefund && itemDiscount > 0) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Line Discount: Rs. ${itemDiscount.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              color: Colors.red,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 4),
                         Align(
                           alignment: Alignment.centerRight,
                           child: Text(
-                            'Rs. ${lineTotal.toStringAsFixed(2)}',
+                            'Rs. ${shownLineTotal.toStringAsFixed(2)}',
                             style: const TextStyle(
                               fontWeight: FontWeight.bold,
                             ),
@@ -437,6 +489,30 @@ Future<String?> showTransactionReceiptDialog(
                   );
                 }),
                 const SizedBox(height: 6),
+                if (!isRefund) ...[
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      'Subtotal: Rs. ${subtotal.toStringAsFixed(2)}',
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                  ),
+                  if (discountAmount > 0) ...[
+                    const SizedBox(height: 4),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        'Discount${discountLabel().isEmpty ? '' : ' (${discountLabel()})'}: -Rs. ${discountAmount.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Colors.red,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                ],
                 Align(
                   alignment: Alignment.centerRight,
                   child: Text(

@@ -17,17 +17,68 @@ class CartProvider with ChangeNotifier {
   final List<CartItem> _items = [];
   bool _isRefundMode = false;
 
+  String _discountType = 'none'; // none | fixed | percent
+  double _discountValue = 0.0;
+
   List<CartItem> get items => _items;
   bool get isRefundMode => _isRefundMode;
+  String get discountType => _discountType;
+  double get discountValue => _discountValue;
+
+  double get subtotal {
+    return _items.fold(0, (sum, item) => sum + item.total);
+  }
+
+  double get discountAmount {
+    if (_isRefundMode || subtotal <= 0) return 0.0;
+
+    if (_discountType == 'fixed') {
+      final safeValue = _discountValue < 0 ? 0.0 : _discountValue;
+      return safeValue > subtotal ? subtotal : safeValue;
+    }
+
+    if (_discountType == 'percent') {
+      final safeValue = _discountValue < 0 ? 0.0 : _discountValue;
+      final capped = safeValue > 100 ? 100.0 : safeValue;
+      return subtotal * (capped / 100);
+    }
+
+    return 0.0;
+  }
 
   double get cartTotal {
-    return _items.fold(0, (sum, item) => sum + item.total);
+    final total = subtotal - discountAmount;
+    return total < 0 ? 0 : total;
   }
 
   void toggleRefundMode(bool value) {
     _isRefundMode = value;
     _items.clear();
+    _discountType = 'none';
+    _discountValue = 0.0;
     notifyListeners();
+  }
+
+  void setDiscount({
+    required String discountType,
+    required double discountValue,
+  }) {
+    if (_isRefundMode) return;
+
+    _discountType = _normalizeDiscountType(discountType);
+    _discountValue = discountValue < 0 ? 0.0 : discountValue;
+    notifyListeners();
+  }
+
+  void clearDiscount() {
+    _discountType = 'none';
+    _discountValue = 0.0;
+    notifyListeners();
+  }
+
+  String _normalizeDiscountType(String value) {
+    if (value == 'fixed' || value == 'percent') return value;
+    return 'none';
   }
 
   void addToCart(Product product) {
@@ -61,11 +112,22 @@ class CartProvider with ChangeNotifier {
       _items.removeAt(index);
     }
 
+    if (_items.isEmpty) {
+      _discountType = 'none';
+      _discountValue = 0.0;
+    }
+
     notifyListeners();
   }
 
   void removeItem(String barcode) {
     _items.removeWhere((item) => item.product.barcode == barcode);
+
+    if (_items.isEmpty) {
+      _discountType = 'none';
+      _discountValue = 0.0;
+    }
+
     notifyListeners();
   }
 
@@ -78,15 +140,21 @@ class CartProvider with ChangeNotifier {
   void clearCart() {
     _items.clear();
     _isRefundMode = false;
+    _discountType = 'none';
+    _discountValue = 0.0;
     notifyListeners();
   }
 
   void loadHeldCart({
     required List<Map<String, dynamic>> items,
     required bool isRefundMode,
+    String discountType = 'none',
+    double discountValue = 0.0,
   }) {
     _items.clear();
     _isRefundMode = isRefundMode;
+    _discountType = isRefundMode ? 'none' : _normalizeDiscountType(discountType);
+    _discountValue = isRefundMode ? 0.0 : (discountValue < 0 ? 0.0 : discountValue);
 
     for (final rawItem in items) {
       final item = Map<String, dynamic>.from(rawItem);

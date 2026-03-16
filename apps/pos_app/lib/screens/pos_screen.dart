@@ -11,6 +11,7 @@ import '../providers/cart_provider.dart';
 import '../services/database_helper.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
+import 'cart_discount_dialog.dart';
 import 'checkout_payment_dialog.dart';
 import 'held_carts_screen.dart';
 import 'login_screen.dart';
@@ -259,6 +260,42 @@ class _PosScreenState extends State<PosScreen> {
     _focusBarcodeField();
   }
 
+  Future<void> _applyDiscount(CartProvider cart) async {
+    if (cart.items.isEmpty) {
+      _showInfoMessage(
+        'Add items before applying a discount.',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+
+    if (cart.isRefundMode) {
+      _showInfoMessage(
+        'Discounts are not available in refund mode.',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+
+    AdminDialogs.showPinDialog(context, () async {
+      final result = await showCartDiscountDialog(
+        context,
+        subtotal: cart.subtotal,
+        currentDiscountType: cart.discountType,
+        currentDiscountValue: cart.discountValue,
+      );
+
+      if (!mounted || result == null) return;
+
+      cart.setDiscount(
+        discountType: (result['discount_type'] ?? 'none').toString(),
+        discountValue: ((result['discount_value'] as num?) ?? 0).toDouble(),
+      );
+
+      _focusBarcodeField();
+    });
+  }
+
   Future<void> _handleCheckout(CartProvider cart) async {
     if (cart.items.isEmpty || _isProcessingCheckout) return;
 
@@ -286,6 +323,7 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     final isRefund = cart.isRefundMode;
+    final subtotal = cart.subtotal;
     final displayTotal = cart.cartTotal;
     final itemsMap = cart.getCartItemsAsMap();
 
@@ -315,6 +353,7 @@ class _PosScreenState extends State<PosScreen> {
 
     try {
       final saleId = await DatabaseHelper.instance.processTransaction(
+        subtotalAmount: subtotal,
         totalAmount: displayTotal,
         cartItems: itemsMap,
         cashierName: cashierName,
@@ -322,6 +361,9 @@ class _PosScreenState extends State<PosScreen> {
         paymentMethod: paymentMethod,
         amountTendered: amountTendered,
         changeAmount: changeAmount,
+        discountType: cart.discountType,
+        discountValue: cart.discountValue,
+        discountAmount: cart.discountAmount,
       );
 
       cart.clearCart();
@@ -447,6 +489,8 @@ class _PosScreenState extends State<PosScreen> {
         cartName: cartName,
         cashierName: cashierName,
         isRefundMode: cart.isRefundMode,
+        discountType: cart.discountType,
+        discountValue: cart.discountValue,
         items: cart.getCartItemsAsMap(),
       );
 
@@ -549,6 +593,8 @@ class _PosScreenState extends State<PosScreen> {
     cart.loadHeldCart(
       items: preparedItems,
       isRefundMode: (restored['is_refund_mode'] ?? false) == true,
+      discountType: (restored['discount_type'] ?? 'none').toString(),
+      discountValue: ((restored['discount_value'] as num?) ?? 0).toDouble(),
     );
 
     _showInfoMessage(
@@ -1206,6 +1252,27 @@ class _PosScreenState extends State<PosScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
+                        'Subtotal: Rs. ${cart.subtotal.toStringAsFixed(2)}',
+                        textAlign: TextAlign.right,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Discount: Rs. ${cart.discountAmount.toStringAsFixed(2)}',
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: cart.discountAmount > 0
+                              ? Colors.red
+                              : Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
                         cart.isRefundMode
                             ? 'Refund Total: Rs. ${cart.cartTotal.toStringAsFixed(2)}'
                             : 'Total: Rs. ${cart.cartTotal.toStringAsFixed(2)}',
@@ -1216,6 +1283,36 @@ class _PosScreenState extends State<PosScreen> {
                         textAlign: TextAlign.right,
                       ),
                       const SizedBox(height: 12),
+                      if (!cart.isRefundMode)
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: cart.items.isEmpty
+                                    ? null
+                                    : () => _applyDiscount(cart),
+                                child: Text(
+                                  cart.discountAmount > 0
+                                      ? 'EDIT DISCOUNT'
+                                      : 'APPLY DISCOUNT',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: cart.discountAmount > 0
+                                    ? () {
+                                        cart.clearDiscount();
+                                        _focusBarcodeField();
+                                      }
+                                    : null,
+                                child: const Text('CLEAR DISCOUNT'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      if (!cart.isRefundMode) const SizedBox(height: 12),
                       Row(
                         children: [
                           Expanded(
