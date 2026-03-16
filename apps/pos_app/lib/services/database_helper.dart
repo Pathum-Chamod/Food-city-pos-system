@@ -29,7 +29,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 4,
+        version: 5,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -77,6 +77,20 @@ class DatabaseHelper {
         line_total REAL NOT NULL,
         created_at TEXT NOT NULL,
         FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE shifts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cashier_name TEXT NOT NULL,
+        opening_cash REAL NOT NULL,
+        expected_cash REAL,
+        closing_cash REAL,
+        variance REAL,
+        status TEXT NOT NULL DEFAULT 'open',
+        opened_at TEXT NOT NULL,
+        closed_at TEXT
       )
     ''');
 
@@ -134,6 +148,22 @@ class DatabaseHelper {
       await _addColumnIfMissing(db, 'sales', 'payment_method', 'TEXT');
       await _addColumnIfMissing(db, 'sales', 'amount_tendered', 'REAL');
       await _addColumnIfMissing(db, 'sales', 'change_amount', 'REAL');
+    }
+
+    if (oldVersion < 5) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS shifts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          cashier_name TEXT NOT NULL,
+          opening_cash REAL NOT NULL,
+          expected_cash REAL,
+          closing_cash REAL,
+          variance REAL,
+          status TEXT NOT NULL DEFAULT 'open',
+          opened_at TEXT NOT NULL,
+          closed_at TEXT
+        )
+      ''');
     }
   }
 
@@ -942,5 +972,275 @@ class DatabaseHelper {
         'refundable_quantity': refundableQty < 0 ? 0 : refundableQty,
       };
     }).toList();
+  }
+
+  Future<int> openShift({
+    required String cashierName,
+    required double openingCash,
+  }) async {
+    final db = await database;
+
+    if (openingCash < 0) {
+      throw Exception('Opening cash cannot be negative.');
+    }
+
+    try {
+      late int shiftId;
+
+      await db.transaction((txn) async {
+        final existingOpenShift = await txn.query(
+          'shifts',
+          where: 'cashier_name = ? AND status = ?',
+          whereArgs: [cashierName, 'open'],
+          limit: 1,
+        );
+
+        if (existingOpenShift.isNotEmpty) {
+          throw Exception('This cashier already has an open shift.');
+        }
+
+        final now = DateTime.now().toIso8601String();
+
+        shiftId = await txn.insert('shifts', {
+          'cashier_name': cashierName,
+          'opening_cash': openingCash,
+          'expected_cash': openingCash,
+          'closing_cash': null,
+          'variance': null,
+          'status': 'open',
+          'opened_at': now,
+          'closed_at': null,
+        });
+      });
+
+      return shiftId;
+    } catch (e) {
+      debugPrint('Open Shift Error: $e');
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>?> getOpenShiftForCashier(String cashierName) async {
+    final db = await database;
+
+    final rows = await db.query(
+      'shifts',
+      where: 'cashier_name = ? AND status = ?',
+      whereArgs: [cashierName, 'open'],
+      orderBy: 'datetime(opened_at) DESC, id DESC',
+      limit: 1,
+    );
+
+    if (rows.isEmpty) return null;
+
+    return Map<String, dynamic>.from(rows.first);
+  }
+
+  Future<Map<String, dynamic>?> getOpenShiftSummaryForCashier(
+    String cashierName,
+  ) async {
+    final db = await database;
+    return _getOpenShiftSummaryForCashierExecutor(db, cashierName);
+  }
+
+  Future<Map<String, dynamic>?> _getOpenShiftSummaryForCashierExecutor(
+    DatabaseExecutor executor,
+    String cashierName,
+  ) async {
+    final rows = await executor.query(
+      'shifts',
+      where: 'cashier_name = ? AND status = ?',
+      whereArgs: [cashierName, 'open'],
+      orderBy: 'datetime(opened_at) DESC, id DESC',
+      limit: 1,
+    );
+
+    if (rows.isEmpty) return null;
+
+    final shift = Map<String, dynamic>.from(rows.first);
+    final stats = await _buildShiftStatsExecutor(
+      executor,
+      cashierName: cashierName,
+      openedAt: (shift['opened_at'] ?? '').toString(),
+      openingCash: ((shift['opening_cash'] as num?) ?? 0).toDouble(),
+    );
+
+    return {
+      ...shift,
+      ...stats,
+    };
+  }
+
+  Future<Map<String, dynamic>> closeShift({
+    required int shiftId,
+    required String cashierName,
+    required double closingCash,
+  }) async {
+    final db = await database;
+
+    if (closingCash < 0) {
+      throw Exception('Closing cash cannot be negative.');
+    }
+
+    try {
+      late Map<String, dynamic> result;
+
+      await db.transaction((txn) async {
+        final shiftRows = await txn.query(
+          'shifts',
+          where: 'id = ? AND cashier_name = ? AND status = ?',
+          whereArgs: [shiftId, cashierName, 'open'],
+          limit: 1,
+        );
+
+        if (shiftRows.isEmpty) {
+          throw Exception('Open shift not found.');
+        }
+
+        final shift = Map<String, dynamic>.from(shiftRows.first);
+        final closedAt = DateTime.now().toIso8601String();
+
+        final stats = await _buildShiftStatsExecutor(
+          txn,
+          cashierName: cashierName,
+          openedAt: (shift['opened_at'] ?? '').toString(),
+          openingCash: ((shift['opening_cash'] as num?) ?? 0).toDouble(),
+          closedAt: closedAt,
+        );
+
+        final expectedCash =
+            ((stats['expected_cash'] as num?) ?? 0).toDouble();
+        final variance = closingCash - expectedCash;
+
+        await txn.update(
+          'shifts',
+          {
+            'expected_cash': expectedCash,
+            'closing_cash': closingCash,
+            'variance': variance,
+            'closed_at': closedAt,
+            'status': 'closed',
+          },
+          where: 'id = ?',
+          whereArgs: [shiftId],
+        );
+
+        result = {
+          ...shift,
+          ...stats,
+          'expected_cash': expectedCash,
+          'closing_cash': closingCash,
+          'variance': variance,
+          'closed_at': closedAt,
+          'status': 'closed',
+        };
+      });
+
+      return result;
+    } catch (e) {
+      debugPrint('Close Shift Error: $e');
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> _buildShiftStatsExecutor(
+    DatabaseExecutor executor, {
+    required String cashierName,
+    required String openedAt,
+    required double openingCash,
+    String? closedAt,
+  }) async {
+    final endTime = closedAt ?? DateTime.now().toIso8601String();
+
+    final cashSalesRow = (await executor.rawQuery(
+      '''
+      SELECT
+        COALESCE(SUM(total_amount), 0) AS total,
+        COUNT(*) AS count
+      FROM sales
+      WHERE cashier_name = ?
+        AND transaction_type = 'sale'
+        AND payment_method = 'cash'
+        AND datetime(created_at) >= datetime(?)
+        AND datetime(created_at) <= datetime(?)
+      ''',
+      [cashierName, openedAt, endTime],
+    ))
+        .first;
+
+    final cardSalesRow = (await executor.rawQuery(
+      '''
+      SELECT
+        COALESCE(SUM(total_amount), 0) AS total,
+        COUNT(*) AS count
+      FROM sales
+      WHERE cashier_name = ?
+        AND transaction_type = 'sale'
+        AND payment_method = 'card'
+        AND datetime(created_at) >= datetime(?)
+        AND datetime(created_at) <= datetime(?)
+      ''',
+      [cashierName, openedAt, endTime],
+    ))
+        .first;
+
+    final refundCountRow = (await executor.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM sales
+      WHERE cashier_name = ?
+        AND transaction_type = 'refund'
+        AND datetime(created_at) >= datetime(?)
+        AND datetime(created_at) <= datetime(?)
+      ''',
+      [cashierName, openedAt, endTime],
+    ))
+        .first;
+
+    final transactionCountRow = (await executor.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM sales
+      WHERE cashier_name = ?
+        AND datetime(created_at) >= datetime(?)
+        AND datetime(created_at) <= datetime(?)
+      ''',
+      [cashierName, openedAt, endTime],
+    ))
+        .first;
+
+    final cashRefundRow = (await executor.rawQuery(
+      '''
+      SELECT
+        COALESCE(SUM(ABS(r.total_amount)), 0) AS total
+      FROM sales r
+      LEFT JOIN sales o ON r.original_sale_id = o.id
+      WHERE r.cashier_name = ?
+        AND r.transaction_type = 'refund'
+        AND o.payment_method = 'cash'
+        AND datetime(r.created_at) >= datetime(?)
+        AND datetime(r.created_at) <= datetime(?)
+      ''',
+      [cashierName, openedAt, endTime],
+    ))
+        .first;
+
+    final cashSalesTotal = ((cashSalesRow['total'] as num?) ?? 0).toDouble();
+    final cardSalesTotal = ((cardSalesRow['total'] as num?) ?? 0).toDouble();
+    final cashRefundTotal = ((cashRefundRow['total'] as num?) ?? 0).toDouble();
+
+    final expectedCash = openingCash + cashSalesTotal - cashRefundTotal;
+
+    return {
+      'cash_sales_total': cashSalesTotal,
+      'card_sales_total': cardSalesTotal,
+      'cash_refund_total': cashRefundTotal,
+      'cash_sale_count': (cashSalesRow['count'] as num?)?.toInt() ?? 0,
+      'card_sale_count': (cardSalesRow['count'] as num?)?.toInt() ?? 0,
+      'refund_count': (refundCountRow['count'] as num?)?.toInt() ?? 0,
+      'transaction_count':
+          (transactionCountRow['count'] as num?)?.toInt() ?? 0,
+      'expected_cash': expectedCash,
+    };
   }
 }

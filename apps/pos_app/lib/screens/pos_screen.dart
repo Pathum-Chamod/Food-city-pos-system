@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
 
+import '../config/pos_feature_flags.dart';
 import '../providers/auth_provider.dart';
 import '../providers/cart_provider.dart';
 import '../services/database_helper.dart';
@@ -12,6 +13,7 @@ import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
 import 'checkout_payment_dialog.dart';
 import 'login_screen.dart';
+import 'shift_management_screen.dart';
 import 'transaction_history_screen.dart';
 
 class PosScreen extends StatefulWidget {
@@ -34,6 +36,7 @@ class _PosScreenState extends State<PosScreen> {
   final FocusNode _searchFocusNode = FocusNode();
 
   String _searchQuery = '';
+  Map<String, dynamic>? _currentShiftSummary;
 
   @override
   void initState() {
@@ -44,6 +47,9 @@ class _PosScreenState extends State<PosScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusBarcodeField();
+      if (PosFeatureFlags.enableShiftManagement) {
+        _loadShiftSummary();
+      }
     });
   }
 
@@ -55,6 +61,27 @@ class _PosScreenState extends State<PosScreen> {
     _barcodeFocusNode.dispose();
     _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadShiftSummary() async {
+    if (!PosFeatureFlags.enableShiftManagement) {
+      if (!mounted) return;
+      setState(() {
+        _currentShiftSummary = null;
+      });
+      return;
+    }
+
+    final cashierName =
+        context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+    final summary =
+        await DatabaseHelper.instance.getOpenShiftSummaryForCashier(cashierName);
+
+    if (!mounted) return;
+
+    setState(() {
+      _currentShiftSummary = summary;
+    });
   }
 
   void _focusBarcodeField() {
@@ -69,6 +96,9 @@ class _PosScreenState extends State<PosScreen> {
     _productRefreshTimer?.cancel();
     _productRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _refreshProductsFromBackendAndReload(silentOnFailure: true);
+      if (PosFeatureFlags.enableShiftManagement) {
+        _loadShiftSummary();
+      }
     });
   }
 
@@ -233,6 +263,27 @@ class _PosScreenState extends State<PosScreen> {
 
     final cashierName =
         context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+
+    if (PosFeatureFlags.enableShiftManagement) {
+      final openShift =
+          await DatabaseHelper.instance.getOpenShiftSummaryForCashier(
+        cashierName,
+      );
+
+      if (openShift == null) {
+        if (!mounted) return;
+        _showInfoMessage(
+          'Open a shift before processing transactions.',
+          backgroundColor: Colors.red,
+        );
+        return;
+      }
+
+      setState(() {
+        _currentShiftSummary = openShift;
+      });
+    }
+
     final isRefund = cart.isRefundMode;
     final displayTotal = cart.cartTotal;
     final itemsMap = cart.getCartItemsAsMap();
@@ -277,6 +328,9 @@ class _PosScreenState extends State<PosScreen> {
 
       await SyncService().syncNow();
       await _refreshProductsFromBackendAndReload(silentOnFailure: true);
+      if (PosFeatureFlags.enableShiftManagement) {
+        await _loadShiftSummary();
+      }
 
       if (!mounted) return;
 
@@ -326,6 +380,56 @@ class _PosScreenState extends State<PosScreen> {
         });
       }
     }
+  }
+
+  Future<void> _openShiftManagement() async {
+    if (!PosFeatureFlags.enableShiftManagement) return;
+
+    final cashierName =
+        context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+
+    await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ShiftManagementScreen(cashierName: cashierName),
+      ),
+    );
+
+    await _loadShiftSummary();
+    _focusBarcodeField();
+  }
+
+  Widget _buildShiftStatusChip() {
+    final shift = _currentShiftSummary;
+    final isOpen = shift != null;
+
+    return Container(
+      margin: const EdgeInsets.only(right: 8, top: 12, bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: isOpen ? Colors.green[100] : Colors.orange[100],
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: isOpen ? Colors.green : Colors.orange),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isOpen ? Icons.badge : Icons.badge_outlined,
+            color: isOpen ? Colors.green[700] : Colors.orange[800],
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isOpen ? 'SHIFT OPEN' : 'SHIFT CLOSED',
+            style: TextStyle(
+              color: isOpen ? Colors.green[900] : Colors.orange[900],
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildTopToolbar(CartProvider cart) {
@@ -720,6 +824,13 @@ class _PosScreenState extends State<PosScreen> {
               );
             },
           ),
+          if (PosFeatureFlags.enableShiftManagement) _buildShiftStatusChip(),
+          if (PosFeatureFlags.enableShiftManagement)
+            IconButton(
+              tooltip: 'Shift management',
+              onPressed: _openShiftManagement,
+              icon: const Icon(Icons.point_of_sale, color: Colors.white),
+            ),
           IconButton(
             tooltip: 'Transaction history',
             onPressed: () async {
@@ -729,6 +840,9 @@ class _PosScreenState extends State<PosScreen> {
                   builder: (context) => const TransactionHistoryScreen(),
                 ),
               );
+              if (PosFeatureFlags.enableShiftManagement) {
+                await _loadShiftSummary();
+              }
               _focusBarcodeField();
             },
             icon: const Icon(Icons.receipt_long, color: Colors.white),
@@ -741,6 +855,9 @@ class _PosScreenState extends State<PosScreen> {
                     _refreshProductsFromBackendAndReload(
                       showSuccessMessage: true,
                     );
+                    if (PosFeatureFlags.enableShiftManagement) {
+                      _loadShiftSummary();
+                    }
                   },
             icon: _isRefreshingProducts
                 ? const SizedBox(
@@ -828,6 +945,38 @@ class _PosScreenState extends State<PosScreen> {
                     ),
                   ),
                 ),
+                if (PosFeatureFlags.enableShiftManagement && _currentShiftSummary == null)
+                  Container(
+                    width: double.infinity,
+                    color: Colors.orange[50],
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                    child: Text(
+                      'Open a shift to process transactions.',
+                      style: TextStyle(
+                        color: Colors.orange[900],
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  )
+                else if (PosFeatureFlags.enableShiftManagement && _currentShiftSummary != null)
+                  Container(
+                    width: double.infinity,
+                    color: Colors.green[50],
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                    child: Text(
+                      'Expected Cash: Rs. ${((((_currentShiftSummary!['expected_cash'] as num?) ?? 0).toDouble())).toStringAsFixed(2)}',
+                      style: TextStyle(
+                        color: Colors.green[900],
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
                 const Divider(height: 1),
                 Container(
                   color: cart.isRefundMode ? Colors.red[50] : Colors.grey[200],

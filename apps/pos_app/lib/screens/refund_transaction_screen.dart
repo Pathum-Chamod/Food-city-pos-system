@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../config/pos_feature_flags.dart';
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 import '../services/sync_service.dart';
@@ -169,6 +170,24 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
         ),
       );
       return;
+    }
+
+    if (PosFeatureFlags.enableShiftManagement) {
+      final cashierName =
+          context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+      final openShift =
+          await DatabaseHelper.instance.getOpenShiftForCashier(cashierName);
+
+      if (openShift == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Open a shift before processing refunds.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
     }
 
     AdminDialogs.showPinDialog(context, () {
