@@ -1,0 +1,365 @@
+import 'package:flutter/material.dart';
+
+import '../services/database_helper.dart';
+
+class TransactionHistoryScreen extends StatefulWidget {
+  const TransactionHistoryScreen({super.key});
+
+  @override
+  State<TransactionHistoryScreen> createState() =>
+      _TransactionHistoryScreenState();
+
+  static Future<void> showReceiptDialogForTransaction(
+    BuildContext context,
+    int saleId,
+  ) async {
+    final summary = await DatabaseHelper.instance.getTransactionSummary(saleId);
+    final items = await DatabaseHelper.instance.getTransactionItems(saleId);
+
+    if (!context.mounted) return;
+
+    if (summary == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Transaction not found.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    await showTransactionReceiptDialog(
+      context,
+      summary: summary,
+      items: items,
+    );
+  }
+}
+
+class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
+  bool _isLoading = true;
+  String _filter = 'all';
+  List<Map<String, dynamic>> _transactions = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTransactions();
+  }
+
+  Future<void> _loadTransactions() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    final type = _filter == 'all' ? null : _filter;
+
+    final transactions = await DatabaseHelper.instance.getRecentTransactions(
+      transactionType: type,
+      limit: 100,
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _transactions = transactions;
+      _isLoading = false;
+    });
+  }
+
+  Color _typeColor(String type) {
+    return type == 'refund' ? Colors.red : Colors.green;
+  }
+
+  String _typeLabel(String type) {
+    return type == 'refund' ? 'Refund' : 'Sale';
+  }
+
+  String _formatDateTime(String raw) {
+    try {
+      final dt = DateTime.parse(raw).toLocal();
+      final y = dt.year.toString().padLeft(4, '0');
+      final m = dt.month.toString().padLeft(2, '0');
+      final d = dt.day.toString().padLeft(2, '0');
+      final h = dt.hour.toString().padLeft(2, '0');
+      final min = dt.minute.toString().padLeft(2, '0');
+      return '$y-$m-$d  $h:$min';
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  Widget _buildFilterChip(String value, String label) {
+    final selected = _filter == value;
+
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) {
+        setState(() {
+          _filter = value;
+        });
+        _loadTransactions();
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Transaction History'),
+        backgroundColor: Colors.blue[900],
+        foregroundColor: Colors.white,
+      ),
+      body: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            color: Colors.grey[100],
+            padding: const EdgeInsets.all(16),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _buildFilterChip('all', 'All'),
+                _buildFilterChip('sale', 'Sales'),
+                _buildFilterChip('refund', 'Refunds'),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _transactions.isEmpty
+                    ? const Center(
+                        child: Text('No transactions found'),
+                      )
+                    : RefreshIndicator(
+                        onRefresh: _loadTransactions,
+                        child: ListView.builder(
+                          itemCount: _transactions.length,
+                          itemBuilder: (context, index) {
+                            final tx = _transactions[index];
+                            final type =
+                                (tx['transaction_type'] ?? 'sale').toString();
+                            final color = _typeColor(type);
+                            final total =
+                                ((tx['total_amount'] as num?) ?? 0).toDouble();
+                            final totalAbs = total.abs();
+                            final id = tx['id'];
+                            final cashier =
+                                (tx['cashier_name'] ?? 'Unknown').toString();
+                            final itemQty =
+                                (tx['item_quantity_total'] as num?)?.toInt() ??
+                                    0;
+                            final createdAt =
+                                (tx['created_at'] ?? '').toString();
+
+                            return Card(
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.all(14),
+                                title: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        'Transaction #$id',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 5,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: color.withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                      child: Text(
+                                        _typeLabel(type),
+                                        style: TextStyle(
+                                          color: color,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                subtitle: Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text('Cashier: $cashier'),
+                                      const SizedBox(height: 4),
+                                      Text('Items: $itemQty'),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Time: ${_formatDateTime(createdAt)}',
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        'Total: Rs. ${totalAbs.toStringAsFixed(2)}',
+                                        style: TextStyle(
+                                          color: color,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                onTap: () async {
+                                  await TransactionHistoryScreen
+                                      .showReceiptDialogForTransaction(
+                                    context,
+                                    id as int,
+                                  );
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Future<void> showTransactionReceiptDialog(
+  BuildContext context, {
+  required Map<String, dynamic> summary,
+  required List<Map<String, dynamic>> items,
+}) async {
+  String formatDateTime(String raw) {
+    try {
+      final dt = DateTime.parse(raw).toLocal();
+      final y = dt.year.toString().padLeft(4, '0');
+      final m = dt.month.toString().padLeft(2, '0');
+      final d = dt.day.toString().padLeft(2, '0');
+      final h = dt.hour.toString().padLeft(2, '0');
+      final min = dt.minute.toString().padLeft(2, '0');
+      return '$y-$m-$d  $h:$min';
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  final transactionType =
+      (summary['transaction_type'] ?? 'sale').toString().toLowerCase();
+  final isRefund = transactionType == 'refund';
+  final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
+  final cashier = (summary['cashier_name'] ?? 'Unknown').toString();
+  final createdAt = (summary['created_at'] ?? '').toString();
+  final transactionId = summary['id'];
+
+  await showDialog(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: Text(isRefund ? 'Refund Receipt' : 'Sale Receipt'),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Food City POS',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text('Transaction #: $transactionId'),
+                Text('Type: ${isRefund ? 'Refund' : 'Sale'}'),
+                Text('Cashier: $cashier'),
+                Text('Date/Time: ${formatDateTime(createdAt)}'),
+                const SizedBox(height: 14),
+                const Divider(),
+                const SizedBox(height: 6),
+                ...items.map((item) {
+                  final name = (item['product_name'] ?? 'Unknown').toString();
+                  final barcode = (item['barcode'] ?? '').toString();
+                  final qty = (item['quantity'] as num?)?.toInt() ?? 0;
+                  final unitPrice =
+                      ((item['unit_price'] as num?) ?? 0).toDouble();
+                  final lineTotal =
+                      ((item['line_total'] as num?) ?? 0).toDouble().abs();
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.only(bottom: 10),
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(color: Color(0xFFE0E0E0)),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Barcode: $barcode',
+                          style: TextStyle(
+                            color: Colors.grey[700],
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text('Qty: $qty × Rs. ${unitPrice.toStringAsFixed(2)}'),
+                        const SizedBox(height: 4),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Text(
+                            'Rs. ${lineTotal.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    'Total: Rs. ${total.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: isRefund ? Colors.red : Colors.green,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      );
+    },
+  );
+}

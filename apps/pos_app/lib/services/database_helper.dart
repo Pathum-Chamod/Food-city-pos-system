@@ -244,8 +244,6 @@ class DatabaseHelper {
 
       await batch.commit(noResult: true);
 
-      // Re-apply local pending changes so local POS state stays correct
-      // even if there are unsynced offline actions.
       final pendingItems = await txn.query(
         'sync_queue',
         where: 'status = ?',
@@ -281,7 +279,8 @@ class DatabaseHelper {
 
             if (barcode.isEmpty || quantity <= 0) continue;
 
-            final stockDelta = transactionType == 'refund' ? quantity : -quantity;
+            final stockDelta =
+                transactionType == 'refund' ? quantity : -quantity;
 
             await txn.rawUpdate(
               '''
@@ -313,7 +312,7 @@ class DatabaseHelper {
     });
   }
 
-  Future<void> processTransaction({
+  Future<int> processTransaction({
     required double totalAmount,
     required List<Map<String, dynamic>> cartItems,
     required String cashierName,
@@ -326,6 +325,8 @@ class DatabaseHelper {
     }
 
     try {
+      late int saleId;
+
       await db.transaction((txn) async {
         final now = DateTime.now().toIso8601String();
         final transactionType = isRefund ? 'refund' : 'sale';
@@ -366,7 +367,7 @@ class DatabaseHelper {
           }
         }
 
-        final saleId = await txn.insert('sales', {
+        saleId = await txn.insert('sales', {
           'total_amount': signedTotal,
           'cashier_name': cashierName,
           'transaction_type': transactionType,
@@ -430,6 +431,8 @@ class DatabaseHelper {
           'created_at': now,
         });
       });
+
+      return saleId;
     } catch (e) {
       debugPrint('Checkout Database Error: $e');
       rethrow;
@@ -491,5 +494,117 @@ class DatabaseHelper {
     }
 
     return null;
+  }
+
+  Future<List<Map<String, dynamic>>> getRecentTransactions({
+    String? transactionType,
+    int limit = 50,
+  }) async {
+    final db = await database;
+
+    String whereClause = '';
+    List<Object?> whereArgs = [];
+
+    if (transactionType != null && transactionType.isNotEmpty) {
+      whereClause = 'WHERE s.transaction_type = ?';
+      whereArgs = [transactionType];
+    }
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        s.id,
+        s.total_amount,
+        s.cashier_name,
+        s.transaction_type,
+        s.created_at,
+        COUNT(si.id) AS item_line_count,
+        COALESCE(SUM(si.quantity), 0) AS item_quantity_total
+      FROM sales s
+      LEFT JOIN sale_items si ON si.sale_id = s.id
+      $whereClause
+      GROUP BY s.id, s.total_amount, s.cashier_name, s.transaction_type, s.created_at
+      ORDER BY datetime(s.created_at) DESC, s.id DESC
+      LIMIT ?
+      ''',
+      [...whereArgs, limit],
+    );
+
+    return rows
+        .map(
+          (row) => {
+            'id': row['id'],
+            'total_amount': row['total_amount'],
+            'cashier_name': row['cashier_name'],
+            'transaction_type': row['transaction_type'],
+            'created_at': row['created_at'],
+            'item_line_count': row['item_line_count'],
+            'item_quantity_total': row['item_quantity_total'],
+          },
+        )
+        .toList();
+  }
+
+  Future<Map<String, dynamic>?> getTransactionSummary(int saleId) async {
+    final db = await database;
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        s.id,
+        s.total_amount,
+        s.cashier_name,
+        s.transaction_type,
+        s.created_at,
+        COUNT(si.id) AS item_line_count,
+        COALESCE(SUM(si.quantity), 0) AS item_quantity_total
+      FROM sales s
+      LEFT JOIN sale_items si ON si.sale_id = s.id
+      WHERE s.id = ?
+      GROUP BY s.id, s.total_amount, s.cashier_name, s.transaction_type, s.created_at
+      LIMIT 1
+      ''',
+      [saleId],
+    );
+
+    if (rows.isEmpty) return null;
+
+    final row = rows.first;
+
+    return {
+      'id': row['id'],
+      'total_amount': row['total_amount'],
+      'cashier_name': row['cashier_name'],
+      'transaction_type': row['transaction_type'],
+      'created_at': row['created_at'],
+      'item_line_count': row['item_line_count'],
+      'item_quantity_total': row['item_quantity_total'],
+    };
+  }
+
+  Future<List<Map<String, dynamic>>> getTransactionItems(int saleId) async {
+    final db = await database;
+
+    final rows = await db.query(
+      'sale_items',
+      where: 'sale_id = ?',
+      whereArgs: [saleId],
+      orderBy: 'id ASC',
+    );
+
+    return rows
+        .map(
+          (row) => {
+            'id': row['id'],
+            'sale_id': row['sale_id'],
+            'barcode': row['barcode'],
+            'product_name': row['product_name'],
+            'unit_price': row['unit_price'],
+            'quantity': row['quantity'],
+            'line_total': row['line_total'],
+            'created_at': row['created_at'],
+          },
+        )
+        .toList();
   }
 }

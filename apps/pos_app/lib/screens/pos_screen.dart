@@ -11,6 +11,7 @@ import '../services/database_helper.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
 import 'login_screen.dart';
+import 'transaction_history_screen.dart';
 
 class PosScreen extends StatefulWidget {
   const PosScreen({super.key});
@@ -218,6 +219,14 @@ class _PosScreenState extends State<PosScreen> {
     _focusBarcodeField();
   }
 
+  Future<void> _showReceiptForTransaction(int saleId) async {
+    await TransactionHistoryScreen.showReceiptDialogForTransaction(
+      context,
+      saleId,
+    );
+    _focusBarcodeField();
+  }
+
   Future<void> _handleCheckout(CartProvider cart) async {
     if (cart.items.isEmpty || _isProcessingCheckout) return;
 
@@ -232,7 +241,7 @@ class _PosScreenState extends State<PosScreen> {
     final itemsMap = cart.getCartItemsAsMap();
 
     try {
-      await DatabaseHelper.instance.processTransaction(
+      final saleId = await DatabaseHelper.instance.processTransaction(
         totalAmount: displayTotal,
         cartItems: itemsMap,
         cashierName: cashierName,
@@ -251,19 +260,26 @@ class _PosScreenState extends State<PosScreen> {
 
       showDialog(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (dialogContext) => AlertDialog(
           title: Text(title),
           content: Text(
             '$amountLabel: Rs. ${displayTotal.toStringAsFixed(2)}\n\n'
-            'Transaction saved locally. Sync was attempted now and the product list has been refreshed from backend.',
+            'Transaction #$saleId was saved locally. Sync was attempted now and the product list has been refreshed from backend.',
           ),
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.pop(context);
+                Navigator.pop(dialogContext);
                 _focusBarcodeField();
               },
               child: const Text('Next Customer'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(dialogContext);
+                await _showReceiptForTransaction(saleId);
+              },
+              child: const Text('View Receipt'),
             ),
           ],
         ),
@@ -678,6 +694,19 @@ class _PosScreenState extends State<PosScreen> {
                 ),
               );
             },
+          ),
+          IconButton(
+            tooltip: 'Transaction history',
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const TransactionHistoryScreen(),
+                ),
+              );
+              _focusBarcodeField();
+            },
+            icon: const Icon(Icons.receipt_long, color: Colors.white),
           ),
           IconButton(
             tooltip: 'Refresh products from backend',
