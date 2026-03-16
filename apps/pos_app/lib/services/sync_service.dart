@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared/models/product.dart';
 
 import 'database_helper.dart';
 
@@ -93,6 +94,47 @@ class SyncService {
       return syncedCount;
     } finally {
       _isSyncing = false;
+    }
+  }
+
+  Future<bool> refreshProductsFromBackend() async {
+    try {
+      if (!_isLocalServer) {
+        final connectivityResult = await Connectivity().checkConnectivity();
+        if (connectivityResult.contains(ConnectivityResult.none)) {
+          debugPrint("📴 Offline. Product refresh skipped.");
+          return false;
+        }
+      }
+
+      final response = await http.get(
+        Uri.parse('$apiUrl?action=get_products'),
+        headers: {"Content-Type": "application/json"},
+      );
+
+      if (response.statusCode != 200) {
+        debugPrint("⚠️ Product refresh failed: HTTP ${response.statusCode}");
+        return false;
+      }
+
+      final decoded = jsonDecode(response.body);
+
+      if (decoded is! List) {
+        debugPrint("⚠️ Product refresh failed: invalid response format");
+        return false;
+      }
+
+      final products = decoded
+          .map((item) => Product.fromMap(Map<String, dynamic>.from(item)))
+          .toList();
+
+      await DatabaseHelper.instance.replaceProductsFromBackend(products);
+
+      debugPrint("🔄 Product catalog refreshed from backend (${products.length} items).");
+      return true;
+    } catch (e) {
+      debugPrint("❌ Product refresh error: $e");
+      return false;
     }
   }
 

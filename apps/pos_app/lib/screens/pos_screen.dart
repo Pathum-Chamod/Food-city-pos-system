@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -21,17 +23,36 @@ class _PosScreenState extends State<PosScreen> {
   List<Product> _products = [];
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
+  bool _isRefreshingProducts = false;
+  Timer? _productRefreshTimer;
 
   @override
   void initState() {
     super.initState();
-    _loadProducts();
+    _loadProducts(showLoader: true);
+    _refreshProductsFromBackendAndReload(silentOnFailure: true);
+    _startAutoRefresh();
   }
 
-  Future<void> _loadProducts() async {
-    setState(() {
-      _isLoadingProducts = true;
+  @override
+  void dispose() {
+    _productRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startAutoRefresh() {
+    _productRefreshTimer?.cancel();
+    _productRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _refreshProductsFromBackendAndReload(silentOnFailure: true);
     });
+  }
+
+  Future<void> _loadProducts({bool showLoader = false}) async {
+    if (showLoader && mounted) {
+      setState(() {
+        _isLoadingProducts = true;
+      });
+    }
 
     final products = await DatabaseHelper.instance.getProducts();
 
@@ -41,6 +62,45 @@ class _PosScreenState extends State<PosScreen> {
       _products = products;
       _isLoadingProducts = false;
     });
+  }
+
+  Future<bool> _refreshProductsFromBackendAndReload({
+    bool showSuccessMessage = false,
+    bool silentOnFailure = false,
+  }) async {
+    if (_isRefreshingProducts) return false;
+
+    setState(() {
+      _isRefreshingProducts = true;
+    });
+
+    try {
+      final success = await SyncService().refreshProductsFromBackend();
+
+      await _loadProducts(showLoader: false);
+
+      if (!mounted) return success;
+
+      if (success && showSuccessMessage) {
+        _showInfoMessage(
+          'Products refreshed from backend.',
+          backgroundColor: Colors.green,
+        );
+      } else if (!success && !silentOnFailure) {
+        _showInfoMessage(
+          'Could not refresh products from backend.',
+          backgroundColor: Colors.orange,
+        );
+      }
+
+      return success;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRefreshingProducts = false;
+        });
+      }
+    }
   }
 
   void _showInfoMessage(String message, {Color? backgroundColor}) {
@@ -99,7 +159,7 @@ class _PosScreenState extends State<PosScreen> {
       cart.clearCart();
 
       await SyncService().syncNow();
-      await _loadProducts();
+      await _refreshProductsFromBackendAndReload(silentOnFailure: true);
 
       if (!mounted) return;
 
@@ -113,7 +173,7 @@ class _PosScreenState extends State<PosScreen> {
           title: Text(title),
           content: Text(
             '$amountLabel: Rs. ${displayTotal.toStringAsFixed(2)}\n\n'
-            'Transaction saved locally. Sync was attempted now and will retry automatically if needed.',
+            'Transaction saved locally. Sync was attempted now and the product list has been refreshed from backend.',
           ),
           actions: [
             TextButton(
@@ -156,7 +216,11 @@ class _PosScreenState extends State<PosScreen> {
               product.barcode,
               product.name,
               product.price,
-              _loadProducts,
+              () async {
+                await _refreshProductsFromBackendAndReload(
+                  silentOnFailure: true,
+                );
+              },
             );
           });
         },
@@ -342,9 +406,24 @@ class _PosScreenState extends State<PosScreen> {
             },
           ),
           IconButton(
-            tooltip: 'Reload local products',
-            onPressed: _loadProducts,
-            icon: const Icon(Icons.refresh, color: Colors.white),
+            tooltip: 'Refresh products from backend',
+            onPressed: _isRefreshingProducts
+                ? null
+                : () {
+                    _refreshProductsFromBackendAndReload(
+                      showSuccessMessage: true,
+                    );
+                  },
+            icon: _isRefreshingProducts
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.refresh, color: Colors.white),
           ),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.white),

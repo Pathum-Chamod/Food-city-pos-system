@@ -24,6 +24,8 @@ class DatabaseHelper {
     final dbPath = await databaseFactory.getDatabasesPath();
     final path = join(dbPath, filePath);
 
+    debugPrint('POS local DB path: $path');
+
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
@@ -207,6 +209,110 @@ class DatabaseHelper {
     return maps.map((map) => Product.fromMap(map)).toList();
   }
 
+  Future<void> replaceProductsFromBackend(List<Product> backendProducts) async {
+    final db = await database;
+
+    await db.transaction((txn) async {
+      final backendBarcodes = backendProducts.map((p) => p.barcode).toList();
+
+      if (backendBarcodes.isEmpty) {
+        await txn.delete('products');
+      } else {
+        final placeholders = List.filled(backendBarcodes.length, '?').join(',');
+        await txn.delete(
+          'products',
+          where: 'barcode NOT IN ($placeholders)',
+          whereArgs: backendBarcodes,
+        );
+      }
+
+      final batch = txn.batch();
+
+      for (final product in backendProducts) {
+        batch.insert(
+          'products',
+          {
+            'barcode': product.barcode,
+            'name': product.name,
+            'price': product.price,
+            'stock': product.stock,
+            'updated_at': product.updatedAt,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+
+      await batch.commit(noResult: true);
+
+      // Re-apply local pending changes so local POS state stays correct
+      // even if there are unsynced offline actions.
+      final pendingItems = await txn.query(
+        'sync_queue',
+        where: 'status = ?',
+        whereArgs: ['pending'],
+        orderBy: 'id ASC',
+      );
+
+      for (final pending in pendingItems) {
+        final type = (pending['type'] as String?) ?? '';
+        final rawData = (pending['data'] as String?) ?? '{}';
+
+        dynamic decodedData;
+        try {
+          decodedData = jsonDecode(rawData);
+        } catch (_) {
+          continue;
+        }
+
+        if (type == 'SALE') {
+          final data = Map<String, dynamic>.from(decodedData as Map);
+          final transactionType =
+              (data['transaction_type'] ?? 'sale').toString().toLowerCase();
+          final items = (data['items'] as List?) ?? [];
+
+          for (final rawItem in items) {
+            final item = Map<String, dynamic>.from(rawItem as Map);
+            final productMap = Map<String, dynamic>.from(
+              item['product'] as Map,
+            );
+
+            final barcode = productMap['barcode']?.toString() ?? '';
+            final quantity = (item['quantity'] as num?)?.toInt() ?? 0;
+
+            if (barcode.isEmpty || quantity <= 0) continue;
+
+            final stockDelta = transactionType == 'refund' ? quantity : -quantity;
+
+            await txn.rawUpdate(
+              '''
+              UPDATE products
+              SET stock = stock + ?
+              WHERE barcode = ?
+              ''',
+              [stockDelta, barcode],
+            );
+          }
+        } else if (type == 'PRICE_UPDATE') {
+          final data = Map<String, dynamic>.from(decodedData as Map);
+          final barcode = data['barcode']?.toString() ?? '';
+          final newPrice = (data['new_price'] as num?)?.toDouble();
+
+          if (barcode.isEmpty || newPrice == null) continue;
+
+          await txn.update(
+            'products',
+            {
+              'price': newPrice,
+              'updated_at': DateTime.now().toIso8601String(),
+            },
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+          );
+        }
+      }
+    });
+  }
+
   Future<void> processTransaction({
     required double totalAmount,
     required List<Map<String, dynamic>> cartItems,
@@ -225,7 +331,6 @@ class DatabaseHelper {
         final transactionType = isRefund ? 'refund' : 'sale';
         final signedTotal = isRefund ? -totalAmount.abs() : totalAmount.abs();
 
-        // Validate stock only for sales.
         if (!isRefund) {
           for (final item in cartItems) {
             final productMap =
