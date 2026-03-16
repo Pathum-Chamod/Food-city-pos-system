@@ -1,5 +1,3 @@
-import 'dart:collection';
-
 import 'package:flutter/material.dart';
 import 'package:shared/shared.dart';
 
@@ -19,32 +17,27 @@ class CartProvider with ChangeNotifier {
   final List<CartItem> _items = [];
   bool _isRefundMode = false;
 
-  UnmodifiableListView<CartItem> get items => UnmodifiableListView(_items);
+  List<CartItem> get items => _items;
   bool get isRefundMode => _isRefundMode;
-  bool get isSaleMode => !_isRefundMode;
-  String get transactionType => _isRefundMode ? 'refund' : 'sale';
 
   double get cartTotal {
-    return _items.fold(0.0, (sum, item) => sum + item.total);
+    return _items.fold(0, (sum, item) => sum + item.total);
   }
 
   void toggleRefundMode(bool value) {
-    if (_isRefundMode == value) return;
-
     _isRefundMode = value;
-    _items.clear(); // prevent mixing sale + refund lines
+    _items.clear();
     notifyListeners();
   }
 
   void addToCart(Product product) {
-    final index = _items.indexWhere(
-      (item) => item.product.barcode == product.barcode,
-    );
+    final index =
+        _items.indexWhere((item) => item.product.barcode == product.barcode);
 
     if (index >= 0) {
       _items[index].quantity += 1;
     } else {
-      _items.add(CartItem(product: product));
+      _items.add(CartItem(product: product, quantity: 1));
     }
 
     notifyListeners();
@@ -62,10 +55,10 @@ class CartProvider with ChangeNotifier {
     final index = _items.indexWhere((item) => item.product.barcode == barcode);
     if (index == -1) return;
 
-    if (_items[index].quantity <= 1) {
+    _items[index].quantity -= 1;
+
+    if (_items[index].quantity <= 0) {
       _items.removeAt(index);
-    } else {
-      _items[index].quantity -= 1;
     }
 
     notifyListeners();
@@ -85,6 +78,31 @@ class CartProvider with ChangeNotifier {
   void clearCart() {
     _items.clear();
     _isRefundMode = false;
+    notifyListeners();
+  }
+
+  void loadHeldCart({
+    required List<Map<String, dynamic>> items,
+    required bool isRefundMode,
+  }) {
+    _items.clear();
+    _isRefundMode = isRefundMode;
+
+    for (final rawItem in items) {
+      final item = Map<String, dynamic>.from(rawItem);
+      final productMap = Map<String, dynamic>.from(item['product'] as Map);
+      final quantity = (item['quantity'] as num?)?.toInt() ?? 1;
+
+      if (quantity <= 0) continue;
+
+      _items.add(
+        CartItem(
+          product: Product.fromMap(productMap),
+          quantity: quantity,
+        ),
+      );
+    }
+
     notifyListeners();
   }
 

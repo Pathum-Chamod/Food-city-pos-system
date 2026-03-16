@@ -29,7 +29,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 5,
+        version: 6,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -91,6 +91,18 @@ class DatabaseHelper {
         status TEXT NOT NULL DEFAULT 'open',
         opened_at TEXT NOT NULL,
         closed_at TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE held_carts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cart_name TEXT NOT NULL,
+        cashier_name TEXT NOT NULL,
+        is_refund_mode INTEGER NOT NULL DEFAULT 0,
+        items_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       )
     ''');
 
@@ -162,6 +174,20 @@ class DatabaseHelper {
           status TEXT NOT NULL DEFAULT 'open',
           opened_at TEXT NOT NULL,
           closed_at TEXT
+        )
+      ''');
+    }
+
+    if (oldVersion < 6) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS held_carts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          cart_name TEXT NOT NULL,
+          cashier_name TEXT NOT NULL,
+          is_refund_mode INTEGER NOT NULL DEFAULT 0,
+          items_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
         )
       ''');
     }
@@ -422,7 +448,9 @@ class DatabaseHelper {
             );
 
             if (rows.isEmpty) {
-              throw Exception('$productName was not found in local POS database.');
+              throw Exception(
+                '$productName was not found in local POS database.',
+              );
             }
 
             final availableStock = (rows.first['stock'] as num).toInt();
@@ -476,7 +504,9 @@ class DatabaseHelper {
           );
 
           if (updatedCount == 0) {
-            throw Exception('$productName was not found in local POS database.');
+            throw Exception(
+              '$productName was not found in local POS database.',
+            );
           }
 
           await txn.insert('sale_items', {
@@ -551,7 +581,9 @@ class DatabaseHelper {
 
         final originalSale = originalSaleRows.first;
         final originalType =
-            (originalSale['transaction_type'] ?? 'sale').toString().toLowerCase();
+            (originalSale['transaction_type'] ?? 'sale')
+                .toString()
+                .toLowerCase();
 
         if (originalType != 'sale') {
           throw Exception('Only sale transactions can be refunded.');
@@ -593,7 +625,9 @@ class DatabaseHelper {
 
           final refundableData = refundableMap[barcode];
           if (refundableData == null) {
-            throw Exception('Refund item $barcode is not part of the original sale.');
+            throw Exception(
+              'Refund item $barcode is not part of the original sale.',
+            );
           }
 
           final refundableQty =
@@ -601,7 +635,8 @@ class DatabaseHelper {
 
           if (quantity > refundableQty) {
             final productName =
-                (refundableData['product_name'] ?? 'Unknown product').toString();
+                (refundableData['product_name'] ?? 'Unknown product')
+                    .toString();
             throw Exception(
               'Cannot refund more than remaining quantity for $productName. Remaining: $refundableQty.',
             );
@@ -622,7 +657,9 @@ class DatabaseHelper {
           );
 
           if (updatedCount == 0) {
-            throw Exception('$productName was not found in local POS database.');
+            throw Exception(
+              '$productName was not found in local POS database.',
+            );
           }
 
           final lineTotal = -(unitPrice * quantity);
@@ -895,7 +932,9 @@ class DatabaseHelper {
         .toList();
   }
 
-  Future<List<Map<String, dynamic>>> getRefundableItemsForSale(int saleId) async {
+  Future<List<Map<String, dynamic>>> getRefundableItemsForSale(
+    int saleId,
+  ) async {
     final db = await database;
     return _getRefundableItemsForSaleExecutor(db, saleId);
   }
@@ -916,7 +955,9 @@ class DatabaseHelper {
     }
 
     final saleType =
-        (saleRows.first['transaction_type'] ?? 'sale').toString().toLowerCase();
+        (saleRows.first['transaction_type'] ?? 'sale')
+            .toString()
+            .toLowerCase();
 
     if (saleType != 'sale') {
       throw Exception('Only sale transactions can be refunded.');
@@ -1020,7 +1061,9 @@ class DatabaseHelper {
     }
   }
 
-  Future<Map<String, dynamic>?> getOpenShiftForCashier(String cashierName) async {
+  Future<Map<String, dynamic>?> getOpenShiftForCashier(
+    String cashierName,
+  ) async {
     final db = await database;
 
     final rows = await db.query(
@@ -1242,5 +1285,145 @@ class DatabaseHelper {
           (transactionCountRow['count'] as num?)?.toInt() ?? 0,
       'expected_cash': expectedCash,
     };
+  }
+
+  Future<int> saveHeldCart({
+    required String cartName,
+    required String cashierName,
+    required bool isRefundMode,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    final db = await database;
+
+    if (items.isEmpty) {
+      throw Exception('Cannot hold an empty cart.');
+    }
+
+    final safeName = cartName.trim().isEmpty ? 'Held Cart' : cartName.trim();
+    final now = DateTime.now().toIso8601String();
+
+    return db.insert('held_carts', {
+      'cart_name': safeName,
+      'cashier_name': cashierName,
+      'is_refund_mode': isRefundMode ? 1 : 0,
+      'items_json': jsonEncode(items),
+      'created_at': now,
+      'updated_at': now,
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> getHeldCartsForCashier(
+    String cashierName,
+  ) async {
+    final db = await database;
+
+    final rows = await db.query(
+      'held_carts',
+      where: 'cashier_name = ?',
+      whereArgs: [cashierName],
+      orderBy: 'datetime(updated_at) DESC, id DESC',
+    );
+
+    return rows.map((row) {
+      final itemsJson = (row['items_json'] ?? '[]').toString();
+      List<dynamic> decoded;
+
+      try {
+        decoded = jsonDecode(itemsJson) as List<dynamic>;
+      } catch (_) {
+        decoded = [];
+      }
+
+      int itemCount = 0;
+      double totalAmount = 0;
+
+      for (final raw in decoded) {
+        final item = Map<String, dynamic>.from(raw as Map);
+        final quantity = (item['quantity'] as num?)?.toInt() ?? 0;
+        final lineTotal = ((item['line_total'] as num?) ?? 0).toDouble();
+
+        itemCount += quantity;
+        totalAmount += lineTotal.abs();
+      }
+
+      return {
+        'id': row['id'],
+        'cart_name': row['cart_name'],
+        'cashier_name': row['cashier_name'],
+        'is_refund_mode': ((row['is_refund_mode'] as num?) ?? 0).toInt() == 1,
+        'item_count': itemCount,
+        'total_amount': totalAmount,
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at'],
+      };
+    }).toList();
+  }
+
+  Future<Map<String, dynamic>?> resumeHeldCart(
+    int heldCartId, {
+    required String cashierName,
+  }) async {
+    final db = await database;
+
+    Map<String, dynamic>? result;
+
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'held_carts',
+        where: 'id = ? AND cashier_name = ?',
+        whereArgs: [heldCartId, cashierName],
+        limit: 1,
+      );
+
+      if (rows.isEmpty) {
+        result = null;
+        return;
+      }
+
+      final row = Map<String, dynamic>.from(rows.first);
+      final itemsJson = (row['items_json'] ?? '[]').toString();
+
+      List<Map<String, dynamic>> decodedItems = [];
+
+      try {
+        final decoded = jsonDecode(itemsJson) as List<dynamic>;
+        decodedItems = decoded
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } catch (_) {
+        decodedItems = [];
+      }
+
+      await txn.delete(
+        'held_carts',
+        where: 'id = ? AND cashier_name = ?',
+        whereArgs: [heldCartId, cashierName],
+      );
+
+      result = {
+        'id': row['id'],
+        'cart_name': row['cart_name'],
+        'cashier_name': row['cashier_name'],
+        'is_refund_mode': ((row['is_refund_mode'] as num?) ?? 0).toInt() == 1,
+        'items': decodedItems,
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at'],
+      };
+    });
+
+    return result;
+  }
+
+  Future<void> deleteHeldCart(
+    int heldCartId, {
+    required String cashierName,
+  }) async {
+    final db = await database;
+
+    await db.delete(
+      'held_carts',
+      where: 'id = ? AND cashier_name = ?',
+      whereArgs: [heldCartId, cashierName],
+    );
   }
 }

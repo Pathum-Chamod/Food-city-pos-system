@@ -12,6 +12,7 @@ import '../services/database_helper.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
 import 'checkout_payment_dialog.dart';
+import 'held_carts_screen.dart';
 import 'login_screen.dart';
 import 'shift_management_screen.dart';
 import 'transaction_history_screen.dart';
@@ -304,8 +305,7 @@ class _PosScreenState extends State<PosScreen> {
       }
 
       paymentMethod = paymentResult['payment_method']?.toString();
-      amountTendered =
-          (paymentResult['amount_tendered'] as num?)?.toDouble();
+      amountTendered = (paymentResult['amount_tendered'] as num?)?.toDouble();
       changeAmount = (paymentResult['change_amount'] as num?)?.toDouble();
     }
 
@@ -396,6 +396,165 @@ class _PosScreenState extends State<PosScreen> {
     );
 
     await _loadShiftSummary();
+    _focusBarcodeField();
+  }
+
+  Future<void> _holdCurrentCart(CartProvider cart) async {
+    if (cart.items.isEmpty) return;
+
+    final controller = TextEditingController();
+
+    final cartName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Hold Cart'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Cart Name',
+            hintText: 'Example: Customer 1 / Counter Hold',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context, controller.text.trim());
+            },
+            child: const Text('Hold'),
+          ),
+        ],
+      ),
+    );
+
+    controller.dispose();
+
+    if (cartName == null) {
+      _focusBarcodeField();
+      return;
+    }
+
+    final cashierName =
+        context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+
+    try {
+      await DatabaseHelper.instance.saveHeldCart(
+        cartName: cartName,
+        cashierName: cashierName,
+        isRefundMode: cart.isRefundMode,
+        items: cart.getCartItemsAsMap(),
+      );
+
+      cart.clearCart();
+
+      if (!mounted) return;
+
+      _showInfoMessage(
+        'Cart held successfully.',
+        backgroundColor: Colors.green,
+      );
+      _focusBarcodeField();
+    } catch (e) {
+      if (!mounted) return;
+
+      _showInfoMessage(
+        e.toString().replaceFirst('Exception: ', ''),
+        backgroundColor: Colors.red,
+      );
+      _focusBarcodeField();
+    }
+  }
+
+  Future<bool> _confirmReplaceCurrentCartIfNeeded(CartProvider cart) async {
+    if (cart.items.isEmpty) return true;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Replace Current Cart?'),
+        content: const Text(
+          'Resuming a held cart will replace the current cart. Hold or clear the current cart first if you want to keep it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+
+    return confirmed ?? false;
+  }
+
+  List<Map<String, dynamic>> _prepareResumedCartItems(
+    List<Map<String, dynamic>> rawItems,
+  ) {
+    return rawItems.map((raw) {
+      final item = Map<String, dynamic>.from(raw);
+      final productMap = Map<String, dynamic>.from(item['product'] as Map);
+      final barcode = productMap['barcode']?.toString() ?? '';
+      final quantity = (item['quantity'] as num?)?.toInt() ?? 1;
+
+      final latestProduct = _getCurrentProduct(barcode);
+      final resolvedProduct = latestProduct?.toMap() ?? productMap;
+      final resolvedPrice =
+          ((resolvedProduct['price'] as num?) ?? 0).toDouble();
+
+      return {
+        'product': resolvedProduct,
+        'quantity': quantity <= 0 ? 1 : quantity,
+        'line_total': resolvedPrice * (quantity <= 0 ? 1 : quantity),
+      };
+    }).toList();
+  }
+
+  Future<void> _openHeldCarts(CartProvider cart) async {
+    final canProceed = await _confirmReplaceCurrentCartIfNeeded(cart);
+    if (!canProceed) {
+      _focusBarcodeField();
+      return;
+    }
+
+    final cashierName =
+        context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+
+    final restored = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => HeldCartsScreen(cashierName: cashierName),
+      ),
+    );
+
+    if (!mounted || restored == null) {
+      _focusBarcodeField();
+      return;
+    }
+
+    final restoredItems = (restored['items'] as List<dynamic>)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+
+    final preparedItems = _prepareResumedCartItems(restoredItems);
+
+    cart.loadHeldCart(
+      items: preparedItems,
+      isRefundMode: (restored['is_refund_mode'] ?? false) == true,
+    );
+
+    _showInfoMessage(
+      'Held cart resumed.',
+      backgroundColor: Colors.green,
+    );
     _focusBarcodeField();
   }
 
@@ -945,7 +1104,8 @@ class _PosScreenState extends State<PosScreen> {
                     ),
                   ),
                 ),
-                if (PosFeatureFlags.enableShiftManagement && _currentShiftSummary == null)
+                if (PosFeatureFlags.enableShiftManagement &&
+                    _currentShiftSummary == null)
                   Container(
                     width: double.infinity,
                     color: Colors.orange[50],
@@ -961,7 +1121,8 @@ class _PosScreenState extends State<PosScreen> {
                       ),
                     ),
                   )
-                else if (PosFeatureFlags.enableShiftManagement && _currentShiftSummary != null)
+                else if (PosFeatureFlags.enableShiftManagement &&
+                    _currentShiftSummary != null)
                   Container(
                     width: double.infinity,
                     color: Colors.green[50],
@@ -1053,6 +1214,26 @@ class _PosScreenState extends State<PosScreen> {
                           fontWeight: FontWeight.bold,
                         ),
                         textAlign: TextAlign.right,
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: cart.items.isEmpty
+                                  ? null
+                                  : () => _holdCurrentCart(cart),
+                              child: const Text('HOLD CART'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => _openHeldCarts(cart),
+                              child: const Text('HELD CARTS'),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 12),
                       OutlinedButton(
