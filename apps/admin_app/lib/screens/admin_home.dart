@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
+
+import '../models/stock_adjustment_request.dart';
 import '../providers/admin_provider.dart';
 import 'inventory_history_screen.dart';
-import '../models/stock_adjustment_request.dart';
+import 'stock_take_screen.dart';
 
 class AdminHome extends StatefulWidget {
   const AdminHome({super.key});
@@ -258,7 +260,7 @@ class _AdminHomeState extends State<AdminHome> {
                   ),
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
-                    value: adjustmentType,
+                    initialValue: adjustmentType,
                     decoration: const InputDecoration(
                       labelText: 'Adjustment Type',
                       border: OutlineInputBorder(),
@@ -339,8 +341,8 @@ class _AdminHomeState extends State<AdminHome> {
                   backgroundColor: adjustmentType == 'increase'
                       ? Colors.green
                       : adjustmentType == 'decrease'
-                      ? Colors.orange
-                      : Colors.blue,
+                          ? Colors.orange
+                          : Colors.blue,
                 ),
                 onPressed: () {
                   final qty = int.tryParse(qtyController.text.trim()) ?? -1;
@@ -394,8 +396,8 @@ class _AdminHomeState extends State<AdminHome> {
                       final actionText = adjustmentType == 'increase'
                           ? 'Increase by $qty'
                           : adjustmentType == 'decrease'
-                          ? 'Decrease by $qty'
-                          : 'Set exact stock to $qty';
+                              ? 'Decrease by $qty'
+                              : 'Set exact stock to $qty';
 
                       return AlertDialog(
                         title: const Text('Confirm Stock Adjustment'),
@@ -446,8 +448,8 @@ class _AdminHomeState extends State<AdminHome> {
                                 final message = adjustmentType == 'increase'
                                     ? 'Stock increased successfully.'
                                     : adjustmentType == 'decrease'
-                                    ? 'Stock decreased successfully.'
-                                    : 'Exact stock updated successfully.';
+                                        ? 'Stock decreased successfully.'
+                                        : 'Exact stock updated successfully.';
 
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
@@ -524,7 +526,7 @@ class _AdminHomeState extends State<AdminHome> {
                       border: OutlineInputBorder(),
                     ),
                     isExpanded: true,
-                    value: selectedBarcode,
+                    initialValue: selectedBarcode,
                     items: products
                         .map(
                           (p) => DropdownMenuItem(
@@ -1073,7 +1075,6 @@ class _AdminHomeState extends State<AdminHome> {
     final outOfStockCount = provider.products.where((p) => p.stock <= 0).length;
 
     final List<Widget> pages = [
-      // PAGE 1: Dashboard
       RefreshIndicator(
         onRefresh: () async {
           await provider.fetchDashboardStats();
@@ -1224,7 +1225,6 @@ class _AdminHomeState extends State<AdminHome> {
         ),
       ),
 
-      // PAGE 2: Inventory List
       provider.isLoading
           ? const Center(child: CircularProgressIndicator())
           : Column(
@@ -1420,9 +1420,9 @@ class _AdminHomeState extends State<AdminHome> {
                                             Container(
                                               padding:
                                                   const EdgeInsets.symmetric(
-                                                    horizontal: 10,
-                                                    vertical: 6,
-                                                  ),
+                                                horizontal: 10,
+                                                vertical: 6,
+                                              ),
                                               decoration: BoxDecoration(
                                                 color: statusColor.withOpacity(
                                                   0.12,
@@ -1460,7 +1460,6 @@ class _AdminHomeState extends State<AdminHome> {
               ],
             ),
 
-      // PAGE 3: Suppliers
       provider.isLoading
           ? const Center(child: CircularProgressIndicator())
           : ListView.builder(
@@ -1502,6 +1501,20 @@ class _AdminHomeState extends State<AdminHome> {
         title: const Text('Manager Cloud Control'),
         backgroundColor: Colors.blue[900],
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            tooltip: 'Stock Take',
+            icon: const Icon(Icons.fact_check_outlined),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const StockTakeScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: pages[_currentIndex],
       bottomNavigationBar: BottomNavigationBar(
