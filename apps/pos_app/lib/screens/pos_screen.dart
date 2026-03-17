@@ -12,6 +12,7 @@ import '../services/database_helper.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
 import 'cart_discount_dialog.dart';
+import 'cashier_summary_screen.dart';
 import 'checkout_payment_dialog.dart';
 import 'held_carts_screen.dart';
 import 'login_screen.dart';
@@ -1036,6 +1037,24 @@ class _PosScreenState extends State<PosScreen> {
               onPressed: _openShiftManagement,
               icon: const Icon(Icons.point_of_sale, color: Colors.white),
             ),
+          IconButton(
+            tooltip: 'Cashier summary',
+            onPressed: () async {
+              final cashierName =
+                  context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) =>
+                      CashierSummaryScreen(cashierName: cashierName),
+                ),
+              );
+
+              _focusBarcodeField();
+            },
+            icon: const Icon(Icons.bar_chart, color: Colors.white),
+          ),
           IconButton(
             tooltip: 'Transaction history',
             onPressed: () async {

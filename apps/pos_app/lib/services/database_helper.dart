@@ -1516,6 +1516,178 @@ class DatabaseHelper {
     };
   }
 
+
+  Future<Map<String, dynamic>> getCashierSalesSummary({
+    String? cashierName,
+    DateTime? start,
+    DateTime? end,
+  }) async {
+    final db = await database;
+
+    final startTime = start ?? DateTime.now();
+    final endTime = end ?? DateTime.now();
+
+    final conditions = <String>[
+      'datetime(s.created_at) >= datetime(?)',
+      'datetime(s.created_at) <= datetime(?)',
+    ];
+    final args = <Object?>[
+      startTime.toIso8601String(),
+      endTime.toIso8601String(),
+    ];
+
+    final trimmedCashier = cashierName?.trim();
+    if (trimmedCashier != null && trimmedCashier.isNotEmpty) {
+      conditions.add('s.cashier_name = ?');
+      args.add(trimmedCashier);
+    }
+
+    final whereBase = conditions.join(' AND ');
+
+    final saleRow = (await db.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS sale_count,
+        COALESCE(SUM(ABS(s.subtotal_amount)), 0) AS gross_sales,
+        COALESCE(SUM(ABS(s.discount_amount)), 0) AS total_discounts,
+        COALESCE(SUM(ABS(s.total_amount)), 0) AS net_sales,
+        COALESCE(
+          SUM(CASE WHEN s.payment_method = 'cash' THEN ABS(s.total_amount) ELSE 0 END),
+          0
+        ) AS cash_sales,
+        COALESCE(
+          SUM(CASE WHEN s.payment_method = 'card' THEN ABS(s.total_amount) ELSE 0 END),
+          0
+        ) AS card_sales
+      FROM sales s
+      WHERE s.transaction_type = 'sale'
+        AND $whereBase
+      ''',
+      args,
+    )).first;
+
+    final refundRow = (await db.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS refund_count,
+        COALESCE(SUM(ABS(s.total_amount)), 0) AS refund_total
+      FROM sales s
+      WHERE s.transaction_type = 'refund'
+        AND $whereBase
+      ''',
+      args,
+    )).first;
+
+    final itemRow = (await db.rawQuery(
+      '''
+      SELECT
+        COALESCE(SUM(si.quantity), 0) AS items_sold,
+        COUNT(si.id) AS item_line_count
+      FROM sales s
+      INNER JOIN sale_items si ON si.sale_id = s.id
+      WHERE s.transaction_type = 'sale'
+        AND $whereBase
+      ''',
+      args,
+    )).first;
+
+    final grossSales = ((saleRow['gross_sales'] as num?) ?? 0).toDouble();
+    final totalDiscounts =
+        ((saleRow['total_discounts'] as num?) ?? 0).toDouble();
+    final netSales = ((saleRow['net_sales'] as num?) ?? 0).toDouble();
+    final cashSales = ((saleRow['cash_sales'] as num?) ?? 0).toDouble();
+    final cardSales = ((saleRow['card_sales'] as num?) ?? 0).toDouble();
+    final refundTotal = ((refundRow['refund_total'] as num?) ?? 0).toDouble();
+    final saleCount = (saleRow['sale_count'] as num?)?.toInt() ?? 0;
+    final refundCount = (refundRow['refund_count'] as num?)?.toInt() ?? 0;
+    final itemsSold = (itemRow['items_sold'] as num?)?.toInt() ?? 0;
+    final itemLineCount = (itemRow['item_line_count'] as num?)?.toInt() ?? 0;
+
+    return {
+      'start': startTime.toIso8601String(),
+      'end': endTime.toIso8601String(),
+      'cashier_name': trimmedCashier,
+      'sale_count': saleCount,
+      'refund_count': refundCount,
+      'transaction_count': saleCount + refundCount,
+      'gross_sales': _roundMoney(grossSales),
+      'total_discounts': _roundMoney(totalDiscounts),
+      'net_sales': _roundMoney(netSales),
+      'refund_total': _roundMoney(refundTotal),
+      'net_after_refunds': _roundMoney(netSales - refundTotal),
+      'cash_sales': _roundMoney(cashSales),
+      'card_sales': _roundMoney(cardSales),
+      'items_sold': itemsSold,
+      'item_line_count': itemLineCount,
+      'average_sale_value': saleCount <= 0
+          ? 0.0
+          : _roundMoney(netSales / saleCount),
+    };
+  }
+
+  Future<List<Map<String, dynamic>>> getTopSellingItemsSummary({
+    String? cashierName,
+    DateTime? start,
+    DateTime? end,
+    int limit = 10,
+  }) async {
+    final db = await database;
+
+    final startTime = start ?? DateTime.now();
+    final endTime = end ?? DateTime.now();
+
+    final conditions = <String>[
+      "s.transaction_type = 'sale'",
+      'datetime(s.created_at) >= datetime(?)',
+      'datetime(s.created_at) <= datetime(?)',
+    ];
+    final args = <Object?>[
+      startTime.toIso8601String(),
+      endTime.toIso8601String(),
+    ];
+
+    final trimmedCashier = cashierName?.trim();
+    if (trimmedCashier != null && trimmedCashier.isNotEmpty) {
+      conditions.add('s.cashier_name = ?');
+      args.add(trimmedCashier);
+    }
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        si.barcode,
+        si.product_name,
+        COALESCE(SUM(si.quantity), 0) AS quantity_sold,
+        COALESCE(SUM(ABS(si.base_line_total)), 0) AS gross_sales_amount,
+        COALESCE(SUM(ABS(si.item_discount_amount)), 0) AS discount_amount,
+        COALESCE(SUM(ABS(si.line_total)), 0) AS net_sales_amount
+      FROM sales s
+      INNER JOIN sale_items si ON si.sale_id = s.id
+      WHERE ${conditions.join(' AND ')}
+      GROUP BY si.barcode, si.product_name
+      ORDER BY quantity_sold DESC, net_sales_amount DESC, si.product_name ASC
+      LIMIT ?
+      ''',
+      [...args, limit],
+    );
+
+    return rows
+        .map(
+          (row) => {
+            'barcode': row['barcode'],
+            'product_name': row['product_name'],
+            'quantity_sold': (row['quantity_sold'] as num?)?.toInt() ?? 0,
+            'gross_sales_amount':
+                ((row['gross_sales_amount'] as num?) ?? 0).toDouble(),
+            'discount_amount':
+                ((row['discount_amount'] as num?) ?? 0).toDouble(),
+            'net_sales_amount':
+                ((row['net_sales_amount'] as num?) ?? 0).toDouble(),
+          },
+        )
+        .toList();
+  }
+
   Future<int> saveHeldCart({
     required String cartName,
     required String cashierName,
