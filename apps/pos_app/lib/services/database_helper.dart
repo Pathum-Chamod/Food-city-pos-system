@@ -1688,6 +1688,96 @@ class DatabaseHelper {
         .toList();
   }
 
+
+  Future<List<Map<String, dynamic>>> getCashierBreakdownSummary({
+    DateTime? start,
+    DateTime? end,
+    int limit = 20,
+  }) async {
+    final db = await database;
+
+    final startTime = start ?? DateTime.now();
+    final endTime = end ?? DateTime.now();
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        COALESCE(NULLIF(TRIM(s.cashier_name), ''), 'Unknown') AS cashier_name,
+        COALESCE(SUM(CASE WHEN s.transaction_type = 'sale' THEN 1 ELSE 0 END), 0) AS sale_count,
+        COALESCE(SUM(CASE WHEN s.transaction_type = 'refund' THEN 1 ELSE 0 END), 0) AS refund_count,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.subtotal_amount) ELSE 0 END),
+          0
+        ) AS gross_sales,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.discount_amount) ELSE 0 END),
+          0
+        ) AS total_discounts,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.total_amount) ELSE 0 END),
+          0
+        ) AS net_sales,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'refund' THEN ABS(s.total_amount) ELSE 0 END),
+          0
+        ) AS refund_total,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN s.transaction_type = 'sale' AND s.payment_method = 'cash'
+                THEN ABS(s.total_amount)
+              ELSE 0
+            END
+          ),
+          0
+        ) AS cash_sales,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN s.transaction_type = 'sale' AND s.payment_method = 'card'
+                THEN ABS(s.total_amount)
+              ELSE 0
+            END
+          ),
+          0
+        ) AS card_sales
+      FROM sales s
+      WHERE datetime(s.created_at) >= datetime(?)
+        AND datetime(s.created_at) <= datetime(?)
+      GROUP BY COALESCE(NULLIF(TRIM(s.cashier_name), ''), 'Unknown')
+      ORDER BY net_sales DESC, refund_total ASC, cashier_name ASC
+      LIMIT ?
+      ''',
+      [startTime.toIso8601String(), endTime.toIso8601String(), limit],
+    );
+
+    return rows
+        .map(
+          (row) {
+            final netSales = ((row['net_sales'] as num?) ?? 0).toDouble();
+            final refundTotal = ((row['refund_total'] as num?) ?? 0).toDouble();
+
+            return {
+              'cashier_name': row['cashier_name'],
+              'sale_count': (row['sale_count'] as num?)?.toInt() ?? 0,
+              'refund_count': (row['refund_count'] as num?)?.toInt() ?? 0,
+              'transaction_count':
+                  ((row['sale_count'] as num?)?.toInt() ?? 0) +
+                  ((row['refund_count'] as num?)?.toInt() ?? 0),
+              'gross_sales': ((row['gross_sales'] as num?) ?? 0).toDouble(),
+              'total_discounts':
+                  ((row['total_discounts'] as num?) ?? 0).toDouble(),
+              'net_sales': netSales,
+              'refund_total': refundTotal,
+              'net_after_refunds': _roundMoney(netSales - refundTotal),
+              'cash_sales': ((row['cash_sales'] as num?) ?? 0).toDouble(),
+              'card_sales': ((row['card_sales'] as num?) ?? 0).toDouble(),
+            };
+          },
+        )
+        .toList();
+  }
+
   Future<int> saveHeldCart({
     required String cartName,
     required String cashierName,

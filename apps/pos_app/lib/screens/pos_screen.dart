@@ -16,6 +16,7 @@ import 'cashier_summary_screen.dart';
 import 'checkout_payment_dialog.dart';
 import 'held_carts_screen.dart';
 import 'login_screen.dart';
+import 'sales_report_screen.dart';
 import 'shift_management_screen.dart';
 import 'transaction_history_screen.dart';
 
@@ -1054,6 +1055,20 @@ class _PosScreenState extends State<PosScreen> {
               _focusBarcodeField();
             },
             icon: const Icon(Icons.bar_chart, color: Colors.white),
+          ),
+          IconButton(
+            tooltip: 'Store sales report',
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const SalesReportScreen(),
+                ),
+              );
+
+              _focusBarcodeField();
+            },
+            icon: const Icon(Icons.analytics, color: Colors.white),
           ),
           IconButton(
             tooltip: 'Transaction history',
