@@ -6,6 +6,7 @@ import '../models/stock_adjustment_request.dart';
 import '../providers/admin_provider.dart';
 import 'inventory_history_screen.dart';
 import 'stock_take_screen.dart';
+import 'supplier_management_screen.dart';
 
 class AdminHome extends StatefulWidget {
   const AdminHome({super.key});
@@ -19,6 +20,7 @@ class _AdminHomeState extends State<AdminHome> {
 
   String _inventorySearch = '';
   String _stockFilter = 'all';
+  String _supplierSearch = '';
 
   @override
   void initState() {
@@ -193,8 +195,7 @@ class _AdminHomeState extends State<AdminHome> {
                     Navigator.push(
                       this.context,
                       MaterialPageRoute(
-                        builder: (_) =>
-                            InventoryHistoryScreen(product: product),
+                        builder: (_) => InventoryHistoryScreen(product: product),
                       ),
                     );
                   },
@@ -260,7 +261,7 @@ class _AdminHomeState extends State<AdminHome> {
                   ),
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
-                    initialValue: adjustmentType,
+                    value: adjustmentType,
                     decoration: const InputDecoration(
                       labelText: 'Adjustment Type',
                       border: OutlineInputBorder(),
@@ -526,7 +527,7 @@ class _AdminHomeState extends State<AdminHome> {
                       border: OutlineInputBorder(),
                     ),
                     isExpanded: true,
-                    initialValue: selectedBarcode,
+                    value: selectedBarcode,
                     items: products
                         .map(
                           (p) => DropdownMenuItem(
@@ -1062,10 +1063,69 @@ class _AdminHomeState extends State<AdminHome> {
     );
   }
 
+  List<dynamic> _getFilteredSuppliers(List<dynamic> suppliers) {
+    final query = _supplierSearch.trim().toLowerCase();
+    if (query.isEmpty) return suppliers;
+
+    return suppliers.where((supplier) {
+      final name = supplier.name.toString().toLowerCase();
+      final phone = supplier.phone.toString().toLowerCase();
+      final id = supplier.id.toString().toLowerCase();
+      return name.contains(query) || phone.contains(query) || id.contains(query);
+    }).toList();
+  }
+
+  Widget _buildSupplierSummaryCard({
+    required String title,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            backgroundColor: color.withOpacity(0.12),
+            child: Icon(icon, color: color),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  title,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AdminProvider>();
     final filteredProducts = _getFilteredProducts(provider.products);
+    final filteredSuppliers = _getFilteredSuppliers(provider.suppliers);
 
     final totalProducts = provider.products.length;
     final inStockCount = provider.products.where((p) => p.stock > 10).length;
@@ -1462,37 +1522,217 @@ class _AdminHomeState extends State<AdminHome> {
 
       provider.isLoading
           ? const Center(child: CircularProgressIndicator())
-          : ListView.builder(
-              itemCount: provider.suppliers.length,
-              itemBuilder: (context, index) {
-                final supplier = provider.suppliers[index];
-
-                return Card(
-                  margin: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
-                  child: ListTile(
-                    leading: const CircleAvatar(
-                      backgroundColor: Colors.orange,
-                      child: Icon(Icons.local_shipping, color: Colors.white),
-                    ),
-                    title: Text(
-                      supplier.name,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: Text('Phone: ${supplier.phone}'),
-                    trailing: ElevatedButton(
-                      onPressed: () => _showReceiveStockDialog(
-                        context,
-                        supplier.id,
-                        supplier.name,
-                      ),
-                      child: const Text('Receive'),
-                    ),
-                  ),
-                );
+          : RefreshIndicator(
+              onRefresh: () async {
+                await provider.fetchSuppliers();
+                await provider.fetchProducts();
               },
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: Colors.deepPurple,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            CircleAvatar(
+                              backgroundColor: Colors.white24,
+                              child: Icon(
+                                Icons.factory_outlined,
+                                color: Colors.white,
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'Supplier Management',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'This blueprint step improves the supplier side by giving each supplier a focused receiving workspace. Full purchase orders can come next.',
+                          style: TextStyle(color: Colors.white70, height: 1.35),
+                        ),
+                        const SizedBox(height: 14),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _SupplierInfoPill(
+                              label: 'Suppliers',
+                              value: '${provider.suppliers.length}',
+                            ),
+                            _SupplierInfoPill(
+                              label: 'Low Stock Items',
+                              value: '$lowStockCount',
+                            ),
+                            _SupplierInfoPill(
+                              label: 'Out of Stock',
+                              value: '$outOfStockCount',
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildSupplierSummaryCard(
+                          title: 'Suppliers',
+                          value: '${provider.suppliers.length}',
+                          icon: Icons.local_shipping,
+                          color: Colors.deepPurple,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _buildSupplierSummaryCard(
+                          title: 'Receive Ready',
+                          value: 'Yes',
+                          icon: Icons.add_box_outlined,
+                          color: Colors.green,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    decoration: InputDecoration(
+                      hintText: 'Search supplier name, phone or ID',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _supplierSearch.isNotEmpty
+                          ? IconButton(
+                              onPressed: () {
+                                setState(() {
+                                  _supplierSearch = '';
+                                });
+                              },
+                              icon: const Icon(Icons.clear),
+                            )
+                          : null,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onChanged: (value) {
+                      setState(() {
+                        _supplierSearch = value;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  if (filteredSuppliers.isEmpty)
+                    const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(
+                          child: Text('No suppliers found.'),
+                        ),
+                      ),
+                    )
+                  else
+                    ...filteredSuppliers.map(
+                      (supplier) => Card(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        child: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const CircleAvatar(
+                                    backgroundColor: Color(0xFFEDE7F6),
+                                    child: Icon(
+                                      Icons.local_shipping,
+                                      color: Colors.deepPurple,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          supplier.name,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text('Phone: ${supplier.phone}'),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Supplier ID: ${supplier.id}',
+                                          style: TextStyle(
+                                            color: Colors.grey[700],
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                SupplierManagementScreen(
+                                              supplier: supplier,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      icon: const Icon(Icons.dashboard_outlined),
+                                      label: const Text('Open Workspace'),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: ElevatedButton.icon(
+                                      onPressed: () => _showReceiveStockDialog(
+                                        context,
+                                        supplier.id,
+                                        supplier.name,
+                                      ),
+                                      icon: const Icon(Icons.add_box_outlined),
+                                      label: const Text('Receive'),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
     ];
 
@@ -1534,6 +1774,31 @@ class _AdminHomeState extends State<AdminHome> {
             label: 'Suppliers',
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SupplierInfoPill extends StatelessWidget {
+  const _SupplierInfoPill({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white24,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '$label: $value',
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
