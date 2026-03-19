@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/purchase_order.dart';
 import '../models/purchase_order_item.dart';
 import '../services/purchase_order_service.dart';
+import 'purchase_order_receive_history_screen.dart';
 
 class PurchaseOrderReceiveScreen extends StatefulWidget {
   const PurchaseOrderReceiveScreen({
@@ -73,6 +74,18 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
     });
   }
 
+  Future<void> _openHistory() async {
+    final order = _order ?? widget.purchaseOrder;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PurchaseOrderReceiveHistoryScreen(
+          purchaseOrder: order,
+        ),
+      ),
+    );
+  }
+
   String _statusLabel(String value) {
     switch (value) {
       case 'draft':
@@ -128,10 +141,14 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
     final order = _order;
     if (order == null) return;
 
-    if (order.status == 'cancelled') {
+    if (!order.canReceive) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cancelled purchase orders cannot be received.'),
+        SnackBar(
+          content: Text(
+            order.status == 'draft'
+                ? 'Mark this purchase order as Ordered before receiving stock.'
+                : 'This purchase order cannot be received in its current status.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -202,6 +219,7 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
     );
 
     if (success) {
+      _referenceController.clear();
       await _loadOrder();
     }
   }
@@ -374,6 +392,11 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
         title: Text('Receive • ${order.orderNumber}'),
         actions: [
           IconButton(
+            tooltip: 'Receive history',
+            onPressed: _openHistory,
+            icon: const Icon(Icons.history),
+          ),
+          IconButton(
             tooltip: 'Refresh order',
             onPressed: _loadOrder,
             icon: const Icon(Icons.refresh),
@@ -465,6 +488,22 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
                               style: TextStyle(color: Colors.grey[700]),
                             ),
                           ],
+                          const SizedBox(height: 8),
+                          Text(
+                            order.canReceive
+                                ? 'This PO is ready for line-by-line receiving.'
+                                : order.status == 'draft'
+                                    ? 'This PO is still Draft. Change status to Ordered before receiving.'
+                                    : 'This PO is not available for receiving now.',
+                            style: TextStyle(
+                              color: order.canReceive
+                                  ? Colors.grey[700]
+                                  : Colors.red[700],
+                              fontWeight: order.canReceive
+                                  ? FontWeight.w500
+                                  : FontWeight.w600,
+                            ),
+                          ),
                           const SizedBox(height: 14),
                           LinearProgressIndicator(
                             value: order.receiveProgress,

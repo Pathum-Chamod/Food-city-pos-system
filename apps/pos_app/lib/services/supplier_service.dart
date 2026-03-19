@@ -6,6 +6,8 @@ import 'package:shared/models/product.dart';
 
 import '../models/pos_supplier.dart';
 import '../models/stock_receipt_record.dart';
+import '../models/supplier_product_history.dart';
+import '../models/supplier_purchase_summary.dart';
 import 'database_helper.dart';
 import 'sync_service.dart';
 
@@ -112,4 +114,32 @@ class SupplierService {
   Future<Map<String, dynamic>> getReceiveSummary({int? supplierId}) {
     return DatabaseHelper.instance.getStockReceiptSummary(supplierId: supplierId);
   }
+
+
+  Future<List<SupplierPurchaseSummary>> getSupplierPurchaseSummaries({
+    String search = '',
+    int limit = 200,
+  }) {
+    return DatabaseHelper.instance.getSupplierPurchaseSummaries(
+      search: search,
+      limit: limit,
+    );
+  }
+
+  Future<Map<String, dynamic>> getSupplierPurchaseOverview(int supplierId) {
+    return DatabaseHelper.instance.getSupplierPurchaseOverview(supplierId);
+  }
+
+  Future<List<SupplierProductHistory>> getSupplierProductHistory({
+    required int supplierId,
+    String search = '',
+    int limit = 200,
+  }) {
+    return DatabaseHelper.instance.getSupplierProductHistory(
+      supplierId: supplierId,
+      search: search,
+      limit: limit,
+    );
+  }
 }
+  

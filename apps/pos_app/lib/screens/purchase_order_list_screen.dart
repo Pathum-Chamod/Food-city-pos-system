@@ -4,6 +4,7 @@ import '../models/pos_supplier.dart';
 import '../models/purchase_order.dart';
 import '../services/purchase_order_service.dart';
 import 'purchase_order_editor_screen.dart';
+import 'purchase_order_receive_history_screen.dart';
 import 'purchase_order_receive_screen.dart';
 
 class PurchaseOrderListScreen extends StatefulWidget {
@@ -119,6 +120,18 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
         builder: (_) => PurchaseOrderReceiveScreen(
           purchaseOrder: order,
           cashierName: widget.cashierName,
+        ),
+      ),
+    );
+    await _loadData();
+  }
+
+  Future<void> _openHistory({PurchaseOrder? order}) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PurchaseOrderReceiveHistoryScreen(
+          purchaseOrder: order,
         ),
       ),
     );
@@ -290,6 +303,10 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
                 _miniPill('Lines: ${order.totalLines}', Colors.indigo),
                 _miniPill('Outstanding: ${order.outstandingUnits}', Colors.orange),
                 _miniPill(
+                  'Receipts: ${order.receiptCount}',
+                  Colors.blueGrey,
+                ),
+                _miniPill(
                   'Total: Rs. ${order.totalCost.toStringAsFixed(2)}',
                   Colors.green,
                 ),
@@ -300,6 +317,13 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
               Text(
                 'Reference: ${order.referenceNote}',
                 style: TextStyle(color: Colors.grey[700]),
+              ),
+            ],
+            if (order.lastReceivedAt.trim().isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Last receive: ${order.lastReceivedAt}',
+                style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
               ),
             ],
             const SizedBox(height: 14),
@@ -316,6 +340,11 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
                   onPressed: order.canReceive ? () => _openReceive(order) : null,
                   icon: const Icon(Icons.inventory_2_outlined),
                   label: const Text('Receive'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => _openHistory(order: order),
+                  icon: const Icon(Icons.history),
+                  label: const Text('History'),
                 ),
                 OutlinedButton.icon(
                   onPressed: () => _showQuickStatusMenu(order),
@@ -355,6 +384,11 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
         title: Text(title),
         actions: [
           IconButton(
+            tooltip: 'Receive history',
+            onPressed: () => _openHistory(),
+            icon: const Icon(Icons.history),
+          ),
+          IconButton(
             tooltip: 'Refresh purchase orders',
             onPressed: _loadData,
             icon: const Icon(Icons.refresh),
@@ -390,7 +424,7 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Purchase orders can now be received line-by-line from POS_APP. Stock receipts are saved locally and PO progress updates automatically.',
+                      'Purchase orders can now be received line-by-line from POS_APP. Receipt history is stored locally by receipt batch, so managers can review exactly what was received and when.',
                       style: TextStyle(color: Colors.grey[700], height: 1.4),
                     ),
                   ],
@@ -432,7 +466,7 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
                   _buildSummaryCard(
                     label: 'PO Value',
                     value:
-                        'Rs. ${((( _summary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
+                        'Rs. ${(((_summary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
                     icon: Icons.payments_outlined,
                     color: Colors.orange,
                   ),

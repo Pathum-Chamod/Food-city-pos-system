@@ -7,6 +7,7 @@ import 'purchase_order_editor_screen.dart';
 import 'purchase_order_list_screen.dart';
 import 'supplier_receive_history_screen.dart';
 import 'supplier_workspace_screen.dart';
+import 'supplier_purchase_history_screen.dart';
 
 class SupplierManagementScreen extends StatefulWidget {
   const SupplierManagementScreen({
@@ -80,6 +81,16 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
       context,
       MaterialPageRoute(
         builder: (_) => const SupplierReceiveHistoryScreen(),
+      ),
+    );
+    await _loadData(refreshFromBackend: false);
+  }
+
+  Future<void> _openPurchaseHistory({PosSupplier? supplier}) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SupplierPurchaseHistoryScreen(supplier: supplier),
       ),
     );
     await _loadData(refreshFromBackend: false);
@@ -172,6 +183,11 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
             icon: const Icon(Icons.history),
           ),
           IconButton(
+            tooltip: 'Purchase history',
+            onPressed: () => _openPurchaseHistory(),
+            icon: const Icon(Icons.insights_outlined),
+          ),
+          IconButton(
             tooltip: 'Refresh suppliers',
             onPressed: () => _loadData(refreshFromBackend: true),
             icon: const Icon(Icons.refresh),
@@ -229,6 +245,11 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                           onPressed: _openHistory,
                           icon: const Icon(Icons.history),
                           label: const Text('Receive History'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => _openPurchaseHistory(),
+                          icon: const Icon(Icons.insights_outlined),
+                          label: const Text('Purchase History'),
                         ),
                       ],
                     ),
@@ -382,6 +403,13 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                     ),
                                     icon: const Icon(Icons.add_business_outlined),
                                     label: const Text('New PO'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _openPurchaseHistory(
+                                      supplier: supplier,
+                                    ),
+                                    icon: const Icon(Icons.insights_outlined),
+                                    label: const Text('History'),
                                   ),
                                 ],
                               ),

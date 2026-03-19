@@ -9,6 +9,8 @@ class StockReceiptRecord {
   final int quantity;
   final int supplierId;
   final String supplierName;
+  final int? purchaseOrderId;
+  final String? purchaseOrderNumber;
   final double cost;
   final String referenceNote;
   final String cashierName;
@@ -23,6 +25,8 @@ class StockReceiptRecord {
     required this.quantity,
     required this.supplierId,
     required this.supplierName,
+    required this.purchaseOrderId,
+    required this.purchaseOrderNumber,
     required this.cost,
     required this.referenceNote,
     required this.cashierName,
@@ -39,6 +43,8 @@ class StockReceiptRecord {
       quantity: (map['quantity'] as num?)?.toInt() ?? 0,
       supplierId: (map['supplier_id'] as num?)?.toInt() ?? 0,
       supplierName: (map['supplier_name'] ?? '').toString(),
+      purchaseOrderId: (map['purchase_order_id'] as num?)?.toInt(),
+      purchaseOrderNumber: (map['purchase_order_number'] ?? '').toString(),
       cost: ((map['cost'] as num?) ?? 0).toDouble(),
       referenceNote: (map['reference_note'] ?? '').toString(),
       cashierName: (map['cashier_name'] ?? '').toString(),
@@ -56,6 +62,8 @@ class StockReceiptRecord {
       'quantity': quantity,
       'supplier_id': supplierId,
       'supplier_name': supplierName,
+      'purchase_order_id': purchaseOrderId,
+      'purchase_order_number': purchaseOrderNumber,
       'cost': cost,
       'reference_note': referenceNote,
       'cashier_name': cashierName,

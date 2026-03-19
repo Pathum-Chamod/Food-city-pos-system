@@ -7,6 +7,7 @@ import '../services/supplier_service.dart';
 import 'purchase_order_editor_screen.dart';
 import 'purchase_order_list_screen.dart';
 import 'supplier_receive_history_screen.dart';
+import 'supplier_purchase_history_screen.dart';
 
 class SupplierWorkspaceScreen extends StatefulWidget {
   const SupplierWorkspaceScreen({
@@ -90,6 +91,15 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
       ),
     );
     await _loadData();
+  }
+
+  Future<void> _openPurchaseHistory() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SupplierPurchaseHistoryScreen(supplier: widget.supplier),
+      ),
+    );
   }
 
   Future<void> _openPurchaseOrders() async {
@@ -376,6 +386,11 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
             icon: const Icon(Icons.history),
           ),
           IconButton(
+            tooltip: 'Purchase history',
+            onPressed: _openPurchaseHistory,
+            icon: const Icon(Icons.insights_outlined),
+          ),
+          IconButton(
             tooltip: 'Refresh products',
             onPressed: _loadData,
             icon: const Icon(Icons.refresh),
@@ -429,6 +444,11 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
                           onPressed: _openHistory,
                           icon: const Icon(Icons.history),
                           label: const Text('Receive History'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _openPurchaseHistory,
+                          icon: const Icon(Icons.insights_outlined),
+                          label: const Text('Purchase History'),
                         ),
                       ],
                     ),

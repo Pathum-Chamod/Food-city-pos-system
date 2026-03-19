@@ -11,10 +11,12 @@ class PurchaseOrder {
   final int totalLines;
   final int totalUnits;
   final int receivedUnits;
+  final int receiptCount;
   final double totalCost;
   final String createdBy;
   final String createdAt;
   final String updatedAt;
+  final String lastReceivedAt;
 
   const PurchaseOrder({
     required this.id,
@@ -26,10 +28,12 @@ class PurchaseOrder {
     required this.totalLines,
     required this.totalUnits,
     this.receivedUnits = 0,
+    this.receiptCount = 0,
     required this.totalCost,
     required this.createdBy,
     required this.createdAt,
     required this.updatedAt,
+    this.lastReceivedAt = '',
   });
 
   int get outstandingUnits {
@@ -46,7 +50,7 @@ class PurchaseOrder {
   }
 
   bool get canReceive =>
-      status == 'ordered' || status == 'partially_received' || status == 'draft';
+      status == 'ordered' || status == 'partially_received';
 
   factory PurchaseOrder.fromMap(Map<dynamic, dynamic> map) {
     return PurchaseOrder(
@@ -59,10 +63,12 @@ class PurchaseOrder {
       totalLines: (map['total_lines'] as num?)?.toInt() ?? 0,
       totalUnits: (map['total_units'] as num?)?.toInt() ?? 0,
       receivedUnits: (map['received_units'] as num?)?.toInt() ?? 0,
+      receiptCount: (map['receipt_count'] as num?)?.toInt() ?? 0,
       totalCost: ((map['total_cost'] as num?) ?? 0).toDouble(),
       createdBy: (map['created_by'] ?? '').toString(),
       createdAt: (map['created_at'] ?? '').toString(),
       updatedAt: (map['updated_at'] ?? '').toString(),
+      lastReceivedAt: (map['last_received_at'] ?? '').toString(),
     );
   }
 
@@ -77,10 +83,12 @@ class PurchaseOrder {
       'total_lines': totalLines,
       'total_units': totalUnits,
       'received_units': receivedUnits,
+      'receipt_count': receiptCount,
       'total_cost': totalCost,
       'created_by': createdBy,
       'created_at': createdAt,
       'updated_at': updatedAt,
+      'last_received_at': lastReceivedAt,
     };
   }
 
@@ -94,10 +102,12 @@ class PurchaseOrder {
     int? totalLines,
     int? totalUnits,
     int? receivedUnits,
+    int? receiptCount,
     double? totalCost,
     String? createdBy,
     String? createdAt,
     String? updatedAt,
+    String? lastReceivedAt,
   }) {
     return PurchaseOrder(
       id: id ?? this.id,
@@ -109,10 +119,12 @@ class PurchaseOrder {
       totalLines: totalLines ?? this.totalLines,
       totalUnits: totalUnits ?? this.totalUnits,
       receivedUnits: receivedUnits ?? this.receivedUnits,
+      receiptCount: receiptCount ?? this.receiptCount,
       totalCost: totalCost ?? this.totalCost,
       createdBy: createdBy ?? this.createdBy,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      lastReceivedAt: lastReceivedAt ?? this.lastReceivedAt,
     );
   }
 }

@@ -8,7 +8,10 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/pos_supplier.dart';
 import '../models/purchase_order.dart';
 import '../models/purchase_order_item.dart';
+import '../models/purchase_order_receipt.dart';
 import '../models/stock_receipt_record.dart';
+import '../models/supplier_product_history.dart';
+import '../models/supplier_purchase_summary.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -34,7 +37,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 10,
+        version: 11,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -136,6 +139,40 @@ class DatabaseHelper {
         unit_cost REAL NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS purchase_order_receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        purchase_order_id INTEGER NOT NULL,
+        purchase_order_number TEXT NOT NULL,
+        supplier_id INTEGER NOT NULL,
+        supplier_name TEXT NOT NULL,
+        cashier_name TEXT,
+        reference_note TEXT,
+        total_lines INTEGER NOT NULL DEFAULT 0,
+        total_units INTEGER NOT NULL DEFAULT 0,
+        total_cost REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS purchase_order_receipt_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        purchase_order_receipt_id INTEGER NOT NULL,
+        purchase_order_id INTEGER NOT NULL,
+        purchase_order_item_id INTEGER,
+        backend_receipt_id INTEGER,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL,
+        unit_cost REAL NOT NULL DEFAULT 0,
+        line_cost REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (purchase_order_receipt_id) REFERENCES purchase_order_receipts(id) ON DELETE CASCADE
       )
     ''');
   }
@@ -406,6 +443,42 @@ class DatabaseHelper {
           whereArgs: [orderId],
         );
       }
+    }
+
+    if (oldVersion < 11) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS purchase_order_receipts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          purchase_order_id INTEGER NOT NULL,
+          purchase_order_number TEXT NOT NULL,
+          supplier_id INTEGER NOT NULL,
+          supplier_name TEXT NOT NULL,
+          cashier_name TEXT,
+          reference_note TEXT,
+          total_lines INTEGER NOT NULL DEFAULT 0,
+          total_units INTEGER NOT NULL DEFAULT 0,
+          total_cost REAL NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE
+        )
+      ''');
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS purchase_order_receipt_lines (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          purchase_order_receipt_id INTEGER NOT NULL,
+          purchase_order_id INTEGER NOT NULL,
+          purchase_order_item_id INTEGER,
+          backend_receipt_id INTEGER,
+          barcode TEXT NOT NULL,
+          product_name TEXT NOT NULL,
+          quantity INTEGER NOT NULL,
+          unit_cost REAL NOT NULL DEFAULT 0,
+          line_cost REAL NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (purchase_order_receipt_id) REFERENCES purchase_order_receipts(id) ON DELETE CASCADE
+        )
+      ''');
     }
   }
 
@@ -2247,6 +2320,128 @@ class DatabaseHelper {
   }
 
 
+  Future<List<SupplierPurchaseSummary>> getSupplierPurchaseSummaries({
+    String search = '',
+    int limit = 200,
+  }) async {
+    final db = await database;
+    final trimmed = search.trim().toLowerCase();
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        s.id AS supplier_id,
+        s.name AS supplier_name,
+        COALESCE(s.phone, '') AS phone,
+        COUNT(sr.id) AS receipt_count,
+        COUNT(DISTINCT CASE WHEN sr.purchase_order_id IS NOT NULL THEN sr.id END) AS po_receipt_count,
+        COUNT(DISTINCT sr.barcode) AS product_count,
+        COALESCE(SUM(sr.quantity), 0) AS total_units,
+        COALESCE(SUM(sr.cost), 0) AS total_cost,
+        COALESCE(MAX(sr.created_at), '') AS last_received_at
+      FROM suppliers s
+      LEFT JOIN stock_receipts sr ON sr.supplier_id = s.id
+      WHERE (? = '' OR LOWER(s.name) LIKE ? OR LOWER(COALESCE(s.phone, '')) LIKE ? OR CAST(s.id AS TEXT) LIKE ?)
+      GROUP BY s.id, s.name, s.phone
+      ORDER BY total_cost DESC, receipt_count DESC, s.name COLLATE NOCASE ASC
+      LIMIT ?
+      ''',
+      [
+        trimmed,
+        '%$trimmed%',
+        '%$trimmed%',
+        '%$trimmed%',
+        limit,
+      ],
+    );
+
+    return rows.map((row) => SupplierPurchaseSummary.fromMap(row)).toList();
+  }
+
+  Future<Map<String, dynamic>> getSupplierPurchaseOverview(int supplierId) async {
+    final db = await database;
+
+    final receiptRows = await db.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS receipt_count,
+        COUNT(DISTINCT CASE WHEN purchase_order_id IS NOT NULL THEN id END) AS po_receipt_count,
+        COUNT(DISTINCT barcode) AS product_count,
+        COALESCE(SUM(quantity), 0) AS total_units,
+        COALESCE(SUM(cost), 0) AS total_cost,
+        COALESCE(MAX(created_at), '') AS last_received_at
+      FROM stock_receipts
+      WHERE supplier_id = ?
+      ''',
+      [supplierId],
+    );
+
+    final poRows = await db.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS order_count,
+        COALESCE(SUM(total_cost), 0) AS po_value,
+        SUM(CASE WHEN status IN ('draft', 'ordered', 'partially_received') THEN 1 ELSE 0 END) AS open_order_count
+      FROM purchase_orders
+      WHERE supplier_id = ?
+      ''',
+      [supplierId],
+    );
+
+    final receiptRow = receiptRows.first;
+    final poRow = poRows.first;
+
+    return {
+      'receipt_count': (receiptRow['receipt_count'] as num?)?.toInt() ?? 0,
+      'po_receipt_count': (receiptRow['po_receipt_count'] as num?)?.toInt() ?? 0,
+      'product_count': (receiptRow['product_count'] as num?)?.toInt() ?? 0,
+      'total_units': (receiptRow['total_units'] as num?)?.toInt() ?? 0,
+      'total_cost': ((receiptRow['total_cost'] as num?) ?? 0).toDouble(),
+      'last_received_at': (receiptRow['last_received_at'] ?? '').toString(),
+      'order_count': (poRow['order_count'] as num?)?.toInt() ?? 0,
+      'po_value': ((poRow['po_value'] as num?) ?? 0).toDouble(),
+      'open_order_count': (poRow['open_order_count'] as num?)?.toInt() ?? 0,
+    };
+  }
+
+  Future<List<SupplierProductHistory>> getSupplierProductHistory({
+    required int supplierId,
+    String search = '',
+    int limit = 200,
+  }) async {
+    final db = await database;
+    final trimmed = search.trim().toLowerCase();
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        barcode,
+        product_name,
+        COUNT(*) AS receipt_count,
+        COUNT(DISTINCT purchase_order_id) AS linked_po_count,
+        COALESCE(SUM(quantity), 0) AS total_units,
+        COALESCE(SUM(cost), 0) AS total_cost,
+        COALESCE(MAX(created_at), '') AS last_received_at
+      FROM stock_receipts
+      WHERE supplier_id = ?
+        AND (? = '' OR LOWER(product_name) LIKE ? OR LOWER(barcode) LIKE ?)
+      GROUP BY barcode, product_name
+      ORDER BY total_cost DESC, total_units DESC, product_name COLLATE NOCASE ASC
+      LIMIT ?
+      ''',
+      [
+        supplierId,
+        trimmed,
+        '%$trimmed%',
+        '%$trimmed%',
+        limit,
+      ],
+    );
+
+    return rows.map((row) => SupplierProductHistory.fromMap(row)).toList();
+  }
+
+
 
   Future<int> savePurchaseOrder({
     int? purchaseOrderId,
@@ -2351,7 +2546,7 @@ class DatabaseHelper {
     int? supplierId,
     String status = 'all',
     String search = '',
-    int limit = 200,
+    int limit = 100,
   }) async {
     final db = await database;
     final whereClauses = <String>[];
@@ -2360,18 +2555,18 @@ class DatabaseHelper {
     final safeStatus = _normalizePurchaseOrderStatus(status);
 
     if (supplierId != null) {
-      whereClauses.add('supplier_id = ?');
+      whereClauses.add('po.supplier_id = ?');
       whereArgs.add(supplierId);
     }
 
     if (status != 'all') {
-      whereClauses.add('status = ?');
+      whereClauses.add('po.status = ?');
       whereArgs.add(safeStatus);
     }
 
     if (trimmedSearch.isNotEmpty) {
       whereClauses.add(
-        '(LOWER(order_number) LIKE ? OR LOWER(supplier_name) LIKE ? OR LOWER(reference_note) LIKE ?)',
+        '(LOWER(po.order_number) LIKE ? OR LOWER(po.supplier_name) LIKE ? OR LOWER(po.reference_note) LIKE ?)',
       );
       whereArgs
         ..add('%$trimmedSearch%')
@@ -2379,24 +2574,53 @@ class DatabaseHelper {
         ..add('%$trimmedSearch%');
     }
 
-    final rows = await db.query(
-      'purchase_orders',
-      where: whereClauses.isEmpty ? null : whereClauses.join(' AND '),
-      whereArgs: whereClauses.isEmpty ? null : whereArgs,
-      orderBy: 'datetime(updated_at) DESC, id DESC',
-      limit: limit,
-    );
+    final sql = StringBuffer('''
+      SELECT
+        po.*,
+        (
+          SELECT COUNT(*)
+          FROM purchase_order_receipts por
+          WHERE por.purchase_order_id = po.id
+        ) AS receipt_count,
+        (
+          SELECT MAX(por.created_at)
+          FROM purchase_order_receipts por
+          WHERE por.purchase_order_id = po.id
+        ) AS last_received_at
+      FROM purchase_orders po
+    ''');
 
+    if (whereClauses.isNotEmpty) {
+      sql.write(' WHERE ${whereClauses.join(' AND ')}');
+    }
+
+    sql.write(' ORDER BY datetime(po.updated_at) DESC, po.id DESC LIMIT $limit');
+
+    final rows = await db.rawQuery(sql.toString(), whereArgs);
     return rows.map((row) => PurchaseOrder.fromMap(row)).toList();
   }
 
   Future<PurchaseOrder?> getPurchaseOrderById(int purchaseOrderId) async {
     final db = await database;
-    final rows = await db.query(
-      'purchase_orders',
-      where: 'id = ?',
-      whereArgs: [purchaseOrderId],
-      limit: 1,
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        po.*,
+        (
+          SELECT COUNT(*)
+          FROM purchase_order_receipts por
+          WHERE por.purchase_order_id = po.id
+        ) AS receipt_count,
+        (
+          SELECT MAX(por.created_at)
+          FROM purchase_order_receipts por
+          WHERE por.purchase_order_id = po.id
+        ) AS last_received_at
+      FROM purchase_orders po
+      WHERE po.id = ?
+      LIMIT 1
+      ''',
+      [purchaseOrderId],
     );
 
     if (rows.isEmpty) return null;
@@ -2495,6 +2719,27 @@ class DatabaseHelper {
     final now = DateTime.now().toIso8601String();
 
     await db.transaction((txn) async {
+      int totalUnits = 0;
+      double totalCost = 0;
+
+      for (final line in receivedLines) {
+        totalUnits += (line['quantity'] as num?)?.toInt() ?? 0;
+        totalCost += ((line['cost'] as num?) ?? 0).toDouble();
+      }
+
+      final receiptId = await txn.insert('purchase_order_receipts', {
+        'purchase_order_id': purchaseOrderId,
+        'purchase_order_number': orderNumber,
+        'supplier_id': supplierId,
+        'supplier_name': supplierName,
+        'cashier_name': cashierName.trim(),
+        'reference_note': referenceNote.trim(),
+        'total_lines': receivedLines.length,
+        'total_units': totalUnits,
+        'total_cost': _roundMoney(totalCost),
+        'created_at': now,
+      });
+
       for (final line in receivedLines) {
         final itemId = (line['purchase_order_item_id'] as num?)?.toInt();
         final quantity = (line['quantity'] as num?)?.toInt() ?? 0;
@@ -2502,6 +2747,7 @@ class DatabaseHelper {
         final barcode = (line['barcode'] ?? '').toString();
         final productName = (line['product_name'] ?? '').toString();
         final backendReceiptId = (line['backend_receipt_id'] as num?)?.toInt();
+        final unitCost = quantity > 0 ? _roundMoney(cost / quantity) : 0.0;
 
         if (itemId == null || quantity <= 0) continue;
 
@@ -2519,6 +2765,19 @@ class DatabaseHelper {
           'cashier_name': cashierName.trim(),
           'created_at': now,
           'backend_status': 'synced',
+        });
+
+        await txn.insert('purchase_order_receipt_lines', {
+          'purchase_order_receipt_id': receiptId,
+          'purchase_order_id': purchaseOrderId,
+          'purchase_order_item_id': itemId,
+          'backend_receipt_id': backendReceiptId,
+          'barcode': barcode,
+          'product_name': productName,
+          'quantity': quantity,
+          'unit_cost': unitCost,
+          'line_cost': _roundMoney(cost),
+          'created_at': now,
         });
 
         await txn.rawUpdate(
@@ -2543,13 +2802,13 @@ class DatabaseHelper {
       );
 
       final row = totals.first;
-      final totalUnits = (row['total_units'] as num?)?.toInt() ?? 0;
-      final receivedUnits = (row['received_units'] as num?)?.toInt() ?? 0;
+      final poTotalUnits = (row['total_units'] as num?)?.toInt() ?? 0;
+      final poReceivedUnits = (row['received_units'] as num?)?.toInt() ?? 0;
 
       String nextStatus = 'draft';
-      if (receivedUnits <= 0) {
+      if (poReceivedUnits <= 0) {
         nextStatus = 'ordered';
-      } else if (receivedUnits >= totalUnits && totalUnits > 0) {
+      } else if (poReceivedUnits >= poTotalUnits && poTotalUnits > 0) {
         nextStatus = 'received';
       } else {
         nextStatus = 'partially_received';
@@ -2558,7 +2817,7 @@ class DatabaseHelper {
       await txn.update(
         'purchase_orders',
         {
-          'received_units': receivedUnits,
+          'received_units': poReceivedUnits,
           'status': nextStatus,
           'updated_at': now,
         },
@@ -2566,6 +2825,45 @@ class DatabaseHelper {
         whereArgs: [purchaseOrderId],
       );
     });
+  }
+
+
+  Future<List<PurchaseOrderReceipt>> getPurchaseOrderReceipts({
+    int? purchaseOrderId,
+    int limit = 100,
+  }) async {
+    final db = await database;
+    final whereParts = <String>[];
+    final whereArgs = <Object?>[];
+
+    if (purchaseOrderId != null) {
+      whereParts.add('purchase_order_id = ?');
+      whereArgs.add(purchaseOrderId);
+    }
+
+    final rows = await db.query(
+      'purchase_order_receipts',
+      where: whereParts.isEmpty ? null : whereParts.join(' AND '),
+      whereArgs: whereArgs.isEmpty ? null : whereArgs,
+      orderBy: 'created_at DESC, id DESC',
+      limit: limit,
+    );
+
+    return rows.map(PurchaseOrderReceipt.fromMap).toList();
+  }
+
+  Future<List<PurchaseOrderReceiptLine>> getPurchaseOrderReceiptLines(
+    int purchaseOrderReceiptId,
+  ) async {
+    final db = await database;
+    final rows = await db.query(
+      'purchase_order_receipt_lines',
+      where: 'purchase_order_receipt_id = ?',
+      whereArgs: [purchaseOrderReceiptId],
+      orderBy: 'id ASC',
+    );
+
+    return rows.map(PurchaseOrderReceiptLine.fromMap).toList();
   }
 
   Future<List<Map<String, dynamic>>> getOutstandingPurchaseOrderLines(

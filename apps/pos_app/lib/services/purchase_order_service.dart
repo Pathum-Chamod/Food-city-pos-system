@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import '../models/pos_supplier.dart';
 import '../models/purchase_order.dart';
 import '../models/purchase_order_item.dart';
+import '../models/purchase_order_receipt.dart';
 import 'database_helper.dart';
 import 'supplier_service.dart';
 import 'sync_service.dart';
@@ -16,7 +17,6 @@ class PurchaseOrderService {
   final DatabaseHelper _db = DatabaseHelper.instance;
   final SupplierService _supplierService = SupplierService();
 
-  // Same local backend used by the POS app in local-first development.
   final String apiUrl = 'http://127.0.0.1:8080/api/pos_sync.php';
 
   Future<List<PosSupplier>> getSuppliers({bool refreshFromBackend = false}) {
@@ -57,6 +57,20 @@ class PurchaseOrderService {
 
   Future<List<Map<String, dynamic>>> getOutstandingLines(int purchaseOrderId) {
     return _db.getOutstandingPurchaseOrderLines(purchaseOrderId);
+  }
+
+  Future<List<PurchaseOrderReceipt>> getReceipts({
+    int? purchaseOrderId,
+    int limit = 100,
+  }) {
+    return _db.getPurchaseOrderReceipts(
+      purchaseOrderId: purchaseOrderId,
+      limit: limit,
+    );
+  }
+
+  Future<List<PurchaseOrderReceiptLine>> getReceiptLines(int receiptId) {
+    return _db.getPurchaseOrderReceiptLines(receiptId);
   }
 
   String generateOrderNumber() {
@@ -113,6 +127,15 @@ class PurchaseOrderService {
       };
     }
 
+    if (!order.canReceive) {
+      return {
+        'success': false,
+        'applied_lines': 0,
+        'failed_lines': 0,
+        'message': 'Only ordered purchase orders can be received.',
+      };
+    }
+
     int appliedLines = 0;
     int failedLines = 0;
     final receivedLines = <Map<String, dynamic>>[];
@@ -166,7 +189,9 @@ class PurchaseOrderService {
             appliedLines += 1;
           } else {
             failedLines += 1;
-            failedMessages.add('${item.productName}: backend did not accept receive.');
+            failedMessages.add(
+              '${item.productName}: backend did not accept receive.',
+            );
           }
         } else {
           failedLines += 1;
