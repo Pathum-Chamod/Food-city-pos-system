@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared/models/product.dart';
 
 import '../models/pos_supplier.dart';
+import '../models/reorder_suggestion.dart';
 import '../models/stock_receipt_record.dart';
 import '../models/supplier_product_history.dart';
 import '../models/supplier_purchase_summary.dart';
@@ -141,5 +142,31 @@ class SupplierService {
       limit: limit,
     );
   }
+
+  Future<List<ReorderSuggestion>> getReorderSuggestions({
+    String search = '',
+    int limit = 200,
+    int reorderLevel = 10,
+    int defaultTargetStock = 30,
+  }) {
+    return DatabaseHelper.instance.getReorderSuggestions(
+      search: search,
+      limit: limit,
+      reorderLevel: reorderLevel,
+      defaultTargetStock: defaultTargetStock,
+    );
+  }
+
+  Future<Map<String, dynamic>> getReorderSuggestionSummary({
+    String search = '',
+    int reorderLevel = 10,
+    int defaultTargetStock = 30,
+  }) {
+    return DatabaseHelper.instance.getReorderSuggestionSummary(
+      search: search,
+      reorderLevel: reorderLevel,
+      defaultTargetStock: defaultTargetStock,
+    );
+  }
+
 }
-  

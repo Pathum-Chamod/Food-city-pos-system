@@ -8,6 +8,7 @@ import 'purchase_order_editor_screen.dart';
 import 'purchase_order_list_screen.dart';
 import 'supplier_receive_history_screen.dart';
 import 'supplier_purchase_history_screen.dart';
+import 'reorder_suggestion_screen.dart';
 
 class SupplierWorkspaceScreen extends StatefulWidget {
   const SupplierWorkspaceScreen({
@@ -124,6 +125,20 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
         ),
       ),
     );
+  }
+
+
+  Future<void> _openReorderSuggestions() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReorderSuggestionScreen(
+          cashierName: widget.cashierName,
+          initialSupplier: widget.supplier,
+        ),
+      ),
+    );
+    await _loadData();
   }
 
   Future<void> _receiveByBarcode() async {
@@ -389,6 +404,11 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
             tooltip: 'Purchase history',
             onPressed: _openPurchaseHistory,
             icon: const Icon(Icons.insights_outlined),
+          ),
+          IconButton(
+            tooltip: 'Reorder suggestions',
+            onPressed: _openReorderSuggestions,
+            icon: const Icon(Icons.playlist_add_check_circle_outlined),
           ),
           IconButton(
             tooltip: 'Refresh products',

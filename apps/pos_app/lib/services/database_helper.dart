@@ -9,6 +9,7 @@ import '../models/pos_supplier.dart';
 import '../models/purchase_order.dart';
 import '../models/purchase_order_item.dart';
 import '../models/purchase_order_receipt.dart';
+import '../models/reorder_suggestion.dart';
 import '../models/stock_receipt_record.dart';
 import '../models/supplier_product_history.dart';
 import '../models/supplier_purchase_summary.dart';
@@ -2892,5 +2893,128 @@ class DatabaseHelper {
     return rows;
   }
 
+
+  Future<List<ReorderSuggestion>> getReorderSuggestions({
+    String search = '',
+    int limit = 200,
+    int reorderLevel = 10,
+    int defaultTargetStock = 30,
+  }) async {
+    final db = await database;
+    final whereClauses = <String>['p.stock <= ?'];
+    final whereArgs = <Object?>[reorderLevel];
+
+    final trimmedSearch = search.trim().toLowerCase();
+    if (trimmedSearch.isNotEmpty) {
+      whereClauses.add('(LOWER(p.name) LIKE ? OR LOWER(p.barcode) LIKE ?)');
+      final like = '%$trimmedSearch%';
+      whereArgs.addAll([like, like]);
+    }
+
+    final rows = await db.rawQuery(
+      """
+      SELECT
+        p.barcode AS barcode,
+        p.name AS product_name,
+        p.stock AS current_stock,
+        ? AS reorder_level,
+        CASE
+          WHEN COALESCE((
+            SELECT SUM(
+              CASE
+                WHEN s.transaction_type = 'refund' THEN -si.quantity
+                ELSE si.quantity
+              END
+            )
+            FROM sale_items si
+            INNER JOIN sales s ON s.id = si.sale_id
+            WHERE si.barcode = p.barcode
+              AND datetime(si.created_at) >= datetime('now', '-30 days')
+          ), 0) > ?
+          THEN COALESCE((
+            SELECT SUM(
+              CASE
+                WHEN s.transaction_type = 'refund' THEN -si.quantity
+                ELSE si.quantity
+              END
+            )
+            FROM sale_items si
+            INNER JOIN sales s ON s.id = si.sale_id
+            WHERE si.barcode = p.barcode
+              AND datetime(si.created_at) >= datetime('now', '-30 days')
+          ), 0)
+          ELSE ?
+        END AS target_stock,
+        COALESCE((
+          SELECT SUM(
+            CASE
+              WHEN s.transaction_type = 'refund' THEN -si.quantity
+              ELSE si.quantity
+            END
+          )
+          FROM sale_items si
+          INNER JOIN sales s ON s.id = si.sale_id
+          WHERE si.barcode = p.barcode
+            AND datetime(si.created_at) >= datetime('now', '-30 days')
+        ), 0) AS sold_units_30d,
+        COALESCE((
+          SELECT ROUND(sr.cost / NULLIF(sr.quantity, 0), 2)
+          FROM stock_receipts sr
+          WHERE sr.barcode = p.barcode
+            AND sr.quantity > 0
+          ORDER BY datetime(sr.created_at) DESC
+          LIMIT 1
+        ), p.price) AS last_unit_cost
+      FROM products p
+      WHERE ${whereClauses.join(' AND ')}
+      ORDER BY p.stock ASC, sold_units_30d DESC, p.name COLLATE NOCASE ASC
+      LIMIT ?
+      """,
+      [reorderLevel, defaultTargetStock, defaultTargetStock, ...whereArgs, limit],
+    );
+
+    return rows.map((row) {
+      final currentStock = (row['current_stock'] as num?)?.toInt() ?? 0;
+      final targetStock = (row['target_stock'] as num?)?.toInt() ?? defaultTargetStock;
+      final resolvedTarget = targetStock < defaultTargetStock ? defaultTargetStock : targetStock;
+      var suggestedQuantity = resolvedTarget - currentStock;
+      if (suggestedQuantity < 1) {
+        suggestedQuantity = currentStock <= reorderLevel ? 1 : 0;
+      }
+
+      return ReorderSuggestion.fromMap({
+        ...row,
+        'reorder_level': reorderLevel,
+        'target_stock': resolvedTarget,
+        'suggested_quantity': suggestedQuantity,
+      });
+    }).where((item) => item.suggestedQuantity > 0).toList();
+  }
+
+  Future<Map<String, dynamic>> getReorderSuggestionSummary({
+    String search = '',
+    int reorderLevel = 10,
+    int defaultTargetStock = 30,
+  }) async {
+    final suggestions = await getReorderSuggestions(
+      search: search,
+      reorderLevel: reorderLevel,
+      defaultTargetStock: defaultTargetStock,
+      limit: 1000,
+    );
+
+    final outOfStockCount = suggestions.where((item) => item.isOutOfStock).length;
+    final highDemandCount = suggestions.where((item) => item.isHighDemand).length;
+    final totalUnits = suggestions.fold<int>(0, (sum, item) => sum + item.suggestedQuantity);
+    final estimatedCost = suggestions.fold<double>(0, (sum, item) => sum + item.estimatedCost);
+
+    return {
+      'item_count': suggestions.length,
+      'out_of_stock_count': outOfStockCount,
+      'high_demand_count': highDemandCount,
+      'total_units': totalUnits,
+      'estimated_cost': estimatedCost,
+    };
+  }
 
 }
