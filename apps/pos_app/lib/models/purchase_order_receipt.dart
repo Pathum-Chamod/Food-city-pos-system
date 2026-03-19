@@ -9,6 +9,9 @@ class PurchaseOrderReceipt {
   final String supplierName;
   final String cashierName;
   final String referenceNote;
+  final String invoiceNumber;
+  final String deliveryNoteNumber;
+  final String grnReference;
   final int totalLines;
   final int totalUnits;
   final double totalCost;
@@ -22,6 +25,9 @@ class PurchaseOrderReceipt {
     required this.supplierName,
     required this.cashierName,
     required this.referenceNote,
+    required this.invoiceNumber,
+    required this.deliveryNoteNumber,
+    required this.grnReference,
     required this.totalLines,
     required this.totalUnits,
     required this.totalCost,
@@ -37,6 +43,9 @@ class PurchaseOrderReceipt {
       supplierName: (map['supplier_name'] ?? '').toString(),
       cashierName: (map['cashier_name'] ?? '').toString(),
       referenceNote: (map['reference_note'] ?? '').toString(),
+      invoiceNumber: (map['invoice_number'] ?? '').toString(),
+      deliveryNoteNumber: (map['delivery_note_number'] ?? '').toString(),
+      grnReference: (map['grn_reference'] ?? '').toString(),
       totalLines: (map['total_lines'] as num?)?.toInt() ?? 0,
       totalUnits: (map['total_units'] as num?)?.toInt() ?? 0,
       totalCost: ((map['total_cost'] as num?) ?? 0).toDouble(),

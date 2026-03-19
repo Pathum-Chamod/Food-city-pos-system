@@ -117,6 +117,9 @@ class PurchaseOrderService {
     required Map<int, int> receiveQuantities,
     required String cashierName,
     String referenceNote = '',
+    String invoiceNumber = '',
+    String deliveryNoteNumber = '',
+    String grnReference = '',
   }) async {
     if (receiveQuantities.isEmpty) {
       return {
@@ -214,6 +217,9 @@ class PurchaseOrderService {
         supplierName: order.supplierName,
         cashierName: cashierName,
         referenceNote: referenceNote,
+        invoiceNumber: invoiceNumber,
+        deliveryNoteNumber: deliveryNoteNumber,
+        grnReference: grnReference,
         receivedLines: receivedLines,
       );
 

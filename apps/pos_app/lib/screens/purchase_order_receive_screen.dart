@@ -23,6 +23,9 @@ class PurchaseOrderReceiveScreen extends StatefulWidget {
 class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen> {
   final PurchaseOrderService _service = PurchaseOrderService();
   final TextEditingController _referenceController = TextEditingController();
+  final TextEditingController _invoiceController = TextEditingController();
+  final TextEditingController _deliveryNoteController = TextEditingController();
+  final TextEditingController _grnController = TextEditingController();
 
   bool _isLoading = true;
   bool _isSaving = false;
@@ -40,6 +43,9 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
   @override
   void dispose() {
     _referenceController.dispose();
+    _invoiceController.dispose();
+    _deliveryNoteController.dispose();
+    _grnController.dispose();
     for (final controller in _qtyControllers.values) {
       controller.dispose();
     }
@@ -202,6 +208,9 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
       receiveQuantities: receiveMap,
       cashierName: widget.cashierName,
       referenceNote: _referenceController.text.trim(),
+      invoiceNumber: _invoiceController.text.trim(),
+      deliveryNoteNumber: _deliveryNoteController.text.trim(),
+      grnReference: _grnController.text.trim(),
     );
 
     if (!mounted) return;
@@ -220,6 +229,9 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
 
     if (success) {
       _referenceController.clear();
+      _invoiceController.clear();
+      _deliveryNoteController.clear();
+      _grnController.clear();
       await _loadOrder();
     }
   }
@@ -554,6 +566,38 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
                     decoration: const InputDecoration(
                       labelText: 'Receive Reference Note (Optional)',
                       hintText: 'Delivery note, invoice no, remarks',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _invoiceController,
+                          decoration: const InputDecoration(
+                            labelText: 'Invoice No',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextField(
+                          controller: _deliveryNoteController,
+                          decoration: const InputDecoration(
+                            labelText: 'Delivery Note',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _grnController,
+                    decoration: const InputDecoration(
+                      labelText: 'GRN / Delivery Ref (Optional)',
                       border: OutlineInputBorder(),
                     ),
                   ),

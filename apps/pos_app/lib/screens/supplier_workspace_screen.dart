@@ -9,6 +9,7 @@ import 'purchase_order_list_screen.dart';
 import 'supplier_receive_history_screen.dart';
 import 'supplier_purchase_history_screen.dart';
 import 'reorder_suggestion_screen.dart';
+import 'supplier_product_mapping_screen.dart';
 
 class SupplierWorkspaceScreen extends StatefulWidget {
   const SupplierWorkspaceScreen({
@@ -128,6 +129,17 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
   }
 
 
+
+  Future<void> _openProductMappings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SupplierProductMappingScreen(initialSupplier: widget.supplier),
+      ),
+    );
+    await _loadData();
+  }
+
   Future<void> _openReorderSuggestions() async {
     await Navigator.push(
       context,
@@ -172,6 +184,13 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
     final qtyController = TextEditingController();
     final costController = TextEditingController();
     final noteController = TextEditingController();
+    final invoiceController = TextEditingController();
+    final deliveryController = TextEditingController();
+    final grnController = TextEditingController();
+    final mapping = await _supplierService.getPreferredSupplierMapping(product.barcode);
+    if (mapping != null && mapping.supplierId == widget.supplier.id && mapping.defaultUnitCost > 0) {
+      costController.text = mapping.defaultUnitCost.toStringAsFixed(2);
+    }
     bool isSaving = false;
 
     await showDialog<void>(
@@ -237,6 +256,41 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
                       border: OutlineInputBorder(),
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: invoiceController,
+                          enabled: !isSaving,
+                          decoration: const InputDecoration(
+                            labelText: 'Invoice No',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextField(
+                          controller: deliveryController,
+                          enabled: !isSaving,
+                          decoration: const InputDecoration(
+                            labelText: 'Delivery Note',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: grnController,
+                    enabled: !isSaving,
+                    decoration: const InputDecoration(
+                      labelText: 'GRN / Delivery Ref (Optional)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -283,6 +337,9 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
                           cost: cost,
                           cashierName: widget.cashierName,
                           referenceNote: noteController.text.trim(),
+                          invoiceNumber: invoiceController.text.trim(),
+                          deliveryNoteNumber: deliveryController.text.trim(),
+                          grnReference: grnController.text.trim(),
                         );
 
                         if (!mounted) return;

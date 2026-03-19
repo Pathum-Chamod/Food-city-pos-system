@@ -13,6 +13,9 @@ class StockReceiptRecord {
   final String? purchaseOrderNumber;
   final double cost;
   final String referenceNote;
+  final String invoiceNumber;
+  final String deliveryNoteNumber;
+  final String grnReference;
   final String cashierName;
   final String createdAt;
   final String backendStatus;
@@ -29,6 +32,9 @@ class StockReceiptRecord {
     required this.purchaseOrderNumber,
     required this.cost,
     required this.referenceNote,
+    required this.invoiceNumber,
+    required this.deliveryNoteNumber,
+    required this.grnReference,
     required this.cashierName,
     required this.createdAt,
     required this.backendStatus,
@@ -47,6 +53,9 @@ class StockReceiptRecord {
       purchaseOrderNumber: (map['purchase_order_number'] ?? '').toString(),
       cost: ((map['cost'] as num?) ?? 0).toDouble(),
       referenceNote: (map['reference_note'] ?? '').toString(),
+      invoiceNumber: (map['invoice_number'] ?? '').toString(),
+      deliveryNoteNumber: (map['delivery_note_number'] ?? '').toString(),
+      grnReference: (map['grn_reference'] ?? '').toString(),
       cashierName: (map['cashier_name'] ?? '').toString(),
       createdAt: (map['created_at'] ?? '').toString(),
       backendStatus: (map['backend_status'] ?? '').toString(),
@@ -66,6 +75,9 @@ class StockReceiptRecord {
       'purchase_order_number': purchaseOrderNumber,
       'cost': cost,
       'reference_note': referenceNote,
+      'invoice_number': invoiceNumber,
+      'delivery_note_number': deliveryNoteNumber,
+      'grn_reference': grnReference,
       'cashier_name': cashierName,
       'created_at': createdAt,
       'backend_status': backendStatus,

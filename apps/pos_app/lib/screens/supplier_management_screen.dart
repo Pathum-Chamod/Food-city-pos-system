@@ -9,6 +9,7 @@ import 'supplier_receive_history_screen.dart';
 import 'supplier_workspace_screen.dart';
 import 'supplier_purchase_history_screen.dart';
 import 'reorder_suggestion_screen.dart';
+import 'supplier_product_mapping_screen.dart';
 
 class SupplierManagementScreen extends StatefulWidget {
   const SupplierManagementScreen({
@@ -124,6 +125,17 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
   }
 
 
+
+  Future<void> _openProductMappings({PosSupplier? supplier}) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SupplierProductMappingScreen(initialSupplier: supplier),
+      ),
+    );
+    await _loadData(refreshFromBackend: false);
+  }
+
   Future<void> _openReorderSuggestions({PosSupplier? supplier}) async {
     await Navigator.push(
       context,
@@ -208,6 +220,11 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
             icon: const Icon(Icons.playlist_add_check_circle_outlined),
           ),
           IconButton(
+            tooltip: 'Supplier mappings',
+            onPressed: () => _openProductMappings(),
+            icon: const Icon(Icons.link_outlined),
+          ),
+          IconButton(
             tooltip: 'Refresh suppliers',
             onPressed: () => _loadData(refreshFromBackend: true),
             icon: const Icon(Icons.refresh),
@@ -275,6 +292,11 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                           onPressed: () => _openReorderSuggestions(),
                           icon: const Icon(Icons.playlist_add_check_circle_outlined),
                           label: const Text('Reorder Suggestions'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => _openProductMappings(),
+                          icon: const Icon(Icons.link_outlined),
+                          label: const Text('Product Mapping'),
                         ),
                       ],
                     ),

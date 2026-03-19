@@ -9,6 +9,7 @@ import '../models/reorder_suggestion.dart';
 import '../models/stock_receipt_record.dart';
 import '../models/supplier_product_history.dart';
 import '../models/supplier_purchase_summary.dart';
+import '../models/supplier_product_mapping.dart';
 import 'database_helper.dart';
 import 'sync_service.dart';
 
@@ -58,6 +59,9 @@ class SupplierService {
     required double cost,
     required String cashierName,
     String referenceNote = '',
+    String invoiceNumber = '',
+    String deliveryNoteNumber = '',
+    String grnReference = '',
   }) async {
     final safeNote = referenceNote.trim();
 
@@ -85,6 +89,9 @@ class SupplierService {
             supplierName: supplier.name,
             cost: cost,
             referenceNote: safeNote,
+            invoiceNumber: invoiceNumber,
+            deliveryNoteNumber: deliveryNoteNumber,
+            grnReference: grnReference,
             cashierName: cashierName,
             backendStatus: 'synced',
           );
@@ -169,4 +176,38 @@ class SupplierService {
     );
   }
 
+
+  Future<void> saveSupplierProductMapping(SupplierProductMapping mapping) {
+    return DatabaseHelper.instance.upsertSupplierProductMapping(mapping);
+  }
+
+  Future<void> deleteSupplierProductMapping(int id) {
+    return DatabaseHelper.instance.deleteSupplierProductMapping(id);
+  }
+
+  Future<List<SupplierProductMapping>> getSupplierProductMappings({
+    int? supplierId,
+    String search = '',
+    int limit = 500,
+  }) {
+    return DatabaseHelper.instance.getSupplierProductMappings(
+      supplierId: supplierId,
+      search: search,
+      limit: limit,
+    );
+  }
+
+  Future<List<SupplierProductMapping>> getMappingsForProduct(String barcode) {
+    return DatabaseHelper.instance.getMappingsForProduct(barcode);
+  }
+
+  Future<SupplierProductMapping?> getPreferredSupplierMapping(String barcode) {
+    return DatabaseHelper.instance.getPreferredSupplierMapping(barcode);
+  }
+
+  Future<Map<String, dynamic>> getSupplierProductMappingSummary({int? supplierId}) {
+    return DatabaseHelper.instance.getSupplierProductMappingSummary(
+      supplierId: supplierId,
+    );
+  }
 }

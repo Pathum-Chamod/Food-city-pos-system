@@ -10,6 +10,7 @@ import '../models/purchase_order.dart';
 import '../models/purchase_order_item.dart';
 import '../models/purchase_order_receipt.dart';
 import '../models/reorder_suggestion.dart';
+import '../models/supplier_product_mapping.dart';
 import '../models/stock_receipt_record.dart';
 import '../models/supplier_product_history.dart';
 import '../models/supplier_purchase_summary.dart';
@@ -38,7 +39,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 11,
+        version: 12,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -90,6 +91,24 @@ class DatabaseHelper {
     ''');
 
     await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplier_product_mappings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        supplier_id INTEGER NOT NULL,
+        supplier_name TEXT NOT NULL,
+        is_preferred INTEGER NOT NULL DEFAULT 1,
+        default_unit_cost REAL NOT NULL DEFAULT 0,
+        minimum_order_quantity INTEGER NOT NULL DEFAULT 1,
+        pack_size INTEGER NOT NULL DEFAULT 1,
+        lead_time_days INTEGER NOT NULL DEFAULT 0,
+        note TEXT,
+        updated_at TEXT NOT NULL,
+        UNIQUE(barcode, supplier_id)
+      )
+    ''');
+
+    await db.execute('''
       CREATE TABLE IF NOT EXISTS stock_receipts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         backend_receipt_id INTEGER,
@@ -102,6 +121,9 @@ class DatabaseHelper {
         supplier_name TEXT NOT NULL,
         cost REAL NOT NULL DEFAULT 0,
         reference_note TEXT,
+        invoice_number TEXT,
+        delivery_note_number TEXT,
+        grn_reference TEXT,
         cashier_name TEXT,
         created_at TEXT NOT NULL,
         backend_status TEXT NOT NULL DEFAULT 'synced'
@@ -152,6 +174,9 @@ class DatabaseHelper {
         supplier_name TEXT NOT NULL,
         cashier_name TEXT,
         reference_note TEXT,
+        invoice_number TEXT,
+        delivery_note_number TEXT,
+        grn_reference TEXT,
         total_lines INTEGER NOT NULL DEFAULT 0,
         total_units INTEGER NOT NULL DEFAULT 0,
         total_cost REAL NOT NULL DEFAULT 0,
@@ -480,6 +505,33 @@ class DatabaseHelper {
           FOREIGN KEY (purchase_order_receipt_id) REFERENCES purchase_order_receipts(id) ON DELETE CASCADE
         )
       ''');
+    }
+
+    if (oldVersion < 12) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS supplier_product_mappings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          barcode TEXT NOT NULL,
+          product_name TEXT NOT NULL,
+          supplier_id INTEGER NOT NULL,
+          supplier_name TEXT NOT NULL,
+          is_preferred INTEGER NOT NULL DEFAULT 1,
+          default_unit_cost REAL NOT NULL DEFAULT 0,
+          minimum_order_quantity INTEGER NOT NULL DEFAULT 1,
+          pack_size INTEGER NOT NULL DEFAULT 1,
+          lead_time_days INTEGER NOT NULL DEFAULT 0,
+          note TEXT,
+          updated_at TEXT NOT NULL,
+          UNIQUE(barcode, supplier_id)
+        )
+      ''');
+
+      await _addColumnIfMissing(db, 'stock_receipts', 'invoice_number', 'TEXT');
+      await _addColumnIfMissing(db, 'stock_receipts', 'delivery_note_number', 'TEXT');
+      await _addColumnIfMissing(db, 'stock_receipts', 'grn_reference', 'TEXT');
+      await _addColumnIfMissing(db, 'purchase_order_receipts', 'invoice_number', 'TEXT');
+      await _addColumnIfMissing(db, 'purchase_order_receipts', 'delivery_note_number', 'TEXT');
+      await _addColumnIfMissing(db, 'purchase_order_receipts', 'grn_reference', 'TEXT');
     }
   }
 
@@ -2235,6 +2287,9 @@ class DatabaseHelper {
     required String supplierName,
     required double cost,
     required String referenceNote,
+    String invoiceNumber = '',
+    String deliveryNoteNumber = '',
+    String grnReference = '',
     required String cashierName,
     String backendStatus = 'synced',
   }) async {
@@ -2251,10 +2306,123 @@ class DatabaseHelper {
       'supplier_name': supplierName,
       'cost': _roundMoney(cost),
       'reference_note': referenceNote.trim(),
+      'invoice_number': invoiceNumber.trim(),
+      'delivery_note_number': deliveryNoteNumber.trim(),
+      'grn_reference': grnReference.trim(),
       'cashier_name': cashierName.trim(),
       'created_at': DateTime.now().toIso8601String(),
       'backend_status': backendStatus,
     });
+  }
+
+
+  Future<void> upsertSupplierProductMapping(SupplierProductMapping mapping) async {
+    final db = await database;
+
+    await db.transaction((txn) async {
+      if (mapping.isPreferred) {
+        await txn.update(
+          'supplier_product_mappings',
+          {'is_preferred': 0},
+          where: 'barcode = ?',
+          whereArgs: [mapping.barcode],
+        );
+      }
+
+      await txn.insert(
+        'supplier_product_mappings',
+        mapping.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    });
+  }
+
+  Future<void> deleteSupplierProductMapping(int id) async {
+    final db = await database;
+    await db.delete('supplier_product_mappings', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<List<SupplierProductMapping>> getSupplierProductMappings({
+    int? supplierId,
+    String search = '',
+    int limit = 500,
+  }) async {
+    final db = await database;
+    final trimmed = search.trim().toLowerCase();
+    final whereClauses = <String>[];
+    final whereArgs = <Object?>[];
+
+    if (supplierId != null) {
+      whereClauses.add('supplier_id = ?');
+      whereArgs.add(supplierId);
+    }
+
+    if (trimmed.isNotEmpty) {
+      whereClauses.add(
+        '(LOWER(product_name) LIKE ? OR LOWER(barcode) LIKE ? OR LOWER(supplier_name) LIKE ?)',
+      );
+      whereArgs..add('%$trimmed%')..add('%$trimmed%')..add('%$trimmed%');
+    }
+
+    final rows = await db.query(
+      'supplier_product_mappings',
+      where: whereClauses.isEmpty ? null : whereClauses.join(' AND '),
+      whereArgs: whereClauses.isEmpty ? null : whereArgs,
+      orderBy: 'is_preferred DESC, supplier_name COLLATE NOCASE ASC, product_name COLLATE NOCASE ASC',
+      limit: limit,
+    );
+
+    return rows.map((row) => SupplierProductMapping.fromMap(row)).toList();
+  }
+
+  Future<List<SupplierProductMapping>> getMappingsForProduct(String barcode) async {
+    final db = await database;
+    final rows = await db.query(
+      'supplier_product_mappings',
+      where: 'barcode = ?',
+      whereArgs: [barcode],
+      orderBy: 'is_preferred DESC, supplier_name COLLATE NOCASE ASC',
+    );
+    return rows.map((row) => SupplierProductMapping.fromMap(row)).toList();
+  }
+
+  Future<SupplierProductMapping?> getPreferredSupplierMapping(String barcode) async {
+    final db = await database;
+    final rows = await db.query(
+      'supplier_product_mappings',
+      where: 'barcode = ? AND is_preferred = 1',
+      whereArgs: [barcode],
+      orderBy: 'updated_at DESC',
+      limit: 1,
+    );
+
+    if (rows.isEmpty) return null;
+    return SupplierProductMapping.fromMap(rows.first);
+  }
+
+  Future<Map<String, dynamic>> getSupplierProductMappingSummary({int? supplierId}) async {
+    final db = await database;
+    final whereClause = supplierId == null ? '' : 'WHERE supplier_id = ?';
+    final args = supplierId == null ? <Object?>[] : <Object?>[supplierId];
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS mapping_count,
+        COALESCE(SUM(CASE WHEN is_preferred = 1 THEN 1 ELSE 0 END), 0) AS preferred_count,
+        COALESCE(AVG(default_unit_cost), 0) AS avg_cost
+      FROM supplier_product_mappings
+      $whereClause
+      ''',
+      args,
+    );
+
+    final row = rows.first;
+    return {
+      'mapping_count': (row['mapping_count'] as num?)?.toInt() ?? 0,
+      'preferred_count': (row['preferred_count'] as num?)?.toInt() ?? 0,
+      'avg_cost': ((row['avg_cost'] as num?) ?? 0).toDouble(),
+    };
   }
 
   Future<List<StockReceiptRecord>> getStockReceipts({
@@ -2712,6 +2880,9 @@ class DatabaseHelper {
     required String supplierName,
     required String cashierName,
     required String referenceNote,
+    String invoiceNumber = '',
+    String deliveryNoteNumber = '',
+    String grnReference = '',
     required List<Map<String, dynamic>> receivedLines,
   }) async {
     if (receivedLines.isEmpty) return;
@@ -2735,6 +2906,9 @@ class DatabaseHelper {
         'supplier_name': supplierName,
         'cashier_name': cashierName.trim(),
         'reference_note': referenceNote.trim(),
+        'invoice_number': invoiceNumber.trim(),
+        'delivery_note_number': deliveryNoteNumber.trim(),
+        'grn_reference': grnReference.trim(),
         'total_lines': receivedLines.length,
         'total_units': totalUnits,
         'total_cost': _roundMoney(totalCost),
@@ -2763,6 +2937,9 @@ class DatabaseHelper {
           'supplier_name': supplierName,
           'cost': _roundMoney(cost),
           'reference_note': referenceNote.trim(),
+          'invoice_number': invoiceNumber.trim(),
+          'delivery_note_number': deliveryNoteNumber.trim(),
+          'grn_reference': grnReference.trim(),
           'cashier_name': cashierName.trim(),
           'created_at': now,
           'backend_status': 'synced',

@@ -156,6 +156,27 @@ class _PurchaseOrderReceiveHistoryScreenState
                     style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
                   ),
                 ],
+                if (receipt.invoiceNumber.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Invoice: ${receipt.invoiceNumber}',
+                    style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
+                  ),
+                ],
+                if (receipt.deliveryNoteNumber.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Delivery Note: ${receipt.deliveryNoteNumber}',
+                    style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
+                  ),
+                ],
+                if (receipt.grnReference.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'GRN Ref: ${receipt.grnReference}',
+                    style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
+                  ),
+                ],
               ],
             ),
           ),
