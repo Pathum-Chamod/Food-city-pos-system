@@ -79,7 +79,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                       border: OutlineInputBorder(),
                     ),
                     isExpanded: true,
-                    value: selectedBarcode,
+                    initialValue: selectedBarcode,
                     items: products
                         .map(
                           (p) => DropdownMenuItem<String>(

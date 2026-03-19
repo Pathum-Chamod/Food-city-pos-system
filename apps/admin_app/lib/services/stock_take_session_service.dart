@@ -127,7 +127,7 @@ class StockTakeHistoryEntry {
           .whereType<Map>()
           .map(
             (item) => StockTakeHistoryLine.fromMap(
-              Map<String, dynamic>.from(item as Map<dynamic, dynamic>),
+              Map<String, dynamic>.from(item),
             ),
           )
           .toList(),
@@ -174,7 +174,7 @@ class StockTakeSessionService {
           .whereType<Map>()
           .map(
             (item) => StockTakeHistoryEntry.fromMap(
-              Map<String, dynamic>.from(item as Map<dynamic, dynamic>),
+              Map<String, dynamic>.from(item),
             ),
           )
           .toList();

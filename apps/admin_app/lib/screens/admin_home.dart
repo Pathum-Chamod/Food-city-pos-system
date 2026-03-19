@@ -261,7 +261,7 @@ class _AdminHomeState extends State<AdminHome> {
                   ),
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
-                    value: adjustmentType,
+                    initialValue: adjustmentType,
                     decoration: const InputDecoration(
                       labelText: 'Adjustment Type',
                       border: OutlineInputBorder(),
@@ -527,7 +527,7 @@ class _AdminHomeState extends State<AdminHome> {
                       border: OutlineInputBorder(),
                     ),
                     isExpanded: true,
-                    value: selectedBarcode,
+                    initialValue: selectedBarcode,
                     items: products
                         .map(
                           (p) => DropdownMenuItem(

@@ -720,7 +720,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
               children: [
                 _buildCountIconButton(
                   icon: Icons.remove,
-                  onTap: hasCount && countedQty! > 0
+                  onTap: hasCount && countedQty > 0
                       ? () => _decrementProduct(product)
                       : null,
                 ),
