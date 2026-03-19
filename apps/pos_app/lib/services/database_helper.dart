@@ -5,6 +5,9 @@ import 'package:path/path.dart';
 import 'package:shared/models/product.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import '../models/pos_supplier.dart';
+import '../models/stock_receipt_record.dart';
+
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
@@ -29,7 +32,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 7,
+        version: 8,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -68,6 +71,34 @@ class DatabaseHelper {
     }
 
     return 0.0;
+  }
+
+  Future<void> _createSupplierTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS suppliers (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        phone TEXT,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS stock_receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        backend_receipt_id INTEGER,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL,
+        supplier_id INTEGER NOT NULL,
+        supplier_name TEXT NOT NULL,
+        cost REAL NOT NULL DEFAULT 0,
+        reference_note TEXT,
+        cashier_name TEXT,
+        created_at TEXT NOT NULL,
+        backend_status TEXT NOT NULL DEFAULT 'synced'
+      )
+    ''');
   }
 
   Future<void> _createDB(Database db, int version) async {
@@ -163,6 +194,8 @@ class DatabaseHelper {
         pin TEXT UNIQUE NOT NULL
       )
     ''');
+
+    await _createSupplierTables(db);
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -283,6 +316,10 @@ class DatabaseHelper {
         "REAL NOT NULL DEFAULT 0",
       );
     }
+
+    if (oldVersion < 8) {
+      await _createSupplierTables(db);
+    }
   }
 
   Future<void> _addColumnIfMissing(
@@ -357,6 +394,37 @@ class DatabaseHelper {
 
       for (final user in mockUsers) {
         await db.insert('users', user);
+      }
+    }
+
+    final existingSuppliers = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM suppliers',
+    );
+    final supplierCount = existingSuppliers.first['count'] as int;
+
+    if (supplierCount == 0) {
+      final now = DateTime.now().toIso8601String();
+      final mockSuppliers = [
+        {
+          'id': 1,
+          'name': 'Maliban Distributor',
+          'phone': '077-1234567',
+          'updated_at': now,
+        },
+        {
+          'id': 2,
+          'name': 'Fonterra Lanka',
+          'phone': '077-9876543',
+          'updated_at': now,
+        },
+      ];
+
+      for (final supplier in mockSuppliers) {
+        await db.insert(
+          'suppliers',
+          supplier,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
       }
     }
   }
@@ -1939,4 +2007,152 @@ class DatabaseHelper {
       whereArgs: [heldCartId, cashierName],
     );
   }
+
+
+  Future<void> replaceSuppliers(List<PosSupplier> suppliers) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+
+    await db.transaction((txn) async {
+      if (suppliers.isEmpty) {
+        await txn.delete('suppliers');
+        return;
+      }
+
+      final supplierIds = suppliers.map((supplier) => supplier.id).toList();
+      final placeholders = List.filled(supplierIds.length, '?').join(',');
+
+      await txn.delete(
+        'suppliers',
+        where: 'id NOT IN ($placeholders)',
+        whereArgs: supplierIds,
+      );
+
+      final batch = txn.batch();
+      for (final supplier in suppliers) {
+        batch.insert(
+          'suppliers',
+          {
+            'id': supplier.id,
+            'name': supplier.name,
+            'phone': supplier.phone,
+            'updated_at': supplier.updatedAt.isEmpty ? now : supplier.updatedAt,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  Future<List<PosSupplier>> getSuppliers({String search = ''}) async {
+    final db = await database;
+    final trimmed = search.trim().toLowerCase();
+
+    final rows = await db.query(
+      'suppliers',
+      where: trimmed.isEmpty
+          ? null
+          : '(LOWER(name) LIKE ? OR LOWER(phone) LIKE ? OR CAST(id AS TEXT) LIKE ?)',
+      whereArgs: trimmed.isEmpty
+          ? null
+          : ['%$trimmed%', '%$trimmed%', '%$trimmed%'],
+      orderBy: 'name COLLATE NOCASE ASC',
+    );
+
+    return rows.map((row) => PosSupplier.fromMap(row)).toList();
+  }
+
+  Future<int> insertStockReceipt({
+    int? backendReceiptId,
+    required String barcode,
+    required String productName,
+    required int quantity,
+    required int supplierId,
+    required String supplierName,
+    required double cost,
+    required String referenceNote,
+    required String cashierName,
+    String backendStatus = 'synced',
+  }) async {
+    final db = await database;
+
+    return db.insert('stock_receipts', {
+      'backend_receipt_id': backendReceiptId,
+      'barcode': barcode,
+      'product_name': productName,
+      'quantity': quantity,
+      'supplier_id': supplierId,
+      'supplier_name': supplierName,
+      'cost': _roundMoney(cost),
+      'reference_note': referenceNote.trim(),
+      'cashier_name': cashierName.trim(),
+      'created_at': DateTime.now().toIso8601String(),
+      'backend_status': backendStatus,
+    });
+  }
+
+  Future<List<StockReceiptRecord>> getStockReceipts({
+    int? supplierId,
+    String search = '',
+    int limit = 200,
+  }) async {
+    final db = await database;
+    final trimmed = search.trim().toLowerCase();
+
+    final whereClauses = <String>[];
+    final whereArgs = <Object?>[];
+
+    if (supplierId != null) {
+      whereClauses.add('supplier_id = ?');
+      whereArgs.add(supplierId);
+    }
+
+    if (trimmed.isNotEmpty) {
+      whereClauses.add(
+        '(LOWER(product_name) LIKE ? OR LOWER(barcode) LIKE ? OR LOWER(supplier_name) LIKE ?)',
+      );
+      whereArgs
+        ..add('%$trimmed%')
+        ..add('%$trimmed%')
+        ..add('%$trimmed%');
+    }
+
+    final rows = await db.query(
+      'stock_receipts',
+      where: whereClauses.isEmpty ? null : whereClauses.join(' AND '),
+      whereArgs: whereClauses.isEmpty ? null : whereArgs,
+      orderBy: 'datetime(created_at) DESC, id DESC',
+      limit: limit,
+    );
+
+    return rows.map((row) => StockReceiptRecord.fromMap(row)).toList();
+  }
+
+  Future<Map<String, dynamic>> getStockReceiptSummary({int? supplierId}) async {
+    final db = await database;
+
+    final whereClause = supplierId == null ? '' : 'WHERE supplier_id = ?';
+    final args = supplierId == null ? <Object?>[] : <Object?>[supplierId];
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS receipt_count,
+        COALESCE(SUM(quantity), 0) AS total_units,
+        COALESCE(SUM(cost), 0) AS total_cost
+      FROM stock_receipts
+      $whereClause
+      ''',
+      args,
+    );
+
+    final row = rows.first;
+    return {
+      'receipt_count': (row['receipt_count'] as num?)?.toInt() ?? 0,
+      'total_units': (row['total_units'] as num?)?.toInt() ?? 0,
+      'total_cost': ((row['total_cost'] as num?) ?? 0).toDouble(),
+    };
+  }
+
 }

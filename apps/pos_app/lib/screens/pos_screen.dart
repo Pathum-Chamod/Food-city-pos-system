@@ -17,6 +17,7 @@ import 'checkout_payment_dialog.dart';
 import 'held_carts_screen.dart';
 import 'login_screen.dart';
 import 'sales_report_screen.dart';
+import 'supplier_management_screen.dart';
 import 'shift_management_screen.dart';
 import 'transaction_history_screen.dart';
 
@@ -424,6 +425,28 @@ class _PosScreenState extends State<PosScreen> {
         });
       }
     }
+  }
+
+
+  Future<void> _openSupplierOperations() async {
+    await AdminDialogs.showPinDialog(context, () async {
+      final cashierName =
+          context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => SupplierManagementScreen(
+            cashierName: cashierName,
+          ),
+        ),
+      );
+
+      if (!mounted) return;
+
+      await _refreshProductsFromBackendAndReload(silentOnFailure: true);
+      _focusBarcodeField();
+    });
   }
 
   Future<void> _openShiftManagement() async {
@@ -1069,6 +1092,11 @@ class _PosScreenState extends State<PosScreen> {
               _focusBarcodeField();
             },
             icon: const Icon(Icons.analytics, color: Colors.white),
+          ),
+          IconButton(
+            tooltip: 'Supplier operations',
+            onPressed: _openSupplierOperations,
+            icon: const Icon(Icons.local_shipping, color: Colors.white),
           ),
           IconButton(
             tooltip: 'Transaction history',
