@@ -34,7 +34,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 9,
+        version: 10,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -89,6 +89,8 @@ class DatabaseHelper {
       CREATE TABLE IF NOT EXISTS stock_receipts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         backend_receipt_id INTEGER,
+        purchase_order_id INTEGER,
+        purchase_order_number TEXT,
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
         quantity INTEGER NOT NULL,
@@ -115,6 +117,7 @@ class DatabaseHelper {
         reference_note TEXT,
         total_lines INTEGER NOT NULL DEFAULT 0,
         total_units INTEGER NOT NULL DEFAULT 0,
+        received_units INTEGER NOT NULL DEFAULT 0,
         total_cost REAL NOT NULL DEFAULT 0,
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL,
@@ -360,6 +363,49 @@ class DatabaseHelper {
 
     if (oldVersion < 9) {
       await _createPurchaseOrderTables(db);
+    }
+
+    if (oldVersion < 10) {
+      await _addColumnIfMissing(db, 'stock_receipts', 'purchase_order_id', 'INTEGER');
+      await _addColumnIfMissing(
+        db,
+        'stock_receipts',
+        'purchase_order_number',
+        'TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        'purchase_orders',
+        'received_units',
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+
+      final orderIds = await db.query('purchase_orders', columns: ['id']);
+      for (final row in orderIds) {
+        final orderId = (row['id'] as num?)?.toInt();
+        if (orderId == null) continue;
+
+        final receivedRows = await db.rawQuery(
+          '''
+          SELECT COALESCE(SUM(received_quantity), 0) AS received_units
+          FROM purchase_order_items
+          WHERE purchase_order_id = ?
+          ''',
+          [orderId],
+        );
+
+        final receivedUnits =
+            (receivedRows.first['received_units'] as num?)?.toInt() ?? 0;
+
+        await db.update(
+          'purchase_orders',
+          {
+            'received_units': receivedUnits,
+          },
+          where: 'id = ?',
+          whereArgs: [orderId],
+        );
+      }
     }
   }
 
@@ -2106,6 +2152,8 @@ class DatabaseHelper {
 
   Future<int> insertStockReceipt({
     int? backendReceiptId,
+    int? purchaseOrderId,
+    String? purchaseOrderNumber,
     required String barcode,
     required String productName,
     required int quantity,
@@ -2120,6 +2168,8 @@ class DatabaseHelper {
 
     return db.insert('stock_receipts', {
       'backend_receipt_id': backendReceiptId,
+      'purchase_order_id': purchaseOrderId,
+      'purchase_order_number': purchaseOrderNumber?.trim(),
       'barcode': barcode,
       'product_name': productName,
       'quantity': quantity,
@@ -2216,6 +2266,10 @@ class DatabaseHelper {
     final totalCost = _roundMoney(
       items.fold<num>(0, (sum, item) => sum + item.lineTotal),
     );
+    final receivedUnits = items.fold<int>(
+      0,
+      (sum, item) => sum + item.receivedQuantity,
+    );
 
     late int resolvedId;
 
@@ -2229,6 +2283,7 @@ class DatabaseHelper {
           'reference_note': referenceNote.trim(),
           'total_lines': totalLines,
           'total_units': totalUnits,
+          'received_units': receivedUnits,
           'total_cost': totalCost,
           'created_by': createdBy.trim(),
           'created_at': now,
@@ -2246,6 +2301,7 @@ class DatabaseHelper {
             'reference_note': referenceNote.trim(),
             'total_lines': totalLines,
             'total_units': totalUnits,
+            'received_units': receivedUnits,
             'total_cost': totalCost,
             'updated_at': now,
           },
@@ -2405,6 +2461,7 @@ class DatabaseHelper {
       SELECT
         COUNT(*) AS order_count,
         COALESCE(SUM(total_units), 0) AS total_units,
+        COALESCE(SUM(received_units), 0) AS received_units,
         COALESCE(SUM(total_cost), 0) AS total_cost
       FROM purchase_orders
       $whereSql
@@ -2416,8 +2473,125 @@ class DatabaseHelper {
     return {
       'order_count': (row['order_count'] as num?)?.toInt() ?? 0,
       'total_units': (row['total_units'] as num?)?.toInt() ?? 0,
+      'received_units': (row['received_units'] as num?)?.toInt() ?? 0,
       'total_cost': ((row['total_cost'] as num?) ?? 0).toDouble(),
     };
+  }
+
+
+
+  Future<void> applyPurchaseOrderReceipt({
+    required int purchaseOrderId,
+    required String orderNumber,
+    required int supplierId,
+    required String supplierName,
+    required String cashierName,
+    required String referenceNote,
+    required List<Map<String, dynamic>> receivedLines,
+  }) async {
+    if (receivedLines.isEmpty) return;
+
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+
+    await db.transaction((txn) async {
+      for (final line in receivedLines) {
+        final itemId = (line['purchase_order_item_id'] as num?)?.toInt();
+        final quantity = (line['quantity'] as num?)?.toInt() ?? 0;
+        final cost = ((line['cost'] as num?) ?? 0).toDouble();
+        final barcode = (line['barcode'] ?? '').toString();
+        final productName = (line['product_name'] ?? '').toString();
+        final backendReceiptId = (line['backend_receipt_id'] as num?)?.toInt();
+
+        if (itemId == null || quantity <= 0) continue;
+
+        await txn.insert('stock_receipts', {
+          'backend_receipt_id': backendReceiptId,
+          'purchase_order_id': purchaseOrderId,
+          'purchase_order_number': orderNumber,
+          'barcode': barcode,
+          'product_name': productName,
+          'quantity': quantity,
+          'supplier_id': supplierId,
+          'supplier_name': supplierName,
+          'cost': _roundMoney(cost),
+          'reference_note': referenceNote.trim(),
+          'cashier_name': cashierName.trim(),
+          'created_at': now,
+          'backend_status': 'synced',
+        });
+
+        await txn.rawUpdate(
+          '''
+          UPDATE purchase_order_items
+          SET received_quantity = received_quantity + ?
+          WHERE id = ?
+          ''',
+          [quantity, itemId],
+        );
+      }
+
+      final totals = await txn.rawQuery(
+        '''
+        SELECT
+          COALESCE(SUM(quantity), 0) AS total_units,
+          COALESCE(SUM(received_quantity), 0) AS received_units
+        FROM purchase_order_items
+        WHERE purchase_order_id = ?
+        ''',
+        [purchaseOrderId],
+      );
+
+      final row = totals.first;
+      final totalUnits = (row['total_units'] as num?)?.toInt() ?? 0;
+      final receivedUnits = (row['received_units'] as num?)?.toInt() ?? 0;
+
+      String nextStatus = 'draft';
+      if (receivedUnits <= 0) {
+        nextStatus = 'ordered';
+      } else if (receivedUnits >= totalUnits && totalUnits > 0) {
+        nextStatus = 'received';
+      } else {
+        nextStatus = 'partially_received';
+      }
+
+      await txn.update(
+        'purchase_orders',
+        {
+          'received_units': receivedUnits,
+          'status': nextStatus,
+          'updated_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: [purchaseOrderId],
+      );
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> getOutstandingPurchaseOrderLines(
+    int purchaseOrderId,
+  ) async {
+    final db = await database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        id,
+        purchase_order_id,
+        barcode,
+        product_name,
+        quantity,
+        received_quantity,
+        unit_cost,
+        created_at,
+        (quantity - received_quantity) AS outstanding_quantity
+      FROM purchase_order_items
+      WHERE purchase_order_id = ?
+      ORDER BY id ASC
+      ''',
+      [purchaseOrderId],
+    );
+
+    return rows;
   }
 
 

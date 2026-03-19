@@ -10,6 +10,7 @@ class PurchaseOrder {
   final String referenceNote;
   final int totalLines;
   final int totalUnits;
+  final int receivedUnits;
   final double totalCost;
   final String createdBy;
   final String createdAt;
@@ -24,11 +25,28 @@ class PurchaseOrder {
     required this.referenceNote,
     required this.totalLines,
     required this.totalUnits,
+    this.receivedUnits = 0,
     required this.totalCost,
     required this.createdBy,
     required this.createdAt,
     required this.updatedAt,
   });
+
+  int get outstandingUnits {
+    final remaining = totalUnits - receivedUnits;
+    return remaining < 0 ? 0 : remaining;
+  }
+
+  double get receiveProgress {
+    if (totalUnits <= 0) return 0;
+    final progress = receivedUnits / totalUnits;
+    if (progress < 0) return 0;
+    if (progress > 1) return 1;
+    return progress;
+  }
+
+  bool get canReceive =>
+      status == 'ordered' || status == 'partially_received' || status == 'draft';
 
   factory PurchaseOrder.fromMap(Map<dynamic, dynamic> map) {
     return PurchaseOrder(
@@ -40,6 +58,7 @@ class PurchaseOrder {
       referenceNote: (map['reference_note'] ?? '').toString(),
       totalLines: (map['total_lines'] as num?)?.toInt() ?? 0,
       totalUnits: (map['total_units'] as num?)?.toInt() ?? 0,
+      receivedUnits: (map['received_units'] as num?)?.toInt() ?? 0,
       totalCost: ((map['total_cost'] as num?) ?? 0).toDouble(),
       createdBy: (map['created_by'] ?? '').toString(),
       createdAt: (map['created_at'] ?? '').toString(),
@@ -57,6 +76,7 @@ class PurchaseOrder {
       'reference_note': referenceNote,
       'total_lines': totalLines,
       'total_units': totalUnits,
+      'received_units': receivedUnits,
       'total_cost': totalCost,
       'created_by': createdBy,
       'created_at': createdAt,
@@ -73,6 +93,7 @@ class PurchaseOrder {
     String? referenceNote,
     int? totalLines,
     int? totalUnits,
+    int? receivedUnits,
     double? totalCost,
     String? createdBy,
     String? createdAt,
@@ -87,6 +108,7 @@ class PurchaseOrder {
       referenceNote: referenceNote ?? this.referenceNote,
       totalLines: totalLines ?? this.totalLines,
       totalUnits: totalUnits ?? this.totalUnits,
+      receivedUnits: receivedUnits ?? this.receivedUnits,
       totalCost: totalCost ?? this.totalCost,
       createdBy: createdBy ?? this.createdBy,
       createdAt: createdAt ?? this.createdAt,

@@ -4,6 +4,7 @@ import '../models/pos_supplier.dart';
 import '../models/purchase_order.dart';
 import '../services/purchase_order_service.dart';
 import 'purchase_order_editor_screen.dart';
+import 'purchase_order_receive_screen.dart';
 
 class PurchaseOrderListScreen extends StatefulWidget {
   const PurchaseOrderListScreen({
@@ -111,6 +112,19 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
     await _loadData();
   }
 
+  Future<void> _openReceive(PurchaseOrder order) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PurchaseOrderReceiveScreen(
+          purchaseOrder: order,
+          cashierName: widget.cashierName,
+        ),
+      ),
+    );
+    await _loadData();
+  }
+
   Future<void> _updateStatus(PurchaseOrder order, String status) async {
     await _service.updateStatus(order.id, status);
     if (!mounted) return;
@@ -132,7 +146,7 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
     required Color color,
   }) {
     return Container(
-      width: 200,
+      width: 210,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: color.withOpacity(0.08),
@@ -167,21 +181,6 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
     );
   }
 
-  Widget _buildStatusChip(String status) {
-    final color = _statusColor(status);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.10),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        _statusLabel(status),
-        style: TextStyle(color: color, fontWeight: FontWeight.bold),
-      ),
-    );
-  }
-
   Widget _buildFilterChip(String value, String label) {
     final selected = _statusFilter == value;
     return ChoiceChip(
@@ -193,6 +192,155 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
         });
         await _loadData();
       },
+    );
+  }
+
+  Widget _buildStatusPill(PurchaseOrder order) {
+    final color = _statusColor(order.status);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        _statusLabel(order.status),
+        style: TextStyle(color: color, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+
+  Future<void> _showQuickStatusMenu(PurchaseOrder order) async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: PurchaseOrderService.statuses.map((status) {
+            return ListTile(
+              title: Text(_statusLabel(status)),
+              trailing: order.status == status
+                  ? const Icon(Icons.check, color: Colors.green)
+                  : null,
+              onTap: () => Navigator.pop(sheetContext, status),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+
+    if (selected == null || selected == order.status) return;
+    await _updateStatus(order, selected);
+  }
+
+  Widget _buildOrderCard(PurchaseOrder order) {
+    final statusColor = _statusColor(order.status);
+
+    return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        order.orderNumber,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 17,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        order.supplierName,
+                        style: TextStyle(color: Colors.grey[700]),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _buildStatusPill(order),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Received ${order.receivedUnits} / ${order.totalUnits} units',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(
+              value: order.receiveProgress,
+              minHeight: 8,
+              borderRadius: BorderRadius.circular(999),
+              color: statusColor,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _miniPill('Lines: ${order.totalLines}', Colors.indigo),
+                _miniPill('Outstanding: ${order.outstandingUnits}', Colors.orange),
+                _miniPill(
+                  'Total: Rs. ${order.totalCost.toStringAsFixed(2)}',
+                  Colors.green,
+                ),
+              ],
+            ),
+            if (order.referenceNote.trim().isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Reference: ${order.referenceNote}',
+                style: TextStyle(color: Colors.grey[700]),
+              ),
+            ],
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => _openEditor(purchaseOrderId: order.id),
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Edit'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: order.canReceive ? () => _openReceive(order) : null,
+                  icon: const Icon(Icons.inventory_2_outlined),
+                  label: const Text('Receive'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => _showQuickStatusMenu(order),
+                  icon: const Icon(Icons.more_horiz),
+                  label: const Text('Status'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _miniPill(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(color: color, fontWeight: FontWeight.w600),
+      ),
     );
   }
 
@@ -234,7 +382,7 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Purchase Order Foundation',
+                      'Receive Against Purchase Order',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -242,7 +390,7 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Create and manage local purchase orders on the store POS. PO statuses are now tracked locally; receiving against PO comes in the next supplier phase.',
+                      'Purchase orders can now be received line-by-line from POS_APP. Stock receipts are saved locally and PO progress updates automatically.',
                       style: TextStyle(color: Colors.grey[700], height: 1.4),
                     ),
                   ],
@@ -259,25 +407,34 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
                     value: ((_summary['order_count'] as num?) ?? 0)
                         .toInt()
                         .toString(),
-                    icon: Icons.description_outlined,
+                    icon: Icons.receipt_long,
+                    color: Colors.indigo,
+                  ),
+                  const SizedBox(width: 10),
+                  _buildSummaryCard(
+                    label: 'Ordered Units',
+                    value: ((_summary['total_units'] as num?) ?? 0)
+                        .toInt()
+                        .toString(),
+                    icon: Icons.shopping_bag_outlined,
                     color: Colors.blue,
                   ),
                   const SizedBox(width: 10),
                   _buildSummaryCard(
-                    label: 'Units Ordered',
-                    value: ((_summary['total_units'] as num?) ?? 0)
+                    label: 'Received Units',
+                    value: ((_summary['received_units'] as num?) ?? 0)
                         .toInt()
                         .toString(),
                     icon: Icons.inventory_2_outlined,
-                    color: Colors.orange,
+                    color: Colors.green,
                   ),
                   const SizedBox(width: 10),
                   _buildSummaryCard(
                     label: 'PO Value',
                     value:
-                        'Rs. ${(((_summary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
+                        'Rs. ${((( _summary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
                     icon: Icons.payments_outlined,
-                    color: Colors.green,
+                    color: Colors.orange,
                   ),
                 ],
               ),
@@ -287,167 +444,55 @@ class _PurchaseOrderListScreenState extends State<PurchaseOrderListScreen> {
               controller: _searchController,
               onSubmitted: (_) => _loadData(),
               decoration: InputDecoration(
-                hintText: 'Search PO number, supplier or note',
+                hintText: 'Search PO number, supplier, reference',
                 prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchController.text.isEmpty
-                    ? null
-                    : IconButton(
-                        onPressed: () async {
-                          _searchController.clear();
-                          await _loadData();
-                        },
-                        icon: const Icon(Icons.clear),
-                      ),
+                suffixIcon: IconButton(
+                  onPressed: _loadData,
+                  icon: const Icon(Icons.arrow_forward),
+                ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(14),
                 ),
               ),
             ),
             const SizedBox(height: 12),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  _buildFilterChip('all', 'All'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('draft', 'Draft'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('ordered', 'Ordered'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('partially_received', 'Partially Received'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('received', 'Received'),
-                  const SizedBox(width: 8),
-                  _buildFilterChip('cancelled', 'Cancelled'),
-                ],
-              ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildFilterChip('all', 'All'),
+                _buildFilterChip('draft', 'Draft'),
+                _buildFilterChip('ordered', 'Ordered'),
+                _buildFilterChip('partially_received', 'Partially Received'),
+                _buildFilterChip('received', 'Received'),
+                _buildFilterChip('cancelled', 'Cancelled'),
+              ],
             ),
             const SizedBox(height: 12),
             if (_isLoading)
               const Padding(
-                padding: EdgeInsets.all(24),
+                padding: EdgeInsets.only(top: 60),
                 child: Center(child: CircularProgressIndicator()),
               )
             else if (_orders.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: Text('No purchase orders found.')),
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(28),
+                  child: Center(
+                    child: Text('No purchase orders found for this view.'),
+                  ),
+                ),
               )
             else
               ..._orders.map(
-                (order) => Card(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                order.orderNumber,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            _buildStatusChip(order.status),
-                            const SizedBox(width: 6),
-                            PopupMenuButton<String>(
-                              onSelected: (value) async {
-                                if (value == 'edit') {
-                                  await _openEditor(purchaseOrderId: order.id);
-                                } else if (value == 'draft' ||
-                                    value == 'ordered' ||
-                                    value == 'partially_received' ||
-                                    value == 'received' ||
-                                    value == 'cancelled') {
-                                  await _updateStatus(order, value);
-                                }
-                              },
-                              itemBuilder: (context) => [
-                                const PopupMenuItem(
-                                  value: 'edit',
-                                  child: Text('Open / Edit'),
-                                ),
-                                const PopupMenuDivider(),
-                                const PopupMenuItem(
-                                  value: 'draft',
-                                  child: Text('Mark Draft'),
-                                ),
-                                const PopupMenuItem(
-                                  value: 'ordered',
-                                  child: Text('Mark Ordered'),
-                                ),
-                                const PopupMenuItem(
-                                  value: 'partially_received',
-                                  child: Text('Mark Partially Received'),
-                                ),
-                                const PopupMenuItem(
-                                  value: 'received',
-                                  child: Text('Mark Received'),
-                                ),
-                                const PopupMenuItem(
-                                  value: 'cancelled',
-                                  child: Text('Mark Cancelled'),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          order.supplierName,
-                          style: TextStyle(
-                            color: Colors.grey[800],
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            _pill('Lines: ${order.totalLines}'),
-                            _pill('Units: ${order.totalUnits}'),
-                            _pill('Value: Rs. ${order.totalCost.toStringAsFixed(2)}'),
-                            if (order.referenceNote.isNotEmpty)
-                              _pill('Note: ${order.referenceNote}'),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          'Updated: ${order.updatedAt}',
-                          style: TextStyle(color: Colors.grey[700], fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  ),
+                (order) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _buildOrderCard(order),
                 ),
               ),
-            const SizedBox(height: 80),
+            const SizedBox(height: 90),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _pill(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(fontWeight: FontWeight.w600),
       ),
     );
   }
