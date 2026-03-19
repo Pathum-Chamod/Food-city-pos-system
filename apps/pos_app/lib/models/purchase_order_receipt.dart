@@ -1,10 +1,55 @@
-import 'package:flutter/foundation.dart';
+class PurchaseOrderReceiptLine {
+  final int id;
+  final int receiptId;
+  final String barcode;
+  final String productName;
+  final int orderedQuantity;
+  final int receivedQuantity;
+  final double unitCost;
+  final double lineTotal;
 
-@immutable
+  const PurchaseOrderReceiptLine({
+    required this.id,
+    required this.receiptId,
+    required this.barcode,
+    required this.productName,
+    required this.orderedQuantity,
+    required this.receivedQuantity,
+    required this.unitCost,
+    required this.lineTotal,
+  });
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'receipt_id': receiptId,
+      'barcode': barcode,
+      'product_name': productName,
+      'ordered_quantity': orderedQuantity,
+      'received_quantity': receivedQuantity,
+      'unit_cost': unitCost,
+      'line_total': lineTotal,
+    };
+  }
+
+  factory PurchaseOrderReceiptLine.fromMap(Map<String, dynamic> map) {
+    return PurchaseOrderReceiptLine(
+      id: (map['id'] as num?)?.toInt() ?? 0,
+      receiptId: (map['receipt_id'] as num?)?.toInt() ?? 0,
+      barcode: (map['barcode'] ?? '').toString(),
+      productName: (map['product_name'] ?? '').toString(),
+      orderedQuantity: (map['ordered_quantity'] as num?)?.toInt() ?? 0,
+      receivedQuantity: (map['received_quantity'] as num?)?.toInt() ?? 0,
+      unitCost: ((map['unit_cost'] as num?) ?? 0).toDouble(),
+      lineTotal: ((map['line_total'] as num?) ?? 0).toDouble(),
+    );
+  }
+}
+
 class PurchaseOrderReceipt {
   final int id;
   final int purchaseOrderId;
-  final String purchaseOrderNumber;
+  final String poNumber;
   final int supplierId;
   final String supplierName;
   final String cashierName;
@@ -15,12 +60,19 @@ class PurchaseOrderReceipt {
   final int totalLines;
   final int totalUnits;
   final double totalCost;
-  final String createdAt;
+  final String receivedAt;
+  final int receiptCountForPo;
+  final bool isReversed;
+  final String reversedAt;
+  final String reversedBy;
+  final String reversalReason;
+  final String managerApprovedBy;
+  final List<PurchaseOrderReceiptLine> lines;
 
   const PurchaseOrderReceipt({
     required this.id,
     required this.purchaseOrderId,
-    required this.purchaseOrderNumber,
+    required this.poNumber,
     required this.supplierId,
     required this.supplierName,
     required this.cashierName,
@@ -31,14 +83,49 @@ class PurchaseOrderReceipt {
     required this.totalLines,
     required this.totalUnits,
     required this.totalCost,
-    required this.createdAt,
+    required this.receivedAt,
+    required this.receiptCountForPo,
+    required this.isReversed,
+    required this.reversedAt,
+    required this.reversedBy,
+    required this.reversalReason,
+    required this.managerApprovedBy,
+    this.lines = const [],
   });
 
-  factory PurchaseOrderReceipt.fromMap(Map<dynamic, dynamic> map) {
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'purchase_order_id': purchaseOrderId,
+      'po_number': poNumber,
+      'supplier_id': supplierId,
+      'supplier_name': supplierName,
+      'cashier_name': cashierName,
+      'reference_note': referenceNote,
+      'invoice_number': invoiceNumber,
+      'delivery_note_number': deliveryNoteNumber,
+      'grn_reference': grnReference,
+      'total_lines': totalLines,
+      'total_units': totalUnits,
+      'total_cost': totalCost,
+      'received_at': receivedAt,
+      'receipt_count_for_po': receiptCountForPo,
+      'is_reversed': isReversed ? 1 : 0,
+      'reversed_at': reversedAt,
+      'reversed_by': reversedBy,
+      'reversal_reason': reversalReason,
+      'manager_approved_by': managerApprovedBy,
+    };
+  }
+
+  factory PurchaseOrderReceipt.fromMap(
+    Map<String, dynamic> map, {
+    List<PurchaseOrderReceiptLine> lines = const [],
+  }) {
     return PurchaseOrderReceipt(
       id: (map['id'] as num?)?.toInt() ?? 0,
       purchaseOrderId: (map['purchase_order_id'] as num?)?.toInt() ?? 0,
-      purchaseOrderNumber: (map['purchase_order_number'] ?? '').toString(),
+      poNumber: (map['po_number'] ?? '').toString(),
       supplierId: (map['supplier_id'] as num?)?.toInt() ?? 0,
       supplierName: (map['supplier_name'] ?? '').toString(),
       cashierName: (map['cashier_name'] ?? '').toString(),
@@ -49,53 +136,47 @@ class PurchaseOrderReceipt {
       totalLines: (map['total_lines'] as num?)?.toInt() ?? 0,
       totalUnits: (map['total_units'] as num?)?.toInt() ?? 0,
       totalCost: ((map['total_cost'] as num?) ?? 0).toDouble(),
-      createdAt: (map['created_at'] ?? '').toString(),
+      receivedAt: (map['received_at'] ?? '').toString(),
+      receiptCountForPo: (map['receipt_count_for_po'] as num?)?.toInt() ?? 0,
+      isReversed: ((map['is_reversed'] as num?)?.toInt() ?? 0) == 1,
+      reversedAt: (map['reversed_at'] ?? '').toString(),
+      reversedBy: (map['reversed_by'] ?? '').toString(),
+      reversalReason: (map['reversal_reason'] ?? '').toString(),
+      managerApprovedBy: (map['manager_approved_by'] ?? '').toString(),
+      lines: lines,
     );
   }
-}
 
-@immutable
-class PurchaseOrderReceiptLine {
-  final int id;
-  final int purchaseOrderReceiptId;
-  final int purchaseOrderId;
-  final int? purchaseOrderItemId;
-  final int? backendReceiptId;
-  final String barcode;
-  final String productName;
-  final int quantity;
-  final double unitCost;
-  final double lineCost;
-  final String createdAt;
-
-  const PurchaseOrderReceiptLine({
-    required this.id,
-    required this.purchaseOrderReceiptId,
-    required this.purchaseOrderId,
-    this.purchaseOrderItemId,
-    this.backendReceiptId,
-    required this.barcode,
-    required this.productName,
-    required this.quantity,
-    required this.unitCost,
-    required this.lineCost,
-    required this.createdAt,
-  });
-
-  factory PurchaseOrderReceiptLine.fromMap(Map<dynamic, dynamic> map) {
-    return PurchaseOrderReceiptLine(
-      id: (map['id'] as num?)?.toInt() ?? 0,
-      purchaseOrderReceiptId:
-          (map['purchase_order_receipt_id'] as num?)?.toInt() ?? 0,
-      purchaseOrderId: (map['purchase_order_id'] as num?)?.toInt() ?? 0,
-      purchaseOrderItemId: (map['purchase_order_item_id'] as num?)?.toInt(),
-      backendReceiptId: (map['backend_receipt_id'] as num?)?.toInt(),
-      barcode: (map['barcode'] ?? '').toString(),
-      productName: (map['product_name'] ?? '').toString(),
-      quantity: (map['quantity'] as num?)?.toInt() ?? 0,
-      unitCost: ((map['unit_cost'] as num?) ?? 0).toDouble(),
-      lineCost: ((map['line_cost'] as num?) ?? 0).toDouble(),
-      createdAt: (map['created_at'] ?? '').toString(),
+  PurchaseOrderReceipt copyWith({
+    bool? isReversed,
+    String? reversedAt,
+    String? reversedBy,
+    String? reversalReason,
+    String? managerApprovedBy,
+    List<PurchaseOrderReceiptLine>? lines,
+  }) {
+    return PurchaseOrderReceipt(
+      id: id,
+      purchaseOrderId: purchaseOrderId,
+      poNumber: poNumber,
+      supplierId: supplierId,
+      supplierName: supplierName,
+      cashierName: cashierName,
+      referenceNote: referenceNote,
+      invoiceNumber: invoiceNumber,
+      deliveryNoteNumber: deliveryNoteNumber,
+      grnReference: grnReference,
+      totalLines: totalLines,
+      totalUnits: totalUnits,
+      totalCost: totalCost,
+      receivedAt: receivedAt,
+      receiptCountForPo: receiptCountForPo,
+      isReversed: isReversed ?? this.isReversed,
+      reversedAt: reversedAt ?? this.reversedAt,
+      reversedBy: reversedBy ?? this.reversedBy,
+      reversalReason: reversalReason ?? this.reversalReason,
+      managerApprovedBy: managerApprovedBy ?? this.managerApprovedBy,
+      lines: lines ?? this.lines,
     );
   }
 }

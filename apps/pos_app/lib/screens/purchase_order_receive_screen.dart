@@ -90,6 +90,7 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
         ),
       ),
     );
+    await _loadOrder();
   }
 
   String _statusLabel(String value) {
@@ -143,23 +144,28 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
         (sum, item) => sum + (_parsedQty(item) * item.unitCost),
       );
 
+  String? _buildValidationMessage(PurchaseOrder order) {
+    final validation = _service.validateReceiveAttempt(
+      order: order,
+      lines: _items
+          .map(
+            (item) => PurchaseOrderReceiveLineInput(
+              barcode: item.barcode,
+              productName: item.productName,
+              orderedQuantity: item.quantity,
+              alreadyReceivedQuantity: item.receivedQuantity,
+              quantityToReceive: _parsedQty(item),
+              unitCost: item.unitCost,
+            ),
+          )
+          .toList(),
+    );
+    return validation;
+  }
+
   Future<void> _submit() async {
     final order = _order;
     if (order == null) return;
-
-    if (!order.canReceive) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            order.status == 'draft'
-                ? 'Mark this purchase order as Ordered before receiving stock.'
-                : 'This purchase order cannot be received in its current status.',
-          ),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
 
     final receiveMap = <int, int>{};
     for (final item in _items) {
@@ -170,32 +176,15 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
       }
     }
 
-    if (receiveMap.isEmpty) {
+    final validationMessage = _buildValidationMessage(order);
+    if (validationMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Enter at least one receive quantity.'),
+        SnackBar(
+          content: Text(validationMessage),
           backgroundColor: Colors.red,
         ),
       );
       return;
-    }
-
-    for (final item in _items) {
-      if (item.id == null) continue;
-      final qty = receiveMap[item.id!] ?? 0;
-      if (qty <= 0) continue;
-      final outstanding = _outstandingQty(item);
-      if (qty > outstanding) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '${item.productName}: receive qty cannot exceed outstanding $outstanding.',
-            ),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
     }
 
     setState(() {
@@ -278,10 +267,52 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
     );
   }
 
+  Widget _buildStatusInfoCard(PurchaseOrder order) {
+    final canReceive = order.canReceive;
+    final backgroundColor = canReceive
+        ? Colors.blue.withOpacity(0.06)
+        : Colors.red.withOpacity(0.06);
+    final borderColor = canReceive
+        ? Colors.blue.withOpacity(0.18)
+        : Colors.red.withOpacity(0.18);
+    final textColor = canReceive ? Colors.blue[800]! : Colors.red[800]!;
+
+    final message = switch (order.status) {
+      'draft' =>
+        'This PO is still Draft. Change status to Ordered before receiving.',
+      'cancelled' =>
+        'This PO is Cancelled and cannot be received.',
+      'received' =>
+        'This PO is already fully received. New receives are blocked.',
+      'partially_received' =>
+        'This PO has partial receipts. You can continue receiving only the remaining quantities.',
+      _ => 'This PO is ready for line-by-line receiving.'
+    };
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: borderColor),
+      ),
+      child: Text(
+        message,
+        style: TextStyle(
+          color: textColor,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
   Widget _buildLineCard(PurchaseOrderItem item) {
     final outstanding = _outstandingQty(item);
     final receiveController =
         item.id == null ? null : _qtyControllers[item.id!];
+    final parsedQty = _parsedQty(item);
+    final overReceive = parsedQty > outstanding && outstanding > 0;
 
     return Card(
       margin: EdgeInsets.zero,
@@ -337,9 +368,12 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
                       controller: receiveController,
                       keyboardType: TextInputType.number,
                       onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Receive Qty',
-                        border: OutlineInputBorder(),
+                        border: const OutlineInputBorder(),
+                        errorText: overReceive
+                            ? 'Cannot exceed outstanding $outstanding'
+                            : null,
                       ),
                     ),
                   ),
@@ -367,11 +401,14 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
                   ),
                 ],
               ),
-            if (outstanding > 0 && _parsedQty(item) > 0) ...[
+            if (outstanding > 0 && parsedQty > 0) ...[
               const SizedBox(height: 10),
               Text(
-                'This receive total: Rs. ${(_parsedQty(item) * item.unitCost).toStringAsFixed(2)}',
-                style: const TextStyle(fontWeight: FontWeight.w600),
+                'This receive total: Rs. ${(parsedQty * item.unitCost).toStringAsFixed(2)}',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: overReceive ? Colors.red : null,
+                ),
               ),
             ],
           ],
@@ -500,22 +537,8 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
                               style: TextStyle(color: Colors.grey[700]),
                             ),
                           ],
-                          const SizedBox(height: 8),
-                          Text(
-                            order.canReceive
-                                ? 'This PO is ready for line-by-line receiving.'
-                                : order.status == 'draft'
-                                    ? 'This PO is still Draft. Change status to Ordered before receiving.'
-                                    : 'This PO is not available for receiving now.',
-                            style: TextStyle(
-                              color: order.canReceive
-                                  ? Colors.grey[700]
-                                  : Colors.red[700],
-                              fontWeight: order.canReceive
-                                  ? FontWeight.w500
-                                  : FontWeight.w600,
-                            ),
-                          ),
+                          const SizedBox(height: 12),
+                          _buildStatusInfoCard(order),
                           const SizedBox(height: 14),
                           LinearProgressIndicator(
                             value: order.receiveProgress,
@@ -599,6 +622,14 @@ class _PurchaseOrderReceiveScreenState extends State<PurchaseOrderReceiveScreen>
                     decoration: const InputDecoration(
                       labelText: 'GRN / Delivery Ref (Optional)',
                       border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Any posted receipt batch can later be reviewed or reversed from Receive History with manager approval.',
+                    style: TextStyle(
+                      color: Colors.grey[700],
+                      fontSize: 12.5,
                     ),
                   ),
                   const SizedBox(height: 14),

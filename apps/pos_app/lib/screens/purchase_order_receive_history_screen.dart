@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/purchase_order.dart';
 import '../models/purchase_order_receipt.dart';
 import '../services/purchase_order_service.dart';
+import 'purchase_order_receipt_detail_screen.dart';
 
 class PurchaseOrderReceiveHistoryScreen extends StatefulWidget {
   const PurchaseOrderReceiveHistoryScreen({
@@ -49,7 +50,8 @@ class _PurchaseOrderReceiveHistoryScreenState
   }
 
   Future<void> _loadLines(int receiptId) async {
-    if (_linesByReceipt.containsKey(receiptId) || _loadingLineIds.contains(receiptId)) {
+    if (_linesByReceipt.containsKey(receiptId) ||
+        _loadingLineIds.contains(receiptId)) {
       return;
     }
 
@@ -64,6 +66,21 @@ class _PurchaseOrderReceiveHistoryScreenState
       _loadingLineIds.remove(receiptId);
       _linesByReceipt[receiptId] = lines;
     });
+  }
+
+  Future<void> _openReceiptDetail(PurchaseOrderReceipt receipt) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PurchaseOrderReceiptDetailScreen(
+          receiptId: receipt.id,
+          purchaseOrderId: receipt.purchaseOrderId,
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    await _loadReceipts();
   }
 
   String _formatDateTime(String value) {
@@ -93,6 +110,17 @@ class _PurchaseOrderReceiveHistoryScreenState
     );
   }
 
+  Widget _buildReferenceLine(String label, String value) {
+    if (value.trim().isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(
+        '$label: $value',
+        style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
+      ),
+    );
+  }
+
   Widget _buildReceiptCard(PurchaseOrderReceipt receipt) {
     final lines = _linesByReceipt[receipt.id];
     final isLoadingLines = _loadingLineIds.contains(receipt.id);
@@ -114,7 +142,7 @@ class _PurchaseOrderReceiveHistoryScreenState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                receipt.purchaseOrderNumber,
+                receipt.poNumber,
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 16,
@@ -142,41 +170,102 @@ class _PurchaseOrderReceiveHistoryScreenState
                       'Cost: Rs. ${receipt.totalCost.toStringAsFixed(2)}',
                       Colors.green,
                     ),
+                    if (receipt.isReversed)
+                      _pill('Reversed', Colors.red)
+                    else
+                      _pill('Active', Colors.teal),
                   ],
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  'Received by ${receipt.cashierName.isEmpty ? 'Unknown' : receipt.cashierName} • ${_formatDateTime(receipt.createdAt)}',
+                  'Received by ${receipt.cashierName.isEmpty ? 'Unknown' : receipt.cashierName} • ${_formatDateTime(receipt.receivedAt)}',
                   style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
                 ),
-                if (receipt.referenceNote.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Reference: ${receipt.referenceNote}',
-                    style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
+                _buildReferenceLine('Reference', receipt.referenceNote),
+                _buildReferenceLine('Invoice', receipt.invoiceNumber),
+                _buildReferenceLine(
+                  'Delivery Note',
+                  receipt.deliveryNoteNumber,
+                ),
+                _buildReferenceLine('GRN Ref', receipt.grnReference),
+                if (receipt.isReversed) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.red.withOpacity(0.18)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'This receipt batch has been reversed.',
+                          style: TextStyle(
+                            color: Colors.red[700],
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if (receipt.reversedAt.trim().isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Reversed At: ${_formatDateTime(receipt.reversedAt)}',
+                            style: TextStyle(
+                              color: Colors.red[700],
+                              fontSize: 12.5,
+                            ),
+                          ),
+                        ],
+                        if (receipt.reversedBy.trim().isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Reversed By: ${receipt.reversedBy}',
+                            style: TextStyle(
+                              color: Colors.red[700],
+                              fontSize: 12.5,
+                            ),
+                          ),
+                        ],
+                        if (receipt.managerApprovedBy.trim().isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Manager Approved By: ${receipt.managerApprovedBy}',
+                            style: TextStyle(
+                              color: Colors.red[700],
+                              fontSize: 12.5,
+                            ),
+                          ),
+                        ],
+                        if (receipt.reversalReason.trim().isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Reason: ${receipt.reversalReason}',
+                            style: TextStyle(
+                              color: Colors.red[700],
+                              fontSize: 12.5,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ],
-                if (receipt.invoiceNumber.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Invoice: ${receipt.invoiceNumber}',
-                    style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _openReceiptDetail(receipt),
+                    icon: const Icon(Icons.open_in_new),
+                    label: const Text('Open Receipt Detail'),
+                    style: OutlinedButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
                   ),
-                ],
-                if (receipt.deliveryNoteNumber.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Delivery Note: ${receipt.deliveryNoteNumber}',
-                    style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
-                  ),
-                ],
-                if (receipt.grnReference.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'GRN Ref: ${receipt.grnReference}',
-                    style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
-                  ),
-                ],
+                ),
               ],
             ),
           ),
@@ -218,13 +307,14 @@ class _PurchaseOrderReceiveHistoryScreenState
                         spacing: 8,
                         runSpacing: 8,
                         children: [
-                          _pill('Qty: ${line.quantity}', Colors.orange),
+                          _pill('Ordered: ${line.orderedQuantity}', Colors.blueGrey),
+                          _pill('Received: ${line.receivedQuantity}', Colors.orange),
                           _pill(
                             'Unit: Rs. ${line.unitCost.toStringAsFixed(2)}',
-                            Colors.blueGrey,
+                            Colors.indigo,
                           ),
                           _pill(
-                            'Line: Rs. ${line.lineCost.toStringAsFixed(2)}',
+                            'Line: Rs. ${line.lineTotal.toStringAsFixed(2)}',
                             Colors.green,
                           ),
                         ],

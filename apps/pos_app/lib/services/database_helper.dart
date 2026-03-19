@@ -14,6 +14,7 @@ import '../models/supplier_product_mapping.dart';
 import '../models/stock_receipt_record.dart';
 import '../models/supplier_product_history.dart';
 import '../models/supplier_purchase_summary.dart';
+import '../models/supplier_analytics_summary.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -39,7 +40,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 12,
+        version: 14,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -114,6 +115,7 @@ class DatabaseHelper {
         backend_receipt_id INTEGER,
         purchase_order_id INTEGER,
         purchase_order_number TEXT,
+        purchase_order_receipt_id INTEGER,
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
         quantity INTEGER NOT NULL,
@@ -125,6 +127,9 @@ class DatabaseHelper {
         delivery_note_number TEXT,
         grn_reference TEXT,
         cashier_name TEXT,
+        is_reversed INTEGER NOT NULL DEFAULT 0,
+        reversed_at TEXT NOT NULL DEFAULT '',
+        reversal_reason TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         backend_status TEXT NOT NULL DEFAULT 'synced'
       )
@@ -181,6 +186,11 @@ class DatabaseHelper {
         total_units INTEGER NOT NULL DEFAULT 0,
         total_cost REAL NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
+        is_reversed INTEGER NOT NULL DEFAULT 0,
+        reversed_at TEXT NOT NULL DEFAULT '',
+        reversed_by TEXT NOT NULL DEFAULT '',
+        reversal_reason TEXT NOT NULL DEFAULT '',
+        manager_approved_by TEXT NOT NULL DEFAULT '',
         FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE
       )
     ''');
@@ -199,6 +209,21 @@ class DatabaseHelper {
         line_cost REAL NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         FOREIGN KEY (purchase_order_receipt_id) REFERENCES purchase_order_receipts(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS purchase_order_receipt_reversal_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        receipt_id INTEGER NOT NULL,
+        purchase_order_id INTEGER NOT NULL,
+        po_number TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        manager_name TEXT NOT NULL,
+        reversed_by TEXT NOT NULL,
+        reversed_at TEXT NOT NULL,
+        total_units INTEGER NOT NULL DEFAULT 0,
+        total_cost REAL NOT NULL DEFAULT 0
       )
     ''');
   }
@@ -532,6 +557,76 @@ class DatabaseHelper {
       await _addColumnIfMissing(db, 'purchase_order_receipts', 'invoice_number', 'TEXT');
       await _addColumnIfMissing(db, 'purchase_order_receipts', 'delivery_note_number', 'TEXT');
       await _addColumnIfMissing(db, 'purchase_order_receipts', 'grn_reference', 'TEXT');
+    }
+
+    if (oldVersion < 13) {
+      await _addColumnIfMissing(
+        db,
+        'purchase_order_receipts',
+        'is_reversed',
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'purchase_order_receipts',
+        'reversed_at',
+        "TEXT NOT NULL DEFAULT ''",
+      );
+      await _addColumnIfMissing(
+        db,
+        'purchase_order_receipts',
+        'reversed_by',
+        "TEXT NOT NULL DEFAULT ''",
+      );
+      await _addColumnIfMissing(
+        db,
+        'purchase_order_receipts',
+        'reversal_reason',
+        "TEXT NOT NULL DEFAULT ''",
+      );
+      await _addColumnIfMissing(
+        db,
+        'purchase_order_receipts',
+        'manager_approved_by',
+        "TEXT NOT NULL DEFAULT ''",
+      );
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS purchase_order_receipt_reversal_audit (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          receipt_id INTEGER NOT NULL,
+          purchase_order_id INTEGER NOT NULL,
+          po_number TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          manager_name TEXT NOT NULL,
+          reversed_by TEXT NOT NULL,
+          reversed_at TEXT NOT NULL,
+          total_units INTEGER NOT NULL DEFAULT 0,
+          total_cost REAL NOT NULL DEFAULT 0
+        )
+      ''');
+    }
+
+    if (oldVersion < 14) {
+      await _addColumnIfMissing(db, 'stock_receipts', 'purchase_order_receipt_id', 'INTEGER');
+      await _addColumnIfMissing(
+        db,
+        'stock_receipts',
+        'is_reversed',
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'stock_receipts',
+        'reversed_at',
+        "TEXT NOT NULL DEFAULT ''",
+      );
+      await _addColumnIfMissing(
+        db,
+        'stock_receipts',
+        'reversal_reason',
+        "TEXT NOT NULL DEFAULT ''",
+      );
     }
   }
 
@@ -2299,6 +2394,7 @@ class DatabaseHelper {
       'backend_receipt_id': backendReceiptId,
       'purchase_order_id': purchaseOrderId,
       'purchase_order_number': purchaseOrderNumber?.trim(),
+      'purchase_order_receipt_id': null,
       'barcode': barcode,
       'product_name': productName,
       'quantity': quantity,
@@ -2310,6 +2406,9 @@ class DatabaseHelper {
       'delivery_note_number': deliveryNoteNumber.trim(),
       'grn_reference': grnReference.trim(),
       'cashier_name': cashierName.trim(),
+      'is_reversed': 0,
+      'reversed_at': '',
+      'reversal_reason': '',
       'created_at': DateTime.now().toIso8601String(),
       'backend_status': backendStatus,
     });
@@ -2570,6 +2669,118 @@ class DatabaseHelper {
       'order_count': (poRow['order_count'] as num?)?.toInt() ?? 0,
       'po_value': ((poRow['po_value'] as num?) ?? 0).toDouble(),
       'open_order_count': (poRow['open_order_count'] as num?)?.toInt() ?? 0,
+    };
+  }
+
+
+  Future<List<SupplierAnalyticsSummary>> getSupplierAnalyticsSummaries({
+    String search = '',
+    int limit = 200,
+  }) async {
+    final db = await database;
+    final trimmed = search.trim().toLowerCase();
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        s.id AS supplier_id,
+        s.name AS supplier_name,
+        COALESCE(s.phone, '') AS phone,
+        COUNT(DISTINCT spm.id) AS mapped_product_count,
+        COUNT(DISTINCT sr.id) AS receipt_count,
+        COUNT(DISTINCT po.id) AS po_count,
+        COUNT(DISTINCT CASE WHEN po.status IN ('draft', 'ordered', 'partially_received') THEN po.id END) AS open_po_count,
+        COUNT(DISTINCT CASE WHEN COALESCE(sr.is_reversed, 0) = 1 THEN sr.id END) AS reversed_receipt_count,
+        COALESCE(SUM(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.quantity ELSE 0 END), 0) AS total_units,
+        COALESCE(SUM(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.cost ELSE 0 END), 0) AS total_spend,
+        COALESCE(SUM(CASE
+          WHEN COALESCE(sr.is_reversed, 0) = 0
+           AND DATE(sr.created_at) >= DATE('now', '-30 day')
+          THEN sr.cost ELSE 0 END), 0) AS spend_30_days,
+        COALESCE(SUM(CASE
+          WHEN COALESCE(sr.is_reversed, 0) = 0
+           AND DATE(sr.created_at) >= DATE('now', '-90 day')
+          THEN sr.cost ELSE 0 END), 0) AS spend_90_days,
+        CASE
+          WHEN COALESCE(SUM(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.quantity ELSE 0 END), 0) = 0
+            THEN 0
+          ELSE
+            COALESCE(SUM(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.cost ELSE 0 END), 0) * 1.0 /
+            COALESCE(SUM(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.quantity ELSE 0 END), 0)
+        END AS average_unit_cost,
+        COALESCE(MAX(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.created_at ELSE '' END), '') AS last_received_at
+      FROM suppliers s
+      LEFT JOIN supplier_product_mappings spm ON spm.supplier_id = s.id
+      LEFT JOIN stock_receipts sr ON sr.supplier_id = s.id
+      LEFT JOIN purchase_orders po ON po.supplier_id = s.id
+      WHERE (? = '' OR LOWER(s.name) LIKE ? OR LOWER(COALESCE(s.phone, '')) LIKE ? OR CAST(s.id AS TEXT) LIKE ?)
+      GROUP BY s.id, s.name, s.phone
+      ORDER BY total_spend DESC, spend_30_days DESC, s.name COLLATE NOCASE ASC
+      LIMIT ?
+      ''',
+      [
+        trimmed,
+        '%$trimmed%',
+        '%$trimmed%',
+        '%$trimmed%',
+        limit,
+      ],
+    );
+
+    return rows.map((row) => SupplierAnalyticsSummary.fromMap(row)).toList();
+  }
+
+  Future<Map<String, dynamic>> getSupplierAnalyticsOverview(int supplierId) async {
+    final db = await database;
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        COUNT(DISTINCT spm.id) AS mapped_product_count,
+        COUNT(DISTINCT sr.id) AS receipt_count,
+        COUNT(DISTINCT po.id) AS po_count,
+        COUNT(DISTINCT CASE WHEN po.status IN ('draft', 'ordered', 'partially_received') THEN po.id END) AS open_po_count,
+        COUNT(DISTINCT CASE WHEN COALESCE(sr.is_reversed, 0) = 1 THEN sr.id END) AS reversed_receipt_count,
+        COALESCE(SUM(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.quantity ELSE 0 END), 0) AS total_units,
+        COALESCE(SUM(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.cost ELSE 0 END), 0) AS total_spend,
+        COALESCE(SUM(CASE
+          WHEN COALESCE(sr.is_reversed, 0) = 0
+           AND DATE(sr.created_at) >= DATE('now', '-30 day')
+          THEN sr.cost ELSE 0 END), 0) AS spend_30_days,
+        COALESCE(SUM(CASE
+          WHEN COALESCE(sr.is_reversed, 0) = 0
+           AND DATE(sr.created_at) >= DATE('now', '-90 day')
+          THEN sr.cost ELSE 0 END), 0) AS spend_90_days,
+        CASE
+          WHEN COALESCE(SUM(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.quantity ELSE 0 END), 0) = 0
+            THEN 0
+          ELSE
+            COALESCE(SUM(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.cost ELSE 0 END), 0) * 1.0 /
+            COALESCE(SUM(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.quantity ELSE 0 END), 0)
+        END AS average_unit_cost,
+        COALESCE(MAX(CASE WHEN COALESCE(sr.is_reversed, 0) = 0 THEN sr.created_at ELSE '' END), '') AS last_received_at
+      FROM suppliers s
+      LEFT JOIN supplier_product_mappings spm ON spm.supplier_id = s.id
+      LEFT JOIN stock_receipts sr ON sr.supplier_id = s.id
+      LEFT JOIN purchase_orders po ON po.supplier_id = s.id
+      WHERE s.id = ?
+      ''',
+      [supplierId],
+    );
+
+    final row = rows.first;
+    return {
+      'mapped_product_count': (row['mapped_product_count'] as num?)?.toInt() ?? 0,
+      'receipt_count': (row['receipt_count'] as num?)?.toInt() ?? 0,
+      'po_count': (row['po_count'] as num?)?.toInt() ?? 0,
+      'open_po_count': (row['open_po_count'] as num?)?.toInt() ?? 0,
+      'reversed_receipt_count': (row['reversed_receipt_count'] as num?)?.toInt() ?? 0,
+      'total_units': (row['total_units'] as num?)?.toInt() ?? 0,
+      'total_spend': ((row['total_spend'] as num?) ?? 0).toDouble(),
+      'spend_30_days': ((row['spend_30_days'] as num?) ?? 0).toDouble(),
+      'spend_90_days': ((row['spend_90_days'] as num?) ?? 0).toDouble(),
+      'average_unit_cost': ((row['average_unit_cost'] as num?) ?? 0).toDouble(),
+      'last_received_at': (row['last_received_at'] ?? '').toString(),
     };
   }
 
@@ -2930,6 +3141,7 @@ class DatabaseHelper {
           'backend_receipt_id': backendReceiptId,
           'purchase_order_id': purchaseOrderId,
           'purchase_order_number': orderNumber,
+          'purchase_order_receipt_id': receiptId,
           'barcode': barcode,
           'product_name': productName,
           'quantity': quantity,
@@ -2941,6 +3153,9 @@ class DatabaseHelper {
           'delivery_note_number': deliveryNoteNumber.trim(),
           'grn_reference': grnReference.trim(),
           'cashier_name': cashierName.trim(),
+          'is_reversed': 0,
+          'reversed_at': '',
+          'reversal_reason': '',
           'created_at': now,
           'backend_status': 'synced',
         });
@@ -3015,34 +3230,279 @@ class DatabaseHelper {
     final whereArgs = <Object?>[];
 
     if (purchaseOrderId != null) {
-      whereParts.add('purchase_order_id = ?');
+      whereParts.add('por.purchase_order_id = ?');
       whereArgs.add(purchaseOrderId);
     }
 
-    final rows = await db.query(
-      'purchase_order_receipts',
-      where: whereParts.isEmpty ? null : whereParts.join(' AND '),
-      whereArgs: whereArgs.isEmpty ? null : whereArgs,
-      orderBy: 'created_at DESC, id DESC',
-      limit: limit,
+    final sql = StringBuffer('''
+      SELECT
+        por.id,
+        por.purchase_order_id,
+        por.purchase_order_number AS po_number,
+        por.supplier_id,
+        por.supplier_name,
+        COALESCE(por.cashier_name, '') AS cashier_name,
+        COALESCE(por.reference_note, '') AS reference_note,
+        COALESCE(por.invoice_number, '') AS invoice_number,
+        COALESCE(por.delivery_note_number, '') AS delivery_note_number,
+        COALESCE(por.grn_reference, '') AS grn_reference,
+        por.total_lines,
+        por.total_units,
+        por.total_cost,
+        por.created_at AS received_at,
+        (
+          SELECT COUNT(*)
+          FROM purchase_order_receipts x
+          WHERE x.purchase_order_id = por.purchase_order_id
+            AND datetime(x.created_at) <= datetime(por.created_at)
+        ) AS receipt_count_for_po,
+        COALESCE(por.is_reversed, 0) AS is_reversed,
+        COALESCE(por.reversed_at, '') AS reversed_at,
+        COALESCE(por.reversed_by, '') AS reversed_by,
+        COALESCE(por.reversal_reason, '') AS reversal_reason,
+        COALESCE(por.manager_approved_by, '') AS manager_approved_by
+      FROM purchase_order_receipts por
+    ''');
+
+    if (whereParts.isNotEmpty) {
+      sql.write(' WHERE ${whereParts.join(' AND ')}');
+    }
+
+    sql.write(' ORDER BY datetime(por.created_at) DESC, por.id DESC LIMIT $limit');
+
+    final rows = await db.rawQuery(sql.toString(), whereArgs);
+    final receipts = <PurchaseOrderReceipt>[];
+
+    for (final row in rows) {
+      final receiptId = (row['id'] as num?)?.toInt() ?? 0;
+      final lines = await getPurchaseOrderReceiptLines(receiptId);
+      receipts.add(PurchaseOrderReceipt.fromMap(row, lines: lines));
+    }
+
+    return receipts;
+  }
+
+  Future<PurchaseOrderReceipt?> getPurchaseOrderReceiptById(
+    int purchaseOrderReceiptId,
+  ) async {
+    final db = await database;
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        por.id,
+        por.purchase_order_id,
+        por.purchase_order_number AS po_number,
+        por.supplier_id,
+        por.supplier_name,
+        COALESCE(por.cashier_name, '') AS cashier_name,
+        COALESCE(por.reference_note, '') AS reference_note,
+        COALESCE(por.invoice_number, '') AS invoice_number,
+        COALESCE(por.delivery_note_number, '') AS delivery_note_number,
+        COALESCE(por.grn_reference, '') AS grn_reference,
+        por.total_lines,
+        por.total_units,
+        por.total_cost,
+        por.created_at AS received_at,
+        (
+          SELECT COUNT(*)
+          FROM purchase_order_receipts x
+          WHERE x.purchase_order_id = por.purchase_order_id
+            AND datetime(x.created_at) <= datetime(por.created_at)
+        ) AS receipt_count_for_po,
+        COALESCE(por.is_reversed, 0) AS is_reversed,
+        COALESCE(por.reversed_at, '') AS reversed_at,
+        COALESCE(por.reversed_by, '') AS reversed_by,
+        COALESCE(por.reversal_reason, '') AS reversal_reason,
+        COALESCE(por.manager_approved_by, '') AS manager_approved_by
+      FROM purchase_order_receipts por
+      WHERE por.id = ?
+      LIMIT 1
+      ''',
+      [purchaseOrderReceiptId],
     );
 
-    return rows.map(PurchaseOrderReceipt.fromMap).toList();
+    if (rows.isEmpty) return null;
+
+    final receipt = rows.first;
+    final lines = await getPurchaseOrderReceiptLines(purchaseOrderReceiptId);
+    return PurchaseOrderReceipt.fromMap(receipt, lines: lines);
   }
 
   Future<List<PurchaseOrderReceiptLine>> getPurchaseOrderReceiptLines(
     int purchaseOrderReceiptId,
   ) async {
     final db = await database;
-    final rows = await db.query(
-      'purchase_order_receipt_lines',
-      where: 'purchase_order_receipt_id = ?',
-      whereArgs: [purchaseOrderReceiptId],
-      orderBy: 'id ASC',
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        id,
+        purchase_order_receipt_id AS receipt_id,
+        barcode,
+        product_name,
+        quantity AS ordered_quantity,
+        quantity AS received_quantity,
+        unit_cost,
+        line_cost
+      FROM purchase_order_receipt_lines
+      WHERE purchase_order_receipt_id = ?
+      ORDER BY id ASC
+      ''',
+      [purchaseOrderReceiptId],
     );
 
     return rows.map(PurchaseOrderReceiptLine.fromMap).toList();
   }
+
+
+  Future<int?> getLocalProductStock(String barcode) async {
+    final db = await database;
+    final rows = await db.query(
+      'products',
+      columns: ['stock'],
+      where: 'barcode = ?',
+      whereArgs: [barcode],
+      limit: 1,
+    );
+
+    if (rows.isEmpty) return null;
+    return (rows.first['stock'] as num?)?.toInt();
+  }
+
+  Future<void> markReceiptReversed({
+    required int receiptId,
+    required int purchaseOrderId,
+    required String poNumber,
+    required String reason,
+    required String reversedBy,
+    required String managerApprovedBy,
+    required int totalUnits,
+    required double totalCost,
+  }) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+
+    await db.transaction((txn) async {
+      final receiptRows = await txn.query(
+        'purchase_order_receipts',
+        columns: ['id', 'is_reversed'],
+        where: 'id = ?',
+        whereArgs: [receiptId],
+        limit: 1,
+      );
+
+      if (receiptRows.isEmpty) {
+        throw Exception('Receipt batch not found.');
+      }
+
+      final alreadyReversed =
+          ((receiptRows.first['is_reversed'] as num?)?.toInt() ?? 0) == 1;
+      if (alreadyReversed) {
+        throw Exception('This receipt batch was already reversed.');
+      }
+
+      final receiptLines = await txn.query(
+        'purchase_order_receipt_lines',
+        columns: [
+          'purchase_order_item_id',
+          'barcode',
+          'product_name',
+          'quantity',
+        ],
+        where: 'purchase_order_receipt_id = ?',
+        whereArgs: [receiptId],
+      );
+
+      for (final row in receiptLines) {
+        final itemId = (row['purchase_order_item_id'] as num?)?.toInt();
+        final quantity = (row['quantity'] as num?)?.toInt() ?? 0;
+        if (itemId == null || quantity <= 0) continue;
+
+        await txn.rawUpdate(
+          '''
+          UPDATE purchase_order_items
+          SET received_quantity = CASE
+            WHEN received_quantity >= ? THEN received_quantity - ?
+            ELSE 0
+          END
+          WHERE id = ?
+          ''',
+          [quantity, quantity, itemId],
+        );
+      }
+
+      final totals = await txn.rawQuery(
+        '''
+        SELECT
+          COALESCE(SUM(quantity), 0) AS total_units,
+          COALESCE(SUM(received_quantity), 0) AS received_units
+        FROM purchase_order_items
+        WHERE purchase_order_id = ?
+        ''',
+        [purchaseOrderId],
+      );
+
+      final row = totals.first;
+      final poTotalUnits = (row['total_units'] as num?)?.toInt() ?? 0;
+      final poReceivedUnits = (row['received_units'] as num?)?.toInt() ?? 0;
+
+      String nextStatus;
+      if (poReceivedUnits <= 0) {
+        nextStatus = 'ordered';
+      } else if (poReceivedUnits >= poTotalUnits && poTotalUnits > 0) {
+        nextStatus = 'received';
+      } else {
+        nextStatus = 'partially_received';
+      }
+
+      await txn.update(
+        'purchase_orders',
+        {
+          'received_units': poReceivedUnits,
+          'status': nextStatus,
+          'updated_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: [purchaseOrderId],
+      );
+
+      await txn.update(
+        'purchase_order_receipts',
+        {
+          'is_reversed': 1,
+          'reversed_at': now,
+          'reversed_by': reversedBy.trim(),
+          'reversal_reason': reason.trim(),
+          'manager_approved_by': managerApprovedBy.trim(),
+        },
+        where: 'id = ?',
+        whereArgs: [receiptId],
+      );
+
+      await txn.update(
+        'stock_receipts',
+        {
+          'is_reversed': 1,
+          'reversed_at': now,
+          'reversal_reason': reason.trim(),
+        },
+        where: 'purchase_order_receipt_id = ? AND COALESCE(is_reversed, 0) = 0',
+        whereArgs: [receiptId],
+      );
+
+      await txn.insert('purchase_order_receipt_reversal_audit', {
+        'receipt_id': receiptId,
+        'purchase_order_id': purchaseOrderId,
+        'po_number': poNumber,
+        'reason': reason.trim(),
+        'manager_name': managerApprovedBy.trim(),
+        'reversed_by': reversedBy.trim(),
+        'reversed_at': now,
+        'total_units': totalUnits,
+        'total_cost': _roundMoney(totalCost),
+      });
+    });
+  }
+
 
   Future<List<Map<String, dynamic>>> getOutstandingPurchaseOrderLines(
     int purchaseOrderId,

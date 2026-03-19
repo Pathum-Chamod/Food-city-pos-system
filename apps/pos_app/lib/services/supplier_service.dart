@@ -7,9 +7,10 @@ import 'package:shared/models/product.dart';
 import '../models/pos_supplier.dart';
 import '../models/reorder_suggestion.dart';
 import '../models/stock_receipt_record.dart';
+import '../models/supplier_analytics_summary.dart';
 import '../models/supplier_product_history.dart';
-import '../models/supplier_purchase_summary.dart';
 import '../models/supplier_product_mapping.dart';
+import '../models/supplier_purchase_summary.dart';
 import 'database_helper.dart';
 import 'sync_service.dart';
 
@@ -19,7 +20,9 @@ class SupplierService {
   // POS app is currently desktop-first in local development.
   final String apiUrl = 'http://127.0.0.1:8080/api/pos_sync.php';
 
-  Future<List<PosSupplier>> getSuppliers({bool refreshFromBackend = true}) async {
+  Future<List<PosSupplier>> getSuppliers({
+    bool refreshFromBackend = true,
+  }) async {
     if (!refreshFromBackend) {
       return DatabaseHelper.instance.getSuppliers();
     }
@@ -36,8 +39,9 @@ class SupplierService {
           final now = DateTime.now().toIso8601String();
           final suppliers = decoded
               .map(
-                (item) => PosSupplier.fromMap(Map<String, dynamic>.from(item as Map))
-                    .copyWith(updatedAt: now),
+                (item) => PosSupplier.fromMap(
+                  Map<String, dynamic>.from(item as Map),
+                ).copyWith(updatedAt: now),
               )
               .toList();
 
@@ -120,9 +124,10 @@ class SupplierService {
   }
 
   Future<Map<String, dynamic>> getReceiveSummary({int? supplierId}) {
-    return DatabaseHelper.instance.getStockReceiptSummary(supplierId: supplierId);
+    return DatabaseHelper.instance.getStockReceiptSummary(
+      supplierId: supplierId,
+    );
   }
-
 
   Future<List<SupplierPurchaseSummary>> getSupplierPurchaseSummaries({
     String search = '',
@@ -176,7 +181,6 @@ class SupplierService {
     );
   }
 
-
   Future<void> saveSupplierProductMapping(SupplierProductMapping mapping) {
     return DatabaseHelper.instance.upsertSupplierProductMapping(mapping);
   }
@@ -205,9 +209,25 @@ class SupplierService {
     return DatabaseHelper.instance.getPreferredSupplierMapping(barcode);
   }
 
-  Future<Map<String, dynamic>> getSupplierProductMappingSummary({int? supplierId}) {
+  Future<Map<String, dynamic>> getSupplierProductMappingSummary({
+    int? supplierId,
+  }) {
     return DatabaseHelper.instance.getSupplierProductMappingSummary(
       supplierId: supplierId,
     );
+  }
+
+  Future<List<SupplierAnalyticsSummary>> getSupplierAnalyticsSummaries({
+    String search = '',
+    int limit = 200,
+  }) {
+    return DatabaseHelper.instance.getSupplierAnalyticsSummaries(
+      search: search,
+      limit: limit,
+    );
+  }
+
+  Future<Map<String, dynamic>> getSupplierAnalyticsOverview(int supplierId) {
+    return DatabaseHelper.instance.getSupplierAnalyticsOverview(supplierId);
   }
 }

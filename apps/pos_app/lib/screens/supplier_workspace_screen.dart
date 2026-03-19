@@ -6,10 +6,10 @@ import '../services/database_helper.dart';
 import '../services/supplier_service.dart';
 import 'purchase_order_editor_screen.dart';
 import 'purchase_order_list_screen.dart';
-import 'supplier_receive_history_screen.dart';
-import 'supplier_purchase_history_screen.dart';
 import 'reorder_suggestion_screen.dart';
 import 'supplier_product_mapping_screen.dart';
+import 'supplier_purchase_history_screen.dart';
+import 'supplier_receive_history_screen.dart';
 
 class SupplierWorkspaceScreen extends StatefulWidget {
   const SupplierWorkspaceScreen({
@@ -33,6 +33,7 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
   bool _isLoading = true;
   List<Product> _products = const [];
   Map<String, dynamic> _summary = const {};
+  Map<String, dynamic> _analyticsOverview = const {};
   String _filter = 'all';
 
   @override
@@ -57,12 +58,16 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
     final summary = await _supplierService.getReceiveSummary(
       supplierId: widget.supplier.id,
     );
+    final analyticsOverview = await _supplierService.getSupplierAnalyticsOverview(
+      widget.supplier.id,
+    );
 
     if (!mounted) return;
 
     setState(() {
       _products = products;
       _summary = summary;
+      _analyticsOverview = analyticsOverview;
       _isLoading = false;
     });
   }
@@ -71,7 +76,8 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
     final query = _searchController.text.trim().toLowerCase();
 
     return _products.where((product) {
-      final matchesQuery = query.isEmpty ||
+      final matchesQuery =
+          query.isEmpty ||
           product.name.toLowerCase().contains(query) ||
           product.barcode.toLowerCase().contains(query);
 
@@ -102,6 +108,7 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
         builder: (_) => SupplierPurchaseHistoryScreen(supplier: widget.supplier),
       ),
     );
+    await _loadData();
   }
 
   Future<void> _openPurchaseOrders() async {
@@ -114,6 +121,7 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
         ),
       ),
     );
+    await _loadData();
   }
 
   Future<void> _createPurchaseOrder() async {
@@ -126,15 +134,15 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
         ),
       ),
     );
+    await _loadData();
   }
-
-
 
   Future<void> _openProductMappings() async {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => SupplierProductMappingScreen(initialSupplier: widget.supplier),
+        builder: (_) =>
+            SupplierProductMappingScreen(initialSupplier: widget.supplier),
       ),
     );
     await _loadData();
@@ -187,10 +195,16 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
     final invoiceController = TextEditingController();
     final deliveryController = TextEditingController();
     final grnController = TextEditingController();
-    final mapping = await _supplierService.getPreferredSupplierMapping(product.barcode);
-    if (mapping != null && mapping.supplierId == widget.supplier.id && mapping.defaultUnitCost > 0) {
+
+    final mapping = await _supplierService.getPreferredSupplierMapping(
+      product.barcode,
+    );
+    if (mapping != null &&
+        mapping.supplierId == widget.supplier.id &&
+        mapping.defaultUnitCost > 0) {
       costController.text = mapping.defaultUnitCost.toStringAsFixed(2);
     }
+
     bool isSaving = false;
 
     await showDialog<void>(
@@ -239,7 +253,9 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
                   TextField(
                     controller: costController,
                     enabled: !isSaving,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     decoration: const InputDecoration(
                       labelText: 'Total Cost (Rs.)',
                       border: OutlineInputBorder(),
@@ -304,7 +320,8 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
                     ? null
                     : () async {
                         final qty = int.tryParse(qtyController.text.trim()) ?? 0;
-                        final cost = double.tryParse(costController.text.trim()) ?? -1;
+                        final cost =
+                            double.tryParse(costController.text.trim()) ?? -1;
 
                         if (qty <= 0) {
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -439,14 +456,99 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
     );
   }
 
+  Widget _buildAnalyticsCard({
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      width: 210,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.18)),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            backgroundColor: color.withOpacity(0.14),
+            child: Icon(icon, color: color),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 17,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: TextStyle(color: Colors.grey[700]),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoPill(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final filteredProducts = _filteredProducts;
+
+    final totalSpend =
+        ((_analyticsOverview['total_spend'] as num?) ?? 0).toDouble();
+    final spend30Days =
+        ((_analyticsOverview['spend_30_days'] as num?) ?? 0).toDouble();
+    final spend90Days =
+        ((_analyticsOverview['spend_90_days'] as num?) ?? 0).toDouble();
+    final mappedProductCount =
+        ((_analyticsOverview['mapped_product_count'] as num?) ?? 0).toInt();
+    final purchaseOrderCount =
+        ((_analyticsOverview['purchase_order_count'] as num?) ?? 0).toInt();
+    final openPurchaseOrderCount =
+        ((_analyticsOverview['open_purchase_order_count'] as num?) ?? 0).toInt();
+    final reversedReceiptCount =
+        ((_analyticsOverview['reversed_receipt_count'] as num?) ?? 0).toInt();
+    final averageUnitCost =
+        ((_analyticsOverview['average_unit_cost'] as num?) ?? 0).toDouble();
+    final lastReceivedAt =
+        (_analyticsOverview['last_received_at'] ?? '').toString();
 
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.supplier.name),
         actions: [
+          IconButton(
+            tooltip: 'Product mapping',
+            onPressed: _openProductMappings,
+            icon: const Icon(Icons.link_outlined),
+          ),
           IconButton(
             tooltip: 'Purchase orders',
             onPressed: _openPurchaseOrders,
@@ -527,6 +629,18 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
                           icon: const Icon(Icons.insights_outlined),
                           label: const Text('Purchase History'),
                         ),
+                        OutlinedButton.icon(
+                          onPressed: _openReorderSuggestions,
+                          icon: const Icon(
+                            Icons.playlist_add_check_circle_outlined,
+                          ),
+                          label: const Text('Reorder Suggestions'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _openProductMappings,
+                          icon: const Icon(Icons.link_outlined),
+                          label: const Text('Product Mapping'),
+                        ),
                       ],
                     ),
                   ],
@@ -558,11 +672,86 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
                   const SizedBox(width: 10),
                   _buildSummaryCard(
                     label: 'Receive Cost',
-                    value: 'Rs. ${(((_summary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
+                    value:
+                        'Rs. ${(((_summary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
                     icon: Icons.payments_outlined,
                     color: Colors.green,
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Supplier Analytics',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Refined supplier insights from local receive history, purchase orders, mappings, and reversal activity.',
+                      style: TextStyle(color: Colors.grey[700], height: 1.4),
+                    ),
+                    const SizedBox(height: 14),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _buildAnalyticsCard(
+                            label: 'Total Spend',
+                            value: 'Rs. ${totalSpend.toStringAsFixed(2)}',
+                            icon: Icons.payments_outlined,
+                            color: Colors.green,
+                          ),
+                          const SizedBox(width: 10),
+                          _buildAnalyticsCard(
+                            label: '30-Day Spend',
+                            value: 'Rs. ${spend30Days.toStringAsFixed(2)}',
+                            icon: Icons.calendar_month_outlined,
+                            color: Colors.blue,
+                          ),
+                          const SizedBox(width: 10),
+                          _buildAnalyticsCard(
+                            label: '90-Day Spend',
+                            value: 'Rs. ${spend90Days.toStringAsFixed(2)}',
+                            icon: Icons.date_range_outlined,
+                            color: Colors.indigo,
+                          ),
+                          const SizedBox(width: 10),
+                          _buildAnalyticsCard(
+                            label: 'Avg Unit Cost',
+                            value: 'Rs. ${averageUnitCost.toStringAsFixed(2)}',
+                            icon: Icons.calculate_outlined,
+                            color: Colors.teal,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _buildInfoPill('Mapped Products: $mappedProductCount'),
+                        _buildInfoPill('POs: $purchaseOrderCount'),
+                        _buildInfoPill('Open POs: $openPurchaseOrderCount'),
+                        _buildInfoPill('Reversed Receipts: $reversedReceiptCount'),
+                        if (lastReceivedAt.trim().isNotEmpty)
+                          _buildInfoPill('Last Receive: $lastReceivedAt'),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 12),

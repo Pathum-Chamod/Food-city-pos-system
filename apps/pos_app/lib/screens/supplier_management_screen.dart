@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 
 import '../models/pos_supplier.dart';
+import '../models/supplier_analytics_summary.dart';
 import '../services/purchase_order_service.dart';
 import '../services/supplier_service.dart';
 import 'purchase_order_editor_screen.dart';
 import 'purchase_order_list_screen.dart';
-import 'supplier_receive_history_screen.dart';
-import 'supplier_workspace_screen.dart';
-import 'supplier_purchase_history_screen.dart';
 import 'reorder_suggestion_screen.dart';
 import 'supplier_product_mapping_screen.dart';
+import 'supplier_purchase_history_screen.dart';
+import 'supplier_receive_history_screen.dart';
+import 'supplier_workspace_screen.dart';
 
 class SupplierManagementScreen extends StatefulWidget {
   const SupplierManagementScreen({
@@ -31,6 +32,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
 
   bool _isLoading = true;
   List<PosSupplier> _suppliers = const [];
+  List<SupplierAnalyticsSummary> _analytics = const [];
   Map<String, dynamic> _receiveSummary = const {};
   Map<String, dynamic> _poSummary = const {};
 
@@ -56,6 +58,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
     );
     final receiveSummary = await _supplierService.getReceiveSummary();
     final poSummary = await _purchaseOrderService.getSummary();
+    final analytics = await _supplierService.getSupplierAnalyticsSummaries();
 
     if (!mounted) return;
 
@@ -63,6 +66,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
       _suppliers = suppliers;
       _receiveSummary = receiveSummary;
       _poSummary = poSummary;
+      _analytics = analytics;
       _isLoading = false;
     });
   }
@@ -76,6 +80,41 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
           supplier.phone.toLowerCase().contains(query) ||
           supplier.id.toString().contains(query);
     }).toList();
+  }
+
+  double get _analyticsTotalSpend {
+    return _analytics.fold<double>(0, (sum, item) => sum + item.totalSpend);
+  }
+
+  double get _analyticsSpend30Days {
+    return _analytics.fold<double>(0, (sum, item) => sum + item.spend30Days);
+  }
+
+  int get _analyticsOpenPoCount {
+    return _analytics.fold<int>(
+      0,
+      (sum, item) => sum + item.openPurchaseOrderCount,
+    );
+  }
+
+  int get _analyticsMappedProductCount {
+    return _analytics.fold<int>(
+      0,
+      (sum, item) => sum + item.mappedProductCount,
+    );
+  }
+
+  int get _analyticsReversedReceiptCount {
+    return _analytics.fold<int>(
+      0,
+      (sum, item) => sum + item.reversedReceiptCount,
+    );
+  }
+
+  List<SupplierAnalyticsSummary> get _topSuppliersBySpend {
+    final items = List<SupplierAnalyticsSummary>.from(_analytics);
+    items.sort((a, b) => b.totalSpend.compareTo(a.totalSpend));
+    return items.take(5).toList();
   }
 
   Future<void> _openHistory() async {
@@ -123,8 +162,6 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
     );
     await _loadData(refreshFromBackend: false);
   }
-
-
 
   Future<void> _openProductMappings({PosSupplier? supplier}) async {
     await Navigator.push(
@@ -189,6 +226,163 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildAnalyticsOverviewCard() {
+    return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Supplier Analytics Overview',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Refined supplier insights from local receiving, purchase orders, mappings, and reversal activity.',
+              style: TextStyle(color: Colors.grey[700], height: 1.4),
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _buildSummaryCard(
+                  label: 'Total Spend',
+                  value: 'Rs. ${_analyticsTotalSpend.toStringAsFixed(2)}',
+                  icon: Icons.payments_outlined,
+                  color: Colors.green,
+                ),
+                _buildSummaryCard(
+                  label: '30-Day Spend',
+                  value: 'Rs. ${_analyticsSpend30Days.toStringAsFixed(2)}',
+                  icon: Icons.calendar_month_outlined,
+                  color: Colors.blue,
+                ),
+                _buildSummaryCard(
+                  label: 'Open POs',
+                  value: _analyticsOpenPoCount.toString(),
+                  icon: Icons.pending_actions_outlined,
+                  color: Colors.deepPurple,
+                ),
+                _buildSummaryCard(
+                  label: 'Mapped Products',
+                  value: _analyticsMappedProductCount.toString(),
+                  icon: Icons.link_outlined,
+                  color: Colors.orange,
+                ),
+                _buildSummaryCard(
+                  label: 'Reversed Receipts',
+                  value: _analyticsReversedReceiptCount.toString(),
+                  icon: Icons.undo_outlined,
+                  color: Colors.red,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopSupplierAnalyticsSection() {
+    final items = _topSuppliersBySpend;
+
+    return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Top Supplier Activity',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (items.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text('No supplier analytics available yet.'),
+              )
+            else
+              ...items.map(
+                (item) => Container(
+                  margin: const EdgeInsets.only(top: 10),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.supplierName,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _chip(
+                            'Spend: Rs. ${item.totalSpend.toStringAsFixed(2)}',
+                          ),
+                          _chip(
+                            '30D: Rs. ${item.spend30Days.toStringAsFixed(2)}',
+                          ),
+                          _chip('POs: ${item.purchaseOrderCount}'),
+                          _chip('Open: ${item.openPurchaseOrderCount}'),
+                          _chip('Mapped: ${item.mappedProductCount}'),
+                          _chip('Reversed: ${item.reversedReceiptCount}'),
+                          _chip(
+                            'Avg Cost: Rs. ${item.averageUnitCost.toStringAsFixed(2)}',
+                          ),
+                          if (item.lastReceivedAt.trim().isNotEmpty)
+                            _chip('Last Receive: ${item.lastReceivedAt}'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openWorkspace(PosSupplier supplier) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SupplierWorkspaceScreen(
+          supplier: supplier,
+          cashierName: widget.cashierName,
+        ),
+      ),
+    );
+    await _loadData(refreshFromBackend: false);
   }
 
   @override
@@ -260,7 +454,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Use this area to receive stock from suppliers, create local purchase orders, and keep supplier activity on the store machine behind manager PIN.',
+                      'Use this area to receive stock from suppliers, create local purchase orders, keep supplier-product mappings, and monitor supplier activity on the store machine behind manager PIN.',
                       style: TextStyle(color: Colors.grey[700], height: 1.4),
                     ),
                     const SizedBox(height: 14),
@@ -290,7 +484,8 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                         ),
                         OutlinedButton.icon(
                           onPressed: () => _openReorderSuggestions(),
-                          icon: const Icon(Icons.playlist_add_check_circle_outlined),
+                          icon:
+                              const Icon(Icons.playlist_add_check_circle_outlined),
                           label: const Text('Reorder Suggestions'),
                         ),
                         OutlinedButton.icon(
@@ -336,13 +531,18 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                   const SizedBox(width: 10),
                   _buildSummaryCard(
                     label: 'PO Value',
-                    value: 'Rs. ${(((_poSummary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
+                    value:
+                        'Rs. ${(((_poSummary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
                     icon: Icons.payments_outlined,
                     color: Colors.green,
                   ),
                 ],
               ),
             ),
+            const SizedBox(height: 12),
+            _buildAnalyticsOverviewCard(),
+            const SizedBox(height: 12),
+            _buildTopSupplierAnalyticsSection(),
             const SizedBox(height: 12),
             TextField(
               controller: _searchController,
@@ -429,34 +629,27 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                 runSpacing: 8,
                                 children: [
                                   ElevatedButton.icon(
-                                    onPressed: () async {
-                                      await Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => SupplierWorkspaceScreen(
-                                            supplier: supplier,
-                                            cashierName: widget.cashierName,
-                                          ),
-                                        ),
-                                      );
-                                      await _loadData(refreshFromBackend: false);
-                                    },
+                                    onPressed: () => _openWorkspace(supplier),
                                     icon: const Icon(Icons.storefront_outlined),
                                     label: const Text('Open Workspace'),
                                   ),
                                   OutlinedButton.icon(
-                                    onPressed: () => _createPurchaseOrder(
-                                      supplier: supplier,
-                                    ),
+                                    onPressed: () =>
+                                        _createPurchaseOrder(supplier: supplier),
                                     icon: const Icon(Icons.add_business_outlined),
                                     label: const Text('New PO'),
                                   ),
                                   OutlinedButton.icon(
-                                    onPressed: () => _openPurchaseHistory(
-                                      supplier: supplier,
-                                    ),
+                                    onPressed: () =>
+                                        _openPurchaseHistory(supplier: supplier),
                                     icon: const Icon(Icons.insights_outlined),
                                     label: const Text('History'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () =>
+                                        _openProductMappings(supplier: supplier),
+                                    icon: const Icon(Icons.link_outlined),
+                                    label: const Text('Mapping'),
                                   ),
                                 ],
                               ),
