@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../models/pos_supplier.dart';
+import '../services/purchase_order_service.dart';
 import '../services/supplier_service.dart';
+import 'purchase_order_editor_screen.dart';
+import 'purchase_order_list_screen.dart';
 import 'supplier_receive_history_screen.dart';
 import 'supplier_workspace_screen.dart';
 
@@ -20,11 +23,13 @@ class SupplierManagementScreen extends StatefulWidget {
 
 class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
   final SupplierService _supplierService = SupplierService();
+  final PurchaseOrderService _purchaseOrderService = PurchaseOrderService();
   final TextEditingController _searchController = TextEditingController();
 
   bool _isLoading = true;
   List<PosSupplier> _suppliers = const [];
-  Map<String, dynamic> _summary = const {};
+  Map<String, dynamic> _receiveSummary = const {};
+  Map<String, dynamic> _poSummary = const {};
 
   @override
   void initState() {
@@ -46,13 +51,15 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
     final suppliers = await _supplierService.getSuppliers(
       refreshFromBackend: refreshFromBackend,
     );
-    final summary = await _supplierService.getReceiveSummary();
+    final receiveSummary = await _supplierService.getReceiveSummary();
+    final poSummary = await _purchaseOrderService.getSummary();
 
     if (!mounted) return;
 
     setState(() {
       _suppliers = suppliers;
-      _summary = summary;
+      _receiveSummary = receiveSummary;
+      _poSummary = poSummary;
       _isLoading = false;
     });
   }
@@ -73,6 +80,32 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
       context,
       MaterialPageRoute(
         builder: (_) => const SupplierReceiveHistoryScreen(),
+      ),
+    );
+    await _loadData(refreshFromBackend: false);
+  }
+
+  Future<void> _openPurchaseOrders({PosSupplier? supplier}) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PurchaseOrderListScreen(
+          cashierName: widget.cashierName,
+          initialSupplier: supplier,
+        ),
+      ),
+    );
+    await _loadData(refreshFromBackend: false);
+  }
+
+  Future<void> _createPurchaseOrder({PosSupplier? supplier}) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PurchaseOrderEditorScreen(
+          cashierName: widget.cashierName,
+          initialSupplier: supplier,
+        ),
       ),
     );
     await _loadData(refreshFromBackend: false);
@@ -129,6 +162,11 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
         title: const Text('Supplier Operations'),
         actions: [
           IconButton(
+            tooltip: 'Purchase orders',
+            onPressed: () => _openPurchaseOrders(),
+            icon: const Icon(Icons.description_outlined),
+          ),
+          IconButton(
             tooltip: 'Receive history',
             onPressed: _openHistory,
             icon: const Icon(Icons.history),
@@ -139,6 +177,11 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
             icon: const Icon(Icons.refresh),
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _createPurchaseOrder(),
+        icon: const Icon(Icons.add),
+        label: const Text('New PO'),
       ),
       body: RefreshIndicator(
         onRefresh: () => _loadData(refreshFromBackend: true),
@@ -164,8 +207,30 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Use this area to receive stock from suppliers, keep a local POS receive log, and review supplier activity on the store machine.',
+                      'Use this area to receive stock from suppliers, create local purchase orders, and keep supplier activity on the store machine behind manager PIN.',
                       style: TextStyle(color: Colors.grey[700], height: 1.4),
+                    ),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: () => _openPurchaseOrders(),
+                          icon: const Icon(Icons.description_outlined),
+                          label: const Text('Open Purchase Orders'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => _createPurchaseOrder(),
+                          icon: const Icon(Icons.add_business_outlined),
+                          label: const Text('Create New PO'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _openHistory,
+                          icon: const Icon(Icons.history),
+                          label: const Text('Receive History'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -185,7 +250,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                   const SizedBox(width: 10),
                   _buildSummaryCard(
                     label: 'Receipts Logged',
-                    value: ((_summary['receipt_count'] as num?) ?? 0)
+                    value: ((_receiveSummary['receipt_count'] as num?) ?? 0)
                         .toInt()
                         .toString(),
                     icon: Icons.receipt_long,
@@ -193,10 +258,19 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                   ),
                   const SizedBox(width: 10),
                   _buildSummaryCard(
-                    label: 'Supplier Spend',
-                    value: 'Rs. ${(((_summary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
-                    icon: Icons.payments_outlined,
+                    label: 'Purchase Orders',
+                    value: ((_poSummary['order_count'] as num?) ?? 0)
+                        .toInt()
+                        .toString(),
+                    icon: Icons.description_outlined,
                     color: Colors.deepPurple,
+                  ),
+                  const SizedBox(width: 10),
+                  _buildSummaryCard(
+                    label: 'PO Value',
+                    value: 'Rs. ${(((_poSummary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
+                    icon: Icons.payments_outlined,
+                    color: Colors.green,
                   ),
                 ],
               ),
@@ -278,34 +352,48 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                 runSpacing: 8,
                                 children: [
                                   _chip('Supplier ID: ${supplier.id}'),
-                                  _chip('Receive + history ready'),
+                                  _chip('Receive + PO ready'),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  ElevatedButton.icon(
+                                    onPressed: () async {
+                                      await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => SupplierWorkspaceScreen(
+                                            supplier: supplier,
+                                            cashierName: widget.cashierName,
+                                          ),
+                                        ),
+                                      );
+                                      await _loadData(refreshFromBackend: false);
+                                    },
+                                    icon: const Icon(Icons.storefront_outlined),
+                                    label: const Text('Open Workspace'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _createPurchaseOrder(
+                                      supplier: supplier,
+                                    ),
+                                    icon: const Icon(Icons.add_business_outlined),
+                                    label: const Text('New PO'),
+                                  ),
                                 ],
                               ),
                             ],
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        ElevatedButton.icon(
-                          onPressed: () async {
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => SupplierWorkspaceScreen(
-                                  supplier: supplier,
-                                  cashierName: widget.cashierName,
-                                ),
-                              ),
-                            );
-                            await _loadData(refreshFromBackend: false);
-                          },
-                          icon: const Icon(Icons.open_in_new),
-                          label: const Text('Open Workspace'),
                         ),
                       ],
                     ),
                   ),
                 ),
               ),
+            const SizedBox(height: 80),
           ],
         ),
       ),

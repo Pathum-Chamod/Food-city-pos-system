@@ -6,6 +6,8 @@ import 'package:shared/models/product.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/pos_supplier.dart';
+import '../models/purchase_order.dart';
+import '../models/purchase_order_item.dart';
 import '../models/stock_receipt_record.dart';
 
 class DatabaseHelper {
@@ -32,7 +34,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 8,
+        version: 9,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -97,6 +99,40 @@ class DatabaseHelper {
         cashier_name TEXT,
         created_at TEXT NOT NULL,
         backend_status TEXT NOT NULL DEFAULT 'synced'
+      )
+    ''');
+  }
+
+
+  Future<void> _createPurchaseOrderTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS purchase_orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_number TEXT UNIQUE NOT NULL,
+        supplier_id INTEGER NOT NULL,
+        supplier_name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'draft',
+        reference_note TEXT,
+        total_lines INTEGER NOT NULL DEFAULT 0,
+        total_units INTEGER NOT NULL DEFAULT 0,
+        total_cost REAL NOT NULL DEFAULT 0,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS purchase_order_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        purchase_order_id INTEGER NOT NULL,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        quantity INTEGER NOT NULL,
+        received_quantity INTEGER NOT NULL DEFAULT 0,
+        unit_cost REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE
       )
     ''');
   }
@@ -196,6 +232,7 @@ class DatabaseHelper {
     ''');
 
     await _createSupplierTables(db);
+    await _createPurchaseOrderTables(db);
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -319,6 +356,10 @@ class DatabaseHelper {
 
     if (oldVersion < 8) {
       await _createSupplierTables(db);
+    }
+
+    if (oldVersion < 9) {
+      await _createPurchaseOrderTables(db);
     }
   }
 
@@ -2154,5 +2195,230 @@ class DatabaseHelper {
       'total_cost': ((row['total_cost'] as num?) ?? 0).toDouble(),
     };
   }
+
+
+
+  Future<int> savePurchaseOrder({
+    int? purchaseOrderId,
+    required String orderNumber,
+    required int supplierId,
+    required String supplierName,
+    required String status,
+    required String referenceNote,
+    required List<PurchaseOrderItem> items,
+    required String createdBy,
+  }) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    final safeStatus = _normalizePurchaseOrderStatus(status);
+    final totalLines = items.length;
+    final totalUnits = items.fold<int>(0, (sum, item) => sum + item.quantity);
+    final totalCost = _roundMoney(
+      items.fold<num>(0, (sum, item) => sum + item.lineTotal),
+    );
+
+    late int resolvedId;
+
+    await db.transaction((txn) async {
+      if (purchaseOrderId == null) {
+        resolvedId = await txn.insert('purchase_orders', {
+          'order_number': orderNumber,
+          'supplier_id': supplierId,
+          'supplier_name': supplierName,
+          'status': safeStatus,
+          'reference_note': referenceNote.trim(),
+          'total_lines': totalLines,
+          'total_units': totalUnits,
+          'total_cost': totalCost,
+          'created_by': createdBy.trim(),
+          'created_at': now,
+          'updated_at': now,
+        });
+      } else {
+        resolvedId = purchaseOrderId;
+        await txn.update(
+          'purchase_orders',
+          {
+            'order_number': orderNumber,
+            'supplier_id': supplierId,
+            'supplier_name': supplierName,
+            'status': safeStatus,
+            'reference_note': referenceNote.trim(),
+            'total_lines': totalLines,
+            'total_units': totalUnits,
+            'total_cost': totalCost,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [purchaseOrderId],
+        );
+
+        await txn.delete(
+          'purchase_order_items',
+          where: 'purchase_order_id = ?',
+          whereArgs: [purchaseOrderId],
+        );
+      }
+
+      final batch = txn.batch();
+      for (final item in items) {
+        batch.insert('purchase_order_items', {
+          'purchase_order_id': resolvedId,
+          'barcode': item.barcode,
+          'product_name': item.productName,
+          'quantity': item.quantity,
+          'received_quantity': item.receivedQuantity,
+          'unit_cost': _roundMoney(item.unitCost),
+          'created_at': item.createdAt.isEmpty ? now : item.createdAt,
+        });
+      }
+      await batch.commit(noResult: true);
+    });
+
+    return resolvedId;
+  }
+
+  String _normalizePurchaseOrderStatus(String? value) {
+    switch (value) {
+      case 'draft':
+      case 'ordered':
+      case 'partially_received':
+      case 'received':
+      case 'cancelled':
+        return value!;
+      default:
+        return 'draft';
+    }
+  }
+
+  Future<List<PurchaseOrder>> getPurchaseOrders({
+    int? supplierId,
+    String status = 'all',
+    String search = '',
+    int limit = 200,
+  }) async {
+    final db = await database;
+    final whereClauses = <String>[];
+    final whereArgs = <Object?>[];
+    final trimmedSearch = search.trim().toLowerCase();
+    final safeStatus = _normalizePurchaseOrderStatus(status);
+
+    if (supplierId != null) {
+      whereClauses.add('supplier_id = ?');
+      whereArgs.add(supplierId);
+    }
+
+    if (status != 'all') {
+      whereClauses.add('status = ?');
+      whereArgs.add(safeStatus);
+    }
+
+    if (trimmedSearch.isNotEmpty) {
+      whereClauses.add(
+        '(LOWER(order_number) LIKE ? OR LOWER(supplier_name) LIKE ? OR LOWER(reference_note) LIKE ?)',
+      );
+      whereArgs
+        ..add('%$trimmedSearch%')
+        ..add('%$trimmedSearch%')
+        ..add('%$trimmedSearch%');
+    }
+
+    final rows = await db.query(
+      'purchase_orders',
+      where: whereClauses.isEmpty ? null : whereClauses.join(' AND '),
+      whereArgs: whereClauses.isEmpty ? null : whereArgs,
+      orderBy: 'datetime(updated_at) DESC, id DESC',
+      limit: limit,
+    );
+
+    return rows.map((row) => PurchaseOrder.fromMap(row)).toList();
+  }
+
+  Future<PurchaseOrder?> getPurchaseOrderById(int purchaseOrderId) async {
+    final db = await database;
+    final rows = await db.query(
+      'purchase_orders',
+      where: 'id = ?',
+      whereArgs: [purchaseOrderId],
+      limit: 1,
+    );
+
+    if (rows.isEmpty) return null;
+    return PurchaseOrder.fromMap(rows.first);
+  }
+
+  Future<List<PurchaseOrderItem>> getPurchaseOrderItems(int purchaseOrderId) async {
+    final db = await database;
+    final rows = await db.query(
+      'purchase_order_items',
+      where: 'purchase_order_id = ?',
+      whereArgs: [purchaseOrderId],
+      orderBy: 'id ASC',
+    );
+
+    return rows.map((row) => PurchaseOrderItem.fromMap(row)).toList();
+  }
+
+  Future<void> updatePurchaseOrderStatus(int purchaseOrderId, String status) async {
+    final db = await database;
+    await db.update(
+      'purchase_orders',
+      {
+        'status': _normalizePurchaseOrderStatus(status),
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [purchaseOrderId],
+    );
+  }
+
+  Future<void> deletePurchaseOrder(int purchaseOrderId) async {
+    final db = await database;
+    await db.delete(
+      'purchase_orders',
+      where: 'id = ?',
+      whereArgs: [purchaseOrderId],
+    );
+  }
+
+  Future<Map<String, dynamic>> getPurchaseOrderSummary({
+    int? supplierId,
+    String status = 'all',
+  }) async {
+    final db = await database;
+    final whereClauses = <String>[];
+    final whereArgs = <Object?>[];
+
+    if (supplierId != null) {
+      whereClauses.add('supplier_id = ?');
+      whereArgs.add(supplierId);
+    }
+
+    if (status != 'all') {
+      whereClauses.add('status = ?');
+      whereArgs.add(_normalizePurchaseOrderStatus(status));
+    }
+
+    final whereSql = whereClauses.isEmpty ? '' : 'WHERE ${whereClauses.join(' AND ')}';
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS order_count,
+        COALESCE(SUM(total_units), 0) AS total_units,
+        COALESCE(SUM(total_cost), 0) AS total_cost
+      FROM purchase_orders
+      $whereSql
+      ''',
+      whereArgs,
+    );
+
+    final row = rows.first;
+    return {
+      'order_count': (row['order_count'] as num?)?.toInt() ?? 0,
+      'total_units': (row['total_units'] as num?)?.toInt() ?? 0,
+      'total_cost': ((row['total_cost'] as num?) ?? 0).toDouble(),
+    };
+  }
+
 
 }

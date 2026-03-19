@@ -4,6 +4,8 @@ import 'package:shared/models/product.dart';
 import '../models/pos_supplier.dart';
 import '../services/database_helper.dart';
 import '../services/supplier_service.dart';
+import 'purchase_order_editor_screen.dart';
+import 'purchase_order_list_screen.dart';
 import 'supplier_receive_history_screen.dart';
 
 class SupplierWorkspaceScreen extends StatefulWidget {
@@ -88,6 +90,30 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
       ),
     );
     await _loadData();
+  }
+
+  Future<void> _openPurchaseOrders() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PurchaseOrderListScreen(
+          cashierName: widget.cashierName,
+          initialSupplier: widget.supplier,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _createPurchaseOrder() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PurchaseOrderEditorScreen(
+          cashierName: widget.cashierName,
+          initialSupplier: widget.supplier,
+        ),
+      ),
+    );
   }
 
   Future<void> _receiveByBarcode() async {
@@ -331,18 +357,6 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
     );
   }
 
-  String _stockLabel(Product product) {
-    if (product.stock <= 0) return 'Out of stock';
-    if (product.stock <= 10) return 'Low stock';
-    return 'In stock';
-  }
-
-  Color _stockColor(Product product) {
-    if (product.stock <= 0) return Colors.red;
-    if (product.stock <= 10) return Colors.orange;
-    return Colors.green;
-  }
-
   @override
   Widget build(BuildContext context) {
     final filteredProducts = _filteredProducts;
@@ -352,253 +366,230 @@ class _SupplierWorkspaceScreenState extends State<SupplierWorkspaceScreen> {
         title: Text(widget.supplier.name),
         actions: [
           IconButton(
-            tooltip: 'Supplier history',
+            tooltip: 'Purchase orders',
+            onPressed: _openPurchaseOrders,
+            icon: const Icon(Icons.description_outlined),
+          ),
+          IconButton(
+            tooltip: 'Receive history',
             onPressed: _openHistory,
             icon: const Icon(Icons.history),
           ),
           IconButton(
-            tooltip: 'Refresh',
+            tooltip: 'Refresh products',
             onPressed: _loadData,
             icon: const Icon(Icons.refresh),
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _loadData,
-              child: ListView(
+      body: RefreshIndicator(
+        onRefresh: _loadData,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Padding(
                 padding: const EdgeInsets.all(16),
-                children: [
-                  Card(
-                    elevation: 1,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.supplier.name,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
+                    if (widget.supplier.phone.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Phone: ${widget.supplier.phone}',
+                        style: TextStyle(color: Colors.grey[700]),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _createPurchaseOrder,
+                          icon: const Icon(Icons.add_business_outlined),
+                          label: const Text('Create PO'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _openPurchaseOrders,
+                          icon: const Icon(Icons.description_outlined),
+                          label: const Text('View POs'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _openHistory,
+                          icon: const Icon(Icons.history),
+                          label: const Text('Receive History'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _buildSummaryCard(
+                    label: 'Receipts',
+                    value: ((_summary['receipt_count'] as num?) ?? 0)
+                        .toInt()
+                        .toString(),
+                    icon: Icons.receipt_long,
+                    color: Colors.blue,
+                  ),
+                  const SizedBox(width: 10),
+                  _buildSummaryCard(
+                    label: 'Units Received',
+                    value: ((_summary['total_units'] as num?) ?? 0)
+                        .toInt()
+                        .toString(),
+                    icon: Icons.inventory_2_outlined,
+                    color: Colors.orange,
+                  ),
+                  const SizedBox(width: 10),
+                  _buildSummaryCard(
+                    label: 'Receive Cost',
+                    value: 'Rs. ${(((_summary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
+                    icon: Icons.payments_outlined,
+                    color: Colors.green,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _barcodeController,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _receiveByBarcode(),
+              decoration: InputDecoration(
+                hintText: 'Quick receive by barcode',
+                prefixIcon: const Icon(Icons.qr_code_scanner),
+                suffixIcon: IconButton(
+                  onPressed: _receiveByBarcode,
+                  icon: const Icon(Icons.add),
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _searchController,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: 'Search products by name or barcode',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {});
+                        },
+                        icon: const Icon(Icons.clear),
+                      ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildFilterChip('all', 'All'),
+                _buildFilterChip('low', 'Low Stock'),
+                _buildFilterChip('out', 'Out of Stock'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_isLoading)
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (filteredProducts.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: Text('No products found.')),
+              )
+            else
+              ...filteredProducts.map(
+                (product) => Card(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        CircleAvatar(
+                          backgroundColor: Colors.blue.withOpacity(0.12),
+                          child: const Icon(
+                            Icons.inventory_2_outlined,
+                            color: Colors.blue,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              CircleAvatar(
-                                radius: 22,
-                                backgroundColor: Colors.orange.withOpacity(0.12),
-                                child: const Icon(
-                                  Icons.local_shipping,
-                                  color: Colors.orange,
+                              Text(
+                                product.name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      widget.supplier.name,
-                                      style: const TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      widget.supplier.phone.isEmpty
-                                          ? 'Phone not available'
-                                          : 'Phone: ${widget.supplier.phone}',
-                                      style: TextStyle(color: Colors.grey[700]),
-                                    ),
-                                  ],
-                                ),
+                              const SizedBox(height: 4),
+                              Text('Barcode: ${product.barcode}'),
+                              const SizedBox(height: 4),
+                              Text('Current Stock: ${product.stock}'),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  OutlinedButton.icon(
+                                    onPressed: () => _showReceiveDialog(product),
+                                    icon: const Icon(Icons.add_box_outlined),
+                                    label: const Text('Receive Stock'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: _createPurchaseOrder,
+                                    icon: const Icon(Icons.note_add_outlined),
+                                    label: const Text('PO'),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
-                          const SizedBox(height: 14),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.blue.shade50,
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: Text(
-                              'This supplier workspace records stock received from ${widget.supplier.name}. '
-                              'Product-to-supplier mapping and purchase orders will come in the next supplier phase.',
-                              style: TextStyle(
-                                color: Colors.blue.shade900,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        _buildSummaryCard(
-                          label: 'Receipts',
-                          value: ((_summary['receipt_count'] as num?) ?? 0)
-                              .toInt()
-                              .toString(),
-                          icon: Icons.receipt_long,
-                          color: Colors.blue,
-                        ),
-                        const SizedBox(width: 10),
-                        _buildSummaryCard(
-                          label: 'Units Received',
-                          value: ((_summary['total_units'] as num?) ?? 0)
-                              .toInt()
-                              .toString(),
-                          icon: Icons.inventory_2_outlined,
-                          color: Colors.green,
-                        ),
-                        const SizedBox(width: 10),
-                        _buildSummaryCard(
-                          label: 'Spend',
-                          value: 'Rs. ${(((_summary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
-                          icon: Icons.payments_outlined,
-                          color: Colors.deepPurple,
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _barcodeController,
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _receiveByBarcode(),
-                    decoration: InputDecoration(
-                      labelText: 'Quick Receive by Barcode',
-                      hintText: 'Scan or type barcode',
-                      prefixIcon: const Icon(Icons.qr_code_scanner),
-                      suffixIcon: IconButton(
-                        onPressed: _receiveByBarcode,
-                        icon: const Icon(Icons.add_box_outlined),
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _searchController,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      hintText: 'Search products by name or barcode',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _searchController.text.isEmpty
-                          ? null
-                          : IconButton(
-                              onPressed: () {
-                                _searchController.clear();
-                                setState(() {});
-                              },
-                              icon: const Icon(Icons.clear),
-                            ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _buildFilterChip('all', 'All Products'),
-                      _buildFilterChip('low', 'Low Stock'),
-                      _buildFilterChip('out', 'Out of Stock'),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  if (_isLoading)
-                    const Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  else if (filteredProducts.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Center(child: Text('No products found.')),
-                    )
-                  else
-                    ...filteredProducts.map((product) {
-                      final stockColor = _stockColor(product);
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.all(14),
-                          leading: CircleAvatar(
-                            backgroundColor: stockColor.withOpacity(0.12),
-                            child: Icon(Icons.inventory_2, color: stockColor),
-                          ),
-                          title: Text(
-                            product.name,
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('Barcode: ${product.barcode}'),
-                                const SizedBox(height: 6),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: [
-                                    _statusTag(
-                                      'Stock: ${product.stock}',
-                                      stockColor,
-                                    ),
-                                    _statusTag(_stockLabel(product), stockColor),
-                                    _statusTag(
-                                      'Price: Rs. ${product.price.toStringAsFixed(2)}',
-                                      Colors.blueGrey,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                          trailing: ElevatedButton.icon(
-                            onPressed: () => _showReceiveDialog(product),
-                            icon: const Icon(Icons.add),
-                            label: const Text('Receive'),
-                          ),
-                        ),
-                      );
-                    }),
-                ],
+                ),
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statusTag(String text, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.10),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(color: color, fontWeight: FontWeight.w600),
+            const SizedBox(height: 60),
+          ],
+        ),
       ),
     );
   }
