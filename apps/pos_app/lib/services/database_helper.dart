@@ -40,7 +40,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 14,
+        version: 15,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -234,9 +234,18 @@ class DatabaseHelper {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         barcode TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'General',
         price REAL NOT NULL,
+        cost_price REAL NOT NULL DEFAULT 0,
+        selling_price REAL NOT NULL DEFAULT 0,
+        wholesale_price REAL NOT NULL DEFAULT 0,
+        sale_price REAL,
+        sale_enabled INTEGER NOT NULL DEFAULT 0,
         stock INTEGER NOT NULL,
-        updated_at TEXT NOT NULL
+        min_stock_level INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL,
+        last_price_updated_at TEXT
       )
     ''');
 
@@ -266,12 +275,34 @@ class DatabaseHelper {
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
         unit_price REAL NOT NULL,
+        price_category_used TEXT NOT NULL DEFAULT 'selling',
+        cost_price_snapshot REAL NOT NULL DEFAULT 0,
         quantity INTEGER NOT NULL,
         base_line_total REAL NOT NULL DEFAULT 0,
         item_discount_amount REAL NOT NULL DEFAULT 0,
         line_total REAL NOT NULL,
         created_at TEXT NOT NULL,
         FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE inventory_movements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        quantity_change INTEGER,
+        stock_before INTEGER,
+        stock_after INTEGER,
+        old_price REAL,
+        new_price REAL,
+        price_type TEXT,
+        reason TEXT,
+        reference_id INTEGER,
+        reference_type TEXT,
+        performed_by TEXT,
+        created_at TEXT NOT NULL
       )
     ''');
 
@@ -295,6 +326,7 @@ class DatabaseHelper {
         cart_name TEXT NOT NULL,
         cashier_name TEXT NOT NULL,
         is_refund_mode INTEGER NOT NULL DEFAULT 0,
+        selected_price_type TEXT NOT NULL DEFAULT 'selling',
         discount_type TEXT NOT NULL DEFAULT 'none',
         discount_value REAL NOT NULL DEFAULT 0,
         items_json TEXT NOT NULL,
@@ -335,6 +367,8 @@ class DatabaseHelper {
           barcode TEXT NOT NULL,
           product_name TEXT NOT NULL,
           unit_price REAL NOT NULL,
+          price_category_used TEXT NOT NULL DEFAULT 'selling',
+          cost_price_snapshot REAL NOT NULL DEFAULT 0,
           quantity INTEGER NOT NULL,
           line_total REAL NOT NULL,
           created_at TEXT NOT NULL,
@@ -385,6 +419,7 @@ class DatabaseHelper {
           cart_name TEXT NOT NULL,
           cashier_name TEXT NOT NULL,
           is_refund_mode INTEGER NOT NULL DEFAULT 0,
+          selected_price_type TEXT NOT NULL DEFAULT 'selling',
           items_json TEXT NOT NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
@@ -628,6 +663,115 @@ class DatabaseHelper {
         "TEXT NOT NULL DEFAULT ''",
       );
     }
+
+    if (oldVersion < 15) {
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'category',
+        "TEXT NOT NULL DEFAULT 'General'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'cost_price',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'selling_price',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'wholesale_price',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(db, 'products', 'sale_price', 'REAL');
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'sale_enabled',
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'min_stock_level',
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'is_active',
+        "INTEGER NOT NULL DEFAULT 1",
+      );
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'last_price_updated_at',
+        'TEXT',
+      );
+
+      await db.execute('''
+        UPDATE products
+        SET
+          selling_price = CASE
+            WHEN COALESCE(selling_price, 0) <= 0 THEN COALESCE(price, 0)
+            ELSE selling_price
+          END,
+          wholesale_price = CASE
+            WHEN COALESCE(wholesale_price, 0) <= 0 THEN COALESCE(price, 0)
+            ELSE wholesale_price
+          END,
+          price = CASE
+            WHEN COALESCE(price, 0) <= 0 THEN COALESCE(selling_price, 0)
+            ELSE price
+          END
+      ''');
+
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_category_used',
+        "TEXT NOT NULL DEFAULT 'selling'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'cost_price_snapshot',
+        "REAL NOT NULL DEFAULT 0",
+      );
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS inventory_movements (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          barcode TEXT NOT NULL,
+          product_name TEXT NOT NULL,
+          action_type TEXT NOT NULL,
+          quantity_change INTEGER,
+          stock_before INTEGER,
+          stock_after INTEGER,
+          old_price REAL,
+          new_price REAL,
+          price_type TEXT,
+          reason TEXT,
+          reference_id INTEGER,
+          reference_type TEXT,
+          performed_by TEXT,
+          created_at TEXT NOT NULL
+        )
+      ''');
+
+      await _addColumnIfMissing(
+        db,
+        'held_carts',
+        'selected_price_type',
+        "TEXT NOT NULL DEFAULT 'selling'",
+      );
+    }
   }
 
   Future<void> _addColumnIfMissing(
@@ -644,6 +788,116 @@ class DatabaseHelper {
     }
   }
 
+
+  double _parseDouble(dynamic value, {double fallback = 0.0}) {
+    if (value == null) return fallback;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString()) ?? fallback;
+  }
+
+  int _parseInt(dynamic value, {int fallback = 0}) {
+    if (value == null) return fallback;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString()) ?? fallback;
+  }
+
+  String _normalizePriceType(String? value) {
+    if (value == 'wholesale') return 'wholesale';
+    if (value == 'sale') return 'sale';
+    return 'selling';
+  }
+
+  double _resolveCartItemUnitPrice(Map<String, dynamic> item) {
+    final explicitUnitPrice = item['unit_price_used'];
+    if (explicitUnitPrice != null) {
+      return _parseDouble(explicitUnitPrice);
+    }
+
+    final productMap = Map<String, dynamic>.from(item['product'] as Map);
+    final priceType = _normalizePriceType(item['price_type_used']?.toString());
+
+    final sellingPrice = _parseDouble(
+      productMap['selling_price'] ?? productMap['price'],
+    );
+    final wholesalePrice = _parseDouble(
+      productMap['wholesale_price'],
+      fallback: sellingPrice,
+    );
+    final salePrice = productMap['sale_price'] == null
+        ? null
+        : _parseDouble(productMap['sale_price']);
+    final saleEnabledRaw = productMap['sale_enabled'];
+    final saleEnabled = saleEnabledRaw == null
+        ? salePrice != null
+        : _parseInt(saleEnabledRaw) == 1 || saleEnabledRaw == true;
+
+    switch (priceType) {
+      case 'wholesale':
+        return wholesalePrice > 0 ? wholesalePrice : sellingPrice;
+      case 'sale':
+        if (saleEnabled && salePrice != null && salePrice > 0) {
+          return salePrice;
+        }
+        return sellingPrice;
+      case 'selling':
+      default:
+        return sellingPrice;
+    }
+  }
+
+  String _resolveCartItemPriceType(Map<String, dynamic> item) {
+    return _normalizePriceType(item['price_type_used']?.toString());
+  }
+
+  String _mapPriceActionType(String priceType) {
+    switch (priceType) {
+      case 'cost':
+        return 'price_change_cost';
+      case 'wholesale':
+        return 'price_change_wholesale';
+      case 'sale':
+        return 'price_change_sale';
+      case 'selling':
+      default:
+        return 'price_change_selling';
+    }
+  }
+
+  Future<void> _insertInventoryMovement(
+    DatabaseExecutor executor, {
+    required String barcode,
+    required String productName,
+    required String actionType,
+    int? quantityChange,
+    int? stockBefore,
+    int? stockAfter,
+    double? oldPrice,
+    double? newPrice,
+    String? priceType,
+    String? reason,
+    int? referenceId,
+    String? referenceType,
+    String? performedBy,
+    String? createdAt,
+  }) async {
+    await executor.insert('inventory_movements', {
+      'barcode': barcode,
+      'product_name': productName,
+      'action_type': actionType,
+      'quantity_change': quantityChange,
+      'stock_before': stockBefore,
+      'stock_after': stockAfter,
+      'old_price': oldPrice,
+      'new_price': newPrice,
+      'price_type': priceType,
+      'reason': reason,
+      'reference_id': referenceId,
+      'reference_type': referenceType,
+      'performed_by': performedBy,
+      'created_at': createdAt ?? DateTime.now().toIso8601String(),
+    });
+  }
+
   Future<void> insertMockDataIfEmpty() async {
     final db = await database;
 
@@ -653,34 +907,71 @@ class DatabaseHelper {
     final productCount = existingProducts.first['count'] as int;
 
     if (productCount == 0) {
+      final now = DateTime.now().toIso8601String();
       final mockProducts = [
         {
           'barcode': '4791044000123',
           'name': 'Munchee Super Cream Cracker 500g',
+          'category': 'Biscuits',
           'price': 450.0,
+          'selling_price': 450.0,
+          'cost_price': 390.0,
+          'wholesale_price': 430.0,
+          'sale_price': null,
+          'sale_enabled': 0,
           'stock': 100,
-          'updated_at': DateTime.now().toIso8601String(),
+          'min_stock_level': 10,
+          'is_active': 1,
+          'updated_at': now,
+          'last_price_updated_at': now,
         },
         {
           'barcode': '4792011001234',
           'name': 'Anchor Milk Powder 400g',
+          'category': 'Dairy',
           'price': 1100.0,
+          'selling_price': 1100.0,
+          'cost_price': 980.0,
+          'wholesale_price': 1050.0,
+          'sale_price': null,
+          'sale_enabled': 0,
           'stock': 50,
-          'updated_at': DateTime.now().toIso8601String(),
+          'min_stock_level': 8,
+          'is_active': 1,
+          'updated_at': now,
+          'last_price_updated_at': now,
         },
         {
           'barcode': '4792022005678',
           'name': 'Saman Halmassa 425g',
+          'category': 'Canned Food',
           'price': 650.0,
+          'selling_price': 650.0,
+          'cost_price': 560.0,
+          'wholesale_price': 620.0,
+          'sale_price': 625.0,
+          'sale_enabled': 0,
           'stock': 30,
-          'updated_at': DateTime.now().toIso8601String(),
+          'min_stock_level': 6,
+          'is_active': 1,
+          'updated_at': now,
+          'last_price_updated_at': now,
         },
         {
           'barcode': '4793033009999',
           'name': 'Kist Strawberry Jam 500g',
+          'category': 'Groceries',
           'price': 580.0,
+          'selling_price': 580.0,
+          'cost_price': 505.0,
+          'wholesale_price': 555.0,
+          'sale_price': 549.0,
+          'sale_enabled': 0,
           'stock': 40,
-          'updated_at': DateTime.now().toIso8601String(),
+          'min_stock_level': 8,
+          'is_active': 1,
+          'updated_at': now,
+          'last_price_updated_at': now,
         },
       ];
 
@@ -763,13 +1054,27 @@ class DatabaseHelper {
       final batch = txn.batch();
 
       for (final product in backendProducts) {
-        batch.insert('products', {
-          'barcode': product.barcode,
-          'name': product.name,
-          'price': product.price,
-          'stock': product.stock,
-          'updated_at': product.updatedAt,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
+        batch.insert(
+          'products',
+          {
+            'barcode': product.barcode,
+            'name': product.name,
+            'category': product.category,
+            'price': product.sellingPrice,
+            'cost_price': product.costPrice,
+            'selling_price': product.sellingPrice,
+            'wholesale_price': product.wholesalePrice,
+            'sale_price': product.salePrice,
+            'sale_enabled': product.saleEnabled ? 1 : 0,
+            'stock': product.stock,
+            'min_stock_level': product.minStockLevel,
+            'is_active': product.isActive ? 1 : 0,
+            'updated_at': product.updatedAt,
+            'last_price_updated_at':
+                product.lastPriceUpdatedAt ?? product.updatedAt,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
       }
 
       await batch.commit(noResult: true);
@@ -826,13 +1131,150 @@ class DatabaseHelper {
         } else if (type == 'PRICE_UPDATE') {
           final data = Map<String, dynamic>.from(decodedData as Map);
           final barcode = data['barcode']?.toString() ?? '';
-          final newPrice = (data['new_price'] as num?)?.toDouble();
+          final newPrice = _parseDouble(data['new_price'], fallback: -1);
+          final priceType = (data['price_type'] ?? 'selling').toString();
+          final saleEnabledRaw = data['sale_enabled'];
+          final now = DateTime.now().toIso8601String();
 
-          if (barcode.isEmpty || newPrice == null) continue;
+          if (barcode.isEmpty || newPrice < 0) continue;
+
+          final normalizedPriceType = priceType == 'cost'
+              ? 'cost'
+              : _normalizePriceType(priceType);
+
+          final updates = <String, Object?>{
+            'updated_at': now,
+            'last_price_updated_at': now,
+          };
+
+          switch (normalizedPriceType) {
+            case 'cost':
+              updates['cost_price'] = newPrice;
+              break;
+            case 'wholesale':
+              updates['wholesale_price'] = newPrice;
+              break;
+            case 'sale':
+              updates['sale_price'] = newPrice;
+              if (saleEnabledRaw != null) {
+                updates['sale_enabled'] =
+                    _parseInt(saleEnabledRaw) == 1 || saleEnabledRaw == true
+                    ? 1
+                    : 0;
+              } else {
+                updates['sale_enabled'] = 1;
+              }
+              break;
+            case 'selling':
+            default:
+              updates['selling_price'] = newPrice;
+              updates['price'] = newPrice;
+              break;
+          }
 
           await txn.update(
             'products',
-            {'price': newPrice, 'updated_at': DateTime.now().toIso8601String()},
+            updates,
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+          );
+        } else if (type == 'STOCK_RECEIVE') {
+          final data = Map<String, dynamic>.from(decodedData as Map);
+          final barcode = data['barcode']?.toString() ?? '';
+          final quantity = _parseInt(data['quantity']);
+          final unitCostRaw = data['unit_cost'];
+
+          if (barcode.isEmpty || quantity <= 0) continue;
+
+          final rows = await txn.query(
+            'products',
+            columns: ['stock'],
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+            limit: 1,
+          );
+          if (rows.isEmpty) continue;
+
+          final currentStock = _parseInt(rows.first['stock']);
+          final updates = <String, Object?>{
+            'stock': currentStock + quantity,
+            'updated_at': DateTime.now().toIso8601String(),
+          };
+
+          if (unitCostRaw != null) {
+            updates['cost_price'] = _roundMoney(_parseDouble(unitCostRaw));
+            updates['last_price_updated_at'] = DateTime.now().toIso8601String();
+          }
+
+          await txn.update(
+            'products',
+            updates,
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+          );
+        } else if (type == 'STOCK_ADJUST') {
+          final data = Map<String, dynamic>.from(decodedData as Map);
+          final barcode = data['barcode']?.toString() ?? '';
+          final adjustmentType = (data['adjustment_type'] ?? '').toString();
+          final quantity = _parseInt(data['quantity']);
+
+          if (barcode.isEmpty) continue;
+
+          final rows = await txn.query(
+            'products',
+            columns: ['stock'],
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+            limit: 1,
+          );
+          if (rows.isEmpty) continue;
+
+          final currentStock = _parseInt(rows.first['stock']);
+          int nextStock = currentStock;
+
+          switch (adjustmentType) {
+            case 'add':
+            case 'increase':
+              if (quantity <= 0) continue;
+              nextStock = currentStock + quantity;
+              break;
+            case 'remove':
+            case 'decrease':
+              if (quantity <= 0) continue;
+              nextStock = currentStock - quantity;
+              if (nextStock < 0) nextStock = 0;
+              break;
+            case 'set':
+            case 'set_exact':
+              if (quantity < 0) continue;
+              nextStock = quantity;
+              break;
+            default:
+              continue;
+          }
+
+          await txn.update(
+            'products',
+            {
+              'stock': nextStock,
+              'updated_at': DateTime.now().toIso8601String(),
+            },
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+          );
+        } else if (type == 'MIN_STOCK_UPDATE') {
+          final data = Map<String, dynamic>.from(decodedData as Map);
+          final barcode = data['barcode']?.toString() ?? '';
+          final minStockLevel = _parseInt(data['min_stock_level'], fallback: -1);
+
+          if (barcode.isEmpty || minStockLevel < 0) continue;
+
+          await txn.update(
+            'products',
+            {
+              'min_stock_level': minStockLevel,
+              'updated_at': DateTime.now().toIso8601String(),
+            },
             where: 'barcode = ?',
             whereArgs: [barcode],
           );
@@ -980,7 +1422,9 @@ class DatabaseHelper {
           final barcode = productMap['barcode']?.toString() ?? '';
           final productName =
               productMap['name']?.toString() ?? 'Unknown product';
-          final unitPrice = (productMap['price'] as num).toDouble();
+          final unitPrice = _resolveCartItemUnitPrice(item);
+          final priceTypeUsed = _resolveCartItemPriceType(item);
+          final costPriceSnapshot = _parseDouble(productMap['cost_price']);
           final quantity = (item['quantity'] as num).toInt();
 
           final baseLineTotal = _roundMoney(unitPrice * quantity);
@@ -1017,6 +1461,8 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'price_category_used': priceTypeUsed,
+            'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': baseLineTotal,
             'item_discount_amount': isRefund ? 0.0 : itemDiscount,
@@ -1028,12 +1474,27 @@ class DatabaseHelper {
           final barcode = item['barcode'] as String;
           final productName = item['product_name'] as String;
           final unitPrice = item['unit_price'] as double;
+          final priceCategoryUsed =
+              (item['price_category_used'] ?? 'selling').toString();
+          final costPriceSnapshot =
+              (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
           final quantity = item['quantity'] as int;
           final baseLineTotal = item['base_line_total'] as double;
           final itemDiscount = item['item_discount_amount'] as double;
           final finalLineTotal = item['line_total'] as double;
 
           final stockDelta = isRefund ? quantity : -quantity;
+
+          final stockRows = await txn.query(
+            'products',
+            columns: ['stock'],
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+            limit: 1,
+          );
+          final stockBefore = stockRows.isEmpty
+              ? 0
+              : (stockRows.first['stock'] as num).toInt();
 
           final updatedCount = await txn.rawUpdate(
             '''
@@ -1055,12 +1516,29 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'price_category_used': priceCategoryUsed,
+            'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': baseLineTotal,
             'item_discount_amount': itemDiscount,
             'line_total': finalLineTotal,
             'created_at': now,
           });
+
+          await _insertInventoryMovement(
+            txn,
+            barcode: barcode,
+            productName: productName,
+            actionType: isRefund ? 'refund' : 'sale',
+            quantityChange: stockDelta,
+            stockBefore: stockBefore,
+            stockAfter: stockBefore + stockDelta,
+            priceType: priceCategoryUsed,
+            referenceId: saleId,
+            referenceType: 'sale',
+            performedBy: cashierName,
+            createdAt: now,
+          );
         }
 
         final syncData = jsonEncode({
@@ -1201,6 +1679,21 @@ class DatabaseHelper {
               (refundableData['product_name'] ?? 'Unknown product').toString();
           final unitPrice = ((refundableData['refund_unit_price'] as num?) ?? 0)
               .toDouble();
+          final originalPriceCategory =
+              (refundableData['price_category_used'] ?? 'selling').toString();
+          final costPriceSnapshot =
+              ((refundableData['cost_price_snapshot'] as num?) ?? 0).toDouble();
+
+          final stockRows = await txn.query(
+            'products',
+            columns: ['stock'],
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+            limit: 1,
+          );
+          final stockBefore = stockRows.isEmpty
+              ? 0
+              : (stockRows.first['stock'] as num).toInt();
 
           final updatedCount = await txn.rawUpdate(
             '''
@@ -1233,6 +1726,8 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'price_category_used': originalPriceCategory,
+            'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': refundLineTotal,
             'item_discount_amount': 0.0,
@@ -1240,13 +1735,32 @@ class DatabaseHelper {
             'created_at': now,
           });
 
+          await _insertInventoryMovement(
+            txn,
+            barcode: barcode,
+            productName: productName,
+            actionType: 'refund',
+            quantityChange: quantity,
+            stockBefore: stockBefore,
+            stockAfter: stockBefore + quantity,
+            priceType: originalPriceCategory,
+            referenceId: refundSaleId,
+            referenceType: 'refund',
+            reason: refundReason.trim(),
+            performedBy: cashierName,
+            createdAt: now,
+          );
+
           syncItems.add({
             'product': {
               'barcode': barcode,
               'name': productName,
               'price': unitPrice,
+              'cost_price': costPriceSnapshot,
             },
             'quantity': quantity,
+            'unit_price_used': unitPrice,
+            'price_type_used': originalPriceCategory,
             'line_total': -refundLineTotal,
           });
         }
@@ -1294,23 +1808,105 @@ class DatabaseHelper {
     }
   }
 
-  Future<bool> updateProductPriceLocal(String barcode, double newPrice) async {
+  Future<bool> updateProductPriceLocal(
+    String barcode,
+    double newPrice, {
+    String priceType = 'selling',
+    String? changedBy,
+    String? reason,
+    bool? saleEnabled,
+  }) async {
     final db = await database;
 
     try {
       await db.transaction((txn) async {
         final now = DateTime.now().toIso8601String();
 
-        await txn.update(
+        final rows = await txn.query(
           'products',
-          {'price': newPrice, 'updated_at': now},
+          columns: [
+            'name',
+            'price',
+            'cost_price',
+            'selling_price',
+            'wholesale_price',
+            'sale_price',
+            'sale_enabled',
+          ],
           where: 'barcode = ?',
           whereArgs: [barcode],
+          limit: 1,
+        );
+
+        if (rows.isEmpty) {
+          throw Exception('Product not found for barcode $barcode.');
+        }
+
+        final row = rows.first;
+        final productName = (row['name'] ?? 'Unknown product').toString();
+        final normalizedPriceType = priceType == 'cost'
+            ? 'cost'
+            : _normalizePriceType(priceType);
+
+        final oldPrice = normalizedPriceType == 'cost'
+            ? _parseDouble(row['cost_price'])
+            : normalizedPriceType == 'wholesale'
+                ? _parseDouble(row['wholesale_price'])
+                : normalizedPriceType == 'sale'
+                    ? _parseDouble(row['sale_price'])
+                    : _parseDouble(row['selling_price'] ?? row['price']);
+
+        final updates = <String, Object?>{
+          'updated_at': now,
+          'last_price_updated_at': now,
+        };
+
+        switch (normalizedPriceType) {
+          case 'cost':
+            updates['cost_price'] = newPrice;
+            break;
+          case 'wholesale':
+            updates['wholesale_price'] = newPrice;
+            break;
+          case 'sale':
+            updates['sale_price'] = newPrice;
+            updates['sale_enabled'] = saleEnabled == null
+                ? 1
+                : (saleEnabled ? 1 : 0);
+            break;
+          case 'selling':
+          default:
+            updates['selling_price'] = newPrice;
+            updates['price'] = newPrice;
+            break;
+        }
+
+        await txn.update(
+          'products',
+          updates,
+          where: 'barcode = ?',
+          whereArgs: [barcode],
+        );
+
+        await _insertInventoryMovement(
+          txn,
+          barcode: barcode,
+          productName: productName,
+          actionType: _mapPriceActionType(normalizedPriceType),
+          oldPrice: oldPrice,
+          newPrice: newPrice,
+          priceType: normalizedPriceType,
+          reason: reason,
+          performedBy: changedBy,
+          createdAt: now,
         );
 
         final syncData = jsonEncode({
           'barcode': barcode,
           'new_price': newPrice,
+          'price_type': normalizedPriceType,
+          'sale_enabled': saleEnabled,
+          'reason': reason,
           'updated_at': now,
           'branch': 'Hikkaduwa',
           'vendor': 'Alfasoft',
@@ -1516,6 +2112,8 @@ class DatabaseHelper {
             'barcode': row['barcode'],
             'product_name': row['product_name'],
             'unit_price': row['unit_price'],
+            'price_category_used': row['price_category_used'],
+            'cost_price_snapshot': row['cost_price_snapshot'],
             'quantity': row['quantity'],
             'base_line_total': row['base_line_total'],
             'item_discount_amount': row['item_discount_amount'],
@@ -1562,11 +2160,18 @@ class DatabaseHelper {
         barcode,
         product_name,
         unit_price,
+        price_category_used,
+        cost_price_snapshot,
         SUM(quantity) AS original_quantity,
         COALESCE(SUM(ABS(line_total)), 0) AS original_net_total
       FROM sale_items
       WHERE sale_id = ?
-      GROUP BY barcode, product_name, unit_price
+      GROUP BY
+        barcode,
+        product_name,
+        unit_price,
+        price_category_used,
+        cost_price_snapshot
       ORDER BY product_name ASC
       ''',
       [saleId],
@@ -1619,6 +2224,8 @@ class DatabaseHelper {
         'barcode': barcode,
         'product_name': row['product_name'],
         'unit_price': row['unit_price'],
+        'price_category_used': row['price_category_used'],
+        'cost_price_snapshot': row['cost_price_snapshot'],
         'original_quantity': originalQty,
         'refunded_quantity': refundedQty,
         'refundable_quantity': refundableQty < 0 ? 0 : refundableQty,
@@ -2161,6 +2768,7 @@ class DatabaseHelper {
     required String discountType,
     required double discountValue,
     required List<Map<String, dynamic>> items,
+    String selectedPriceType = 'selling',
   }) async {
     final db = await database;
 
@@ -2175,6 +2783,9 @@ class DatabaseHelper {
       'cart_name': safeName,
       'cashier_name': cashierName,
       'is_refund_mode': isRefundMode ? 1 : 0,
+      'selected_price_type': isRefundMode
+          ? 'selling'
+          : _normalizePriceType(selectedPriceType),
       'discount_type': isRefundMode
           ? 'none'
           : _normalizeDiscountType(discountType),
@@ -2236,6 +2847,8 @@ class DatabaseHelper {
         'cart_name': row['cart_name'],
         'cashier_name': row['cashier_name'],
         'is_refund_mode': isRefundMode,
+        'selected_price_type': (row['selected_price_type'] ?? 'selling')
+            .toString(),
         'discount_type': discountType,
         'discount_value': discountValue,
         'item_count': itemCount,
@@ -2292,6 +2905,8 @@ class DatabaseHelper {
         'cart_name': row['cart_name'],
         'cashier_name': row['cashier_name'],
         'is_refund_mode': ((row['is_refund_mode'] as num?) ?? 0).toInt() == 1,
+        'selected_price_type': (row['selected_price_type'] ?? 'selling')
+            .toString(),
         'discount_type': (row['discount_type'] ?? 'none').toString(),
         'discount_value': ((row['discount_value'] as num?) ?? 0).toDouble(),
         'items': decodedItems,
@@ -3652,6 +4267,328 @@ class DatabaseHelper {
       'total_units': totalUnits,
       'estimated_cost': estimatedCost,
     };
+  }
+
+  Future<List<Map<String, dynamic>>> getInventoryMovements({
+    int limit = 50,
+    String? barcode,
+    List<String>? actionTypes,
+    String searchQuery = '',
+  }) async {
+    final db = await database;
+
+    final clauses = <String>[];
+    final args = <Object?>[];
+
+    if (barcode != null && barcode.trim().isNotEmpty) {
+      clauses.add('barcode = ?');
+      args.add(barcode.trim());
+    }
+
+    if (actionTypes != null && actionTypes.isNotEmpty) {
+      final placeholders = List.filled(actionTypes.length, '?').join(',');
+      clauses.add('action_type IN ($placeholders)');
+      args.addAll(actionTypes);
+    }
+
+    final trimmedSearch = searchQuery.trim();
+    if (trimmedSearch.isNotEmpty) {
+      clauses.add('(product_name LIKE ? OR barcode LIKE ? OR COALESCE(reason, \'\') LIKE ?)');
+      final pattern = '%$trimmedSearch%';
+      args
+        ..add(pattern)
+        ..add(pattern)
+        ..add(pattern);
+    }
+
+    final rows = await db.query(
+      'inventory_movements',
+      where: clauses.isEmpty ? null : clauses.join(' AND '),
+      whereArgs: args.isEmpty ? null : args,
+      orderBy: 'created_at DESC, id DESC',
+      limit: limit,
+    );
+
+    return rows.map((row) => Map<String, dynamic>.from(row)).toList();
+  }
+
+  Future<bool> receiveStockLocal(
+    String barcode,
+    int quantity, {
+    double? unitCost,
+    String? performedBy,
+    String? reason,
+  }) async {
+    if (barcode.trim().isEmpty || quantity <= 0) return false;
+
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        final now = DateTime.now().toIso8601String();
+        final rows = await txn.query(
+          'products',
+          columns: ['name', 'stock', 'cost_price'],
+          where: 'barcode = ?',
+          whereArgs: [barcode.trim()],
+          limit: 1,
+        );
+
+        if (rows.isEmpty) {
+          throw Exception('Product not found for barcode $barcode');
+        }
+
+        final row = rows.first;
+        final productName = (row['name'] ?? 'Unknown product').toString();
+        final stockBefore = _parseInt(row['stock']);
+        final stockAfter = stockBefore + quantity;
+
+        final updates = <String, Object?>{
+          'stock': stockAfter,
+          'updated_at': now,
+        };
+
+        if (unitCost != null && unitCost >= 0) {
+          updates['cost_price'] = _roundMoney(unitCost);
+          updates['last_price_updated_at'] = now;
+        }
+
+        await txn.update(
+          'products',
+          updates,
+          where: 'barcode = ?',
+          whereArgs: [barcode.trim()],
+        );
+
+        await _insertInventoryMovement(
+          txn,
+          barcode: barcode.trim(),
+          productName: productName,
+          actionType: 'stock_receive',
+          quantityChange: quantity,
+          stockBefore: stockBefore,
+          stockAfter: stockAfter,
+          reason: reason,
+          performedBy: performedBy,
+          createdAt: now,
+        );
+
+        final syncData = jsonEncode({
+          'barcode': barcode.trim(),
+          'quantity': quantity,
+          'unit_cost': unitCost,
+          'reason': reason,
+          'performed_by': performedBy,
+          'updated_at': now,
+          'branch': 'Hikkaduwa',
+          'vendor': 'Alfasoft',
+        });
+
+        await txn.insert('sync_queue', {
+          'type': 'STOCK_RECEIVE',
+          'data': syncData,
+          'status': 'pending',
+          'created_at': now,
+        });
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error receiving stock: $e');
+      return false;
+    }
+  }
+
+  Future<bool> adjustStockLocal(
+    String barcode, {
+    required String adjustmentType,
+    required int quantity,
+    String? performedBy,
+    String? reason,
+  }) async {
+    if (barcode.trim().isEmpty) return false;
+    if (adjustmentType != 'add' && adjustmentType != 'remove' && adjustmentType != 'set') {
+      return false;
+    }
+    if (quantity < 0) return false;
+    if (adjustmentType != 'set' && quantity == 0) return false;
+
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        final now = DateTime.now().toIso8601String();
+        final rows = await txn.query(
+          'products',
+          columns: ['name', 'stock'],
+          where: 'barcode = ?',
+          whereArgs: [barcode.trim()],
+          limit: 1,
+        );
+
+        if (rows.isEmpty) {
+          throw Exception('Product not found for barcode $barcode');
+        }
+
+        final row = rows.first;
+        final productName = (row['name'] ?? 'Unknown product').toString();
+        final stockBefore = _parseInt(row['stock']);
+
+        late final int stockAfter;
+        late final int quantityChange;
+        late final String actionType;
+
+        switch (adjustmentType) {
+          case 'add':
+            stockAfter = stockBefore + quantity;
+            quantityChange = quantity;
+            actionType = 'stock_adjust_add';
+            break;
+          case 'remove':
+            if (quantity > stockBefore) {
+              throw Exception('Cannot remove more than available stock.');
+            }
+            stockAfter = stockBefore - quantity;
+            quantityChange = -quantity;
+            actionType = 'stock_adjust_remove';
+            break;
+          case 'set':
+            stockAfter = quantity;
+            quantityChange = quantity - stockBefore;
+            actionType = 'stock_adjust_set';
+            break;
+          default:
+            throw Exception('Unsupported adjustment type.');
+        }
+
+        await txn.update(
+          'products',
+          {
+            'stock': stockAfter,
+            'updated_at': now,
+          },
+          where: 'barcode = ?',
+          whereArgs: [barcode.trim()],
+        );
+
+        await _insertInventoryMovement(
+          txn,
+          barcode: barcode.trim(),
+          productName: productName,
+          actionType: actionType,
+          quantityChange: quantityChange,
+          stockBefore: stockBefore,
+          stockAfter: stockAfter,
+          reason: reason,
+          performedBy: performedBy,
+          createdAt: now,
+        );
+
+        final backendAdjustmentType = adjustmentType == 'add'
+            ? 'increase'
+            : adjustmentType == 'remove'
+                ? 'decrease'
+                : 'set_exact';
+
+        final syncData = jsonEncode({
+          'barcode': barcode.trim(),
+          'adjustment_type': backendAdjustmentType,
+          'quantity': quantity,
+          'reason': reason,
+          'performed_by': performedBy,
+          'updated_at': now,
+          'branch': 'Hikkaduwa',
+          'vendor': 'Alfasoft',
+        });
+
+        await txn.insert('sync_queue', {
+          'type': 'STOCK_ADJUST',
+          'data': syncData,
+          'status': 'pending',
+          'created_at': now,
+        });
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error adjusting stock: $e');
+      return false;
+    }
+  }
+
+  Future<bool> updateProductMinStockLevelLocal(
+    String barcode,
+    int minStockLevel, {
+    String? changedBy,
+  }) async {
+    if (barcode.trim().isEmpty || minStockLevel < 0) return false;
+
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        final now = DateTime.now().toIso8601String();
+        final rows = await txn.query(
+          'products',
+          columns: ['name', 'min_stock_level'],
+          where: 'barcode = ?',
+          whereArgs: [barcode.trim()],
+          limit: 1,
+        );
+
+        if (rows.isEmpty) {
+          throw Exception('Product not found for barcode $barcode');
+        }
+
+        final row = rows.first;
+        final productName = (row['name'] ?? 'Unknown product').toString();
+        final beforeLevel = _parseInt(row['min_stock_level']);
+
+        await txn.update(
+          'products',
+          {
+            'min_stock_level': minStockLevel,
+            'updated_at': now,
+          },
+          where: 'barcode = ?',
+          whereArgs: [barcode.trim()],
+        );
+
+        await _insertInventoryMovement(
+          txn,
+          barcode: barcode.trim(),
+          productName: productName,
+          actionType: 'min_stock_change',
+          quantityChange: minStockLevel - beforeLevel,
+          stockBefore: beforeLevel,
+          stockAfter: minStockLevel,
+          performedBy: changedBy,
+          createdAt: now,
+        );
+
+        final syncData = jsonEncode({
+          'barcode': barcode.trim(),
+          'min_stock_level': minStockLevel,
+          'reason': 'Minimum stock level updated',
+          'performed_by': changedBy,
+          'updated_at': now,
+          'branch': 'Hikkaduwa',
+          'vendor': 'Alfasoft',
+        });
+
+        await txn.insert('sync_queue', {
+          'type': 'MIN_STOCK_UPDATE',
+          'data': syncData,
+          'status': 'pending',
+          'created_at': now,
+        });
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error updating minimum stock: $e');
+      return false;
+    }
   }
 
 }

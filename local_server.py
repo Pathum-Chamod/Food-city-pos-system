@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Local Mock API Server for Food City POS System
-Mimics the Spaceship PHP/MySQL API using local SQLite
+Upgraded to support advanced product pricing + inventory sync.
 Run: python local_server.py
 Endpoint: http://localhost:8080/api/pos_sync.php
 """
@@ -21,6 +21,79 @@ def get_db():
     return conn
 
 
+def get_table_columns(cursor, table_name):
+    rows = cursor.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row[1] for row in rows}
+
+
+def ensure_column(cursor, table_name, column_name, column_sql):
+    columns = get_table_columns(cursor, table_name)
+    if column_name not in columns:
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+
+
+def normalize_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def parse_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def parse_float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def now_sql():
+    return "datetime('now','localtime')"
+
+
+def get_product_row(cursor, barcode):
+    return cursor.execute(
+        """
+        SELECT
+            id,
+            barcode,
+            name,
+            COALESCE(category, 'General') AS category,
+            COALESCE(cost_price, 0) AS cost_price,
+            COALESCE(selling_price, price, 0) AS selling_price,
+            COALESCE(price, selling_price, 0) AS price,
+            CASE
+                WHEN COALESCE(wholesale_price, 0) <= 0 THEN COALESCE(selling_price, price, 0)
+                ELSE wholesale_price
+            END AS wholesale_price,
+            sale_price,
+            COALESCE(sale_enabled, CASE WHEN sale_price IS NOT NULL THEN 1 ELSE 0 END) AS sale_enabled,
+            COALESCE(stock, 0) AS stock,
+            COALESCE(min_stock_level, 0) AS min_stock_level,
+            COALESCE(is_active, 1) AS is_active,
+            updated_at,
+            last_price_updated_at
+        FROM products
+        WHERE barcode = ?
+        """,
+        (barcode,),
+    ).fetchone()
+
+
 def log_inventory_history(
     cursor,
     barcode,
@@ -30,7 +103,6 @@ def log_inventory_history(
     reference_type="",
     reference_id=None,
 ):
-    """Write one inventory movement record."""
     cursor.execute(
         """
         INSERT INTO inventory_history (
@@ -55,11 +127,276 @@ def log_inventory_history(
     )
 
 
+def update_product_price(
+    cursor,
+    barcode,
+    new_price,
+    price_type="selling",
+    sale_enabled=None,
+    reason="",
+):
+    row = get_product_row(cursor, barcode)
+    if not row:
+        return False, "Product not found"
+
+    normalized = str(price_type or "selling").strip().lower()
+    if normalized not in {"selling", "wholesale", "sale", "cost"}:
+        normalized = "selling"
+
+    new_price = parse_float(new_price, -1)
+    if new_price < 0:
+        return False, "Invalid price"
+
+    if normalized == "selling":
+        cursor.execute(
+            f"""
+            UPDATE products
+            SET price = ?,
+                selling_price = ?,
+                updated_at = {now_sql()},
+                last_price_updated_at = {now_sql()}
+            WHERE barcode = ?
+            """,
+            (new_price, new_price, barcode),
+        )
+    elif normalized == "wholesale":
+        cursor.execute(
+            f"""
+            UPDATE products
+            SET wholesale_price = ?,
+                updated_at = {now_sql()},
+                last_price_updated_at = {now_sql()}
+            WHERE barcode = ?
+            """,
+            (new_price, barcode),
+        )
+    elif normalized == "sale":
+        enabled_value = 1 if normalize_bool(sale_enabled, True) else 0
+        cursor.execute(
+            f"""
+            UPDATE products
+            SET sale_price = ?,
+                sale_enabled = ?,
+                updated_at = {now_sql()},
+                last_price_updated_at = {now_sql()}
+            WHERE barcode = ?
+            """,
+            (new_price, enabled_value, barcode),
+        )
+    else:  # cost
+        cursor.execute(
+            f"""
+            UPDATE products
+            SET cost_price = ?,
+                updated_at = {now_sql()},
+                last_price_updated_at = {now_sql()}
+            WHERE barcode = ?
+            """,
+            (new_price, barcode),
+        )
+
+    log_inventory_history(
+        cursor,
+        barcode=barcode,
+        movement_type=f"price_change_{normalized}",
+        quantity=0,
+        reason=reason or f"{normalized.title()} price updated to Rs.{new_price:.2f}",
+        reference_type="price_update",
+        reference_id=None,
+    )
+    return True, "success"
+
+
+def update_stock_receive(
+    cursor,
+    barcode,
+    quantity,
+    cost=0,
+    supplier_id=0,
+    supplier_name="",
+    reason="",
+):
+    row = get_product_row(cursor, barcode)
+    if not row:
+        return False, "Product not found", None
+
+    quantity = parse_int(quantity, 0)
+    if quantity <= 0:
+        return False, "Quantity must be greater than 0", None
+
+    cost = parse_float(cost, 0)
+
+    cursor.execute(
+        f"""
+        INSERT INTO stock_receipts (
+            barcode,
+            quantity,
+            supplier_id,
+            cost,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, {now_sql()})
+        """,
+        (barcode, quantity, parse_int(supplier_id, 0), cost),
+    )
+    receipt_id = cursor.lastrowid
+
+    if cost > 0:
+        cursor.execute(
+            f"""
+            UPDATE products
+            SET stock = stock + ?,
+                cost_price = ?,
+                updated_at = {now_sql()},
+                last_price_updated_at = {now_sql()}
+            WHERE barcode = ?
+            """,
+            (quantity, cost, barcode),
+        )
+    else:
+        cursor.execute(
+            f"""
+            UPDATE products
+            SET stock = stock + ?,
+                updated_at = {now_sql()}
+            WHERE barcode = ?
+            """,
+            (quantity, barcode),
+        )
+
+    note = reason or "Received stock"
+    if supplier_name:
+        note = f"{note} ({supplier_name})"
+
+    log_inventory_history(
+        cursor,
+        barcode=barcode,
+        movement_type="stock_in",
+        quantity=quantity,
+        reason=note,
+        reference_type="stock_receipt",
+        reference_id=receipt_id,
+    )
+    return True, "success", receipt_id
+
+
+def update_stock_adjustment(cursor, barcode, adjustment_type, quantity, reason=""):
+    row = get_product_row(cursor, barcode)
+    if not row:
+        return False, "Product not found", None, None
+
+    current_stock = parse_int(row["stock"], 0)
+    normalized = str(adjustment_type or "").strip().lower()
+    quantity = parse_int(quantity, 0)
+
+    if normalized in {"increase", "add"}:
+        if quantity <= 0:
+            return False, "Quantity must be greater than 0", None, None
+        stock_delta = quantity
+        movement_type = "stock_adjust_add"
+    elif normalized in {"decrease", "remove"}:
+        if quantity <= 0:
+            return False, "Quantity must be greater than 0", None, None
+        stock_delta = -quantity
+        movement_type = "stock_adjust_remove"
+    elif normalized in {"set_exact", "set"}:
+        if quantity < 0:
+            return False, "Quantity cannot be negative", None, None
+        stock_delta = quantity - current_stock
+        movement_type = "stock_adjust_set"
+    else:
+        return False, "Invalid adjustment type", None, None
+
+    resulting_stock = current_stock + stock_delta
+    if resulting_stock < 0:
+        return False, "Resulting stock cannot be negative", None, None
+    if stock_delta == 0:
+        return False, "No stock change detected", current_stock, 0
+
+    cursor.execute(
+        f"""
+        UPDATE products
+        SET stock = ?, updated_at = {now_sql()}
+        WHERE barcode = ?
+        """,
+        (resulting_stock, barcode),
+    )
+
+    log_inventory_history(
+        cursor,
+        barcode=barcode,
+        movement_type=movement_type,
+        quantity=stock_delta,
+        reason=reason or "Manual stock adjustment",
+        reference_type="manual_adjustment",
+        reference_id=None,
+    )
+    return True, "success", resulting_stock, stock_delta
+
+
+def update_min_stock_level(cursor, barcode, min_stock_level, reason=""):
+    row = get_product_row(cursor, barcode)
+    if not row:
+        return False, "Product not found"
+
+    min_stock_level = parse_int(min_stock_level, -1)
+    if min_stock_level < 0:
+        return False, "Minimum stock level cannot be negative"
+
+    cursor.execute(
+        f"""
+        UPDATE products
+        SET min_stock_level = ?, updated_at = {now_sql()}
+        WHERE barcode = ?
+        """,
+        (min_stock_level, barcode),
+    )
+
+    log_inventory_history(
+        cursor,
+        barcode=barcode,
+        movement_type="min_stock_change",
+        quantity=0,
+        reason=reason or f"Minimum stock level updated to {min_stock_level}",
+        reference_type="min_stock_update",
+        reference_id=None,
+    )
+    return True, "success"
+
+
+def fetch_products(cursor):
+    rows = cursor.execute(
+        """
+        SELECT
+            id,
+            barcode,
+            name,
+            COALESCE(category, 'General') AS category,
+            COALESCE(cost_price, 0) AS cost_price,
+            COALESCE(selling_price, price, 0) AS selling_price,
+            COALESCE(price, selling_price, 0) AS price,
+            CASE
+                WHEN COALESCE(wholesale_price, 0) <= 0 THEN COALESCE(selling_price, price, 0)
+                ELSE wholesale_price
+            END AS wholesale_price,
+            sale_price,
+            COALESCE(sale_enabled, CASE WHEN sale_price IS NOT NULL THEN 1 ELSE 0 END) AS sale_enabled,
+            COALESCE(stock, 0) AS stock,
+            COALESCE(min_stock_level, 0) AS min_stock_level,
+            COALESCE(is_active, 1) AS is_active,
+            updated_at,
+            last_price_updated_at
+        FROM products
+        ORDER BY name COLLATE NOCASE ASC
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def init_db():
     conn = get_db()
     c = conn.cursor()
 
-    # Product master
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS products (
@@ -73,7 +410,34 @@ def init_db():
         """
     )
 
-    # Sales summary table
+    ensure_column(c, "products", "category", "category TEXT DEFAULT 'General'")
+    ensure_column(c, "products", "cost_price", "cost_price REAL DEFAULT 0")
+    ensure_column(c, "products", "selling_price", "selling_price REAL DEFAULT 0")
+    ensure_column(c, "products", "wholesale_price", "wholesale_price REAL DEFAULT 0")
+    ensure_column(c, "products", "sale_price", "sale_price REAL")
+    ensure_column(c, "products", "sale_enabled", "sale_enabled INTEGER DEFAULT 0")
+    ensure_column(c, "products", "min_stock_level", "min_stock_level INTEGER DEFAULT 0")
+    ensure_column(c, "products", "is_active", "is_active INTEGER DEFAULT 1")
+    ensure_column(c, "products", "last_price_updated_at", "last_price_updated_at TEXT")
+
+    c.execute(
+        f"""
+        UPDATE products
+        SET category = COALESCE(NULLIF(category, ''), 'General'),
+            selling_price = COALESCE(NULLIF(selling_price, 0), price, 0),
+            price = COALESCE(NULLIF(price, 0), selling_price, 0),
+            wholesale_price = CASE
+                WHEN COALESCE(wholesale_price, 0) <= 0 THEN COALESCE(NULLIF(selling_price, 0), price, 0)
+                ELSE wholesale_price
+            END,
+            sale_enabled = COALESCE(sale_enabled, 0),
+            min_stock_level = COALESCE(min_stock_level, 0),
+            is_active = COALESCE(is_active, 1),
+            updated_at = COALESCE(updated_at, {now_sql()}),
+            last_price_updated_at = COALESCE(last_price_updated_at, updated_at)
+        """
+    )
+
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS sales (
@@ -88,7 +452,6 @@ def init_db():
         """
     )
 
-    # Suppliers
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS suppliers (
@@ -99,7 +462,6 @@ def init_db():
         """
     )
 
-    # Stock receipts from suppliers
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS stock_receipts (
@@ -113,7 +475,6 @@ def init_db():
         """
     )
 
-    # Unified inventory history / stock movement table
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS inventory_history (
@@ -129,25 +490,90 @@ def init_db():
         """
     )
 
-    # Seed mock products if empty
     if c.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
         products = [
-            ("4791044000123", "Munchee Super Cream Cracker 500g", 450.00, 100),
-            ("4792011001234", "Anchor Milk Powder 400g", 1100.00, 50),
-            ("4792022005678", "Saman Halmassa 425g", 650.00, 30),
-            ("4793033009999", "Kist Strawberry Jam 500g", 580.00, 40),
+            {
+                "barcode": "4791044000123",
+                "name": "Munchee Super Cream Cracker 500g",
+                "selling_price": 550.00,
+                "wholesale_price": 500.00,
+                "sale_price": None,
+                "sale_enabled": 0,
+                "cost_price": 420.00,
+                "stock": 100,
+                "min_stock_level": 10,
+            },
+            {
+                "barcode": "4792011001234",
+                "name": "Anchor Milk Powder 400g",
+                "selling_price": 1100.00,
+                "wholesale_price": 1050.00,
+                "sale_price": None,
+                "sale_enabled": 0,
+                "cost_price": 920.00,
+                "stock": 50,
+                "min_stock_level": 8,
+            },
+            {
+                "barcode": "4792022005678",
+                "name": "Saman Halmassa 425g",
+                "selling_price": 650.00,
+                "wholesale_price": 620.00,
+                "sale_price": None,
+                "sale_enabled": 0,
+                "cost_price": 540.00,
+                "stock": 30,
+                "min_stock_level": 6,
+            },
+            {
+                "barcode": "4793033009999",
+                "name": "Kist Strawberry Jam 500g",
+                "selling_price": 580.00,
+                "wholesale_price": 555.00,
+                "sale_price": None,
+                "sale_enabled": 0,
+                "cost_price": 470.00,
+                "stock": 40,
+                "min_stock_level": 8,
+            },
         ]
-        for barcode, name, price, stock in products:
+        for item in products:
             c.execute(
-                """
-                INSERT INTO products (barcode, name, price, stock, updated_at)
-                VALUES (?, ?, ?, ?, datetime('now','localtime'))
+                f"""
+                INSERT INTO products (
+                    barcode,
+                    name,
+                    category,
+                    price,
+                    cost_price,
+                    selling_price,
+                    wholesale_price,
+                    sale_price,
+                    sale_enabled,
+                    stock,
+                    min_stock_level,
+                    is_active,
+                    updated_at,
+                    last_price_updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, {now_sql()}, {now_sql()})
                 """,
-                (barcode, name, price, stock),
+                (
+                    item["barcode"],
+                    item["name"],
+                    "General",
+                    item["selling_price"],
+                    item["cost_price"],
+                    item["selling_price"],
+                    item["wholesale_price"],
+                    item["sale_price"],
+                    item["sale_enabled"],
+                    item["stock"],
+                    item["min_stock_level"],
+                ),
             )
         print("✅ Seeded 4 mock products")
 
-    # Seed suppliers if empty
     if c.execute("SELECT COUNT(*) FROM suppliers").fetchone()[0] == 0:
         suppliers = [
             ("Maliban Distributor", "077-1234567"),
@@ -185,8 +611,7 @@ class APIHandler(BaseHTTPRequestHandler):
         c = conn.cursor()
 
         if action == "get_products":
-            rows = c.execute("SELECT * FROM products").fetchall()
-            result = [dict(r) for r in rows]
+            result = fetch_products(c)
             self._set_headers()
             self.wfile.write(json.dumps(result).encode())
 
@@ -271,7 +696,7 @@ class APIHandler(BaseHTTPRequestHandler):
         c = conn.cursor()
 
         if action == "pos_sync":
-            sync_type = body.get("type", "")
+            sync_type = str(body.get("type", "")).strip().upper()
             data = body.get("data", {})
 
             if isinstance(data, str):
@@ -281,7 +706,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 transaction_type = str(data.get("transaction_type", "sale")).lower()
                 items = data.get("items", [])
 
-                # Validate all items before writing anything
                 for item in items:
                     product = item.get("product", {})
                     barcode = str(product.get("barcode", "")).strip()
@@ -323,7 +747,6 @@ class APIHandler(BaseHTTPRequestHandler):
                         return
 
                     current_stock = int(row["stock"])
-
                     if transaction_type == "sale" and current_stock < qty:
                         self._set_headers(400)
                         self.wfile.write(
@@ -337,9 +760,8 @@ class APIHandler(BaseHTTPRequestHandler):
                         conn.close()
                         return
 
-                # Insert sale/refund record
                 c.execute(
-                    """
+                    f"""
                     INSERT INTO sales (
                         total_amount,
                         cashier_name,
@@ -348,7 +770,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         items,
                         created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))
+                    VALUES (?, ?, ?, ?, ?, {now_sql()})
                     """,
                     (
                         data.get("total_amount", 0),
@@ -360,7 +782,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 sale_id = c.lastrowid
 
-                # Apply stock changes + log history
                 for item in items:
                     product = item.get("product", {})
                     barcode = str(product.get("barcode", "")).strip()
@@ -369,9 +790,9 @@ class APIHandler(BaseHTTPRequestHandler):
                     stock_delta = qty if transaction_type == "refund" else -qty
 
                     c.execute(
-                        """
+                        f"""
                         UPDATE products
-                        SET stock = stock + ?, updated_at = datetime('now','localtime')
+                        SET stock = stock + ?, updated_at = {now_sql()}
                         WHERE barcode = ?
                         """,
                         (stock_delta, barcode),
@@ -402,190 +823,74 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"status": "success"}).encode())
 
             elif sync_type == "PRICE_UPDATE":
-                barcode = data.get("barcode", "")
+                barcode = str(data.get("barcode", "")).strip()
                 new_price = data.get("new_price", 0)
+                price_type = str(data.get("price_type", "selling")).strip().lower()
+                sale_enabled = data.get("sale_enabled")
+                reason = str(data.get("reason", "")).strip()
 
-                c.execute(
-                    """
-                    UPDATE products
-                    SET price = ?, updated_at = datetime('now','localtime')
-                    WHERE barcode = ?
-                    """,
-                    (new_price, barcode),
-                )
-
-                log_inventory_history(
+                ok, message = update_product_price(
                     c,
                     barcode=barcode,
-                    movement_type="price_update",
-                    quantity=0,
-                    reason=f"Price updated to Rs.{new_price}",
-                    reference_type="price_update",
-                    reference_id=None,
+                    new_price=new_price,
+                    price_type=price_type,
+                    sale_enabled=sale_enabled,
+                    reason=reason,
                 )
-
-                conn.commit()
-                print(f"  ✅ PRICE_UPDATE: {barcode} → Rs.{new_price}")
-                self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
-
-            else:
-                self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
-
-        elif action == "update_price":
-            barcode = body.get("barcode", "")
-            new_price = body.get("new_price", 0)
-
-            c.execute(
-                """
-                UPDATE products
-                SET price = ?, updated_at = datetime('now','localtime')
-                WHERE barcode = ?
-                """,
-                (new_price, barcode),
-            )
-
-            log_inventory_history(
-                c,
-                barcode=barcode,
-                movement_type="price_update",
-                quantity=0,
-                reason=f"Price updated to Rs.{new_price}",
-                reference_type="price_update",
-                reference_id=None,
-            )
-
-            conn.commit()
-            print(f"  ✅ Price updated: {barcode} → Rs.{new_price}")
-            self._set_headers()
-            self.wfile.write(json.dumps({"status": "success"}).encode())
-
-        elif action == "add_stock":
-            barcode = body.get("barcode", "")
-            quantity = int(body.get("quantity", 0))
-            supplier_id = int(body.get("supplier_id", 0))
-            cost = float(body.get("cost", 0))
-
-            c.execute(
-                """
-                INSERT INTO stock_receipts (
-                    barcode,
-                    quantity,
-                    supplier_id,
-                    cost,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, datetime('now','localtime'))
-                """,
-                (barcode, quantity, supplier_id, cost),
-            )
-            receipt_id = c.lastrowid
-
-            c.execute(
-                """
-                UPDATE products
-                SET stock = stock + ?, updated_at = datetime('now','localtime')
-                WHERE barcode = ?
-                """,
-                (quantity, barcode),
-            )
-
-            log_inventory_history(
-                c,
-                barcode=barcode,
-                movement_type="stock_in",
-                quantity=quantity,
-                reason="Received stock from supplier",
-                reference_type="stock_receipt",
-                reference_id=receipt_id,
-            )
-
-            conn.commit()
-            print(f"  ✅ Stock added: {barcode} +{quantity} units")
-            self._set_headers()
-            self.wfile.write(json.dumps({"status": "success"}).encode())
-
-        elif action == "adjust_stock":
-            barcode = body.get("barcode", "").strip()
-            adjustment_type = body.get("adjustment_type", "").strip()
-            quantity = int(body.get("quantity", 0))
-            reason = body.get("reason", "").strip()
-
-            row = c.execute(
-                "SELECT stock FROM products WHERE barcode = ?",
-                (barcode,),
-            ).fetchone()
-
-            if not row:
-                self._set_headers(404)
-                self.wfile.write(
-                    json.dumps(
-                        {"status": "error", "message": "Product not found"}
-                    ).encode()
-                )
-            else:
-                current_stock = int(row["stock"])
-
-                if adjustment_type == "increase":
-                    stock_delta = quantity
-                elif adjustment_type == "decrease":
-                    stock_delta = -quantity
-                elif adjustment_type == "set_exact":
-                    stock_delta = quantity - current_stock
+                if not ok:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
                 else:
-                    self._set_headers(400)
-                    self.wfile.write(
-                        json.dumps(
-                            {"status": "error", "message": "Invalid adjustment type"}
-                        ).encode()
-                    )
-                    conn.close()
-                    return
-
-                resulting_stock = current_stock + stock_delta
-
-                if resulting_stock < 0:
-                    self._set_headers(400)
-                    self.wfile.write(
-                        json.dumps(
-                            {
-                                "status": "error",
-                                "message": "Resulting stock cannot be negative",
-                            }
-                        ).encode()
-                    )
-                elif stock_delta == 0:
-                    self._set_headers(400)
-                    self.wfile.write(
-                        json.dumps(
-                            {"status": "error", "message": "No stock change detected"}
-                        ).encode()
-                    )
-                else:
-                    c.execute(
-                        """
-                        UPDATE products
-                        SET stock = ?, updated_at = datetime('now','localtime')
-                        WHERE barcode = ?
-                        """,
-                        (resulting_stock, barcode),
-                    )
-
-                    log_inventory_history(
-                        c,
-                        barcode=barcode,
-                        movement_type="adjustment",
-                        quantity=stock_delta,
-                        reason=reason or "Manual stock adjustment",
-                        reference_type="manual_adjustment",
-                        reference_id=None,
-                    )
-
                     conn.commit()
-                    print(
-                        f"  ✅ Stock adjusted: {barcode} {adjustment_type} ({stock_delta:+d})"
-                    )
+                    print(f"  ✅ PRICE_UPDATE: {barcode} [{price_type}] → Rs.{parse_float(new_price):.2f}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"STOCK_RECEIVE", "INVENTORY_RECEIVE", "ADD_STOCK"}:
+                barcode = str(data.get("barcode", "")).strip()
+                quantity = data.get("quantity", 0)
+                unit_cost = data.get("unit_cost", data.get("cost", 0))
+                supplier_id = data.get("supplier_id", 0)
+                supplier_name = str(data.get("supplier_name", "")).strip()
+                reason = str(data.get("reason", "")).strip()
+
+                ok, message, _ = update_stock_receive(
+                    c,
+                    barcode=barcode,
+                    quantity=quantity,
+                    cost=unit_cost,
+                    supplier_id=supplier_id,
+                    supplier_name=supplier_name,
+                    reason=reason,
+                )
+                if not ok:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    conn.commit()
+                    print(f"  ✅ STOCK_RECEIVE: {barcode} +{parse_int(quantity)}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"STOCK_ADJUST", "INVENTORY_ADJUST"}:
+                barcode = str(data.get("barcode", "")).strip()
+                adjustment_type = str(data.get("adjustment_type", "")).strip().lower()
+                quantity = data.get("quantity", 0)
+                reason = str(data.get("reason", "")).strip()
+
+                ok, message, resulting_stock, stock_delta = update_stock_adjustment(
+                    c,
+                    barcode=barcode,
+                    adjustment_type=adjustment_type,
+                    quantity=quantity,
+                    reason=reason,
+                )
+                if not ok:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    conn.commit()
+                    print(f"  ✅ STOCK_ADJUST: {barcode} {adjustment_type} ({stock_delta:+d})")
                     self._set_headers()
                     self.wfile.write(
                         json.dumps(
@@ -596,6 +901,134 @@ class APIHandler(BaseHTTPRequestHandler):
                             }
                         ).encode()
                     )
+
+            elif sync_type in {"MIN_STOCK_UPDATE", "UPDATE_MIN_STOCK"}:
+                barcode = str(data.get("barcode", "")).strip()
+                min_stock_level = data.get("min_stock_level", 0)
+                reason = str(data.get("reason", "")).strip()
+
+                ok, message = update_min_stock_level(
+                    c,
+                    barcode=barcode,
+                    min_stock_level=min_stock_level,
+                    reason=reason,
+                )
+                if not ok:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    conn.commit()
+                    print(f"  ✅ MIN_STOCK_UPDATE: {barcode} → {parse_int(min_stock_level)}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            else:
+                self._set_headers(400)
+                self.wfile.write(
+                    json.dumps(
+                        {"status": "error", "message": f"Unsupported sync type: {sync_type}"}
+                    ).encode()
+                )
+
+        elif action == "update_price":
+            barcode = str(body.get("barcode", "")).strip()
+            new_price = body.get("new_price", 0)
+            price_type = str(body.get("price_type", "selling")).strip().lower()
+            sale_enabled = body.get("sale_enabled")
+            reason = str(body.get("reason", "")).strip()
+
+            ok, message = update_product_price(
+                c,
+                barcode=barcode,
+                new_price=new_price,
+                price_type=price_type,
+                sale_enabled=sale_enabled,
+                reason=reason,
+            )
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                print(f"  ✅ Price updated: {barcode} [{price_type}] → Rs.{parse_float(new_price):.2f}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+        elif action == "add_stock":
+            barcode = str(body.get("barcode", "")).strip()
+            quantity = body.get("quantity", 0)
+            supplier_id = body.get("supplier_id", 0)
+            supplier_name = str(body.get("supplier_name", "")).strip()
+            cost = body.get("cost", 0)
+            reason = str(body.get("reason", "")).strip()
+
+            ok, message, _ = update_stock_receive(
+                c,
+                barcode=barcode,
+                quantity=quantity,
+                cost=cost,
+                supplier_id=supplier_id,
+                supplier_name=supplier_name,
+                reason=reason,
+            )
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                print(f"  ✅ Stock added: {barcode} +{parse_int(quantity)} units")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+        elif action == "adjust_stock":
+            barcode = str(body.get("barcode", "")).strip()
+            adjustment_type = str(body.get("adjustment_type", "")).strip()
+            quantity = body.get("quantity", 0)
+            reason = str(body.get("reason", "")).strip()
+
+            ok, message, resulting_stock, stock_delta = update_stock_adjustment(
+                c,
+                barcode=barcode,
+                adjustment_type=adjustment_type,
+                quantity=quantity,
+                reason=reason,
+            )
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                print(f"  ✅ Stock adjusted: {barcode} {adjustment_type} ({stock_delta:+d})")
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "resulting_stock": resulting_stock,
+                            "stock_delta": stock_delta,
+                        }
+                    ).encode()
+                )
+
+        elif action == "update_min_stock":
+            barcode = str(body.get("barcode", "")).strip()
+            min_stock_level = body.get("min_stock_level", 0)
+            reason = str(body.get("reason", "")).strip()
+
+            ok, message = update_min_stock_level(
+                c,
+                barcode=barcode,
+                min_stock_level=min_stock_level,
+                reason=reason,
+            )
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                print(f"  ✅ Min stock updated: {barcode} → {parse_int(min_stock_level)}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
 
         else:
             self._set_headers(404)
@@ -631,6 +1064,7 @@ def main():
 ║     POST ?action=update_price            → Price update  ║
 ║     POST ?action=add_stock               → Stock receive ║
 ║     POST ?action=adjust_stock            → Adjustment    ║
+║     POST ?action=update_min_stock        → Min stock     ║
 ║                                                          ║
 ║   Press Ctrl+C to stop                                   ║
 ╚══════════════════════════════════════════════════════════╝

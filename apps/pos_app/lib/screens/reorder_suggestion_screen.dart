@@ -347,7 +347,7 @@ class _ReorderSuggestionScreenState extends State<ReorderSuggestionScreen> {
                     ),
                     const SizedBox(height: 14),
                     DropdownButtonFormField<PosSupplier>(
-                      value: _selectedSupplier,
+                      initialValue: _selectedSupplier,
                       isExpanded: true,
                       items: _suppliers
                           .map(

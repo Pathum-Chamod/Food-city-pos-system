@@ -153,7 +153,7 @@ class _SupplierProductMappingScreenState extends State<SupplierProductMappingScr
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     DropdownButtonFormField<int>(
-                      value: selectedSupplier.id,
+                      initialValue: selectedSupplier.id,
                       decoration: const InputDecoration(
                         labelText: 'Supplier',
                         border: OutlineInputBorder(),
@@ -366,7 +366,7 @@ class _SupplierProductMappingScreenState extends State<SupplierProductMappingScr
               children: [
                 if (widget.initialSupplier == null) ...[
                   DropdownButtonFormField<int?>(
-                    value: _selectedSupplier?.id,
+                    initialValue: _selectedSupplier?.id,
                     decoration: const InputDecoration(
                       labelText: 'Filter by Supplier',
                       border: OutlineInputBorder(),

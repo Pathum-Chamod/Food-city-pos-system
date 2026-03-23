@@ -4,29 +4,36 @@ import 'package:shared/shared.dart';
 class CartItem {
   final Product product;
   int quantity;
+  double unitPrice;
+  ProductPriceType priceType;
 
   CartItem({
     required this.product,
+    required this.unitPrice,
+    required this.priceType,
     this.quantity = 1,
   });
 
-  double get total => product.price * quantity;
+  double get total => unitPrice * quantity;
 }
 
 class CartProvider with ChangeNotifier {
   final List<CartItem> _items = [];
-  bool _isRefundMode = false;
 
+  bool _isRefundMode = false;
   String _discountType = 'none'; // none | fixed | percent
   double _discountValue = 0.0;
 
-  List<CartItem> get items => _items;
+  ProductPriceType _selectedPriceType = ProductPriceType.selling;
+
+  List<CartItem> get items => List.unmodifiable(_items);
   bool get isRefundMode => _isRefundMode;
   String get discountType => _discountType;
   double get discountValue => _discountValue;
+  ProductPriceType get selectedPriceType => _selectedPriceType;
 
   double get subtotal {
-    return _items.fold(0, (sum, item) => sum + item.total);
+    return _items.fold(0.0, (sum, item) => sum + item.total);
   }
 
   double get discountAmount {
@@ -54,8 +61,27 @@ class CartProvider with ChangeNotifier {
   void toggleRefundMode(bool value) {
     _isRefundMode = value;
     _items.clear();
+    _selectedPriceType = ProductPriceType.selling;
     _discountType = 'none';
     _discountValue = 0.0;
+    notifyListeners();
+  }
+
+  void setPriceType(
+    ProductPriceType value, {
+    bool applyToExistingItems = true,
+  }) {
+    if (_selectedPriceType == value) return;
+
+    _selectedPriceType = value;
+
+    if (applyToExistingItems) {
+      for (final item in _items) {
+        item.priceType = value;
+        item.unitPrice = item.product.resolvePrice(value);
+      }
+    }
+
     notifyListeners();
   }
 
@@ -82,13 +108,23 @@ class CartProvider with ChangeNotifier {
   }
 
   void addToCart(Product product) {
-    final index =
-        _items.indexWhere((item) => item.product.barcode == product.barcode);
+    final index = _items.indexWhere(
+      (item) =>
+          item.product.barcode == product.barcode &&
+          item.priceType == _selectedPriceType,
+    );
 
     if (index >= 0) {
       _items[index].quantity += 1;
     } else {
-      _items.add(CartItem(product: product, quantity: 1));
+      _items.add(
+        CartItem(
+          product: product,
+          quantity: 1,
+          unitPrice: product.resolvePrice(_selectedPriceType),
+          priceType: _selectedPriceType,
+        ),
+      );
     }
 
     notifyListeners();
@@ -140,6 +176,7 @@ class CartProvider with ChangeNotifier {
   void clearCart() {
     _items.clear();
     _isRefundMode = false;
+    _selectedPriceType = ProductPriceType.selling;
     _discountType = 'none';
     _discountValue = 0.0;
     notifyListeners();
@@ -150,23 +187,40 @@ class CartProvider with ChangeNotifier {
     required bool isRefundMode,
     String discountType = 'none',
     double discountValue = 0.0,
+    String? selectedPriceType,
   }) {
     _items.clear();
     _isRefundMode = isRefundMode;
+    _selectedPriceType = isRefundMode
+        ? ProductPriceType.selling
+        : ProductPriceTypeX.fromDb(selectedPriceType);
+
     _discountType = isRefundMode ? 'none' : _normalizeDiscountType(discountType);
     _discountValue = isRefundMode ? 0.0 : (discountValue < 0 ? 0.0 : discountValue);
 
     for (final rawItem in items) {
       final item = Map<String, dynamic>.from(rawItem);
       final productMap = Map<String, dynamic>.from(item['product'] as Map);
+
+      final product = Product.fromMap(productMap);
       final quantity = (item['quantity'] as num?)?.toInt() ?? 1;
 
       if (quantity <= 0) continue;
 
+      final itemPriceType = ProductPriceTypeX.fromDb(
+        item['price_type_used']?.toString(),
+      );
+
+      final unitPriceUsed =
+          (item['unit_price_used'] as num?)?.toDouble() ??
+          product.resolvePrice(itemPriceType);
+
       _items.add(
         CartItem(
-          product: Product.fromMap(productMap),
+          product: product,
           quantity: quantity,
+          unitPrice: unitPriceUsed,
+          priceType: itemPriceType,
         ),
       );
     }
@@ -180,6 +234,8 @@ class CartProvider with ChangeNotifier {
           (item) => {
             'product': item.product.toMap(),
             'quantity': item.quantity,
+            'unit_price_used': item.unitPrice,
+            'price_type_used': item.priceType.dbValue,
             'line_total': item.total,
           },
         )

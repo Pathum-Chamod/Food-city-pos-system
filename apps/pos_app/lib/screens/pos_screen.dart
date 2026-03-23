@@ -15,6 +15,7 @@ import 'cart_discount_dialog.dart';
 import 'cashier_summary_screen.dart';
 import 'checkout_payment_dialog.dart';
 import 'held_carts_screen.dart';
+import 'inventory_screen.dart';
 import 'login_screen.dart';
 import 'sales_report_screen.dart';
 import 'supplier_management_screen.dart';
@@ -196,6 +197,209 @@ class _PosScreenState extends State<PosScreen> {
     return _getCurrentProduct(barcode)?.stock ?? fallback;
   }
 
+  int _getQuantityInCart(CartProvider cart, String barcode) {
+    return cart.items
+        .where((item) => item.product.barcode == barcode)
+        .fold<int>(0, (sum, item) => sum + item.quantity);
+  }
+
+  double _getDisplayPrice(Product product, CartProvider cart) {
+    if (cart.isRefundMode) {
+      return product.sellingPrice;
+    }
+
+    return product.resolvePrice(cart.selectedPriceType);
+  }
+
+  String _priceTypeTitle(ProductPriceType type) {
+    switch (type) {
+      case ProductPriceType.selling:
+        return 'Selling Price';
+      case ProductPriceType.wholesale:
+        return 'Wholesale Price';
+      case ProductPriceType.sale:
+        return 'Sale Price';
+    }
+  }
+
+  String _priceTypeShortLabel(ProductPriceType type) {
+    switch (type) {
+      case ProductPriceType.selling:
+        return 'SELLING';
+      case ProductPriceType.wholesale:
+        return 'WHOLESALE';
+      case ProductPriceType.sale:
+        return 'SALE';
+    }
+  }
+
+  Color _priceTypeColor(ProductPriceType type) {
+    switch (type) {
+      case ProductPriceType.selling:
+        return Colors.blue;
+      case ProductPriceType.wholesale:
+        return Colors.deepPurple;
+      case ProductPriceType.sale:
+        return Colors.orange;
+    }
+  }
+
+  String _priceModeDescription(ProductPriceType type) {
+    switch (type) {
+      case ProductPriceType.selling:
+        return 'Standard retail billing using the product selling price.';
+      case ProductPriceType.wholesale:
+        return 'Uses wholesale price. If missing, it falls back to selling price.';
+      case ProductPriceType.sale:
+        return 'Uses sale price only for products with active sale pricing. Others use selling price.';
+    }
+  }
+
+  Future<void> _handlePriceTypeSelection(
+    CartProvider cart,
+    ProductPriceType newType,
+  ) async {
+    if (cart.isRefundMode || cart.selectedPriceType == newType) return;
+
+    if (cart.items.isNotEmpty) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Change Billing Price Category?'),
+          content: Text(
+            'Apply ${_priceTypeTitle(newType)} to all items currently in the cart?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) {
+        _focusBarcodeField();
+        return;
+      }
+    }
+
+    cart.setPriceType(newType, applyToExistingItems: true);
+
+    _showInfoMessage(
+      '${_priceTypeTitle(newType)} selected for this bill.',
+      backgroundColor: _priceTypeColor(newType),
+    );
+    _focusBarcodeField();
+  }
+
+  bool _shouldShowCartPriceTypeBadge(CartItem item) {
+    switch (item.priceType) {
+      case ProductPriceType.selling:
+        return false;
+      case ProductPriceType.wholesale:
+        return item.product.wholesalePrice > 0 &&
+            item.product.wholesalePrice != item.product.sellingPrice;
+      case ProductPriceType.sale:
+        return item.product.saleEnabled &&
+            item.product.salePrice != null &&
+            item.product.salePrice! > 0;
+    }
+  }
+
+  Widget _buildPriceTypeBadge(ProductPriceType type) {
+    final color = _priceTypeColor(type);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Text(
+        _priceTypeShortLabel(type),
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPriceModeSelector(CartProvider cart) {
+    return Container(
+      width: double.infinity,
+      color: cart.isRefundMode ? Colors.red[50] : Colors.blue[50],
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.sell_outlined,
+                color: cart.isRefundMode ? Colors.red[700] : Colors.blue[800],
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Billing Price Category',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: cart.isRefundMode ? Colors.red[800] : Colors.blue[900],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: ProductPriceType.values.map((type) {
+              final selected = cart.selectedPriceType == type;
+              final color = _priceTypeColor(type);
+
+              return ChoiceChip(
+                label: Text(_priceTypeTitle(type)),
+                selected: selected,
+                onSelected: cart.isRefundMode
+                    ? null
+                    : (_) => _handlePriceTypeSelection(cart, type),
+                selectedColor: color.withOpacity(0.14),
+                backgroundColor: Colors.white,
+                side: BorderSide(
+                  color: selected ? color : Colors.grey.shade300,
+                ),
+                labelStyle: TextStyle(
+                  color: selected ? color : Colors.grey[800],
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            cart.isRefundMode
+                ? 'Refund mode uses selling price only.'
+                : _priceModeDescription(cart.selectedPriceType),
+            style: TextStyle(
+              color: Colors.grey[700],
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+
   List<Product> get _filteredProducts {
     final query = _searchQuery.trim().toLowerCase();
 
@@ -241,7 +445,7 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    final currentQtyInCart = cart.getQuantityFor(product.barcode);
+    final currentQtyInCart = _getQuantityInCart(cart, product.barcode);
 
     if (!cart.isRefundMode && currentQtyInCart >= product.stock) {
       _showInfoMessage(
@@ -517,6 +721,7 @@ class _PosScreenState extends State<PosScreen> {
         discountType: cart.discountType,
         discountValue: cart.discountValue,
         items: cart.getCartItemsAsMap(),
+        selectedPriceType: cart.selectedPriceType.dbValue,
       );
 
       cart.clearCart();
@@ -566,23 +771,33 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   List<Map<String, dynamic>> _prepareResumedCartItems(
-    List<Map<String, dynamic>> rawItems,
-  ) {
+    List<Map<String, dynamic>> rawItems, {
+    String fallbackPriceType = 'selling',
+  }) {
     return rawItems.map((raw) {
       final item = Map<String, dynamic>.from(raw);
       final productMap = Map<String, dynamic>.from(item['product'] as Map);
       final barcode = productMap['barcode']?.toString() ?? '';
       final quantity = (item['quantity'] as num?)?.toInt() ?? 1;
+      final safeQuantity = quantity <= 0 ? 1 : quantity;
 
       final latestProduct = _getCurrentProduct(barcode);
-      final resolvedProduct = latestProduct?.toMap() ?? productMap;
-      final resolvedPrice =
-          ((resolvedProduct['price'] as num?) ?? 0).toDouble();
+      final resolvedProductMap = latestProduct?.toMap() ?? productMap;
+
+      final priceTypeUsed =
+          (item['price_type_used'] ?? fallbackPriceType).toString();
+      final resolvedUnitPrice =
+          (item['unit_price_used'] as num?)?.toDouble() ??
+          (latestProduct ?? Product.fromMap(resolvedProductMap)).resolvePrice(
+            ProductPriceTypeX.fromDb(priceTypeUsed),
+          );
 
       return {
-        'product': resolvedProduct,
-        'quantity': quantity <= 0 ? 1 : quantity,
-        'line_total': resolvedPrice * (quantity <= 0 ? 1 : quantity),
+        'product': resolvedProductMap,
+        'quantity': safeQuantity,
+        'unit_price_used': resolvedUnitPrice,
+        'price_type_used': priceTypeUsed,
+        'line_total': resolvedUnitPrice * safeQuantity,
       };
     }).toList();
   }
@@ -613,13 +828,20 @@ class _PosScreenState extends State<PosScreen> {
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
 
-    final preparedItems = _prepareResumedCartItems(restoredItems);
+    final restoredSelectedPriceType =
+        (restored['selected_price_type'] ?? 'selling').toString();
+
+    final preparedItems = _prepareResumedCartItems(
+      restoredItems,
+      fallbackPriceType: restoredSelectedPriceType,
+    );
 
     cart.loadHeldCart(
       items: preparedItems,
       isRefundMode: (restored['is_refund_mode'] ?? false) == true,
       discountType: (restored['discount_type'] ?? 'none').toString(),
       discountValue: ((restored['discount_value'] as num?) ?? 0).toDouble(),
+      selectedPriceType: restoredSelectedPriceType,
     );
 
     _showInfoMessage(
@@ -793,7 +1015,9 @@ class _PosScreenState extends State<PosScreen> {
 
   Widget _buildProductCard(Product product, CartProvider cart) {
     final isOutOfStock = product.stock <= 0 && !cart.isRefundMode;
-    final cartQty = cart.getQuantityFor(product.barcode);
+    final isLowStock = !isOutOfStock && product.isLowStock;
+    final cartQty = _getQuantityInCart(cart, product.barcode);
+    final displayPrice = _getDisplayPrice(product, cart);
 
     return Card(
       elevation: 2,
@@ -806,7 +1030,7 @@ class _PosScreenState extends State<PosScreen> {
               context,
               product.barcode,
               product.name,
-              product.price,
+              product.sellingPrice,
               () async {
                 await _refreshProductsFromBackendAndReload(
                   silentOnFailure: true,
@@ -838,13 +1062,21 @@ class _PosScreenState extends State<PosScreen> {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    Text(
-                      'Rs. ${product.price.toStringAsFixed(2)}',
-                      style: TextStyle(
-                        color: isOutOfStock ? Colors.grey : Colors.green,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            'Rs. ${displayPrice.toStringAsFixed(2)}',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: isOutOfStock ? Colors.grey : Colors.green,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 6),
                     Text(
@@ -862,14 +1094,23 @@ class _PosScreenState extends State<PosScreen> {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: isOutOfStock ? Colors.red[50] : Colors.blue[50],
+                        color: isOutOfStock
+                            ? Colors.red[50]
+                            : (isLowStock ? Colors.orange[50] : Colors.blue[50]),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        isOutOfStock ? 'Out of Stock' : 'Stock: ${product.stock}',
+                        isOutOfStock
+                            ? 'Out of Stock'
+                            : (isLowStock
+                                ? 'Low Stock: ${product.stock}'
+                                : 'Stock: ${product.stock}'),
                         style: TextStyle(
-                          color:
-                              isOutOfStock ? Colors.red[700] : Colors.blue[700],
+                          color: isOutOfStock
+                              ? Colors.red[700]
+                              : (isLowStock
+                                  ? Colors.orange[700]
+                                  : Colors.blue[700]),
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
@@ -941,9 +1182,13 @@ class _PosScreenState extends State<PosScreen> {
             Row(
               children: [
                 Text(
-                  'Rs. ${item.product.price.toStringAsFixed(2)} each',
+                  'Rs. ${item.unitPrice.toStringAsFixed(2)} each',
                   style: TextStyle(color: Colors.grey[700]),
                 ),
+                if (_shouldShowCartPriceTypeBadge(item)) ...[
+                  const SizedBox(width: 8),
+                  _buildPriceTypeBadge(item.priceType),
+                ],
                 const Spacer(),
                 IconButton(
                   onPressed: () {
@@ -1078,6 +1323,20 @@ class _PosScreenState extends State<PosScreen> {
               _focusBarcodeField();
             },
             icon: const Icon(Icons.bar_chart, color: Colors.white),
+          ),
+          IconButton(
+            tooltip: 'Inventory',
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const InventoryScreen(),
+                ),
+              );
+
+              _focusBarcodeField();
+            },
+            icon: const Icon(Icons.inventory_2_outlined, color: Colors.white),
           ),
           IconButton(
             tooltip: 'Store sales report',
@@ -1289,6 +1548,8 @@ class _PosScreenState extends State<PosScreen> {
                   ),
                 ),
                 const Divider(height: 1),
+                _buildPriceModeSelector(cart),
+                const Divider(height: 1),
                 Expanded(
                   child: cart.items.isEmpty
                       ? Center(
@@ -1313,6 +1574,25 @@ class _PosScreenState extends State<PosScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Text(
+                            'Bill Price Category:',
+                            style: TextStyle(
+                              color: Colors.grey[700],
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _buildPriceTypeBadge(
+                            cart.isRefundMode
+                                ? ProductPriceType.selling
+                                : cart.selectedPriceType,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
                       Text(
                         'Subtotal: Rs. ${cart.subtotal.toStringAsFixed(2)}',
                         textAlign: TextAlign.right,

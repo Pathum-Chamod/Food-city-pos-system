@@ -588,7 +588,7 @@ class _PurchaseOrderEditorScreenState extends State<PurchaseOrderEditorScreen> {
                           ),
                           const SizedBox(height: 12),
                           DropdownButtonFormField<PosSupplier>(
-                            value: _selectedSupplier,
+                            initialValue: _selectedSupplier,
                             items: _suppliers
                                 .map(
                                   (supplier) => DropdownMenuItem<PosSupplier>(
@@ -609,7 +609,7 @@ class _PurchaseOrderEditorScreenState extends State<PurchaseOrderEditorScreen> {
                           ),
                           const SizedBox(height: 12),
                           DropdownButtonFormField<String>(
-                            value: _status,
+                            initialValue: _status,
                             items: PurchaseOrderService.statuses
                                 .map(
                                   (status) => DropdownMenuItem<String>(
