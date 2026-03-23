@@ -1,10 +1,10 @@
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
+import 'stock_take_screen.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -13,13 +13,7 @@ class InventoryScreen extends StatefulWidget {
   State<InventoryScreen> createState() => _InventoryScreenState();
 }
 
-enum InventoryFilter {
-  all,
-  inStock,
-  lowStock,
-  outOfStock,
-  inactive,
-}
+enum InventoryFilter { all, inStock, lowStock, outOfStock, inactive }
 
 class _InventoryScreenState extends State<InventoryScreen> {
   final TextEditingController _searchController = TextEditingController();
@@ -104,7 +98,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final query = _searchQuery.trim().toLowerCase();
 
     return _products.where((product) {
-      final matchesSearch = query.isEmpty ||
+      final matchesSearch =
+          query.isEmpty ||
           product.name.toLowerCase().contains(query) ||
           product.barcode.toLowerCase().contains(query) ||
           product.category.toLowerCase().contains(query);
@@ -126,17 +121,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }).toList();
   }
 
-  int get _lowStockCount => _products.where((p) => p.isActive && p.isLowStock).length;
-  int get _outOfStockCount => _products.where((p) => p.isActive && p.isOutOfStock).length;
+  int get _lowStockCount =>
+      _products.where((p) => p.isActive && p.isLowStock).length;
+  int get _outOfStockCount =>
+      _products.where((p) => p.isActive && p.isOutOfStock).length;
   int get _activeProductCount => _products.where((p) => p.isActive).length;
   double get _stockValue => _products.fold<double>(
-        0,
-        (sum, product) => sum + (product.costPrice * product.stock),
-      );
+    0,
+    (sum, product) => sum + (product.costPrice * product.stock),
+  );
 
-  Future<Product?> _pickProduct({
-    required String title,
-  }) async {
+  Future<Product?> _pickProduct({required String title}) async {
     return showModalBottomSheet<Product>(
       context: context,
       isScrollControlled: true,
@@ -222,7 +217,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                         color: Colors.green,
                                       ),
                                     ),
-                                    onTap: () => Navigator.pop(context, product),
+                                    onTap: () =>
+                                        Navigator.pop(context, product),
                                   );
                                 },
                               ),
@@ -239,7 +235,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openReceiveFlow({Product? initialProduct}) async {
-    final product = initialProduct ??
+    final product =
+        initialProduct ??
         await _pickProduct(title: 'Select a product to receive');
     if (product == null || !mounted) return;
 
@@ -341,14 +338,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           ? null
                           : double.tryParse(rawCost);
 
-                      final changedBy = context.read<AuthProvider>().currentUser?.name;
-                      final success = await DatabaseHelper.instance.receiveStockLocal(
-                        product.barcode,
-                        qty,
-                        unitCost: unitCost,
-                        performedBy: changedBy,
-                        reason: noteController.text.trim(),
-                      );
+                      final changedBy = context
+                          .read<AuthProvider>()
+                          .currentUser
+                          ?.name;
+                      final success = await DatabaseHelper.instance
+                          .receiveStockLocal(
+                            product.barcode,
+                            qty,
+                            unitCost: unitCost,
+                            performedBy: changedBy,
+                            reason: noteController.text.trim(),
+                          );
 
                       if (!context.mounted) return;
                       Navigator.pop(context, success);
@@ -377,7 +378,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openAdjustFlow({Product? initialProduct}) async {
-    final product = initialProduct ??
+    final product =
+        initialProduct ??
         await _pickProduct(title: 'Select a product to adjust');
     if (product == null || !mounted) return;
 
@@ -475,8 +477,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       width: double.infinity,
                       child: FilledButton.icon(
                         onPressed: () async {
-                          final qty = int.tryParse(qtyController.text.trim()) ?? -1;
-                          if (qty < 0 || (adjustmentType != 'set' && qty == 0)) {
+                          final qty =
+                              int.tryParse(qtyController.text.trim()) ?? -1;
+                          if (qty < 0 ||
+                              (adjustmentType != 'set' && qty == 0)) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text('Enter a valid quantity.'),
@@ -485,14 +489,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             return;
                           }
 
-                          final changedBy = context.read<AuthProvider>().currentUser?.name;
-                          final success = await DatabaseHelper.instance.adjustStockLocal(
-                            product.barcode,
-                            adjustmentType: adjustmentType,
-                            quantity: qty,
-                            performedBy: changedBy,
-                            reason: reasonController.text.trim(),
-                          );
+                          final changedBy = context
+                              .read<AuthProvider>()
+                              .currentUser
+                              ?.name;
+                          final success = await DatabaseHelper.instance
+                              .adjustStockLocal(
+                                product.barcode,
+                                adjustmentType: adjustmentType,
+                                quantity: qty,
+                                performedBy: changedBy,
+                                reason: reasonController.text.trim(),
+                              );
 
                           if (!context.mounted) return;
                           Navigator.pop(context, success);
@@ -534,9 +542,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           content: TextField(
             controller: controller,
             keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'Minimum stock level',
-            ),
+            decoration: const InputDecoration(labelText: 'Minimum stock level'),
           ),
           actions: [
             TextButton(
@@ -547,13 +553,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
               onPressed: () async {
                 final value = int.tryParse(controller.text.trim()) ?? -1;
                 if (value < 0) return;
-                final changedBy = context.read<AuthProvider>().currentUser?.name;
-                final success =
-                    await DatabaseHelper.instance.updateProductMinStockLevelLocal(
-                  product.barcode,
-                  value,
-                  changedBy: changedBy,
-                );
+                final changedBy = context
+                    .read<AuthProvider>()
+                    .currentUser
+                    ?.name;
+                final success = await DatabaseHelper.instance
+                    .updateProductMinStockLevelLocal(
+                      product.barcode,
+                      value,
+                      changedBy: changedBy,
+                    );
                 if (!context.mounted) return;
                 Navigator.pop(context, success);
               },
@@ -575,7 +584,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openPriceChangeFlow({Product? initialProduct}) async {
-    final product = initialProduct ??
+    final product =
+        initialProduct ??
         await _pickProduct(title: 'Select a product to change price');
     if (product == null || !mounted) return;
 
@@ -600,8 +610,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
               valueController.text = product.wholesalePrice.toStringAsFixed(2);
               break;
             case 'sale':
-              valueController.text =
-                  (product.salePrice ?? product.sellingPrice).toStringAsFixed(2);
+              valueController.text = (product.salePrice ?? product.sellingPrice)
+                  .toStringAsFixed(2);
               saleEnabled = product.saleEnabled;
               break;
             case 'selling':
@@ -717,8 +727,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       width: double.infinity,
                       child: FilledButton.icon(
                         onPressed: () async {
-                          final newPrice =
-                              double.tryParse(valueController.text.trim());
+                          final newPrice = double.tryParse(
+                            valueController.text.trim(),
+                          );
                           if (newPrice == null || newPrice < 0) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
@@ -728,16 +739,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             return;
                           }
 
-                          final changedBy = context.read<AuthProvider>().currentUser?.name;
-                          final success =
-                              await DatabaseHelper.instance.updateProductPriceLocal(
-                            product.barcode,
-                            newPrice,
-                            priceType: priceType,
-                            changedBy: changedBy,
-                            reason: noteController.text.trim(),
-                            saleEnabled: priceType == 'sale' ? saleEnabled : null,
-                          );
+                          final changedBy = context
+                              .read<AuthProvider>()
+                              .currentUser
+                              ?.name;
+                          final success = await DatabaseHelper.instance
+                              .updateProductPriceLocal(
+                                product.barcode,
+                                newPrice,
+                                priceType: priceType,
+                                changedBy: changedBy,
+                                reason: noteController.text.trim(),
+                                saleEnabled: priceType == 'sale'
+                                    ? saleEnabled
+                                    : null,
+                              );
 
                           if (!context.mounted) return;
                           Navigator.pop(context, success);
@@ -766,11 +782,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
+  Future<void> _openStockTakeScreen({String? barcode}) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StockTakeScreen(initialBarcode: barcode),
+      ),
+    );
+
+    if (!mounted) return;
+    await _loadData(showLoader: false);
+  }
+
   Future<void> _openRecentActivitySheet({String? barcode}) async {
     final movements = await DatabaseHelper.instance.getInventoryMovements(
       limit: 100,
       barcode: barcode,
-      searchQuery: barcode == null ? _searchQuery : '',
     );
 
     if (!mounted) return;
@@ -870,8 +897,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     spacing: 12,
                     runSpacing: 12,
                     children: [
-                      _buildDetailCard('Current Stock', product.stock.toString()),
-                      _buildDetailCard('Min Stock', product.minStockLevel.toString()),
+                      _buildDetailCard(
+                        'Current Stock',
+                        product.stock.toString(),
+                      ),
+                      _buildDetailCard(
+                        'Min Stock',
+                        product.minStockLevel.toString(),
+                      ),
                       _buildDetailCard(
                         'Cost Price',
                         'Rs. ${product.costPrice.toStringAsFixed(2)}',
@@ -900,7 +933,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       FilledButton.icon(
                         onPressed: () async {
                           Navigator.pop(context);
-                          await Future.delayed(const Duration(milliseconds: 120));
+                          await Future.delayed(
+                            const Duration(milliseconds: 120),
+                          );
                           if (!mounted) return;
                           await _openReceiveFlow(initialProduct: product);
                         },
@@ -910,7 +945,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       OutlinedButton.icon(
                         onPressed: () async {
                           Navigator.pop(context);
-                          await Future.delayed(const Duration(milliseconds: 120));
+                          await Future.delayed(
+                            const Duration(milliseconds: 120),
+                          );
                           if (!mounted) return;
                           await _openAdjustFlow(initialProduct: product);
                         },
@@ -920,7 +957,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       OutlinedButton.icon(
                         onPressed: () async {
                           Navigator.pop(context);
-                          await Future.delayed(const Duration(milliseconds: 120));
+                          await Future.delayed(
+                            const Duration(milliseconds: 120),
+                          );
                           if (!mounted) return;
                           await _openPriceChangeFlow(initialProduct: product);
                         },
@@ -930,7 +969,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       OutlinedButton.icon(
                         onPressed: () async {
                           Navigator.pop(context);
-                          await Future.delayed(const Duration(milliseconds: 120));
+                          await Future.delayed(
+                            const Duration(milliseconds: 120),
+                          );
+                          if (!mounted) return;
+                          await _openStockTakeScreen(barcode: product.barcode);
+                        },
+                        icon: const Icon(Icons.playlist_add_check_circle),
+                        label: const Text('Count'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          await Future.delayed(
+                            const Duration(milliseconds: 120),
+                          );
                           if (!mounted) return;
                           await _openMinStockDialog(product);
                         },
@@ -1063,10 +1116,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           children: [
             Icon(icon, size: 18, color: Colors.blue.shade700),
             const SizedBox(width: 8),
-            Text(
-              title,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
           ],
         ),
       ),
@@ -1176,10 +1226,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           const SizedBox(height: 4),
           Text(
             value,
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 16,
-            ),
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
           ),
         ],
       ),
@@ -1257,10 +1304,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontSize: 13,
-                  ),
+                  style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
                 ),
               ],
             ),
@@ -1532,6 +1576,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               onTap: () => _openPriceChangeFlow(),
                             ),
                             _buildQuickActionButton(
+                              title: 'Count Stock',
+                              icon: Icons.playlist_add_check_circle,
+                              onTap: () => _openStockTakeScreen(),
+                            ),
+                            _buildQuickActionButton(
                               title: 'Activity',
                               icon: Icons.history,
                               onTap: () => _openRecentActivitySheet(),
@@ -1597,7 +1646,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               children: [
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Row(
                                         children: [
@@ -1727,7 +1777,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           const Padding(
                             padding: EdgeInsets.symmetric(vertical: 20),
                             child: Center(
-                              child: Text('No recent stock or price activity yet.'),
+                              child: Text(
+                                'No recent stock or price activity yet.',
+                              ),
                             ),
                           )
                         else

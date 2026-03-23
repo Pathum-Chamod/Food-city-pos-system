@@ -40,7 +40,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 15,
+        version: 16,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -303,6 +303,41 @@ class DatabaseHelper {
         reference_type TEXT,
         performed_by TEXT,
         created_at TEXT NOT NULL
+      )
+    ''');
+
+
+
+    await db.execute('''
+      CREATE TABLE stock_take_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        total_products INTEGER NOT NULL DEFAULT 0,
+        counted_items INTEGER NOT NULL DEFAULT 0,
+        discrepancy_items INTEGER NOT NULL DEFAULT 0,
+        applied_items INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE stock_take_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        system_stock INTEGER NOT NULL,
+        counted_stock INTEGER NOT NULL,
+        difference_qty INTEGER NOT NULL,
+        applied INTEGER NOT NULL DEFAULT 0,
+        applied_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(session_id, barcode),
+        FOREIGN KEY (session_id) REFERENCES stock_take_sessions(id) ON DELETE CASCADE
       )
     ''');
 
@@ -772,6 +807,43 @@ class DatabaseHelper {
         "TEXT NOT NULL DEFAULT 'selling'",
       );
     }
+
+
+    if (oldVersion < 16) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS stock_take_sessions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'open',
+          total_products INTEGER NOT NULL DEFAULT 0,
+          counted_items INTEGER NOT NULL DEFAULT 0,
+          discrepancy_items INTEGER NOT NULL DEFAULT 0,
+          applied_items INTEGER NOT NULL DEFAULT 0,
+          started_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT
+        )
+      ''');
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS stock_take_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id INTEGER NOT NULL,
+          barcode TEXT NOT NULL,
+          product_name TEXT NOT NULL,
+          system_stock INTEGER NOT NULL,
+          counted_stock INTEGER NOT NULL,
+          difference_qty INTEGER NOT NULL,
+          applied INTEGER NOT NULL DEFAULT 0,
+          applied_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(session_id, barcode),
+          FOREIGN KEY (session_id) REFERENCES stock_take_sessions(id) ON DELETE CASCADE
+        )
+      ''');
+    }
+
   }
 
   Future<void> _addColumnIfMissing(
@@ -4589,6 +4661,306 @@ class DatabaseHelper {
       debugPrint('Error updating minimum stock: $e');
       return false;
     }
+  }
+
+
+
+  Future<Map<String, dynamic>> getOrCreateOpenStockTakeSession({
+    String defaultSessionName = 'Main Store Count',
+  }) async {
+    final db = await database;
+    final existing = await db.query(
+      'stock_take_sessions',
+      where: "status = ?",
+      whereArgs: ['open'],
+      orderBy: 'updated_at DESC, id DESC',
+      limit: 1,
+    );
+
+    if (existing.isNotEmpty) {
+      return Map<String, dynamic>.from(existing.first);
+    }
+
+    final now = DateTime.now().toIso8601String();
+    final sessionId = await db.insert('stock_take_sessions', {
+      'session_name': defaultSessionName,
+      'status': 'open',
+      'total_products': 0,
+      'counted_items': 0,
+      'discrepancy_items': 0,
+      'applied_items': 0,
+      'started_at': now,
+      'updated_at': now,
+    });
+
+    final created = await db.query(
+      'stock_take_sessions',
+      where: 'id = ?',
+      whereArgs: [sessionId],
+      limit: 1,
+    );
+
+    return Map<String, dynamic>.from(created.first);
+  }
+
+  Future<bool> renameStockTakeSession(int sessionId, String sessionName) async {
+    final trimmed = sessionName.trim();
+    if (sessionId <= 0 || trimmed.isEmpty) return false;
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    final updated = await db.update(
+      'stock_take_sessions',
+      {
+        'session_name': trimmed,
+        'updated_at': now,
+      },
+      where: 'id = ?',
+      whereArgs: [sessionId],
+    );
+    return updated > 0;
+  }
+
+  Future<void> _refreshStockTakeSessionSummary(
+    DatabaseExecutor db,
+    int sessionId,
+  ) async {
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS counted_items,
+        SUM(CASE WHEN difference_qty != 0 THEN 1 ELSE 0 END) AS discrepancy_items
+      FROM stock_take_items
+      WHERE session_id = ?
+      ''',
+      [sessionId],
+    );
+
+    final countedItems = _parseInt(rows.first['counted_items']);
+    final discrepancyItems = _parseInt(rows.first['discrepancy_items']);
+    final totalRows = await db.rawQuery('SELECT COUNT(*) AS total_products FROM products');
+    final totalProducts = _parseInt(totalRows.first['total_products']);
+
+    await db.update(
+      'stock_take_sessions',
+      {
+        'counted_items': countedItems,
+        'discrepancy_items': discrepancyItems,
+        'total_products': totalProducts,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [sessionId],
+    );
+  }
+
+  Future<bool> saveStockTakeCount({
+    required int sessionId,
+    required Product product,
+    required int countedQty,
+  }) async {
+    if (sessionId <= 0 || countedQty < 0) return false;
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    try {
+      await db.transaction((txn) async {
+        await txn.insert(
+          'stock_take_items',
+          {
+            'session_id': sessionId,
+            'barcode': product.barcode,
+            'product_name': product.name,
+            'system_stock': product.stock,
+            'counted_stock': countedQty,
+            'difference_qty': countedQty - product.stock,
+            'applied': 0,
+            'created_at': now,
+            'updated_at': now,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+
+        await txn.update(
+          'stock_take_sessions',
+          {'updated_at': now},
+          where: 'id = ?',
+          whereArgs: [sessionId],
+        );
+
+        await _refreshStockTakeSessionSummary(txn, sessionId);
+      });
+      return true;
+    } catch (e) {
+      debugPrint('Error saving stock take count: $e');
+      return false;
+    }
+  }
+
+  Future<bool> removeStockTakeCount({
+    required int sessionId,
+    required String barcode,
+  }) async {
+    if (sessionId <= 0 || barcode.trim().isEmpty) return false;
+    final db = await database;
+    try {
+      await db.transaction((txn) async {
+        await txn.delete(
+          'stock_take_items',
+          where: 'session_id = ? AND barcode = ?',
+          whereArgs: [sessionId, barcode.trim()],
+        );
+        await _refreshStockTakeSessionSummary(txn, sessionId);
+      });
+      return true;
+    } catch (e) {
+      debugPrint('Error removing stock take count: $e');
+      return false;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getStockTakeSessionItems(int sessionId) async {
+    if (sessionId <= 0) return [];
+    final db = await database;
+    final rows = await db.query(
+      'stock_take_items',
+      where: 'session_id = ?',
+      whereArgs: [sessionId],
+      orderBy: 'updated_at DESC, id DESC',
+    );
+    return rows.map((row) => Map<String, dynamic>.from(row)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> getCompletedStockTakeSessions({
+    int limit = 20,
+  }) async {
+    final db = await database;
+    final rows = await db.query(
+      'stock_take_sessions',
+      where: "status = ?",
+      whereArgs: ['completed'],
+      orderBy: 'completed_at DESC, id DESC',
+      limit: limit,
+    );
+    return rows.map((row) => Map<String, dynamic>.from(row)).toList();
+  }
+
+  Future<bool> discardOpenStockTakeSession(int sessionId) async {
+    if (sessionId <= 0) return false;
+    final db = await database;
+    try {
+      await db.delete(
+        'stock_take_sessions',
+        where: 'id = ? AND status = ?',
+        whereArgs: [sessionId, 'open'],
+      );
+      return true;
+    } catch (e) {
+      debugPrint('Error discarding stock take session: $e');
+      return false;
+    }
+  }
+
+  Future<Map<String, dynamic>> applyStockTakeSession({
+    required int sessionId,
+    String? performedBy,
+  }) async {
+    final db = await database;
+
+    final sessionRows = await db.query(
+      'stock_take_sessions',
+      where: 'id = ?',
+      whereArgs: [sessionId],
+      limit: 1,
+    );
+
+    if (sessionRows.isEmpty) {
+      return {
+        'success': false,
+        'message': 'Stock take session not found.',
+        'applied_count': 0,
+        'discrepancy_count': 0,
+      };
+    }
+
+    final session = Map<String, dynamic>.from(sessionRows.first);
+    final sessionName = (session['session_name'] ?? 'Stock Take Session').toString();
+    final items = await getStockTakeSessionItems(sessionId);
+    final discrepancies = items
+        .where((item) => _parseInt(item['difference_qty']) != 0)
+        .toList();
+
+    if (discrepancies.isEmpty) {
+      return {
+        'success': false,
+        'message': 'No discrepancies to apply.',
+        'applied_count': 0,
+        'discrepancy_count': 0,
+      };
+    }
+
+    int appliedCount = 0;
+    final failedBarcodes = <String>[];
+    final appliedAt = DateTime.now().toIso8601String();
+
+    for (final item in discrepancies) {
+      final barcode = (item['barcode'] ?? '').toString();
+      final countedStock = _parseInt(item['counted_stock']);
+      final success = await adjustStockLocal(
+        barcode,
+        adjustmentType: 'set',
+        quantity: countedStock,
+        performedBy: performedBy,
+        reason: 'Stock take reconciliation • $sessionName',
+      );
+
+      if (success) {
+        appliedCount += 1;
+        await db.update(
+          'stock_take_items',
+          {
+            'applied': 1,
+            'applied_at': appliedAt,
+            'updated_at': appliedAt,
+          },
+          where: 'session_id = ? AND barcode = ?',
+          whereArgs: [sessionId, barcode],
+        );
+      } else {
+        failedBarcodes.add(barcode);
+      }
+    }
+
+    if (failedBarcodes.isEmpty) {
+      final totalRows = await db.rawQuery('SELECT COUNT(*) AS total_products FROM products');
+      final totalProducts = _parseInt(totalRows.first['total_products']);
+      await db.update(
+        'stock_take_sessions',
+        {
+          'status': 'completed',
+          'total_products': totalProducts,
+          'applied_items': appliedCount,
+          'completed_at': appliedAt,
+          'updated_at': appliedAt,
+        },
+        where: 'id = ?',
+        whereArgs: [sessionId],
+      );
+
+      return {
+        'success': true,
+        'message': 'Stock take applied for $appliedCount items.',
+        'applied_count': appliedCount,
+        'discrepancy_count': discrepancies.length,
+      };
+    }
+
+    await _refreshStockTakeSessionSummary(db, sessionId);
+    return {
+      'success': false,
+      'message': 'Some stock take items could not be applied.',
+      'applied_count': appliedCount,
+      'discrepancy_count': discrepancies.length,
+      'failed_barcodes': failedBarcodes,
+    };
   }
 
 }
