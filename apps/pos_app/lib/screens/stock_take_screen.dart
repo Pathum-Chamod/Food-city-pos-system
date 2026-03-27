@@ -103,6 +103,145 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     );
   }
 
+  bool get _currentUserIsManager {
+    final role = context.read<AuthProvider>().currentUser?.role.toLowerCase();
+    return role == 'manager';
+  }
+
+  String _buildPerformedByLabel(String? approverName) {
+    final currentUser = context.read<AuthProvider>().currentUser;
+    final currentName = currentUser?.name?.trim();
+    if (_currentUserIsManager) {
+      return (currentName == null || currentName.isEmpty)
+          ? (approverName ?? 'Manager')
+          : currentName;
+    }
+    if (currentName == null || currentName.isEmpty) {
+      return approverName ?? 'Manager';
+    }
+    if (approverName == null || approverName.trim().isEmpty) {
+      return currentName;
+    }
+    return '$currentName (approved by ${approverName.trim()})';
+  }
+
+  Future<String?> _requireManagerApproval(String actionLabel) async {
+    if (_currentUserIsManager) {
+      final managerName = context.read<AuthProvider>().currentUser?.name?.trim();
+      return (managerName == null || managerName.isEmpty) ? 'Manager' : managerName;
+    }
+
+    final pinController = TextEditingController();
+    String? errorText;
+    bool isVerifying = false;
+
+    final approver = await showDialog<String?>(
+      context: context,
+      barrierDismissible: !isVerifying,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            Future<void> verify() async {
+              final pin = pinController.text.trim();
+              if (pin.isEmpty) {
+                setDialogState(() {
+                  errorText = 'Enter manager PIN.';
+                });
+                return;
+              }
+
+              setDialogState(() {
+                isVerifying = true;
+                errorText = null;
+              });
+
+              final user = await DatabaseHelper.instance.authenticateUser(pin);
+
+              if (!dialogContext.mounted) return;
+
+              if (user == null) {
+                setDialogState(() {
+                  isVerifying = false;
+                  errorText = 'Invalid PIN.';
+                });
+                return;
+              }
+
+              final role = (user['role'] ?? '').toString().toLowerCase();
+              if (role != 'manager') {
+                setDialogState(() {
+                  isVerifying = false;
+                  errorText = 'PIN does not belong to a manager.';
+                });
+                return;
+              }
+
+              Navigator.pop(
+                dialogContext,
+                (user['name'] ?? 'Manager').toString(),
+              );
+            }
+
+            return AlertDialog(
+              title: const Text('Manager Approval Required'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Enter manager PIN to $actionLabel.'),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: pinController,
+                    obscureText: true,
+                    autofocus: true,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'Manager PIN',
+                      border: const OutlineInputBorder(),
+                      errorText: errorText,
+                    ),
+                    onSubmitted: (_) {
+                      if (!isVerifying) {
+                        verify();
+                      }
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isVerifying
+                      ? null
+                      : () => Navigator.pop(dialogContext, null),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: isVerifying ? null : verify,
+                  child: isVerifying
+                      ? const SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Approve'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    pinController.dispose();
+
+    if (approver == null && mounted) {
+      _showMessage('Manager approval is required to continue.', isError: true);
+    }
+
+    return approver;
+  }
+
+
   List<Product> get _filteredProducts {
     final query = _searchQuery.trim().toLowerCase();
 
@@ -478,13 +617,17 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     if (!confirmed) return;
 
+    final approverName =
+        await _requireManagerApproval('apply stock take reconciliation');
+    if (approverName == null) return;
+
     setState(() {
       _isApplying = true;
     });
 
     final result = await DatabaseHelper.instance.applyStockTakeSession(
       sessionId: _sessionId!,
-      performedBy: context.read<AuthProvider>().currentUser?.name,
+      performedBy: _buildPerformedByLabel(approverName),
     );
 
     if (!mounted) return;
