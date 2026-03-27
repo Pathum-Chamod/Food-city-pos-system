@@ -21,6 +21,7 @@ import 'sales_report_screen.dart';
 import 'supplier_management_screen.dart';
 import 'shift_management_screen.dart';
 import 'transaction_history_screen.dart';
+import 'user_management_screen.dart';
 
 class PosScreen extends StatefulWidget {
   const PosScreen({super.key});
@@ -95,6 +96,22 @@ class _PosScreenState extends State<PosScreen> {
     Future.delayed(const Duration(milliseconds: 50), () {
       if (!mounted) return;
       _barcodeFocusNode.requestFocus();
+    });
+  }
+
+
+  Future<void> _runProtectedManagerAction(
+    Future<void> Function() onApproved,
+  ) async {
+    final auth = context.read<AuthProvider>();
+
+    if (auth.isManager) {
+      await onApproved();
+      return;
+    }
+
+    await AdminDialogs.showPinDialog(context, () async {
+      await onApproved();
     });
   }
 
@@ -484,7 +501,7 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    AdminDialogs.showPinDialog(context, () async {
+    await _runProtectedManagerAction(() async {
       final result = await showCartDiscountDialog(
         context,
         subtotal: cart.subtotal,
@@ -632,8 +649,34 @@ class _PosScreenState extends State<PosScreen> {
   }
 
 
+  Future<void> _openUserManagement() async {
+    final auth = context.read<AuthProvider>();
+
+    if (!auth.isManager) {
+      _showInfoMessage(
+        'Only managers can access User Management.',
+        backgroundColor: Colors.orange,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const UserManagementScreen(),
+      ),
+    );
+
+    if (!mounted) return;
+
+    await auth.refreshCurrentUser();
+    _focusBarcodeField();
+  }
+
+
   Future<void> _openSupplierOperations() async {
-    await AdminDialogs.showPinDialog(context, () async {
+    await _runProtectedManagerAction(() async {
       final cashierName =
           context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
 
@@ -1024,9 +1067,9 @@ class _PosScreenState extends State<PosScreen> {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () => _handleProductTap(product, cart),
-        onLongPress: () {
-          AdminDialogs.showPinDialog(context, () {
-            AdminDialogs.showEditPriceDialog(
+        onLongPress: () async {
+          await _runProtectedManagerAction(() async {
+            await AdminDialogs.showEditPriceDialog(
               context,
               product.barcode,
               product.name,
@@ -1324,6 +1367,12 @@ class _PosScreenState extends State<PosScreen> {
             },
             icon: const Icon(Icons.bar_chart, color: Colors.white),
           ),
+          if (auth.isManager)
+            IconButton(
+              tooltip: 'User management',
+              onPressed: _openUserManagement,
+              icon: const Icon(Icons.manage_accounts_outlined, color: Colors.white),
+            ),
           IconButton(
             tooltip: 'Inventory',
             onPressed: () async {
@@ -1530,9 +1579,9 @@ class _PosScreenState extends State<PosScreen> {
                       Switch(
                         value: cart.isRefundMode,
                         activeThumbColor: Colors.red,
-                        onChanged: (value) {
+                        onChanged: (value) async {
                           if (value) {
-                            AdminDialogs.showPinDialog(context, () {
+                            await _runProtectedManagerAction(() async {
                               context
                                   .read<CartProvider>()
                                   .toggleRefundMode(true);

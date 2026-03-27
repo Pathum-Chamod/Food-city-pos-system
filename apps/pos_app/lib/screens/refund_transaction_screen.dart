@@ -48,10 +48,12 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     });
 
     try {
-      final summary =
-          await DatabaseHelper.instance.getTransactionSummary(widget.originalSaleId);
-      final items =
-          await DatabaseHelper.instance.getRefundableItemsForSale(widget.originalSaleId);
+      final summary = await DatabaseHelper.instance.getTransactionSummary(
+        widget.originalSaleId,
+      );
+      final items = await DatabaseHelper.instance.getRefundableItemsForSale(
+        widget.originalSaleId,
+      );
 
       if (!mounted) return;
 
@@ -148,6 +150,22 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
         .toList();
   }
 
+  String _buildApprovalDescription({
+    required String requesterName,
+    required int itemCount,
+    required double refundTotal,
+    required String refundReason,
+  }) {
+    final trimmedReason = refundReason.trim();
+    final safeReason = trimmedReason.isEmpty ? 'No reason provided' : trimmedReason;
+
+    return 'Approved linked refund for sale #${widget.originalSaleId} '
+        'requested by $requesterName '
+        '($itemCount ${itemCount == 1 ? 'item' : 'items'}, '
+        'Rs. ${refundTotal.toStringAsFixed(2)}). '
+        'Reason: $safeReason';
+  }
+
   Future<void> _processRefund() async {
     if (_isProcessing) return;
 
@@ -162,7 +180,8 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
       return;
     }
 
-    if (_reasonController.text.trim().isEmpty) {
+    final refundReason = _reasonController.text.trim();
+    if (refundReason.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Refund reason is required.'),
@@ -190,9 +209,33 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
       }
     }
 
-    AdminDialogs.showPinDialog(context, () {
-      _processRefundAfterApproval(selectedItems);
-    });
+    final auth = context.read<AuthProvider>();
+    final requester = auth.currentUser;
+    final requesterName = requester?.name ?? 'Unknown';
+
+    final approved = await AdminDialogs.showPinDialog(
+      context,
+      () => _processRefundAfterApproval(selectedItems),
+      title: 'Manager Approval Required',
+      message: 'Enter an active manager PIN to approve this refund.',
+      requesterUserId: requester?.id,
+      requesterUserName: requesterName,
+      approvalDescription: _buildApprovalDescription(
+        requesterName: requesterName,
+        itemCount: selectedItems.length,
+        refundTotal: _refundTotal,
+        refundReason: refundReason,
+      ),
+    );
+
+    if (!approved || !mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Refund approved by manager.'),
+        backgroundColor: Colors.green,
+      ),
+    );
   }
 
   Future<void> _processRefundAfterApproval(
@@ -297,7 +340,8 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                                 final name =
                                     (item['product_name'] ?? 'Unknown').toString();
                                 final unitPrice =
-                                    ((item['unit_price'] as num?) ?? 0).toDouble();
+                                    ((item['unit_price'] as num?) ?? 0)
+                                        .toDouble();
                                 final originalQty =
                                     (item['original_quantity'] as num?)?.toInt() ?? 0;
                                 final refundedQty =
@@ -314,7 +358,8 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                                   child: Padding(
                                     padding: const EdgeInsets.all(12),
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           name,
@@ -357,7 +402,8 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                                               ),
                                             ),
                                             IconButton(
-                                              onPressed: refundableQty > selectedQty
+                                              onPressed: refundableQty >
+                                                      selectedQty
                                                   ? () => _increaseQty(
                                                         barcode,
                                                         refundableQty,

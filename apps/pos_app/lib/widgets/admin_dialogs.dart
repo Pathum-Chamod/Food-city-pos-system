@@ -1,64 +1,176 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
 import '../services/database_helper.dart';
 
 class AdminDialogs {
-  // Hardcoded for MVP. Later, we can store this in flutter_secure_storage
-  static const String _adminPin = "1234"; 
-
-  static Future<void> showPinDialog(BuildContext context, VoidCallback onSuccess) async {
+  static Future<bool> showPinDialog(
+    BuildContext context,
+    FutureOr<void> Function()? onSuccess, {
+    String title = 'Manager Approval Required',
+    String message = 'Enter an active manager PIN to continue.',
+    int? requesterUserId,
+    String? requesterUserName,
+    String? approvalDescription,
+    bool requireDifferentManager = false,
+  }) async {
     final TextEditingController pinController = TextEditingController();
-    bool isError = false;
+    String? errorText;
+    bool isVerifying = false;
+    bool approved = false;
 
-    await showDialog(
+    await showDialog<void>(
       context: context,
-      builder: (context) {
+      barrierDismissible: !isVerifying,
+      builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setState) {
+            Future<void> verify() async {
+              if (isVerifying) return;
+
+              final pin = pinController.text.trim();
+              if (!RegExp(r'^\d{4}$').hasMatch(pin)) {
+                setState(() {
+                  errorText = 'Enter a valid 4-digit manager PIN.';
+                });
+                return;
+              }
+
+              setState(() {
+                isVerifying = true;
+                errorText = null;
+              });
+
+              try {
+                final user = await DatabaseHelper.instance.findUserByPin(pin);
+
+                if (user == null) {
+                  setState(() {
+                    errorText = 'Incorrect manager PIN.';
+                    isVerifying = false;
+                  });
+                  return;
+                }
+
+                final userId = ((user['id'] as num?) ?? 0).toInt();
+                final userName = (user['name'] ?? 'Unknown').toString();
+                final role = (user['role'] ?? '').toString().toLowerCase();
+                final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+
+                if (!isActive) {
+                  setState(() {
+                    errorText = 'This manager account is inactive.';
+                    isVerifying = false;
+                  });
+                  return;
+                }
+
+                if (role != 'manager') {
+                  setState(() {
+                    errorText = 'Only an active manager can approve this action.';
+                    isVerifying = false;
+                  });
+                  return;
+                }
+
+                if (requireDifferentManager &&
+                    requesterUserId != null &&
+                    requesterUserId == userId) {
+                  setState(() {
+                    errorText = 'Another manager must approve this action.';
+                    isVerifying = false;
+                  });
+                  return;
+                }
+
+                final description = _buildApprovalDescription(
+                  title: title,
+                  message: message,
+                  requesterUserName: requesterUserName,
+                  explicitDescription: approvalDescription,
+                );
+
+                await DatabaseHelper.instance.logManagerApproval(
+                  actorUserId: userId,
+                  actorName: userName,
+                  targetUserId: requesterUserId,
+                  targetUserName: requesterUserName,
+                  description: description,
+                );
+
+                approved = true;
+                if (dialogContext.mounted) {
+                  Navigator.of(dialogContext).pop();
+                }
+
+                await onSuccess?.call();
+              } catch (_) {
+                if (context.mounted) {
+                  setState(() {
+                    errorText = 'Approval failed. Please try again.';
+                    isVerifying = false;
+                  });
+                }
+              }
+            }
+
             return AlertDialog(
-              title: const Text('Admin Override Required'),
+              title: Text(title),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Enter Manager PIN to modify inventory:'),
-                  const SizedBox(height: 10),
+                  Text(message),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: pinController,
                     obscureText: true,
+                    autofocus: true,
+                    maxLength: 4,
                     keyboardType: TextInputType.number,
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => verify(),
                     decoration: InputDecoration(
                       border: const OutlineInputBorder(),
-                      labelText: 'PIN',
-                      errorText: isError ? 'Incorrect PIN' : null,
+                      labelText: 'Manager PIN',
+                      counterText: '',
+                      errorText: errorText,
                     ),
                   ),
                 ],
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: isVerifying
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
-                  onPressed: () {
-                    if (pinController.text == _adminPin) {
-                      Navigator.pop(context); // Close PIN dialog
-                      onSuccess(); // Trigger the next action
-                    } else {
-                      setState(() => isError = true);
-                    }
-                  },
-                  child: const Text('Verify'),
+                  onPressed: isVerifying ? null : verify,
+                  child: Text(isVerifying ? 'Verifying...' : 'Verify'),
                 ),
               ],
             );
-          }
+          },
         );
       },
     );
+
+    pinController.dispose();
+    return approved;
   }
 
-  static Future<void> showEditPriceDialog(BuildContext context, String barcode, String currentName, double currentPrice, VoidCallback onComplete) async {
-    final TextEditingController priceController = TextEditingController(text: currentPrice.toString());
+  static Future<void> showEditPriceDialog(
+    BuildContext context,
+    String barcode,
+    String currentName,
+    double currentPrice,
+    VoidCallback onComplete,
+  ) async {
+    final TextEditingController priceController =
+        TextEditingController(text: currentPrice.toString());
 
     await showDialog(
       context: context,
@@ -85,22 +197,77 @@ class AdminDialogs {
               onPressed: () async {
                 final newPrice = double.tryParse(priceController.text);
                 if (newPrice != null && newPrice > 0) {
-                  // Update DB locally and queue for cloud
-                  await DatabaseHelper.instance.updateProductPriceLocal(barcode, newPrice);
+                  await DatabaseHelper.instance.updateProductPriceLocal(
+                    barcode,
+                    newPrice,
+                  );
                   if (!context.mounted) return;
                   Navigator.pop(context);
-                  onComplete(); // Refresh the UI
-                  
+                  onComplete();
+
                   scaffoldMessenger.showSnackBar(
-                    const SnackBar(content: Text('Price updated locally and queued for sync!'), backgroundColor: Colors.green),
+                    const SnackBar(
+                      content: Text('Price updated locally and queued for sync!'),
+                      backgroundColor: Colors.green,
+                    ),
                   );
                 }
               },
-              child: const Text('Save Price', style: TextStyle(color: Colors.white)),
+              child: const Text(
+                'Save Price',
+                style: TextStyle(color: Colors.white),
+              ),
             ),
           ],
         );
       },
     );
+
+    priceController.dispose();
+  }
+
+  static String _buildApprovalDescription({
+    required String title,
+    required String message,
+    String? requesterUserName,
+    String? explicitDescription,
+  }) {
+    final custom = explicitDescription?.trim();
+    if (custom != null && custom.isNotEmpty) {
+      return custom;
+    }
+
+    final cleanTitle = title.trim();
+    final cleanMessage = message.trim();
+    final requester = requesterUserName?.trim();
+
+    final genericMessages = <String>{
+      'Enter an active manager PIN to continue.',
+      'Enter manager PIN to continue.',
+      'Enter manager PIN to approve.',
+      'Manager approval is required to continue.',
+    };
+
+    if (cleanTitle.isNotEmpty && cleanTitle != 'Manager Approval Required') {
+      if (requester != null && requester.isNotEmpty) {
+        return '$cleanTitle approved for $requester';
+      }
+      return cleanTitle;
+    }
+
+    if (cleanMessage.isNotEmpty && !genericMessages.contains(cleanMessage)) {
+      if (requester != null &&
+          requester.isNotEmpty &&
+          !cleanMessage.toLowerCase().contains(requester.toLowerCase())) {
+        return '$cleanMessage (requested by $requester)';
+      }
+      return cleanMessage;
+    }
+
+    if (requester != null && requester.isNotEmpty) {
+      return 'Manager approval granted for $requester';
+    }
+
+    return 'Manager approval granted';
   }
 }

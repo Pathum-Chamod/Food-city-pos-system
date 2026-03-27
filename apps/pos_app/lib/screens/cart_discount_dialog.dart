@@ -15,6 +15,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
   );
 
   String selectedType = currentDiscountType;
+  String? errorText;
 
   double calculateDiscountAmount({
     required double subtotal,
@@ -44,10 +45,15 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
         builder: (context, setState) {
           final enteredValue =
               double.tryParse(valueController.text.trim()) ?? 0.0;
+          final sanitizedPreviewValue = selectedType == 'fixed'
+              ? enteredValue.clamp(0.0, subtotal)
+              : selectedType == 'percent'
+                  ? enteredValue.clamp(0.0, 100.0)
+                  : 0.0;
           final discountAmount = calculateDiscountAmount(
             subtotal: subtotal,
             type: selectedType,
-            value: enteredValue,
+            value: sanitizedPreviewValue,
           );
           final total = subtotal - discountAmount;
 
@@ -78,6 +84,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
                           setState(() {
                             selectedType = 'none';
                             valueController.clear();
+                            errorText = null;
                           });
                         },
                       ),
@@ -87,6 +94,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
                         onSelected: (_) {
                           setState(() {
                             selectedType = 'fixed';
+                            errorText = null;
                           });
                         },
                       ),
@@ -96,6 +104,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
                         onSelected: (_) {
                           setState(() {
                             selectedType = 'percent';
+                            errorText = null;
                           });
                         },
                       ),
@@ -116,8 +125,16 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
                         prefixText: selectedType == 'fixed' ? 'Rs. ' : null,
                         suffixText: selectedType == 'percent' ? '%' : null,
                         border: const OutlineInputBorder(),
+                        errorText: errorText,
+                        helperText: selectedType == 'percent'
+                            ? 'Maximum 100%'
+                            : 'Cannot exceed subtotal',
                       ),
-                      onChanged: (_) => setState(() {}),
+                      onChanged: (_) {
+                        setState(() {
+                          errorText = null;
+                        });
+                      },
                     ),
                   ],
                   const SizedBox(height: 16),
@@ -146,12 +163,37 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
               ),
               ElevatedButton(
                 onPressed: () {
-                  final cleanValue =
-                      double.tryParse(valueController.text.trim()) ?? 0.0;
+                  final rawText = valueController.text.trim();
+                  final parsedValue = rawText.isEmpty
+                      ? 0.0
+                      : double.tryParse(rawText);
+
+                  if (selectedType != 'none' && parsedValue == null) {
+                    setState(() {
+                      errorText = 'Enter a valid discount value.';
+                    });
+                    return;
+                  }
+
+                  final safeValue = parsedValue ?? 0.0;
+                  if (safeValue < 0) {
+                    setState(() {
+                      errorText = 'Discount cannot be negative.';
+                    });
+                    return;
+                  }
+
+                  final normalizedValue = selectedType == 'fixed'
+                      ? safeValue.clamp(0.0, subtotal)
+                      : selectedType == 'percent'
+                          ? safeValue.clamp(0.0, 100.0)
+                          : 0.0;
 
                   Navigator.pop(context, {
                     'discount_type': selectedType,
-                    'discount_value': selectedType == 'none' ? 0.0 : cleanValue,
+                    'discount_value': selectedType == 'none'
+                        ? 0.0
+                        : normalizedValue.toDouble(),
                   });
                 },
                 child: const Text('Apply'),

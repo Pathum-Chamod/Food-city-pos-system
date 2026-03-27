@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../models/pos_supplier.dart';
+import '../providers/auth_provider.dart';
 import '../models/supplier_analytics_summary.dart';
+import '../services/database_helper.dart';
 import '../services/purchase_order_service.dart';
 import '../services/supplier_service.dart';
 import 'purchase_order_editor_screen.dart';
@@ -117,6 +120,178 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
     return items.take(5).toList();
   }
 
+  Map<String, dynamic>? get _currentUserMap {
+    final user = context.read<AuthProvider>().currentUser;
+    if (user == null) return null;
+    return {
+      'id': user.id,
+      'name': user.name,
+      'role': user.role,
+    };
+  }
+
+  int? get _currentUserId => _currentUserMap?['id'] as int?;
+
+  String get _currentUserName {
+    final raw = (_currentUserMap?['name'] ?? widget.cashierName).toString().trim();
+    return raw.isEmpty ? 'Unknown User' : raw;
+  }
+
+  bool get _currentUserIsManager {
+    final role = (_currentUserMap?['role'] ?? '').toString().toLowerCase();
+    return role == 'manager';
+  }
+
+  Future<bool> _requireManagerApproval({
+    required String actionLabel,
+    required String description,
+  }) async {
+    if (_currentUserIsManager) {
+      return true;
+    }
+
+    final pinController = TextEditingController();
+    String? errorText;
+    bool isVerifying = false;
+
+    final approved = await showDialog<bool>(
+          context: context,
+          barrierDismissible: !isVerifying,
+          builder: (dialogContext) {
+            return StatefulBuilder(
+              builder: (dialogContext, setDialogState) {
+                Future<void> verify() async {
+                  final pin = pinController.text.trim();
+                  if (pin.isEmpty) {
+                    setDialogState(() {
+                      errorText = 'Enter manager PIN.';
+                    });
+                    return;
+                  }
+
+                  setDialogState(() {
+                    isVerifying = true;
+                    errorText = null;
+                  });
+
+                  try {
+                    final user = await DatabaseHelper.instance.findUserByPin(pin);
+
+                    if (!dialogContext.mounted) return;
+
+                    if (user == null) {
+                      setDialogState(() {
+                        isVerifying = false;
+                        errorText = 'Invalid PIN.';
+                      });
+                      return;
+                    }
+
+                    final userId = ((user['id'] as num?) ?? 0).toInt();
+                    final userName = (user['name'] ?? 'Manager').toString();
+                    final role = (user['role'] ?? '').toString().toLowerCase();
+                    final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+
+                    if (!isActive) {
+                      setDialogState(() {
+                        isVerifying = false;
+                        errorText = 'This manager account is inactive.';
+                      });
+                      return;
+                    }
+
+                    if (role != 'manager') {
+                      setDialogState(() {
+                        isVerifying = false;
+                        errorText = 'PIN does not belong to a manager.';
+                      });
+                      return;
+                    }
+
+                    await DatabaseHelper.instance.logManagerApproval(
+                      actorUserId: userId,
+                      actorName: userName,
+                      targetUserId: _currentUserId,
+                      targetUserName: _currentUserName,
+                      description: description,
+                    );
+
+                    if (!dialogContext.mounted) return;
+                    Navigator.pop(dialogContext, true);
+                  } catch (_) {
+                    if (!dialogContext.mounted) return;
+                    setDialogState(() {
+                      isVerifying = false;
+                      errorText = 'Approval failed. Please try again.';
+                    });
+                  }
+                }
+
+                return AlertDialog(
+                  title: const Text('Manager Approval Required'),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Enter manager PIN to $actionLabel.'),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: pinController,
+                        obscureText: true,
+                        autofocus: true,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: 'Manager PIN',
+                          border: const OutlineInputBorder(),
+                          errorText: errorText,
+                        ),
+                        onSubmitted: (_) {
+                          if (!isVerifying) {
+                            verify();
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: isVerifying
+                          ? null
+                          : () => Navigator.pop(dialogContext, false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: isVerifying ? null : verify,
+                      child: isVerifying
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Approve'),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        ) ??
+        false;
+
+    pinController.dispose();
+
+    if (!approved && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Manager approval is required to continue.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+
+    return approved;
+  }
+
   Future<void> _openHistory() async {
     await Navigator.push(
       context,
@@ -151,6 +326,15 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
   }
 
   Future<void> _createPurchaseOrder({PosSupplier? supplier}) async {
+    final target = supplier == null ? 'supplier purchase orders' : 'purchase order for ${supplier.name}';
+    final approved = await _requireManagerApproval(
+      actionLabel: 'create $target',
+      description: supplier == null
+          ? 'Approved purchase order creation requested by $_currentUserName'
+          : 'Approved purchase order creation for ${supplier.name} requested by $_currentUserName',
+    );
+    if (!approved) return;
+
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -164,6 +348,16 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
   }
 
   Future<void> _openProductMappings({PosSupplier? supplier}) async {
+    final approved = await _requireManagerApproval(
+      actionLabel: supplier == null
+          ? 'open supplier product mappings'
+          : 'open product mappings for ${supplier.name}',
+      description: supplier == null
+          ? 'Approved supplier product mapping access requested by $_currentUserName'
+          : 'Approved supplier product mapping access for ${supplier.name} requested by $_currentUserName',
+    );
+    if (!approved) return;
+
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -373,6 +567,12 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
   }
 
   Future<void> _openWorkspace(PosSupplier supplier) async {
+    final approved = await _requireManagerApproval(
+      actionLabel: 'open supplier workspace for ${supplier.name}',
+      description: 'Approved supplier workspace access for ${supplier.name} requested by $_currentUserName',
+    );
+    if (!approved) return;
+
     await Navigator.push(
       context,
       MaterialPageRoute(

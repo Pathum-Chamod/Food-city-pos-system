@@ -40,7 +40,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 16,
+        version: 17,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -380,14 +380,7 @@ class DatabaseHelper {
       )
     ''');
 
-    await db.execute('''
-      CREATE TABLE users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        role TEXT NOT NULL,
-        pin TEXT UNIQUE NOT NULL
-      )
-    ''');
+    await _createUserTables(db);
 
     await _createSupplierTables(db);
     await _createPurchaseOrderTables(db);
@@ -844,6 +837,34 @@ class DatabaseHelper {
       ''');
     }
 
+    if (oldVersion < 17) {
+      await _createUserTables(db);
+
+      await _addColumnIfMissing(
+        db,
+        'users',
+        'is_active',
+        "INTEGER NOT NULL DEFAULT 1",
+      );
+      await _addColumnIfMissing(db, 'users', 'created_at', 'TEXT');
+      await _addColumnIfMissing(db, 'users', 'updated_at', 'TEXT');
+      await _addColumnIfMissing(db, 'users', 'last_login_at', 'TEXT');
+      await _addColumnIfMissing(db, 'users', 'created_by', 'INTEGER');
+      await _addColumnIfMissing(db, 'users', 'updated_by', 'INTEGER');
+
+      final now = DateTime.now().toIso8601String();
+      await db.execute(
+        '''
+        UPDATE users
+        SET
+          is_active = COALESCE(is_active, 1),
+          created_at = COALESCE(NULLIF(created_at, ''), ?),
+          updated_at = COALESCE(NULLIF(updated_at, ''), ?)
+        ''',
+        [now, now],
+      );
+    }
+
   }
 
   Future<void> _addColumnIfMissing(
@@ -878,6 +899,156 @@ class DatabaseHelper {
     if (value == 'sale') return 'sale';
     return 'selling';
   }
+
+  String _normalizeUserRole(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    if (normalized == 'manager') return 'manager';
+    return 'cashier';
+  }
+
+  String _normalizeUserStatusFilter(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    if (normalized == 'active') return 'active';
+    if (normalized == 'inactive') return 'inactive';
+    return 'all';
+  }
+
+  String _normalizeUserLogActionType(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+
+    switch (normalized) {
+      case 'login_success':
+      case 'login_failed':
+      case 'logout':
+      case 'user_created':
+      case 'user_updated':
+      case 'pin_reset':
+      case 'user_deactivated':
+      case 'user_reactivated':
+      case 'role_changed':
+      case 'manager_approval':
+        return normalized;
+      default:
+        return normalized.isEmpty ? 'user_updated' : normalized;
+    }
+  }
+
+  Future<void> _createUserTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        role TEXT NOT NULL,
+        pin TEXT UNIQUE NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_login_at TEXT,
+        created_by INTEGER,
+        updated_by INTEGER
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS user_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        actor_user_id INTEGER,
+        actor_name TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        target_user_id INTEGER,
+        target_user_name TEXT,
+        description TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    ''');
+  }
+
+  Future<void> _insertUserLog(
+    DatabaseExecutor executor, {
+    int? actorUserId,
+    String? actorName,
+    required String actionType,
+    int? targetUserId,
+    String? targetUserName,
+    required String description,
+    String? createdAt,
+  }) async {
+    await executor.insert('user_logs', {
+      'actor_user_id': actorUserId,
+      'actor_name': (actorName == null || actorName.trim().isEmpty)
+          ? 'System'
+          : actorName.trim(),
+      'action_type': _normalizeUserLogActionType(actionType),
+      'target_user_id': targetUserId,
+      'target_user_name': targetUserName?.trim(),
+      'description': description.trim(),
+      'created_at': createdAt ?? DateTime.now().toIso8601String(),
+    });
+  }
+
+  String _formatUserRoleLabel(String? value) {
+    return _normalizeUserRole(value) == 'manager' ? 'Manager' : 'Cashier';
+  }
+
+  String _buildUserActionDescription(
+    String actionType, {
+    required String targetUserName,
+    String? targetRole,
+  }) {
+    final roleLabel = targetRole == null || targetRole.trim().isEmpty
+        ? ''
+        : ' (${_formatUserRoleLabel(targetRole)})';
+
+    switch (_normalizeUserLogActionType(actionType)) {
+      case 'user_created':
+        return 'Created user $targetUserName$roleLabel';
+      case 'user_updated':
+        return 'Updated user $targetUserName$roleLabel details';
+      case 'pin_reset':
+        return 'Reset PIN for $targetUserName';
+      case 'user_deactivated':
+        return 'Deactivated user $targetUserName';
+      case 'user_reactivated':
+        return 'Reactivated user $targetUserName';
+      case 'role_changed':
+        return 'Changed role for $targetUserName$roleLabel';
+      case 'login_success':
+        return '$targetUserName logged in';
+      case 'login_failed':
+        return 'Failed login attempt';
+      case 'logout':
+        return '$targetUserName logged out';
+      case 'manager_approval':
+        return 'Manager approval recorded for $targetUserName';
+      default:
+        return 'User activity recorded for $targetUserName';
+    }
+  }
+
+  bool _isUserActiveManager(Map<String, dynamic> user) {
+    return _normalizeUserRole(user['role']?.toString()) == 'manager' &&
+        _parseInt(user['is_active'], fallback: 1) == 1;
+  }
+
+  Future<int> _getActiveManagerCountExecutor(
+    DatabaseExecutor executor, {
+    int? excludingUserId,
+  }) async {
+    final hasExclusion = excludingUserId != null && excludingUserId > 0;
+    final rows = await executor.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM users
+      WHERE role = 'manager'
+        AND is_active = 1
+        ${hasExclusion ? 'AND id != ?' : ''}
+      ''',
+      hasExclusion ? [excludingUserId] : const <Object?>[],
+    );
+
+    return _parseInt(rows.first['count']);
+  }
+
 
   double _resolveCartItemUnitPrice(Map<String, dynamic> item) {
     final explicitUnitPrice = item['unit_price_used'];
@@ -1058,9 +1229,30 @@ class DatabaseHelper {
     final userCount = existingUsers.first['count'] as int;
 
     if (userCount == 0) {
+      final now = DateTime.now().toIso8601String();
       final mockUsers = [
-        {'name': 'Pathum (Manager)', 'role': 'manager', 'pin': '1234'},
-        {'name': 'Amal (Cashier)', 'role': 'cashier', 'pin': '5555'},
+        {
+          'name': 'Pathum (Manager)',
+          'role': 'manager',
+          'pin': '1234',
+          'is_active': 1,
+          'created_at': now,
+          'updated_at': now,
+          'last_login_at': null,
+          'created_by': null,
+          'updated_by': null,
+        },
+        {
+          'name': 'Amal (Cashier)',
+          'role': 'cashier',
+          'pin': '5555',
+          'is_active': 1,
+          'created_at': now,
+          'updated_at': now,
+          'last_login_at': null,
+          'created_by': null,
+          'updated_by': null,
+        },
       ];
 
       for (final user in mockUsers) {
@@ -1999,7 +2191,8 @@ class DatabaseHelper {
     }
   }
 
-  Future<Map<String, dynamic>?> authenticateUser(String pin) async {
+
+  Future<Map<String, dynamic>?> findUserByPin(String pin) async {
     final db = await database;
 
     final result = await db.query(
@@ -2010,10 +2203,604 @@ class DatabaseHelper {
     );
 
     if (result.isNotEmpty) {
-      return result.first;
+      return Map<String, dynamic>.from(result.first);
     }
 
     return null;
+  }
+
+  Future<Map<String, dynamic>?> authenticateUser(String pin) async {
+    final db = await database;
+
+    final result = await db.query(
+      'users',
+      where: 'pin = ? AND is_active = 1',
+      whereArgs: [pin],
+      limit: 1,
+    );
+
+    if (result.isNotEmpty) {
+      return Map<String, dynamic>.from(result.first);
+    }
+
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> getUserById(int userId) async {
+    final db = await database;
+
+    final result = await db.query(
+      'users',
+      where: 'id = ?',
+      whereArgs: [userId],
+      limit: 1,
+    );
+
+    if (result.isNotEmpty) {
+      return Map<String, dynamic>.from(result.first);
+    }
+
+    return null;
+  }
+
+  Future<List<Map<String, dynamic>>> getUsers({
+    String search = '',
+    String role = 'all',
+    String status = 'all',
+  }) async {
+    final db = await database;
+    final trimmedSearch = search.trim().toLowerCase();
+    final normalizedRole = role.trim().toLowerCase();
+    final normalizedStatus = _normalizeUserStatusFilter(status);
+
+    final whereClauses = <String>[];
+    final whereArgs = <Object?>[];
+
+    if (normalizedRole == 'manager' || normalizedRole == 'cashier') {
+      whereClauses.add('role = ?');
+      whereArgs.add(normalizedRole);
+    }
+
+    if (normalizedStatus == 'active') {
+      whereClauses.add('is_active = 1');
+    } else if (normalizedStatus == 'inactive') {
+      whereClauses.add('is_active = 0');
+    }
+
+    if (trimmedSearch.isNotEmpty) {
+      whereClauses.add(
+        '(LOWER(name) LIKE ? OR LOWER(role) LIKE ? OR pin LIKE ?)',
+      );
+      final pattern = '%$trimmedSearch%';
+      whereArgs
+        ..add(pattern)
+        ..add(pattern)
+        ..add(pattern);
+    }
+
+    final rows = await db.query(
+      'users',
+      where: whereClauses.isEmpty ? null : whereClauses.join(' AND '),
+      whereArgs: whereArgs.isEmpty ? null : whereArgs,
+      orderBy: 'is_active DESC, role ASC, name COLLATE NOCASE ASC',
+    );
+
+    return rows.map((row) => Map<String, dynamic>.from(row)).toList();
+  }
+
+  Future<Map<String, dynamic>> getUserSummaryCounts() async {
+    final db = await database;
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        COUNT(*) AS total_users,
+        COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_users,
+        COALESCE(SUM(CASE WHEN role = 'manager' THEN 1 ELSE 0 END), 0) AS managers,
+        COALESCE(SUM(CASE WHEN role = 'cashier' THEN 1 ELSE 0 END), 0) AS cashiers
+      FROM users
+      ''',
+    );
+
+    final row = rows.first;
+    return {
+      'total_users': (row['total_users'] as num?)?.toInt() ?? 0,
+      'active_users': (row['active_users'] as num?)?.toInt() ?? 0,
+      'managers': (row['managers'] as num?)?.toInt() ?? 0,
+      'cashiers': (row['cashiers'] as num?)?.toInt() ?? 0,
+    };
+  }
+
+  Future<int> createUser({
+    required String name,
+    required String role,
+    required String pin,
+    int? actorUserId,
+    String? actorName,
+  }) async {
+    final db = await database;
+    final trimmedName = name.trim();
+    final trimmedPin = pin.trim();
+    final normalizedRole = _normalizeUserRole(role);
+
+    if (trimmedName.isEmpty) {
+      throw Exception('User name is required.');
+    }
+
+    if (!RegExp(r'^\d{4}$').hasMatch(trimmedPin)) {
+      throw Exception('PIN must be exactly 4 digits.');
+    }
+
+    late int userId;
+
+    await db.transaction((txn) async {
+      final existingPin = await txn.query(
+        'users',
+        columns: ['id'],
+        where: 'pin = ?',
+        whereArgs: [trimmedPin],
+        limit: 1,
+      );
+
+      if (existingPin.isNotEmpty) {
+        throw Exception('PIN is already used by another user.');
+      }
+
+      final now = DateTime.now().toIso8601String();
+
+      userId = await txn.insert('users', {
+        'name': trimmedName,
+        'role': normalizedRole,
+        'pin': trimmedPin,
+        'is_active': 1,
+        'created_at': now,
+        'updated_at': now,
+        'last_login_at': null,
+        'created_by': actorUserId,
+        'updated_by': actorUserId,
+      });
+
+      await _insertUserLog(
+        txn,
+        actorUserId: actorUserId,
+        actorName: actorName,
+        actionType: 'user_created',
+        targetUserId: userId,
+        targetUserName: trimmedName,
+        description: _buildUserActionDescription(
+          'user_created',
+          targetUserName: trimmedName,
+          targetRole: normalizedRole,
+        ),
+        createdAt: now,
+      );
+    });
+
+    return userId;
+  }
+
+  Future<bool> updateUserProfile({
+    required int userId,
+    required String name,
+    required String role,
+    int? actorUserId,
+    String? actorName,
+  }) async {
+    final db = await database;
+    final trimmedName = name.trim();
+    final normalizedRole = _normalizeUserRole(role);
+
+    if (trimmedName.isEmpty) {
+      throw Exception('User name is required.');
+    }
+
+    try {
+      await db.transaction((txn) async {
+        final existing = await txn.query(
+          'users',
+          columns: ['id', 'name', 'role', 'is_active'],
+          where: 'id = ?',
+          whereArgs: [userId],
+          limit: 1,
+        );
+
+        if (existing.isEmpty) {
+          throw Exception('User not found.');
+        }
+
+        final current = Map<String, dynamic>.from(existing.first);
+        final oldRole = _normalizeUserRole(current['role']?.toString());
+        final oldName = (current['name'] ?? '').toString().trim();
+        final isActive = _parseInt(current['is_active'], fallback: 1) == 1;
+        final now = DateTime.now().toIso8601String();
+
+        final roleChanged = oldRole != normalizedRole;
+
+        if (roleChanged && oldRole == 'manager' && normalizedRole != 'manager' && isActive) {
+          final activeManagerCount = await _getActiveManagerCountExecutor(txn);
+          if (activeManagerCount <= 1) {
+            throw Exception('You cannot change the last active manager to cashier.');
+          }
+        }
+
+        await txn.update(
+          'users',
+          {
+            'name': trimmedName,
+            'role': normalizedRole,
+            'updated_at': now,
+            'updated_by': actorUserId,
+          },
+          where: 'id = ?',
+          whereArgs: [userId],
+        );
+
+        await _insertUserLog(
+          txn,
+          actorUserId: actorUserId,
+          actorName: actorName,
+          actionType: roleChanged ? 'role_changed' : 'user_updated',
+          targetUserId: userId,
+          targetUserName: trimmedName,
+          description: roleChanged
+              ? 'Changed role for $trimmedName from ${_formatUserRoleLabel(oldRole)} to ${_formatUserRoleLabel(normalizedRole)}'
+              : oldName == trimmedName
+                  ? 'Updated user $trimmedName (${_formatUserRoleLabel(normalizedRole)}) details'
+                  : 'Renamed user $oldName to $trimmedName',
+          createdAt: now,
+        );
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error updating user profile: $e');
+      rethrow;
+    }
+  }
+
+  Future<bool> resetUserPin({
+    required int userId,
+    required String newPin,
+    int? actorUserId,
+    String? actorName,
+  }) async {
+    final db = await database;
+    final trimmedPin = newPin.trim();
+
+    if (!RegExp(r'^\d{4}$').hasMatch(trimmedPin)) {
+      throw Exception('PIN must be exactly 4 digits.');
+    }
+
+    try {
+      await db.transaction((txn) async {
+        final existing = await txn.query(
+          'users',
+          columns: ['id', 'name'],
+          where: 'id = ?',
+          whereArgs: [userId],
+          limit: 1,
+        );
+
+        if (existing.isEmpty) {
+          throw Exception('User not found.');
+        }
+
+        final duplicatePin = await txn.query(
+          'users',
+          columns: ['id'],
+          where: 'pin = ? AND id != ?',
+          whereArgs: [trimmedPin, userId],
+          limit: 1,
+        );
+
+        if (duplicatePin.isNotEmpty) {
+          throw Exception('PIN is already used by another user.');
+        }
+
+        final targetName = (existing.first['name'] ?? 'User').toString();
+        final now = DateTime.now().toIso8601String();
+
+        await txn.update(
+          'users',
+          {
+            'pin': trimmedPin,
+            'updated_at': now,
+            'updated_by': actorUserId,
+          },
+          where: 'id = ?',
+          whereArgs: [userId],
+        );
+
+        await _insertUserLog(
+          txn,
+          actorUserId: actorUserId,
+          actorName: actorName,
+          actionType: 'pin_reset',
+          targetUserId: userId,
+          targetUserName: targetName,
+          description: _buildUserActionDescription(
+            'pin_reset',
+            targetUserName: targetName,
+          ),
+          createdAt: now,
+        );
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error resetting user PIN: $e');
+      rethrow;
+    }
+  }
+
+  Future<bool> setUserActiveStatus({
+    required int userId,
+    required bool isActive,
+    int? actorUserId,
+    String? actorName,
+  }) async {
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        final existing = await txn.query(
+          'users',
+          columns: ['id', 'name', 'role', 'is_active'],
+          where: 'id = ?',
+          whereArgs: [userId],
+          limit: 1,
+        );
+
+        if (existing.isEmpty) {
+          throw Exception('User not found.');
+        }
+
+        final current = Map<String, dynamic>.from(existing.first);
+        final targetName = (current['name'] ?? 'User').toString().trim();
+        final currentActive = _parseInt(current['is_active'], fallback: 1) == 1;
+        final currentRole = _normalizeUserRole(current['role']?.toString());
+
+        if (currentActive == isActive) {
+          return;
+        }
+
+        if (!isActive && actorUserId != null && actorUserId == userId) {
+          throw Exception('You cannot deactivate your own account while logged in.');
+        }
+
+        if (!isActive && currentActive && currentRole == 'manager') {
+          final activeManagerCount = await _getActiveManagerCountExecutor(txn);
+          if (activeManagerCount <= 1) {
+            throw Exception('You cannot deactivate the last active manager.');
+          }
+        }
+
+        final now = DateTime.now().toIso8601String();
+
+        await txn.update(
+          'users',
+          {
+            'is_active': isActive ? 1 : 0,
+            'updated_at': now,
+            'updated_by': actorUserId,
+          },
+          where: 'id = ?',
+          whereArgs: [userId],
+        );
+
+        await _insertUserLog(
+          txn,
+          actorUserId: actorUserId,
+          actorName: actorName,
+          actionType: isActive ? 'user_reactivated' : 'user_deactivated',
+          targetUserId: userId,
+          targetUserName: targetName,
+          description: _buildUserActionDescription(
+            isActive ? 'user_reactivated' : 'user_deactivated',
+            targetUserName: targetName,
+          ),
+          createdAt: now,
+        );
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error updating user active status: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> updateUserLastLogin(int userId) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+
+    await db.update(
+      'users',
+      {
+        'last_login_at': now,
+        'updated_at': now,
+      },
+      where: 'id = ?',
+      whereArgs: [userId],
+    );
+  }
+
+  Future<void> logLoginSuccess({
+    required int userId,
+    required String userName,
+  }) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+
+    await db.transaction((txn) async {
+      await txn.update(
+        'users',
+        {
+          'last_login_at': now,
+          'updated_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: [userId],
+      );
+
+      await _insertUserLog(
+        txn,
+        actorUserId: userId,
+        actorName: userName,
+        actionType: 'login_success',
+        targetUserId: userId,
+        targetUserName: userName,
+        description: _buildUserActionDescription(
+          'login_success',
+          targetUserName: userName,
+        ),
+        createdAt: now,
+      );
+    });
+  }
+
+  Future<void> logLoginFailed({
+    String? attemptedPin,
+    String? description,
+  }) async {
+    final db = await database;
+    final pinHint = (attemptedPin ?? '').trim();
+    final resolvedDescription = description?.trim().isNotEmpty == true
+        ? description!.trim()
+        : pinHint.isEmpty
+            ? 'Failed login attempt'
+            : 'Failed login attempt for PIN $pinHint';
+
+    await _insertUserLog(
+      db,
+      actorUserId: null,
+      actorName: 'Unknown',
+      actionType: 'login_failed',
+      targetUserId: null,
+      targetUserName: null,
+      description: resolvedDescription,
+    );
+  }
+
+  Future<void> logLogout({
+    required int userId,
+    required String userName,
+  }) async {
+    final db = await database;
+
+    await _insertUserLog(
+      db,
+      actorUserId: userId,
+      actorName: userName,
+      actionType: 'logout',
+      targetUserId: userId,
+      targetUserName: userName,
+      description: _buildUserActionDescription(
+        'logout',
+        targetUserName: userName,
+      ),
+    );
+  }
+
+  Future<void> logManagerApproval({
+    required int actorUserId,
+    required String actorName,
+    int? targetUserId,
+    String? targetUserName,
+    required String description,
+  }) async {
+    final db = await database;
+
+    await _insertUserLog(
+      db,
+      actorUserId: actorUserId,
+      actorName: actorName,
+      actionType: 'manager_approval',
+      targetUserId: targetUserId,
+      targetUserName: targetUserName,
+      description: description,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getUserLogs({
+    String search = '',
+    String actionFilter = 'all',
+    int? relatedUserId,
+    int limit = 200,
+  }) async {
+    final db = await database;
+    final trimmedSearch = search.trim().toLowerCase();
+    final normalizedFilter = actionFilter.trim().toLowerCase();
+
+    final whereClauses = <String>[];
+    final whereArgs = <Object?>[];
+
+    if (relatedUserId != null && relatedUserId > 0) {
+      whereClauses.add('(actor_user_id = ? OR target_user_id = ?)');
+      whereArgs
+        ..add(relatedUserId)
+        ..add(relatedUserId);
+    }
+
+    if (normalizedFilter != 'all' && normalizedFilter.isNotEmpty) {
+      if (normalizedFilter == 'logins') {
+        whereClauses.add(
+          "(action_type = 'login_success' OR action_type = 'login_failed' OR action_type = 'logout')",
+        );
+      } else if (normalizedFilter == 'user_changes') {
+        whereClauses.add(
+          "(action_type = 'user_created' OR action_type = 'user_updated' OR action_type = 'user_deactivated' OR action_type = 'user_reactivated' OR action_type = 'role_changed')",
+        );
+      } else if (normalizedFilter == 'pin_changes') {
+        whereClauses.add("action_type = 'pin_reset'");
+      } else if (normalizedFilter == 'approvals') {
+        whereClauses.add("action_type = 'manager_approval'");
+      } else {
+        whereClauses.add('action_type = ?');
+        whereArgs.add(normalizedFilter);
+      }
+    }
+
+    if (trimmedSearch.isNotEmpty) {
+      whereClauses.add(
+        '(LOWER(actor_name) LIKE ? OR LOWER(COALESCE(target_user_name, \'\')) LIKE ? OR LOWER(description) LIKE ?)',
+      );
+      final pattern = '%$trimmedSearch%';
+      whereArgs
+        ..add(pattern)
+        ..add(pattern)
+        ..add(pattern);
+    }
+
+    final rows = await db.query(
+      'user_logs',
+      where: whereClauses.isEmpty ? null : whereClauses.join(' AND '),
+      whereArgs: whereArgs.isEmpty ? null : whereArgs,
+      orderBy: 'datetime(created_at) DESC, id DESC',
+      limit: limit,
+    );
+
+    return rows.map((row) => Map<String, dynamic>.from(row)).toList();
+  }
+
+  Future<void> addUserLog({
+    int? actorUserId,
+    String? actorName,
+    required String actionType,
+    int? targetUserId,
+    String? targetUserName,
+    required String description,
+  }) async {
+    final db = await database;
+    await _insertUserLog(
+      db,
+      actorUserId: actorUserId,
+      actorName: actorName,
+      actionType: actionType,
+      targetUserId: targetUserId,
+      targetUserName: targetUserName,
+      description: description,
+    );
   }
 
   Future<List<Map<String, dynamic>>> getRecentTransactions({

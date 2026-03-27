@@ -290,12 +290,57 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return ChoiceChip(
       label: Text(label),
       selected: selected,
+      selectedColor: Colors.blue.shade100,
+      side: BorderSide(
+        color: selected ? Colors.blue.shade200 : Colors.grey.shade300,
+      ),
+      labelStyle: TextStyle(
+        color: selected ? Colors.blue.shade800 : Colors.grey.shade800,
+        fontWeight: FontWeight.w600,
+      ),
       onSelected: (_) async {
         setState(() {
           _selectedFilter = filter;
         });
         await _loadHistory(showLoader: false);
       },
+    );
+  }
+
+
+  Widget _buildActionBadge(String actionType) {
+    Color accent = Colors.blue;
+    String label = _movementTitle(actionType);
+
+    if (actionType.contains('receive')) {
+      accent = Colors.green;
+    } else if (actionType.contains('adjust')) {
+      accent = Colors.orange;
+    } else if (actionType.contains('price')) {
+      accent = Colors.purple;
+    } else if (actionType.contains('stock_take')) {
+      accent = Colors.teal;
+    } else if (actionType.contains('refund')) {
+      accent = Colors.red;
+    } else if (actionType.contains('min_stock')) {
+      accent = Colors.amber.shade800;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: accent.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: accent.withOpacity(0.20)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: accent,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 
@@ -367,14 +412,24 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          (movement['product_name'] ?? 'Unknown product').toString(),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      _buildActionBadge(actionType),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
                   Text(
                     _movementTitle(actionType),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    (movement['product_name'] ?? 'Unknown product').toString(),
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      color: Colors.grey.shade700,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -633,6 +688,32 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                       _buildFilterChip(label: 'Min Stock', filter: InventoryHistoryFilter.minStock),
                     ],
                   ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.grey.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info_outline, color: Colors.grey.shade700, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            widget.initialBarcode == null
+                                ? 'Showing ${_movements.length} history records for the current filters.'
+                                : 'Showing ${_movements.length} records for barcode ${widget.initialBarcode}.',
+                            style: TextStyle(
+                              color: Colors.grey.shade800,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                   const SizedBox(height: 16),
                   if (_movements.isEmpty)
                     Container(
@@ -643,7 +724,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                         border: Border.all(color: Colors.grey.shade200),
                       ),
                       child: const Center(
-                        child: Text('No inventory history records found.'),
+                        child: Text('No inventory history records match the current search or filter.'),
                       ),
                     )
                   else

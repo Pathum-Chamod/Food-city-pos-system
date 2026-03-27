@@ -23,6 +23,16 @@ enum InventoryFilter {
   inactive,
 }
 
+class _InventoryApprovalResult {
+  const _InventoryApprovalResult({
+    required this.approverId,
+    required this.approverName,
+  });
+
+  final int approverId;
+  final String approverName;
+}
+
 class _InventoryScreenState extends State<InventoryScreen> {
   final TextEditingController _searchController = TextEditingController();
 
@@ -150,21 +160,32 @@ class _InventoryScreenState extends State<InventoryScreen> {
     return null;
   }
 
+  Map<String, dynamic>? get _currentUserMap {
+    final user = context.read<AuthProvider>().currentUser;
+    if (user == null) return null;
+    return {
+      'id': user.id,
+      'name': user.name,
+      'role': user.role,
+    };
+  }
+
+  int? get _currentUserId => _currentUserMap?['id'] as int?;
+
+  String get _currentUserName {
+    final raw = (_currentUserMap?['name'] ?? '').toString().trim();
+    return raw.isEmpty ? 'Unknown User' : raw;
+  }
+
   bool get _currentUserIsManager {
-    final role = (context.read<AuthProvider>().currentUser?.role ?? '').toLowerCase();
+    final role = (_currentUserMap?['role'] ?? '').toString().toLowerCase();
     return role == 'manager';
   }
 
   String _buildPerformedByLabel(String? approverName) {
-    final currentUser = context.read<AuthProvider>().currentUser;
-    final currentName = currentUser?.name.trim();
+    final currentName = _currentUserName;
     if (_currentUserIsManager) {
-      return (currentName == null || currentName.isEmpty)
-          ? (approverName ?? 'Manager')
-          : currentName;
-    }
-    if (currentName == null || currentName.isEmpty) {
-      return approverName ?? 'Manager';
+      return currentName;
     }
     if (approverName == null || approverName.trim().isEmpty) {
       return currentName;
@@ -172,17 +193,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
     return '$currentName (approved by ${approverName.trim()})';
   }
 
-  Future<String?> _requireManagerApproval(String actionLabel) async {
+  Future<_InventoryApprovalResult?> _requireManagerApproval({
+    required String actionLabel,
+    required String description,
+  }) async {
     if (_currentUserIsManager) {
-      final managerName = context.read<AuthProvider>().currentUser?.name.trim();
-      return (managerName == null || managerName.isEmpty) ? 'Manager' : managerName;
+      return _InventoryApprovalResult(
+        approverId: _currentUserId ?? 0,
+        approverName: _currentUserName,
+      );
     }
 
     final pinController = TextEditingController();
     String? errorText;
     bool isVerifying = false;
 
-    final approver = await showDialog<String?>(
+    final approver = await showDialog<_InventoryApprovalResult?>(
       context: context,
       barrierDismissible: !isVerifying,
       builder: (dialogContext) {
@@ -202,31 +228,63 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 errorText = null;
               });
 
-              final user = await DatabaseHelper.instance.authenticateUser(pin);
+              try {
+                final user = await DatabaseHelper.instance.findUserByPin(pin);
 
-              if (!dialogContext.mounted) return;
+                if (!dialogContext.mounted) return;
 
-              if (user == null) {
+                if (user == null) {
+                  setDialogState(() {
+                    isVerifying = false;
+                    errorText = 'Invalid PIN.';
+                  });
+                  return;
+                }
+
+                final userId = ((user['id'] as num?) ?? 0).toInt();
+                final userName = (user['name'] ?? 'Manager').toString();
+                final role = (user['role'] ?? '').toString().toLowerCase();
+                final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+
+                if (!isActive) {
+                  setDialogState(() {
+                    isVerifying = false;
+                    errorText = 'This manager account is inactive.';
+                  });
+                  return;
+                }
+
+                if (role != 'manager') {
+                  setDialogState(() {
+                    isVerifying = false;
+                    errorText = 'PIN does not belong to a manager.';
+                  });
+                  return;
+                }
+
+                await DatabaseHelper.instance.logManagerApproval(
+                  actorUserId: userId,
+                  actorName: userName,
+                  targetUserId: _currentUserId,
+                  targetUserName: _currentUserName,
+                  description: description,
+                );
+
+                if (!dialogContext.mounted) return;
+                Navigator.pop(
+                  dialogContext,
+                  _InventoryApprovalResult(
+                    approverId: userId,
+                    approverName: userName,
+                  ),
+                );
+              } catch (_) {
+                if (!dialogContext.mounted) return;
                 setDialogState(() {
                   isVerifying = false;
-                  errorText = 'Invalid PIN.';
+                  errorText = 'Approval failed. Please try again.';
                 });
-                return;
               }
-
-              final role = (user['role'] ?? '').toString().toLowerCase();
-              if (role != 'manager') {
-                setDialogState(() {
-                  isVerifying = false;
-                  errorText = 'PIN does not belong to a manager.';
-                });
-                return;
-              }
-
-              Navigator.pop(
-                dialogContext,
-                (user['name'] ?? 'Manager').toString(),
-              );
             }
 
             return AlertDialog(
@@ -279,9 +337,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       },
     );
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      pinController.dispose();
-    });
+    pinController.dispose();
 
     if (approver == null && mounted) {
       _showMessage('Manager approval is required to continue.', isError: true);
@@ -292,6 +348,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
 
   List<Product> get _filteredProducts {
+
     final query = _searchQuery.trim().toLowerCase();
 
     return _products.where((product) {
@@ -430,13 +487,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openReceiveFlow({Product? initialProduct}) async {
-    final approverName = await _requireManagerApproval('receive stock');
-    if (approverName == null || !mounted) return;
-    final changedBy = _buildPerformedByLabel(approverName);
-
     final product = initialProduct ??
         await _pickProduct(title: 'Select a product to receive');
     if (product == null || !mounted) return;
+
+    final approval = await _requireManagerApproval(
+      actionLabel: 'receive stock for ${product.name}',
+      description: 'Approved stock receive for ${product.name} (${product.barcode}) requested by $_currentUserName',
+    );
+    if (approval == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final qtyController = TextEditingController();
     final costController = TextEditingController(
@@ -461,9 +521,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                const Text(
                   'Receive Stock',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w700,
                   ),
@@ -594,13 +654,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openAdjustFlow({Product? initialProduct}) async {
-    final approverName = await _requireManagerApproval('adjust stock');
-    if (approverName == null || !mounted) return;
-    final changedBy = _buildPerformedByLabel(approverName);
-
     final product = initialProduct ??
         await _pickProduct(title: 'Select a product to adjust');
     if (product == null || !mounted) return;
+
+    final approval = await _requireManagerApproval(
+      actionLabel: 'adjust stock for ${product.name}',
+      description: 'Approved stock adjustment for ${product.name} (${product.barcode}) requested by $_currentUserName',
+    );
+    if (approval == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final qtyController = TextEditingController();
     final reasonController = TextEditingController();
@@ -783,9 +846,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openMinStockDialog(Product product) async {
-    final approverName = await _requireManagerApproval('update minimum stock');
-    if (approverName == null || !mounted) return;
-    final changedBy = _buildPerformedByLabel(approverName);
+    final approval = await _requireManagerApproval(
+      actionLabel: 'update minimum stock for ${product.name}',
+      description: 'Approved minimum stock update for ${product.name} (${product.barcode}) requested by $_currentUserName',
+    );
+    if (approval == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final controller = TextEditingController(
       text: product.minStockLevel.toString(),
@@ -855,13 +921,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openPriceChangeFlow({Product? initialProduct}) async {
-    final approverName = await _requireManagerApproval('change prices');
-    if (approverName == null || !mounted) return;
-    final changedBy = _buildPerformedByLabel(approverName);
-
     final product = initialProduct ??
         await _pickProduct(title: 'Select a product to change price');
     if (product == null || !mounted) return;
+
+    final approval = await _requireManagerApproval(
+      actionLabel: 'change prices for ${product.name}',
+      description: 'Approved price change for ${product.name} (${product.barcode}) requested by $_currentUserName',
+    );
+    if (approval == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final valueController = TextEditingController(
       text: product.sellingPrice.toStringAsFixed(2),
@@ -1070,15 +1139,20 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
 
   Future<void> _openStockTakeScreen({String? barcode}) async {
-    final approverName = await _requireManagerApproval('open stock take');
-    if (approverName == null || !mounted) return;
+    final approval = await _requireManagerApproval(
+      actionLabel: 'open stock take',
+      description: barcode == null || barcode.trim().isEmpty
+          ? 'Approved stock take access requested by $_currentUserName'
+          : 'Approved stock take access for barcode ${barcode.trim()} requested by $_currentUserName',
+    );
+    if (approval == null || !mounted) return;
 
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => StockTakeScreen(
           initialBarcode: barcode,
-          performedByLabel: _buildPerformedByLabel(approverName),
+          performedByLabel: _buildPerformedByLabel(approval.approverName),
         ),
       ),
     );

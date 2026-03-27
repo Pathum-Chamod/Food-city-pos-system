@@ -12,6 +12,16 @@ enum StockTakeFilter {
   uncounted,
 }
 
+class _StockTakeApprovalResult {
+  const _StockTakeApprovalResult({
+    required this.approverId,
+    required this.approverName,
+  });
+
+  final int approverId;
+  final String approverName;
+}
+
 class StockTakeScreen extends StatefulWidget {
   const StockTakeScreen({
     super.key,
@@ -148,7 +158,191 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     return null;
   }
 
+  Map<String, dynamic>? get _currentUserMap {
+    final user = context.read<AuthProvider>().currentUser;
+    if (user == null) return null;
+    return {
+      'id': user.id,
+      'name': user.name,
+      'role': user.role,
+    };
+  }
+
+  int? get _currentUserId => _currentUserMap?['id'] as int?;
+
+  String get _currentUserName {
+    final raw = (_currentUserMap?['name'] ?? '').toString().trim();
+    return raw.isEmpty ? 'Unknown User' : raw;
+  }
+
+  bool get _currentUserIsManager {
+    final role = (_currentUserMap?['role'] ?? '').toString().toLowerCase();
+    return role == 'manager';
+  }
+
+  String _buildPerformedByLabel(String? approverName) {
+    if (_currentUserIsManager) return _currentUserName;
+    if (approverName == null || approverName.trim().isEmpty) {
+      return _currentUserName;
+    }
+    return '$_currentUserName (approved by ${approverName.trim()})';
+  }
+
+  Future<_StockTakeApprovalResult?> _requireManagerApproval({
+    required String actionLabel,
+    required String description,
+  }) async {
+    if (_currentUserIsManager) {
+      return _StockTakeApprovalResult(
+        approverId: _currentUserId ?? 0,
+        approverName: _currentUserName,
+      );
+    }
+
+    final pinController = TextEditingController();
+    String? errorText;
+    bool isVerifying = false;
+
+    final approver = await showDialog<_StockTakeApprovalResult?>(
+      context: context,
+      barrierDismissible: !isVerifying,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            Future<void> verify() async {
+              final pin = pinController.text.trim();
+              if (pin.isEmpty) {
+                setDialogState(() {
+                  errorText = 'Enter manager PIN.';
+                });
+                return;
+              }
+
+              setDialogState(() {
+                isVerifying = true;
+                errorText = null;
+              });
+
+              try {
+                final user = await DatabaseHelper.instance.findUserByPin(pin);
+
+                if (!dialogContext.mounted) return;
+
+                if (user == null) {
+                  setDialogState(() {
+                    isVerifying = false;
+                    errorText = 'Invalid PIN.';
+                  });
+                  return;
+                }
+
+                final userId = ((user['id'] as num?) ?? 0).toInt();
+                final userName = (user['name'] ?? 'Manager').toString();
+                final role = (user['role'] ?? '').toString().toLowerCase();
+                final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+
+                if (!isActive) {
+                  setDialogState(() {
+                    isVerifying = false;
+                    errorText = 'This manager account is inactive.';
+                  });
+                  return;
+                }
+
+                if (role != 'manager') {
+                  setDialogState(() {
+                    isVerifying = false;
+                    errorText = 'PIN does not belong to a manager.';
+                  });
+                  return;
+                }
+
+                await DatabaseHelper.instance.logManagerApproval(
+                  actorUserId: userId,
+                  actorName: userName,
+                  targetUserId: _currentUserId,
+                  targetUserName: _currentUserName,
+                  description: description,
+                );
+
+                if (!dialogContext.mounted) return;
+                Navigator.pop(
+                  dialogContext,
+                  _StockTakeApprovalResult(
+                    approverId: userId,
+                    approverName: userName,
+                  ),
+                );
+              } catch (_) {
+                if (!dialogContext.mounted) return;
+                setDialogState(() {
+                  isVerifying = false;
+                  errorText = 'Approval failed. Please try again.';
+                });
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('Manager Approval Required'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Enter manager PIN to $actionLabel.'),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: pinController,
+                    obscureText: true,
+                    autofocus: true,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'Manager PIN',
+                      border: const OutlineInputBorder(),
+                      errorText: errorText,
+                    ),
+                    onSubmitted: (_) {
+                      if (!isVerifying) {
+                        verify();
+                      }
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isVerifying
+                      ? null
+                      : () => Navigator.pop(dialogContext, null),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: isVerifying ? null : verify,
+                  child: isVerifying
+                      ? const SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Approve'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    pinController.dispose();
+
+    if (approver == null && mounted) {
+      _showMessage('Manager approval is required to continue.', isError: true);
+    }
+
+    return approver;
+  }
+
   List<Product> get _filteredProducts {
+
     final query = _searchQuery.trim().toLowerCase();
 
     return _products.where((product) {
@@ -373,6 +567,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
   Future<void> _discardDraft() async {
     if (_sessionId == null) return;
+    final approval = await _requireManagerApproval(
+      actionLabel: 'discard this stock take draft',
+      description: 'Approved stock take draft discard for ${_sessionNameController.text.trim()} requested by $_currentUserName',
+    );
+    if (approval == null) return;
+
     final confirmed = await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
@@ -506,6 +706,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       return;
     }
 
+    final approval = await _requireManagerApproval(
+      actionLabel: 'apply this stock take reconciliation',
+      description: 'Approved stock take reconciliation for ${_sessionNameController.text.trim()} requested by $_currentUserName',
+    );
+    if (approval == null) return;
+
     final confirmed = await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
@@ -550,8 +756,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     final result = await DatabaseHelper.instance.applyStockTakeSession(
       sessionId: _sessionId!,
-      performedBy: widget.performedByLabel ??
-          context.read<AuthProvider>().currentUser?.name,
+      performedBy: _buildPerformedByLabel(approval.approverName),
     );
 
     if (!mounted) return;
