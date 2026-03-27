@@ -102,6 +102,54 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+  Future<bool> _confirmAction({
+    required String title,
+    required String message,
+    String confirmText = 'Confirm',
+    bool isDestructive = false,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: isDestructive
+                ? FilledButton.styleFrom(backgroundColor: Colors.red)
+                : null,
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(confirmText),
+          ),
+        ],
+      ),
+    );
+
+    return confirmed ?? false;
+  }
+
+  String? _validateNonNegativeMoney(String rawValue, {required String label}) {
+    final value = double.tryParse(rawValue.trim());
+    if (value == null) return 'Enter a valid $label.';
+    if (value < 0) return '$label cannot be negative.';
+    return null;
+  }
+
+  String? _validatePositiveInt(String rawValue, {required String label, bool allowZero = false}) {
+    final value = int.tryParse(rawValue.trim());
+    if (value == null) return 'Enter a valid $label.';
+    if (allowZero) {
+      if (value < 0) return '$label cannot be negative.';
+    } else {
+      if (value <= 0) return '$label must be greater than 0.';
+    }
+    return null;
+  }
+
   bool get _currentUserIsManager {
     final role = (context.read<AuthProvider>().currentUser?.role ?? '').toLowerCase();
     return role == 'manager';
@@ -473,20 +521,43 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   width: double.infinity,
                   child: FilledButton.icon(
                     onPressed: () async {
-                      final qty = int.tryParse(qtyController.text.trim()) ?? 0;
-                      if (qty <= 0) {
+                      final qtyError = _validatePositiveInt(
+                        qtyController.text,
+                        label: 'quantity',
+                      );
+                      if (qtyError != null) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Enter a valid quantity.'),
-                          ),
+                          SnackBar(content: Text(qtyError)),
                         );
                         return;
                       }
 
                       final rawCost = costController.text.trim();
+                      if (rawCost.isNotEmpty) {
+                        final costError = _validateNonNegativeMoney(
+                          rawCost,
+                          label: 'unit cost',
+                        );
+                        if (costError != null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(costError)),
+                          );
+                          return;
+                        }
+                      }
+
+                      final qty = int.parse(qtyController.text.trim());
                       final unitCost = rawCost.isEmpty
                           ? null
-                          : double.tryParse(rawCost);
+                          : double.parse(rawCost);
+
+                      final confirmed = await _confirmAction(
+                        title: 'Confirm Stock Receive',
+                        message:
+                            'Receive $qty units of ${product.name}? This will increase stock immediately.',
+                        confirmText: 'Receive',
+                      );
+                      if (!confirmed) return;
 
                       final success = await DatabaseHelper.instance.receiveStockLocal(
                         product.barcode,
@@ -625,15 +696,56 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       width: double.infinity,
                       child: FilledButton.icon(
                         onPressed: () async {
-                          final qty = int.tryParse(qtyController.text.trim()) ?? -1;
-                          if (qty < 0 || (adjustmentType != 'set' && qty == 0)) {
+                          final qtyError = _validatePositiveInt(
+                            qtyController.text,
+                            label: adjustmentType == 'set'
+                                ? 'final stock quantity'
+                                : 'quantity',
+                            allowZero: adjustmentType == 'set',
+                          );
+                          if (qtyError != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(qtyError)),
+                            );
+                            return;
+                          }
+
+                          final qty = int.parse(qtyController.text.trim());
+                          int resultingStock;
+                          switch (adjustmentType) {
+                            case 'add':
+                              resultingStock = product.stock + qty;
+                              break;
+                            case 'remove':
+                              resultingStock = product.stock - qty;
+                              break;
+                            case 'set':
+                            default:
+                              resultingStock = qty;
+                              break;
+                          }
+
+                          if (resultingStock < 0) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
-                                content: Text('Enter a valid quantity.'),
+                                content: Text('Resulting stock cannot be negative.'),
                               ),
                             );
                             return;
                           }
+
+                          final actionLabel = adjustmentType == 'add'
+                              ? 'increase stock'
+                              : adjustmentType == 'remove'
+                                  ? 'decrease stock'
+                                  : 'set exact stock';
+                          final confirmed = await _confirmAction(
+                            title: 'Confirm Stock Adjustment',
+                            message:
+                                'This will $actionLabel for ${product.name}. Final stock will be $resultingStock.',
+                            confirmText: 'Apply',
+                          );
+                          if (!confirmed) return;
 
                           final success = await DatabaseHelper.instance.adjustStockLocal(
                             product.barcode,
@@ -698,8 +810,24 @@ class _InventoryScreenState extends State<InventoryScreen> {
             ),
             FilledButton(
               onPressed: () async {
-                final value = int.tryParse(controller.text.trim()) ?? -1;
-                if (value < 0) return;
+                final error = _validatePositiveInt(
+                  controller.text,
+                  label: 'minimum stock level',
+                  allowZero: true,
+                );
+                if (error != null) {
+                  _showMessage(error, isError: true);
+                  return;
+                }
+                final value = int.parse(controller.text.trim());
+                final confirmed = await _confirmAction(
+                  title: 'Confirm Minimum Stock Update',
+                  message:
+                      'Set minimum stock for ${product.name} to $value?',
+                  confirmText: 'Save',
+                );
+                if (!confirmed) return;
+
                 final success =
                     await DatabaseHelper.instance.updateProductMinStockLevelLocal(
                   product.barcode,
@@ -873,16 +1001,34 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       width: double.infinity,
                       child: FilledButton.icon(
                         onPressed: () async {
-                          final newPrice =
-                              double.tryParse(valueController.text.trim());
-                          if (newPrice == null || newPrice < 0) {
+                          final priceError = _validateNonNegativeMoney(
+                            valueController.text,
+                            label: 'price',
+                          );
+                          if (priceError != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(priceError)),
+                            );
+                            return;
+                          }
+
+                          final newPrice = double.parse(valueController.text.trim());
+                          if (priceType == 'sale' && saleEnabled && newPrice <= 0) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
-                                content: Text('Enter a valid price.'),
+                                content: Text('Active sale price must be greater than 0.'),
                               ),
                             );
                             return;
                           }
+
+                          final confirmed = await _confirmAction(
+                            title: 'Confirm Price Change',
+                            message:
+                                'Update ${product.name} ${priceType.toUpperCase()} price to Rs. ${newPrice.toStringAsFixed(2)}?',
+                            confirmText: 'Update',
+                          );
+                          if (!confirmed) return;
 
                           final success =
                               await DatabaseHelper.instance.updateProductPriceLocal(

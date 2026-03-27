@@ -108,6 +108,46 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     );
   }
 
+  Future<bool> _confirmAction({
+    required String title,
+    required String message,
+    String confirmText = 'Confirm',
+    bool isDestructive = false,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: isDestructive
+                ? FilledButton.styleFrom(backgroundColor: Colors.red)
+                : null,
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(confirmText),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
+  String? _validateCount(String rawValue, {bool allowZero = true}) {
+    final value = int.tryParse(rawValue.trim());
+    if (value == null) return 'Enter a valid counted quantity.';
+    if (allowZero) {
+      if (value < 0) return 'Counted quantity cannot be negative.';
+    } else if (value <= 0) {
+      return 'Counted quantity must be greater than 0.';
+    }
+    return null;
+  }
+
   List<Product> get _filteredProducts {
     final query = _searchQuery.trim().toLowerCase();
 
@@ -168,7 +208,13 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                 child: const Text('Cancel'),
               ),
               FilledButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
+                onPressed: () {
+                  if (controller.text.trim().isEmpty) {
+                    _showMessage('Session name cannot be empty.', isError: true);
+                    return;
+                  }
+                  Navigator.pop(dialogContext, true);
+                },
                 child: const Text('Save'),
               ),
             ],
@@ -220,6 +266,14 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
   Future<void> _clearCount(Product product) async {
     if (_sessionId == null) return;
+
+    final confirmed = await _confirmAction(
+      title: 'Clear Count?',
+      message: 'Remove the counted quantity for ${product.name}?',
+      confirmText: 'Clear',
+      isDestructive: true,
+    );
+    if (!confirmed) return;
 
     final success = await DatabaseHelper.instance.removeStockTakeCount(
       sessionId: _sessionId!,
@@ -295,11 +349,18 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
           ),
           FilledButton(
             onPressed: () async {
-              final qty = int.tryParse(controller.text.trim());
-              if (qty == null || qty < 0) {
-                _showMessage('Enter a valid quantity.', isError: true);
+              final error = _validateCount(controller.text);
+              if (error != null) {
+                _showMessage(error, isError: true);
                 return;
               }
+              final qty = int.parse(controller.text.trim());
+              final confirmed = await _confirmAction(
+                title: 'Save Count?',
+                message: 'Set counted quantity for ${product.name} to $qty?',
+                confirmText: 'Save',
+              );
+              if (!confirmed) return;
               Navigator.pop(dialogContext);
               await _saveCount(product, qty);
             },
