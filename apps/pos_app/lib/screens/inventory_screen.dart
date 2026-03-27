@@ -103,13 +103,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   bool get _currentUserIsManager {
-    final role = context.read<AuthProvider>().currentUser?.role.toLowerCase();
+    final role = (context.read<AuthProvider>().currentUser?.role ?? '').toLowerCase();
     return role == 'manager';
   }
 
   String _buildPerformedByLabel(String? approverName) {
     final currentUser = context.read<AuthProvider>().currentUser;
-    final currentName = currentUser?.name?.trim();
+    final currentName = currentUser?.name.trim();
     if (_currentUserIsManager) {
       return (currentName == null || currentName.isEmpty)
           ? (approverName ?? 'Manager')
@@ -126,7 +126,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Future<String?> _requireManagerApproval(String actionLabel) async {
     if (_currentUserIsManager) {
-      final managerName = context.read<AuthProvider>().currentUser?.name?.trim();
+      final managerName = context.read<AuthProvider>().currentUser?.name.trim();
       return (managerName == null || managerName.isEmpty) ? 'Manager' : managerName;
     }
 
@@ -231,7 +231,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
       },
     );
 
-    pinController.dispose();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      pinController.dispose();
+    });
 
     if (approver == null && mounted) {
       _showMessage('Manager approval is required to continue.', isError: true);
@@ -380,6 +382,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openReceiveFlow({Product? initialProduct}) async {
+    final approverName = await _requireManagerApproval('receive stock');
+    if (approverName == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approverName);
+
     final product = initialProduct ??
         await _pickProduct(title: 'Select a product to receive');
     if (product == null || !mounted) return;
@@ -482,11 +488,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           ? null
                           : double.tryParse(rawCost);
 
-                      final approverName =
-                          await _requireManagerApproval('receive stock');
-                      if (approverName == null) return;
-
-                      final changedBy = _buildPerformedByLabel(approverName);
                       final success = await DatabaseHelper.instance.receiveStockLocal(
                         product.barcode,
                         qty,
@@ -522,6 +523,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openAdjustFlow({Product? initialProduct}) async {
+    final approverName = await _requireManagerApproval('adjust stock');
+    if (approverName == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approverName);
+
     final product = initialProduct ??
         await _pickProduct(title: 'Select a product to adjust');
     if (product == null || !mounted) return;
@@ -630,11 +635,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             return;
                           }
 
-                          final approverName =
-                              await _requireManagerApproval('adjust stock');
-                          if (approverName == null) return;
-
-                          final changedBy = _buildPerformedByLabel(approverName);
                           final success = await DatabaseHelper.instance.adjustStockLocal(
                             product.barcode,
                             adjustmentType: adjustmentType,
@@ -671,6 +671,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openMinStockDialog(Product product) async {
+    final approverName = await _requireManagerApproval('update minimum stock');
+    if (approverName == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approverName);
+
     final controller = TextEditingController(
       text: product.minStockLevel.toString(),
     );
@@ -696,11 +700,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
               onPressed: () async {
                 final value = int.tryParse(controller.text.trim()) ?? -1;
                 if (value < 0) return;
-                final approverName =
-                    await _requireManagerApproval('update minimum stock');
-                if (approverName == null) return;
-
-                final changedBy = _buildPerformedByLabel(approverName);
                 final success =
                     await DatabaseHelper.instance.updateProductMinStockLevelLocal(
                   product.barcode,
@@ -728,6 +727,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openPriceChangeFlow({Product? initialProduct}) async {
+    final approverName = await _requireManagerApproval('change prices');
+    if (approverName == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approverName);
+
     final product = initialProduct ??
         await _pickProduct(title: 'Select a product to change price');
     if (product == null || !mounted) return;
@@ -881,11 +884,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             return;
                           }
 
-                          final approverName =
-                              await _requireManagerApproval('change prices');
-                          if (approverName == null) return;
-
-                          final changedBy = _buildPerformedByLabel(approverName);
                           final success =
                               await DatabaseHelper.instance.updateProductPriceLocal(
                             product.barcode,
@@ -926,10 +924,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
 
   Future<void> _openStockTakeScreen({String? barcode}) async {
+    final approverName = await _requireManagerApproval('open stock take');
+    if (approverName == null || !mounted) return;
+
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => StockTakeScreen(initialBarcode: barcode),
+        builder: (_) => StockTakeScreen(
+          initialBarcode: barcode,
+          performedByLabel: _buildPerformedByLabel(approverName),
+        ),
       ),
     );
 
