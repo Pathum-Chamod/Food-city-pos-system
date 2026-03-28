@@ -40,7 +40,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 17,
+        version: 18,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -865,6 +865,22 @@ class DatabaseHelper {
       );
     }
 
+    if (oldVersion < 18) {
+      await _addColumnIfMissing(
+        db,
+        'users',
+        'has_full_access',
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+
+      await db.execute(
+        '''
+        UPDATE users
+        SET has_full_access = COALESCE(has_full_access, 0)
+        ''',
+      );
+    }
+
   }
 
   Future<void> _addColumnIfMissing(
@@ -927,6 +943,8 @@ class DatabaseHelper {
       case 'user_reactivated':
       case 'role_changed':
       case 'manager_approval':
+      case 'full_access_granted':
+      case 'full_access_revoked':
         return normalized;
       default:
         return normalized.isEmpty ? 'user_updated' : normalized;
@@ -941,6 +959,7 @@ class DatabaseHelper {
         role TEXT NOT NULL,
         pin TEXT UNIQUE NOT NULL,
         is_active INTEGER NOT NULL DEFAULT 1,
+        has_full_access INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         last_login_at TEXT,
@@ -1012,6 +1031,10 @@ class DatabaseHelper {
         return 'Reactivated user $targetUserName';
       case 'role_changed':
         return 'Changed role for $targetUserName$roleLabel';
+      case 'full_access_granted':
+        return 'Granted full access to $targetUserName';
+      case 'full_access_revoked':
+        return 'Removed full access from $targetUserName';
       case 'login_success':
         return '$targetUserName logged in';
       case 'login_failed':
@@ -1236,6 +1259,7 @@ class DatabaseHelper {
           'role': 'manager',
           'pin': '1234',
           'is_active': 1,
+          'has_full_access': 0,
           'created_at': now,
           'updated_at': now,
           'last_login_at': null,
@@ -1247,6 +1271,7 @@ class DatabaseHelper {
           'role': 'cashier',
           'pin': '5555',
           'is_active': 1,
+          'has_full_access': 0,
           'created_at': now,
           'updated_at': now,
           'last_login_at': null,
@@ -2282,7 +2307,7 @@ class DatabaseHelper {
       'users',
       where: whereClauses.isEmpty ? null : whereClauses.join(' AND '),
       whereArgs: whereArgs.isEmpty ? null : whereArgs,
-      orderBy: 'is_active DESC, role ASC, name COLLATE NOCASE ASC',
+      orderBy: 'is_active DESC, role ASC, has_full_access DESC, name COLLATE NOCASE ASC',
     );
 
     return rows.map((row) => Map<String, dynamic>.from(row)).toList();
@@ -2353,6 +2378,7 @@ class DatabaseHelper {
         'role': normalizedRole,
         'pin': trimmedPin,
         'is_active': 1,
+        'has_full_access': 0,
         'created_at': now,
         'updated_at': now,
         'last_login_at': null,
@@ -2428,6 +2454,7 @@ class DatabaseHelper {
           {
             'name': trimmedName,
             'role': normalizedRole,
+            if (normalizedRole == 'manager') 'has_full_access': 0,
             'updated_at': now,
             'updated_by': actorUserId,
           },
@@ -2610,6 +2637,77 @@ class DatabaseHelper {
     }
   }
 
+  Future<bool> setUserFullAccess({
+    required int userId,
+    required bool hasFullAccess,
+    int? actorUserId,
+    String? actorName,
+  }) async {
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        final existing = await txn.query(
+          'users',
+          columns: ['id', 'name', 'role', 'has_full_access'],
+          where: 'id = ?',
+          whereArgs: [userId],
+          limit: 1,
+        );
+
+        if (existing.isEmpty) {
+          throw Exception('User not found.');
+        }
+
+        final current = Map<String, dynamic>.from(existing.first);
+        final targetName = (current['name'] ?? 'User').toString().trim();
+        final currentRole = _normalizeUserRole(current['role']?.toString());
+        final currentFullAccess =
+            _parseInt(current['has_full_access'], fallback: 0) == 1;
+
+        if (currentRole == 'manager') {
+          throw Exception('Managers already have full access by role.');
+        }
+
+        if (currentFullAccess == hasFullAccess) {
+          return;
+        }
+
+        final now = DateTime.now().toIso8601String();
+
+        await txn.update(
+          'users',
+          {
+            'has_full_access': hasFullAccess ? 1 : 0,
+            'updated_at': now,
+            'updated_by': actorUserId,
+          },
+          where: 'id = ?',
+          whereArgs: [userId],
+        );
+
+        await _insertUserLog(
+          txn,
+          actorUserId: actorUserId,
+          actorName: actorName,
+          actionType: hasFullAccess ? 'full_access_granted' : 'full_access_revoked',
+          targetUserId: userId,
+          targetUserName: targetName,
+          description: _buildUserActionDescription(
+            hasFullAccess ? 'full_access_granted' : 'full_access_revoked',
+            targetUserName: targetName,
+          ),
+          createdAt: now,
+        );
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error updating full access: $e');
+      rethrow;
+    }
+  }
+
   Future<void> updateUserLastLogin(int userId) async {
     final db = await database;
     final now = DateTime.now().toIso8601String();
@@ -2749,7 +2847,7 @@ class DatabaseHelper {
         );
       } else if (normalizedFilter == 'user_changes') {
         whereClauses.add(
-          "(action_type = 'user_created' OR action_type = 'user_updated' OR action_type = 'user_deactivated' OR action_type = 'user_reactivated' OR action_type = 'role_changed')",
+          "(action_type = 'user_created' OR action_type = 'user_updated' OR action_type = 'user_deactivated' OR action_type = 'user_reactivated' OR action_type = 'role_changed' OR action_type = 'full_access_granted' OR action_type = 'full_access_revoked')",
         );
       } else if (normalizedFilter == 'pin_changes') {
         whereClauses.add("action_type = 'pin_reset'");

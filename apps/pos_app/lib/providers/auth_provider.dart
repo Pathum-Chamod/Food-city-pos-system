@@ -14,6 +14,9 @@ class AuthProvider with ChangeNotifier {
 
   bool get isLoggedIn => _currentUser != null;
   bool get isManager => _currentUser?.isManager ?? false;
+  bool get hasFullAccess => _currentUser?.hasFullAccess ?? false;
+  bool get hasManagementAccess => _currentUser?.hasManagementAccess ?? false;
+  bool get shouldBypassManagerPin => hasManagementAccess;
 
   void clearLoginState() {
     _loginError = null;

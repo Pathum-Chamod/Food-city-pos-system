@@ -127,6 +127,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
       'id': user.id,
       'name': user.name,
       'role': user.role,
+      'has_full_access': user.hasFullAccess,
     };
   }
 
@@ -137,16 +138,15 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
     return raw.isEmpty ? 'Unknown User' : raw;
   }
 
-  bool get _currentUserIsManager {
-    final role = (_currentUserMap?['role'] ?? '').toString().toLowerCase();
-    return role == 'manager';
+  bool get _currentUserHasManagementAccess {
+    return context.read<AuthProvider>().hasManagementAccess;
   }
 
   Future<bool> _requireManagerApproval({
     required String actionLabel,
     required String description,
   }) async {
-    if (_currentUserIsManager) {
+    if (_currentUserHasManagementAccess) {
       return true;
     }
 
@@ -164,7 +164,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                   final pin = pinController.text.trim();
                   if (pin.isEmpty) {
                     setDialogState(() {
-                      errorText = 'Enter manager PIN.';
+                      errorText = 'Enter manager or full-access PIN.';
                     });
                     return;
                   }
@@ -191,19 +191,21 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                     final userName = (user['name'] ?? 'Manager').toString();
                     final role = (user['role'] ?? '').toString().toLowerCase();
                     final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+                    final hasFullAccess = ((user['has_full_access'] as num?) ?? 0).toInt() == 1;
+                    final hasManagementAccess = role == 'manager' || hasFullAccess;
 
                     if (!isActive) {
                       setDialogState(() {
                         isVerifying = false;
-                        errorText = 'This manager account is inactive.';
+                        errorText = 'This approver account is inactive.';
                       });
                       return;
                     }
 
-                    if (role != 'manager') {
+                    if (!hasManagementAccess) {
                       setDialogState(() {
                         isVerifying = false;
-                        errorText = 'PIN does not belong to a manager.';
+                        errorText = 'PIN does not belong to a manager or full-access user.';
                       });
                       return;
                     }
@@ -228,12 +230,12 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                 }
 
                 return AlertDialog(
-                  title: const Text('Manager Approval Required'),
+                  title: const Text('Approval Required'),
                   content: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Enter manager PIN to $actionLabel.'),
+                      Text('Enter manager or full-access PIN to $actionLabel.'),
                       const SizedBox(height: 12),
                       TextField(
                         controller: pinController,
@@ -241,7 +243,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                         autofocus: true,
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
-                          labelText: 'Manager PIN',
+                          labelText: 'Approver PIN',
                           border: const OutlineInputBorder(),
                           errorText: errorText,
                         ),
@@ -283,7 +285,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
     if (!approved && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Manager approval is required to continue.'),
+          content: Text('Approval is required to continue.'),
           backgroundColor: Colors.red,
         ),
       );

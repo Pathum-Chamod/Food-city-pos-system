@@ -105,7 +105,7 @@ class _PosScreenState extends State<PosScreen> {
   ) async {
     final auth = context.read<AuthProvider>();
 
-    if (auth.isManager) {
+    if (auth.hasManagementAccess) {
       await onApproved();
       return;
     }
@@ -652,9 +652,9 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _openUserManagement() async {
     final auth = context.read<AuthProvider>();
 
-    if (!auth.isManager) {
+    if (!auth.hasManagementAccess) {
       _showInfoMessage(
-        'Only managers can access User Management.',
+        'Only managers or full-access users can access User Management.',
         backgroundColor: Colors.orange,
       );
       _focusBarcodeField();
@@ -1367,7 +1367,7 @@ class _PosScreenState extends State<PosScreen> {
             },
             icon: const Icon(Icons.bar_chart, color: Colors.white),
           ),
-          if (auth.isManager)
+          if (auth.hasManagementAccess)
             IconButton(
               tooltip: 'User management',
               onPressed: _openUserManagement,

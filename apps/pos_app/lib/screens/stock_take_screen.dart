@@ -165,6 +165,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       'id': user.id,
       'name': user.name,
       'role': user.role,
+      'has_full_access': user.hasFullAccess,
     };
   }
 
@@ -175,13 +176,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     return raw.isEmpty ? 'Unknown User' : raw;
   }
 
-  bool get _currentUserIsManager {
-    final role = (_currentUserMap?['role'] ?? '').toString().toLowerCase();
-    return role == 'manager';
+  bool get _currentUserHasManagementAccess {
+    return context.read<AuthProvider>().hasManagementAccess;
   }
 
   String _buildPerformedByLabel(String? approverName) {
-    if (_currentUserIsManager) return _currentUserName;
+    if (_currentUserHasManagementAccess) return _currentUserName;
     if (approverName == null || approverName.trim().isEmpty) {
       return _currentUserName;
     }
@@ -192,7 +192,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     required String actionLabel,
     required String description,
   }) async {
-    if (_currentUserIsManager) {
+    if (_currentUserHasManagementAccess) {
       return _StockTakeApprovalResult(
         approverId: _currentUserId ?? 0,
         approverName: _currentUserName,
@@ -213,7 +213,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
               final pin = pinController.text.trim();
               if (pin.isEmpty) {
                 setDialogState(() {
-                  errorText = 'Enter manager PIN.';
+                  errorText = 'Enter manager or full-access PIN.';
                 });
                 return;
               }
@@ -240,19 +240,21 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                 final userName = (user['name'] ?? 'Manager').toString();
                 final role = (user['role'] ?? '').toString().toLowerCase();
                 final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+                final hasFullAccess = ((user['has_full_access'] as num?) ?? 0).toInt() == 1;
+                final hasManagementAccess = role == 'manager' || hasFullAccess;
 
                 if (!isActive) {
                   setDialogState(() {
                     isVerifying = false;
-                    errorText = 'This manager account is inactive.';
+                    errorText = 'This approver account is inactive.';
                   });
                   return;
                 }
 
-                if (role != 'manager') {
+                if (!hasManagementAccess) {
                   setDialogState(() {
                     isVerifying = false;
-                    errorText = 'PIN does not belong to a manager.';
+                    errorText = 'PIN does not belong to a manager or full-access user.';
                   });
                   return;
                 }
@@ -283,12 +285,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
             }
 
             return AlertDialog(
-              title: const Text('Manager Approval Required'),
+              title: const Text('Approval Required'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Enter manager PIN to $actionLabel.'),
+                  Text('Enter manager or full-access PIN to $actionLabel.'),
                   const SizedBox(height: 12),
                   TextField(
                     controller: pinController,
@@ -296,7 +298,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                     autofocus: true,
                     keyboardType: TextInputType.number,
                     decoration: InputDecoration(
-                      labelText: 'Manager PIN',
+                      labelText: 'Approver PIN',
                       border: const OutlineInputBorder(),
                       errorText: errorText,
                     ),
@@ -335,7 +337,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     pinController.dispose();
 
     if (approver == null && mounted) {
-      _showMessage('Manager approval is required to continue.', isError: true);
+      _showMessage('Approval is required to continue.', isError: true);
     }
 
     return approver;

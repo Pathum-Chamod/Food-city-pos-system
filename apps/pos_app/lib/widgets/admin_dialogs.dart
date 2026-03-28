@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 
 class AdminDialogs {
@@ -9,7 +11,7 @@ class AdminDialogs {
     BuildContext context,
     FutureOr<void> Function()? onSuccess, {
     String title = 'Manager Approval Required',
-    String message = 'Enter an active manager PIN to continue.',
+    String message = 'Enter an active manager or full-access PIN to continue.',
     int? requesterUserId,
     String? requesterUserName,
     String? approvalDescription,
@@ -19,6 +21,36 @@ class AdminDialogs {
     String? errorText;
     bool isVerifying = false;
     bool approved = false;
+
+    final auth = context.read<AuthProvider>();
+    final currentUser = auth.currentUser;
+    final canBypassWithCurrentUser =
+        auth.hasManagementAccess && currentUser?.id != null;
+
+    if (canBypassWithCurrentUser) {
+      final bypassedSelfApproval =
+          requireDifferentManager && requesterUserId != null && requesterUserId == currentUser!.id;
+
+      if (!bypassedSelfApproval) {
+        final description = _buildApprovalDescription(
+          title: title,
+          message: message,
+          requesterUserName: requesterUserName,
+          explicitDescription: approvalDescription,
+        );
+
+        await DatabaseHelper.instance.logManagerApproval(
+          actorUserId: currentUser!.id!,
+          actorName: currentUser.name,
+          targetUserId: requesterUserId,
+          targetUserName: requesterUserName,
+          description: description,
+        );
+
+        await onSuccess?.call();
+        return true;
+      }
+    }
 
     await showDialog<void>(
       context: context,
@@ -32,7 +64,7 @@ class AdminDialogs {
               final pin = pinController.text.trim();
               if (!RegExp(r'^\d{4}$').hasMatch(pin)) {
                 setState(() {
-                  errorText = 'Enter a valid 4-digit manager PIN.';
+                  errorText = 'Enter a valid 4-digit approval PIN.';
                 });
                 return;
               }
@@ -47,7 +79,7 @@ class AdminDialogs {
 
                 if (user == null) {
                   setState(() {
-                    errorText = 'Incorrect manager PIN.';
+                    errorText = 'Incorrect approval PIN.';
                     isVerifying = false;
                   });
                   return;
@@ -57,18 +89,22 @@ class AdminDialogs {
                 final userName = (user['name'] ?? 'Unknown').toString();
                 final role = (user['role'] ?? '').toString().toLowerCase();
                 final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+                final hasFullAccess =
+                    ((user['has_full_access'] as num?) ?? 0).toInt() == 1 ||
+                    (user['has_full_access'] == true);
+                final canApprove = role == 'manager' || hasFullAccess;
 
                 if (!isActive) {
                   setState(() {
-                    errorText = 'This manager account is inactive.';
+                    errorText = 'This approver account is inactive.';
                     isVerifying = false;
                   });
                   return;
                 }
 
-                if (role != 'manager') {
+                if (!canApprove) {
                   setState(() {
-                    errorText = 'Only an active manager can approve this action.';
+                    errorText = 'Only an active manager or full-access user can approve this action.';
                     isVerifying = false;
                   });
                   return;
@@ -133,7 +169,7 @@ class AdminDialogs {
                     onSubmitted: (_) => verify(),
                     decoration: InputDecoration(
                       border: const OutlineInputBorder(),
-                      labelText: 'Manager PIN',
+                      labelText: 'Approval PIN',
                       counterText: '',
                       errorText: errorText,
                     ),

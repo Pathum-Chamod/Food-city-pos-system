@@ -66,7 +66,8 @@ class _UserManagementScreenState extends State<UserManagementScreen>
   String get _actorName =>
       context.read<AuthProvider>().currentUser?.name ?? 'System';
 
-  bool get _isManager => context.read<AuthProvider>().isManager;
+  bool get _hasManagementAccess =>
+      context.read<AuthProvider>().hasManagementAccess;
 
   Future<void> _loadAll({bool keepUserActivityFilter = true}) async {
     if (!mounted) return;
@@ -178,6 +179,10 @@ class _UserManagementScreenState extends State<UserManagementScreen>
         return 'Reactivated';
       case 'role_changed':
         return 'Role Changed';
+      case 'full_access_granted':
+        return 'Full Access Granted';
+      case 'full_access_revoked':
+        return 'Full Access Removed';
       case 'manager_approval':
         return 'Approval';
       default:
@@ -220,6 +225,8 @@ class _UserManagementScreenState extends State<UserManagementScreen>
       case 'pin_reset':
       case 'manager_approval':
         return Colors.orange;
+      case 'full_access_granted':
+      case 'full_access_revoked':
       case 'role_changed':
       case 'user_updated':
         return Colors.blue;
@@ -606,6 +613,81 @@ class _UserManagementScreenState extends State<UserManagementScreen>
     }
   }
 
+  Future<void> _toggleUserFullAccess(Map<String, dynamic> user) async {
+    final userId = ((user['id'] as num?) ?? 0).toInt();
+    final userName = (user['name'] ?? 'User').toString();
+    final role = (user['role'] ?? 'cashier').toString().trim().toLowerCase();
+    final hasFullAccess = ((user['has_full_access'] as num?) ?? 0).toInt() == 1;
+
+    if (role == 'manager') {
+      _showMessage(
+        'Managers already have full access by role.',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        title: Text(hasFullAccess ? 'Remove Full Access?' : 'Give Full Access?'),
+        content: Text(
+          hasFullAccess
+              ? 'This will remove advanced access from $userName and treat the account like a standard cashier again.'
+              : 'This will allow $userName to access manager-only modules and protected actions without changing the role.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(hasFullAccess ? 'Remove Access' : 'Give Access'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      await DatabaseHelper.instance.setUserFullAccess(
+        userId: userId,
+        hasFullAccess: !hasFullAccess,
+        actorUserId: _actorUserId,
+        actorName: _actorName,
+      );
+      await _loadAll();
+      _showMessage(
+        !hasFullAccess
+            ? 'Full access granted to $userName.'
+            : 'Full access removed from $userName.',
+        backgroundColor: Colors.green,
+      );
+
+      if (_actorUserId == userId) {
+        await context.read<AuthProvider>().refreshCurrentUser();
+      }
+    } catch (e) {
+      _showMessage(
+        e.toString().replaceFirst('Exception: ', ''),
+        backgroundColor: Colors.red,
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
   void _viewUserActivity(Map<String, dynamic> user) {
     setState(() {
       _selectedActivityUserId = ((user['id'] as num?) ?? 0).toInt();
@@ -896,6 +978,7 @@ class _UserManagementScreenState extends State<UserManagementScreen>
     final initial = name.trim().isEmpty ? 'U' : name.trim()[0].toUpperCase();
     final userId = ((user['id'] as num?) ?? 0).toInt();
     final isSelf = _actorUserId == userId;
+    final hasFullAccess = ((user['has_full_access'] as num?) ?? 0).toInt() == 1;
     final activeManagerCount = _users.where((entry) {
       final entryRole = (entry['role'] ?? 'cashier').toString().trim().toLowerCase();
       final entryActive = ((entry['is_active'] as num?) ?? 1).toInt() == 1;
@@ -974,6 +1057,8 @@ class _UserManagementScreenState extends State<UserManagementScreen>
                       color: isActive ? Colors.green : Colors.red,
                     ),
                     _buildPill(label: 'PIN Set', color: Colors.orange),
+                    if (role != 'manager' && hasFullAccess)
+                      _buildPill(label: 'Full Access', color: Colors.indigo),
                     if (isLastActiveManager)
                       _buildPill(label: 'Last Active Manager', color: Colors.indigo),
                   ],
@@ -1009,6 +1094,8 @@ class _UserManagementScreenState extends State<UserManagementScreen>
                   _showResetPinDialog(user);
                 } else if (value == 'toggle') {
                   _toggleUserStatus(user);
+                } else if (value == 'full_access') {
+                  _toggleUserFullAccess(user);
                 } else if (value == 'activity') {
                   _viewUserActivity(user);
                 }
@@ -1022,6 +1109,11 @@ class _UserManagementScreenState extends State<UserManagementScreen>
                   value: 'pin',
                   child: Text('Reset PIN'),
                 ),
+                if (role != 'manager')
+                  PopupMenuItem(
+                    value: 'full_access',
+                    child: Text(hasFullAccess ? 'Remove Full Access' : 'Give Full Access'),
+                  ),
                 PopupMenuItem(
                   value: 'toggle',
                   enabled: !toggleDisabled,
@@ -1358,6 +1450,10 @@ class _UserManagementScreenState extends State<UserManagementScreen>
         return Icons.edit_outlined;
       case 'pin_reset':
         return Icons.password_rounded;
+      case 'full_access_granted':
+        return Icons.admin_panel_settings_outlined;
+      case 'full_access_revoked':
+        return Icons.remove_moderator_outlined;
       case 'user_deactivated':
         return Icons.person_off_outlined;
       case 'user_reactivated':
@@ -1400,6 +1496,14 @@ class _UserManagementScreenState extends State<UserManagementScreen>
         return hasTarget
             ? '$targetName now has an updated PIN.'
             : 'A user PIN was reset.';
+      case 'full_access_granted':
+        return hasTarget
+            ? '$targetName can now access manager-only modules and protected actions.'
+            : 'A cashier account was granted full access.';
+      case 'full_access_revoked':
+        return hasTarget
+            ? '$targetName no longer has extended privileged access.'
+            : 'Extended access was removed from a cashier account.';
       case 'user_deactivated':
         return hasTarget
             ? '$targetName can no longer sign in until the account is reactivated.'
@@ -1569,7 +1673,7 @@ class _UserManagementScreenState extends State<UserManagementScreen>
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
 
-    if (!auth.isManager) {
+    if (!auth.hasManagementAccess) {
       return Scaffold(
         appBar: AppBar(
           title: const Text('User Management'),
@@ -1577,7 +1681,7 @@ class _UserManagementScreenState extends State<UserManagementScreen>
         body: _buildEmptyState(
           icon: Icons.lock_outline,
           title: 'Access restricted',
-          subtitle: 'Only managers can access this module.',
+          subtitle: 'Only managers or full-access users can access this module.',
         ),
       );
     }

@@ -167,6 +167,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       'id': user.id,
       'name': user.name,
       'role': user.role,
+      'has_full_access': user.hasFullAccess,
     };
   }
 
@@ -178,8 +179,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   bool get _currentUserIsManager {
-    final role = (_currentUserMap?['role'] ?? '').toString().toLowerCase();
-    return role == 'manager';
+    return context.read<AuthProvider>().hasManagementAccess;
   }
 
   String _buildPerformedByLabel(String? approverName) {
@@ -218,7 +218,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               final pin = pinController.text.trim();
               if (pin.isEmpty) {
                 setDialogState(() {
-                  errorText = 'Enter manager PIN.';
+                  errorText = 'Enter approval PIN.';
                 });
                 return;
               }
@@ -245,19 +245,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 final userName = (user['name'] ?? 'Manager').toString();
                 final role = (user['role'] ?? '').toString().toLowerCase();
                 final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+                final hasFullAccess =
+                    ((user['has_full_access'] as num?) ?? 0).toInt() == 1 ||
+                    (user['has_full_access'] == true);
+                final canApprove = role == 'manager' || hasFullAccess;
 
                 if (!isActive) {
                   setDialogState(() {
                     isVerifying = false;
-                    errorText = 'This manager account is inactive.';
+                    errorText = 'This approver account is inactive.';
                   });
                   return;
                 }
 
-                if (role != 'manager') {
+                if (!canApprove) {
                   setDialogState(() {
                     isVerifying = false;
-                    errorText = 'PIN does not belong to a manager.';
+                    errorText = 'PIN does not belong to a manager or full-access user.';
                   });
                   return;
                 }
@@ -293,7 +297,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Enter manager PIN to $actionLabel.'),
+                  Text('Enter manager or full-access PIN to $actionLabel.'),
                   const SizedBox(height: 12),
                   TextField(
                     controller: pinController,
@@ -301,7 +305,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     autofocus: true,
                     keyboardType: TextInputType.number,
                     decoration: InputDecoration(
-                      labelText: 'Manager PIN',
+                      labelText: 'Approval PIN',
                       border: const OutlineInputBorder(),
                       errorText: errorText,
                     ),

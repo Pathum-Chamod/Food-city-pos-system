@@ -216,8 +216,8 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     final approved = await AdminDialogs.showPinDialog(
       context,
       () => _processRefundAfterApproval(selectedItems),
-      title: 'Manager Approval Required',
-      message: 'Enter an active manager PIN to approve this refund.',
+      title: 'Approval Required',
+      message: 'Enter an active manager or full-access PIN to approve this refund.',
       requesterUserId: requester?.id,
       requesterUserName: requesterName,
       approvalDescription: _buildApprovalDescription(

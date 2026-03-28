@@ -4,6 +4,7 @@ class User {
   final String role; // manager | cashier
   final String pin;
   final bool isActive;
+  final bool hasFullAccess;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final DateTime? lastLoginAt;
@@ -16,6 +17,7 @@ class User {
     required this.role,
     required this.pin,
     this.isActive = true,
+    this.hasFullAccess = false,
     this.createdAt,
     this.updatedAt,
     this.lastLoginAt,
@@ -25,6 +27,7 @@ class User {
 
   bool get isManager => role.toLowerCase() == 'manager';
   bool get isCashier => role.toLowerCase() == 'cashier';
+  bool get hasManagementAccess => isManager || hasFullAccess;
 
   User copyWith({
     int? id,
@@ -32,6 +35,7 @@ class User {
     String? role,
     String? pin,
     bool? isActive,
+    bool? hasFullAccess,
     DateTime? createdAt,
     DateTime? updatedAt,
     DateTime? lastLoginAt,
@@ -44,6 +48,7 @@ class User {
       role: role ?? this.role,
       pin: pin ?? this.pin,
       isActive: isActive ?? this.isActive,
+      hasFullAccess: hasFullAccess ?? this.hasFullAccess,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       lastLoginAt: lastLoginAt ?? this.lastLoginAt,
@@ -59,6 +64,7 @@ class User {
       'role': role,
       'pin': pin,
       'is_active': isActive ? 1 : 0,
+      'has_full_access': hasFullAccess ? 1 : 0,
       'created_at': createdAt?.toIso8601String(),
       'updated_at': updatedAt?.toIso8601String(),
       'last_login_at': lastLoginAt?.toIso8601String(),
@@ -95,6 +101,7 @@ class User {
       role: (map['role'] ?? 'cashier').toString(),
       pin: (map['pin'] ?? '').toString(),
       isActive: parseBool(map['is_active'], fallback: true),
+      hasFullAccess: parseBool(map['has_full_access'], fallback: false),
       createdAt: parseDate(map['created_at']),
       updatedAt: parseDate(map['updated_at']),
       lastLoginAt: parseDate(map['last_login_at']),
