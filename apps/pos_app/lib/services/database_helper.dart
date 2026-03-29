@@ -1566,7 +1566,50 @@ class DatabaseHelper {
             where: 'barcode = ?',
             whereArgs: [barcode],
           );
-        } else if (type == 'PRODUCT_CREATE') {
+        } else if (type == 'BULK_PRODUCT_IMPORT') {
+          final data = Map<String, dynamic>.from(decodedData as Map);
+          final rows = (data['rows'] as List?) ?? const [];
+          final now = DateTime.now().toIso8601String();
+
+          for (final rawRow in rows) {
+            final row = Map<String, dynamic>.from(rawRow as Map);
+            final barcode = row['barcode']?.toString().trim() ?? '';
+            final name = row['name']?.toString().trim() ?? '';
+            if (barcode.isEmpty || name.isEmpty) continue;
+
+            final sellingPrice = _roundMoney(_parseDouble(row['selling_price'] ?? row['price']));
+            final wholesalePrice = _roundMoney(
+              _parseDouble(row['wholesale_price'], fallback: sellingPrice),
+            );
+            final salePriceRaw = row['sale_price'];
+            final salePrice = salePriceRaw == null ? null : _roundMoney(_parseDouble(salePriceRaw));
+            final saleEnabled = row['sale_enabled'] == null
+                ? (salePrice != null ? 1 : 0)
+                : ((_parseInt(row['sale_enabled']) == 1 || row['sale_enabled'] == true) ? 1 : 0);
+            final stock = _parseInt(row['stock'] ?? row['opening_stock']);
+
+            await txn.insert(
+              'products',
+              {
+                'barcode': barcode,
+                'name': name,
+                'category': (row['category'] ?? 'General').toString(),
+                'price': sellingPrice,
+                'cost_price': _roundMoney(_parseDouble(row['cost_price'])),
+                'selling_price': sellingPrice,
+                'wholesale_price': wholesalePrice,
+                'sale_price': salePrice,
+                'sale_enabled': saleEnabled,
+                'stock': stock,
+                'min_stock_level': _parseInt(row['min_stock_level']),
+                'is_active': 1,
+                'updated_at': now,
+                'last_price_updated_at': now,
+              },
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          }
+        } else if (type == 'PRODUCT_CREATE' || type == 'PRODUCT_UPDATE') {
           final data = Map<String, dynamic>.from(decodedData as Map);
           final barcode = data['barcode']?.toString().trim() ?? '';
           final name = data['name']?.toString().trim() ?? '';
@@ -1603,6 +1646,39 @@ class DatabaseHelper {
             },
             conflictAlgorithm: ConflictAlgorithm.replace,
           );
+        } else if (type == 'PRODUCT_DELETE') {
+          final data = Map<String, dynamic>.from(decodedData as Map);
+          final barcode = data['barcode']?.toString().trim() ?? '';
+          if (barcode.isEmpty) continue;
+
+          await txn.delete(
+            'supplier_product_mappings',
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+          );
+          await txn.delete(
+            'products',
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+          );
+        } else if (type == 'BULK_PRODUCT_DELETE') {
+          final data = Map<String, dynamic>.from(decodedData as Map);
+          final rows = (data['barcodes'] as List?) ?? const [];
+          for (final rawBarcode in rows) {
+            final barcode = rawBarcode?.toString().trim() ?? '';
+            if (barcode.isEmpty) continue;
+
+            await txn.delete(
+              'supplier_product_mappings',
+              where: 'barcode = ?',
+              whereArgs: [barcode],
+            );
+            await txn.delete(
+              'products',
+              where: 'barcode = ?',
+              whereArgs: [barcode],
+            );
+          }
         }
       }
     });
@@ -4666,6 +4742,473 @@ class DatabaseHelper {
     } catch (e) {
       debugPrint('Error creating product: $e');
       return false;
+    }
+  }
+
+
+  Future<bool> updateProductDetailsLocal({
+    required String barcode,
+    required String name,
+    required String category,
+    required double costPrice,
+    required double sellingPrice,
+    double? wholesalePrice,
+    double? salePrice,
+    required bool saleEnabled,
+    required int minStockLevel,
+    String? changedBy,
+  }) async {
+    final trimmedBarcode = barcode.trim();
+    final trimmedName = name.trim();
+    final trimmedCategory = category.trim().isEmpty ? 'General' : category.trim();
+
+    if (trimmedBarcode.isEmpty || trimmedName.isEmpty) return false;
+    if (sellingPrice <= 0 || costPrice < 0 || minStockLevel < 0) return false;
+    if (saleEnabled && (salePrice == null || salePrice <= 0)) {
+      return false;
+    }
+
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        final rows = await txn.query(
+          'products',
+          columns: [
+            'name',
+            'category',
+            'cost_price',
+            'selling_price',
+            'wholesale_price',
+            'sale_price',
+            'sale_enabled',
+            'min_stock_level',
+            'stock',
+          ],
+          where: 'barcode = ?',
+          whereArgs: [trimmedBarcode],
+          limit: 1,
+        );
+
+        if (rows.isEmpty) {
+          throw Exception('Product not found for barcode $trimmedBarcode.');
+        }
+
+        final row = rows.first;
+        final now = DateTime.now().toIso8601String();
+        final resolvedWholesale = _roundMoney(
+          (wholesalePrice == null || wholesalePrice <= 0) ? sellingPrice : wholesalePrice,
+        );
+        final resolvedSalePrice = salePrice == null ? null : _roundMoney(salePrice);
+
+        final oldName = (row['name'] ?? '').toString();
+        final oldCategory = (row['category'] ?? 'General').toString();
+        final oldCostPrice = _parseDouble(row['cost_price']);
+        final oldSellingPrice = _parseDouble(row['selling_price']);
+        final oldWholesalePrice = _parseDouble(row['wholesale_price']);
+        final oldSalePrice = row['sale_price'] == null ? null : _parseDouble(row['sale_price']);
+        final oldSaleEnabled = _parseInt(row['sale_enabled']) == 1;
+        final oldMinStockLevel = _parseInt(row['min_stock_level']);
+        final currentStock = _parseInt(row['stock']);
+
+        await txn.update(
+          'products',
+          {
+            'name': trimmedName,
+            'category': trimmedCategory,
+            'price': _roundMoney(sellingPrice),
+            'cost_price': _roundMoney(costPrice),
+            'selling_price': _roundMoney(sellingPrice),
+            'wholesale_price': resolvedWholesale,
+            'sale_price': resolvedSalePrice,
+            'sale_enabled': saleEnabled ? 1 : 0,
+            'min_stock_level': minStockLevel,
+            'updated_at': now,
+            'last_price_updated_at': now,
+          },
+          where: 'barcode = ?',
+          whereArgs: [trimmedBarcode],
+        );
+
+        final changes = <String>[];
+        if (oldName != trimmedName) changes.add('name');
+        if (oldCategory != trimmedCategory) changes.add('category');
+        if (oldCostPrice != _roundMoney(costPrice)) changes.add('cost');
+        if (oldSellingPrice != _roundMoney(sellingPrice)) changes.add('selling');
+        if (oldWholesalePrice != resolvedWholesale) changes.add('wholesale');
+        if (oldSalePrice != resolvedSalePrice || oldSaleEnabled != saleEnabled) {
+          changes.add('sale');
+        }
+        if (oldMinStockLevel != minStockLevel) changes.add('min stock');
+
+        await _insertInventoryMovement(
+          txn,
+          barcode: trimmedBarcode,
+          productName: trimmedName,
+          actionType: 'product_updated',
+          stockBefore: currentStock,
+          stockAfter: currentStock,
+          reason: changes.isEmpty
+              ? 'Product details updated'
+              : 'Updated ${changes.join(', ')}',
+          performedBy: changedBy,
+          createdAt: now,
+        );
+
+        final syncData = jsonEncode({
+          'barcode': trimmedBarcode,
+          'name': trimmedName,
+          'category': trimmedCategory,
+          'cost_price': _roundMoney(costPrice),
+          'selling_price': _roundMoney(sellingPrice),
+          'price': _roundMoney(sellingPrice),
+          'wholesale_price': resolvedWholesale,
+          'sale_price': resolvedSalePrice,
+          'sale_enabled': saleEnabled,
+          'stock': currentStock,
+          'opening_stock': currentStock,
+          'min_stock_level': minStockLevel,
+          'performed_by': changedBy,
+          'updated_at': now,
+          'branch': 'Hikkaduwa',
+          'vendor': 'Alfasoft',
+        });
+
+        await txn.insert('sync_queue', {
+          'type': 'PRODUCT_UPDATE',
+          'data': syncData,
+          'status': 'pending',
+          'created_at': now,
+        });
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error updating product details: $e');
+      return false;
+    }
+  }
+
+  Future<bool> deleteProductLocal(
+    String barcode, {
+    String? changedBy,
+  }) async {
+    final trimmedBarcode = barcode.trim();
+    if (trimmedBarcode.isEmpty) return false;
+
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        final rows = await txn.query(
+          'products',
+          columns: ['name'],
+          where: 'barcode = ?',
+          whereArgs: [trimmedBarcode],
+          limit: 1,
+        );
+
+        if (rows.isEmpty) {
+          throw Exception('Product not found for barcode $trimmedBarcode.');
+        }
+
+        final productName = (rows.first['name'] ?? 'Unknown product').toString();
+        final now = DateTime.now().toIso8601String();
+
+        await txn.delete(
+          'supplier_product_mappings',
+          where: 'barcode = ?',
+          whereArgs: [trimmedBarcode],
+        );
+
+        await txn.delete(
+          'products',
+          where: 'barcode = ?',
+          whereArgs: [trimmedBarcode],
+        );
+
+        await _insertInventoryMovement(
+          txn,
+          barcode: trimmedBarcode,
+          productName: productName,
+          actionType: 'product_deleted',
+          reason: 'Product removed from inventory',
+          performedBy: changedBy,
+          createdAt: now,
+        );
+
+        await txn.insert('sync_queue', {
+          'type': 'PRODUCT_DELETE',
+          'data': jsonEncode({
+            'barcode': trimmedBarcode,
+            'name': productName,
+            'performed_by': changedBy,
+            'updated_at': now,
+            'branch': 'Hikkaduwa',
+            'vendor': 'Alfasoft',
+          }),
+          'status': 'pending',
+          'created_at': now,
+        });
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting product: $e');
+      return false;
+    }
+  }
+
+  Future<int> bulkDeleteProductsLocal(
+    List<String> barcodes, {
+    String? changedBy,
+  }) async {
+    final normalizedBarcodes = barcodes
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet()
+        .toList();
+
+    if (normalizedBarcodes.isEmpty) return 0;
+
+    final db = await database;
+
+    try {
+      var deletedCount = 0;
+      await db.transaction((txn) async {
+        final now = DateTime.now().toIso8601String();
+        final deletedBarcodes = <String>[];
+
+        for (final barcode in normalizedBarcodes) {
+          final rows = await txn.query(
+            'products',
+            columns: ['name'],
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+            limit: 1,
+          );
+          if (rows.isEmpty) continue;
+
+          final productName = (rows.first['name'] ?? 'Unknown product').toString();
+
+          await txn.delete(
+            'supplier_product_mappings',
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+          );
+          await txn.delete(
+            'products',
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+          );
+
+          await _insertInventoryMovement(
+            txn,
+            barcode: barcode,
+            productName: productName,
+            actionType: 'product_deleted',
+            reason: 'Product removed by bulk delete',
+            performedBy: changedBy,
+            createdAt: now,
+          );
+
+          deletedBarcodes.add(barcode);
+          deletedCount += 1;
+        }
+
+        if (deletedBarcodes.isNotEmpty) {
+          await txn.insert('sync_queue', {
+            'type': 'BULK_PRODUCT_DELETE',
+            'data': jsonEncode({
+              'barcodes': deletedBarcodes,
+              'performed_by': changedBy,
+              'updated_at': now,
+              'branch': 'Hikkaduwa',
+              'vendor': 'Alfasoft',
+            }),
+            'status': 'pending',
+            'created_at': now,
+          });
+        }
+      });
+
+      return deletedCount;
+    } catch (e) {
+      debugPrint('Error bulk deleting products: $e');
+      return 0;
+    }
+  }
+
+
+  Future<Map<String, int>> bulkUpsertProductsLocal({
+    required List<Map<String, dynamic>> rows,
+    String? changedBy,
+  }) async {
+    if (rows.isEmpty) {
+      return {'created': 0, 'updated': 0};
+    }
+
+    final db = await database;
+
+    try {
+      var createdCount = 0;
+      var updatedCount = 0;
+
+      await db.transaction((txn) async {
+        final now = DateTime.now().toIso8601String();
+        final syncRows = <Map<String, dynamic>>[];
+
+        for (final raw in rows) {
+          final barcode = (raw['barcode'] ?? '').toString().trim();
+          final name = (raw['name'] ?? '').toString().trim();
+          final category = (raw['category'] ?? 'General').toString().trim().isEmpty
+              ? 'General'
+              : (raw['category'] ?? 'General').toString().trim();
+          final sellingPrice = _roundMoney(_parseDouble(raw['selling_price'] ?? raw['price']));
+          final costPrice = _roundMoney(_parseDouble(raw['cost_price']));
+          final wholesalePrice = _roundMoney(
+            _parseDouble(raw['wholesale_price'], fallback: sellingPrice),
+          );
+          final salePriceRaw = raw['sale_price'];
+          final salePrice = salePriceRaw == null ? null : _roundMoney(_parseDouble(salePriceRaw));
+          final saleEnabled = raw['sale_enabled'] == null
+              ? (salePrice != null)
+              : (_parseInt(raw['sale_enabled']) == 1 || raw['sale_enabled'] == true);
+          final stock = _parseInt(raw['stock'] ?? raw['opening_stock']);
+          final minStockLevel = _parseInt(raw['min_stock_level']);
+
+          if (barcode.isEmpty || name.isEmpty || sellingPrice <= 0 || costPrice < 0 || stock < 0 || minStockLevel < 0) {
+            continue;
+          }
+          if (saleEnabled && (salePrice == null || salePrice <= 0)) {
+            continue;
+          }
+
+          final existing = await txn.query(
+            'products',
+            columns: ['id', 'stock'],
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+            limit: 1,
+          );
+
+          if (existing.isEmpty) {
+            await txn.insert('products', {
+              'barcode': barcode,
+              'name': name,
+              'category': category,
+              'price': sellingPrice,
+              'cost_price': costPrice,
+              'selling_price': sellingPrice,
+              'wholesale_price': wholesalePrice,
+              'sale_price': salePrice,
+              'sale_enabled': saleEnabled ? 1 : 0,
+              'stock': stock,
+              'min_stock_level': minStockLevel,
+              'is_active': 1,
+              'updated_at': now,
+              'last_price_updated_at': now,
+            });
+            createdCount += 1;
+
+            await _insertInventoryMovement(
+              txn,
+              barcode: barcode,
+              productName: name,
+              actionType: 'product_created',
+              reason: 'Product created by bulk upload',
+              performedBy: changedBy,
+              createdAt: now,
+            );
+
+            if (stock > 0) {
+              await _insertInventoryMovement(
+                txn,
+                barcode: barcode,
+                productName: name,
+                actionType: 'stock_receive',
+                quantityChange: stock,
+                stockBefore: 0,
+                stockAfter: stock,
+                reason: 'Opening stock added during bulk upload',
+                performedBy: changedBy,
+                createdAt: now,
+              );
+            }
+          } else {
+            final stockBefore = _parseInt(existing.first['stock']);
+            await txn.update(
+              'products',
+              {
+                'name': name,
+                'category': category,
+                'price': sellingPrice,
+                'cost_price': costPrice,
+                'selling_price': sellingPrice,
+                'wholesale_price': wholesalePrice,
+                'sale_price': salePrice,
+                'sale_enabled': saleEnabled ? 1 : 0,
+                'stock': stock,
+                'min_stock_level': minStockLevel,
+                'is_active': 1,
+                'updated_at': now,
+                'last_price_updated_at': now,
+              },
+              where: 'barcode = ?',
+              whereArgs: [barcode],
+            );
+            updatedCount += 1;
+
+            await _insertInventoryMovement(
+              txn,
+              barcode: barcode,
+              productName: name,
+              actionType: 'product_updated',
+              quantityChange: stock - stockBefore,
+              stockBefore: stockBefore,
+              stockAfter: stock,
+              reason: 'Product updated by bulk upload',
+              performedBy: changedBy,
+              createdAt: now,
+            );
+          }
+
+          syncRows.add({
+            'barcode': barcode,
+            'name': name,
+            'category': category,
+            'cost_price': costPrice,
+            'selling_price': sellingPrice,
+            'price': sellingPrice,
+            'wholesale_price': wholesalePrice,
+            'sale_price': salePrice,
+            'sale_enabled': saleEnabled,
+            'opening_stock': stock,
+            'stock': stock,
+            'min_stock_level': minStockLevel,
+          });
+        }
+
+        if (syncRows.isNotEmpty) {
+          await txn.insert('sync_queue', {
+            'type': 'BULK_PRODUCT_IMPORT',
+            'data': jsonEncode({
+              'rows': syncRows,
+              'performed_by': changedBy,
+              'updated_at': now,
+              'branch': 'Hikkaduwa',
+              'vendor': 'Alfasoft',
+            }),
+            'status': 'pending',
+            'created_at': now,
+          });
+        }
+      });
+
+      return {'created': createdCount, 'updated': updatedCount};
+    } catch (e) {
+      debugPrint('Error importing products: $e');
+      rethrow;
     }
   }
 

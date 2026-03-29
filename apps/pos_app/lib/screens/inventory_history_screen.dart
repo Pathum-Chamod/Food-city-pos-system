@@ -466,6 +466,10 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     switch (actionType) {
       case 'product_created':
         return 'Product Created';
+      case 'product_updated':
+        return 'Product Updated';
+      case 'product_deleted':
+        return 'Product Deleted';
       case 'stock_receive':
         return 'Stock Received';
       case 'stock_adjust_add':

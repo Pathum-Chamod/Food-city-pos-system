@@ -414,6 +414,7 @@ def create_or_update_product(
 
     existing = get_product_row(cursor, barcode)
     if existing:
+        previous_stock = parse_int(existing["stock"], 0)
         cursor.execute(
             f"""
             UPDATE products
@@ -482,17 +483,19 @@ def create_or_update_product(
             ),
         )
 
+    movement_type = "product_updated" if existing else "product_created"
+    reference_type = "product_update" if existing else "product_create"
     log_inventory_history(
         cursor,
         barcode=barcode,
-        movement_type="product_created",
+        movement_type=movement_type,
         quantity=0,
-        reason=reason or "Product added to inventory",
-        reference_type="product_create",
+        reason=reason or ("Product updated" if existing else "Product added to inventory"),
+        reference_type=reference_type,
         reference_id=None,
     )
 
-    if opening_stock > 0:
+    if not existing and opening_stock > 0:
         log_inventory_history(
             cursor,
             barcode=barcode,
@@ -502,8 +505,54 @@ def create_or_update_product(
             reference_type="product_create",
             reference_id=None,
         )
+    elif existing and previous_stock != opening_stock:
+        log_inventory_history(
+            cursor,
+            barcode=barcode,
+            movement_type="product_updated",
+            quantity=opening_stock - previous_stock,
+            reason="Product stock replaced during update",
+            reference_type="product_update",
+            reference_id=None,
+        )
 
     return True, "success"
+
+
+def delete_product(cursor, barcode, reason=""):
+    barcode = str(barcode or "").strip()
+    if not barcode:
+        return False, "Barcode is required"
+
+    row = get_product_row(cursor, barcode)
+    if not row:
+        return False, "Product not found"
+
+    cursor.execute("DELETE FROM products WHERE barcode = ?", (barcode,))
+
+    log_inventory_history(
+        cursor,
+        barcode=barcode,
+        movement_type="product_deleted",
+        quantity=0,
+        reason=reason or "Product removed from inventory",
+        reference_type="product_delete",
+        reference_id=None,
+    )
+    return True, "success"
+
+
+def bulk_delete_products(cursor, barcodes, reason=""):
+    deleted = 0
+    for raw_barcode in barcodes or []:
+        barcode = str(raw_barcode or "").strip()
+        if not barcode:
+            continue
+        ok, _ = delete_product(cursor, barcode, reason=reason)
+        if ok:
+            deleted += 1
+    return True, deleted
+
 
 def fetch_products(cursor):
     rows = cursor.execute(
@@ -989,6 +1038,91 @@ class APIHandler(BaseHTTPRequestHandler):
                     self._set_headers()
                     self.wfile.write(json.dumps({"status": "success"}).encode())
 
+            elif sync_type == "BULK_PRODUCT_IMPORT":
+                rows = data.get("rows", [])
+                created_or_updated = 0
+
+                for raw_row in rows:
+                    row = dict(raw_row or {})
+                    ok, message = create_or_update_product(
+                        c,
+                        barcode=row.get("barcode", ""),
+                        name=row.get("name", ""),
+                        category=row.get("category", "General"),
+                        cost_price=row.get("cost_price", 0),
+                        selling_price=row.get("selling_price", row.get("price", 0)),
+                        wholesale_price=row.get("wholesale_price"),
+                        sale_price=row.get("sale_price"),
+                        sale_enabled=row.get("sale_enabled"),
+                        opening_stock=row.get("opening_stock", row.get("stock", 0)),
+                        min_stock_level=row.get("min_stock_level", 0),
+                        reason="Bulk product import",
+                    )
+                    if not ok:
+                        self._set_headers(400)
+                        self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                        conn.close()
+                        return
+                    created_or_updated += 1
+
+                conn.commit()
+                print(f"  ✅ BULK_PRODUCT_IMPORT: {created_or_updated} rows")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "processed": created_or_updated}).encode())
+
+            elif sync_type == "PRODUCT_UPDATE":
+                barcode = str(data.get("barcode", "")).strip()
+                name = str(data.get("name", "")).strip()
+                ok, message = create_or_update_product(
+                    c,
+                    barcode=barcode,
+                    name=name,
+                    category=data.get("category", "General"),
+                    cost_price=data.get("cost_price", 0),
+                    selling_price=data.get("selling_price", data.get("price", 0)),
+                    wholesale_price=data.get("wholesale_price"),
+                    sale_price=data.get("sale_price"),
+                    sale_enabled=data.get("sale_enabled"),
+                    opening_stock=data.get("opening_stock", data.get("stock", 0)),
+                    min_stock_level=data.get("min_stock_level", 0),
+                    reason=str(data.get("reason", "")).strip() or "Product updated",
+                )
+                if not ok:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    conn.commit()
+                    print(f"  ✅ PRODUCT_UPDATE: {barcode} • {name}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "PRODUCT_DELETE":
+                barcode = str(data.get("barcode", "")).strip()
+                ok, message = delete_product(
+                    c,
+                    barcode=barcode,
+                    reason=str(data.get("reason", "")).strip() or "Product removed from inventory",
+                )
+                if not ok:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    conn.commit()
+                    print(f"  ✅ PRODUCT_DELETE: {barcode}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "BULK_PRODUCT_DELETE":
+                ok, deleted_count = bulk_delete_products(
+                    c,
+                    data.get("barcodes", []),
+                    reason=str(data.get("reason", "")).strip() or "Bulk deleted from inventory",
+                )
+                conn.commit()
+                print(f"  ✅ BULK_PRODUCT_DELETE: {deleted_count} products")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "deleted": deleted_count}).encode())
+
             elif sync_type == "PRICE_UPDATE":
                 barcode = str(data.get("barcode", "")).strip()
                 new_price = data.get("new_price", 0)
@@ -1119,6 +1253,77 @@ class APIHandler(BaseHTTPRequestHandler):
             else:
                 conn.commit()
                 print(f"  ✅ Product added: {body.get('barcode', '')}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+        elif action == "bulk_import_products":
+            rows = body.get("rows", [])
+            processed = 0
+
+            for raw_row in rows:
+                row = dict(raw_row or {})
+                ok, message = create_or_update_product(
+                    c,
+                    barcode=row.get("barcode", ""),
+                    name=row.get("name", ""),
+                    category=row.get("category", "General"),
+                    cost_price=row.get("cost_price", 0),
+                    selling_price=row.get("selling_price", row.get("price", 0)),
+                    wholesale_price=row.get("wholesale_price"),
+                    sale_price=row.get("sale_price"),
+                    sale_enabled=row.get("sale_enabled"),
+                    opening_stock=row.get("opening_stock", row.get("stock", 0)),
+                    min_stock_level=row.get("min_stock_level", 0),
+                    reason="Bulk product import",
+                )
+                if not ok:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    conn.close()
+                    return
+                processed += 1
+
+            conn.commit()
+            print(f"  ✅ Bulk import: {processed} rows")
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "processed": processed}).encode())
+
+        elif action == "edit_product":
+            ok, message = create_or_update_product(
+                c,
+                barcode=body.get("barcode", ""),
+                name=body.get("name", ""),
+                category=body.get("category", "General"),
+                cost_price=body.get("cost_price", 0),
+                selling_price=body.get("selling_price", body.get("price", 0)),
+                wholesale_price=body.get("wholesale_price"),
+                sale_price=body.get("sale_price"),
+                sale_enabled=body.get("sale_enabled"),
+                opening_stock=body.get("opening_stock", body.get("stock", 0)),
+                min_stock_level=body.get("min_stock_level", 0),
+                reason=str(body.get("reason", "")).strip() or "Product updated",
+            )
+
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                print(f"  ✅ Product updated: {body.get('barcode', '')}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+        elif action == "delete_product":
+            ok, message = delete_product(
+                c,
+                barcode=body.get("barcode", ""),
+                reason=str(body.get("reason", "")).strip() or "Product removed from inventory",
+            )
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
                 self._set_headers()
                 self.wfile.write(json.dumps({"status": "success"}).encode())
 
@@ -1257,6 +1462,7 @@ def main():
 ║     POST ?action=add_stock               → Stock receive ║
 ║     POST ?action=adjust_stock            → Adjustment    ║
 ║     POST ?action=update_min_stock        → Min stock     ║
+║     POST ?action=bulk_import_products   → Bulk import   ║
 ║                                                          ║
 ║   Press Ctrl+C to stop                                   ║
 ╚══════════════════════════════════════════════════════════╝

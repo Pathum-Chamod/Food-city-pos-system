@@ -1,5 +1,9 @@
+import 'dart:io';
+
 
 import 'package:flutter/material.dart';
+import 'package:csv/csv.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
 
@@ -36,6 +40,22 @@ class _InventoryApprovalResult {
   final String approverName;
 }
 
+class _BulkImportPreviewRow {
+  const _BulkImportPreviewRow({
+    required this.rowNumber,
+    required this.data,
+    required this.isExisting,
+    required this.errors,
+  });
+
+  final int rowNumber;
+  final Map<String, dynamic> data;
+  final bool isExisting;
+  final List<String> errors;
+
+  bool get isValid => errors.isEmpty;
+}
+
 class _InventoryScreenState extends State<InventoryScreen> {
   final TextEditingController _searchController = TextEditingController();
 
@@ -45,6 +65,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
   bool _isRefreshing = false;
   String _searchQuery = '';
   InventoryFilter _selectedFilter = InventoryFilter.all;
+  bool _isBulkDeleteMode = false;
+  final Set<String> _selectedProductBarcodes = <String>{};
+  String? _bulkDeletePerformedByLabel;
 
   @override
   void initState() {
@@ -161,6 +184,258 @@ class _InventoryScreenState extends State<InventoryScreen> {
       if (value <= 0) return '$label must be greater than 0.';
     }
     return null;
+  }
+
+  void _disposeControllersNextFrame(List<TextEditingController> controllers) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final controller in controllers) {
+        controller.dispose();
+      }
+    });
+  }
+
+  String _normalizeImportHeader(String raw) {
+    final normalized = raw.trim().toLowerCase().replaceAll(' ', '_');
+    switch (normalized) {
+      case 'product_name':
+        return 'name';
+      case 'price':
+        return 'selling_price';
+      case 'cost':
+        return 'cost_price';
+      case 'stock_qty':
+      case 'qty':
+      case 'quantity':
+      case 'opening_qty':
+        return 'stock';
+      case 'minimum_stock':
+      case 'min_stock':
+        return 'min_stock_level';
+      default:
+        return normalized;
+    }
+  }
+
+  bool _parseImportBool(String? value, {bool fallback = false}) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    if (normalized.isEmpty) return fallback;
+    if ({'1', 'true', 'yes', 'y', 'on'}.contains(normalized)) return true;
+    if ({'0', 'false', 'no', 'n', 'off'}.contains(normalized)) return false;
+    return fallback;
+  }
+
+  String _stringValue(dynamic value) => value?.toString().trim() ?? '';
+
+  Future<void> _downloadBulkImportTemplate() async {
+    try {
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save Bulk Upload Template',
+        fileName: 'food_city_product_import_template.csv',
+        type: FileType.custom,
+        allowedExtensions: ['csv'],
+      );
+
+      if (path == null || path.trim().isEmpty) return;
+
+      final csvText = const ListToCsvConverter().convert([
+        [
+          'barcode',
+          'name',
+          'category',
+          'cost_price',
+          'selling_price',
+          'wholesale_price',
+          'sale_price',
+          'sale_enabled',
+          'stock',
+          'min_stock_level',
+        ],
+        [
+          '4790000000001',
+          'Sample Product',
+          'General',
+          '80.00',
+          '100.00',
+          '95.00',
+          '90.00',
+          'false',
+          '25',
+          '5',
+        ],
+      ]);
+
+      await File(path).writeAsString(csvText);
+      if (!mounted) return;
+      _showMessage('CSV template saved successfully.');
+    } catch (_) {
+      if (!mounted) return;
+      _showMessage('Could not save CSV template.', isError: true);
+    }
+  }
+
+  Future<List<_BulkImportPreviewRow>> _parseBulkImportFile(String path) async {
+    final text = await File(path).readAsString();
+    final rows = const CsvToListConverter(
+      shouldParseNumbers: false,
+      eol: '\n',
+    ).convert(text);
+
+    if (rows.isEmpty) {
+      return const [];
+    }
+
+    final headers = rows.first
+        .map((cell) => _normalizeImportHeader(cell?.toString() ?? ''))
+        .toList();
+    final indexByHeader = <String, int>{};
+    for (var i = 0; i < headers.length; i++) {
+      final key = headers[i];
+      if (key.isNotEmpty && !indexByHeader.containsKey(key)) {
+        indexByHeader[key] = i;
+      }
+    }
+
+    if (!indexByHeader.containsKey('barcode') ||
+        !indexByHeader.containsKey('name') ||
+        !indexByHeader.containsKey('selling_price')) {
+      throw Exception('CSV must include barcode, name, and selling_price columns.');
+    }
+
+    String readValue(List<dynamic> row, String key) {
+      final index = indexByHeader[key];
+      if (index == null || index >= row.length) return '';
+      return _stringValue(row[index]);
+    }
+
+    final existingByBarcode = {
+      for (final product in _products) product.barcode.trim().toLowerCase(): product,
+    };
+    final seenBarcodes = <String>{};
+    final preview = <_BulkImportPreviewRow>[];
+
+    for (var i = 1; i < rows.length; i++) {
+      final row = rows[i];
+      if (row.every((cell) => _stringValue(cell).isEmpty)) {
+        continue;
+      }
+
+      final rowNumber = i + 1;
+      final barcode = readValue(row, 'barcode');
+      final name = readValue(row, 'name');
+      final category = readValue(row, 'category').isEmpty ? 'General' : readValue(row, 'category');
+      final costPriceRaw = readValue(row, 'cost_price');
+      final sellingPriceRaw = readValue(row, 'selling_price');
+      final wholesalePriceRaw = readValue(row, 'wholesale_price');
+      final salePriceRaw = readValue(row, 'sale_price');
+      final saleEnabledRaw = readValue(row, 'sale_enabled');
+      final stockRaw = readValue(row, 'stock');
+      final minStockRaw = readValue(row, 'min_stock_level');
+
+      final errors = <String>[];
+      final normalizedBarcode = barcode.trim().toLowerCase();
+      if (barcode.trim().isEmpty) errors.add('Barcode is required');
+      if (name.trim().isEmpty) errors.add('Name is required');
+      if (sellingPriceRaw.trim().isEmpty) errors.add('Selling price is required');
+      if (normalizedBarcode.isNotEmpty && seenBarcodes.contains(normalizedBarcode)) {
+        errors.add('Duplicate barcode in file');
+      }
+
+
+      double? costPrice;
+      if (costPriceRaw.trim().isEmpty) {
+        costPrice = 0;
+      } else {
+        costPrice = double.tryParse(costPriceRaw.trim());
+        if (costPrice == null) {
+          errors.add('Invalid cost price');
+        } else if (costPrice < 0) {
+          errors.add('Cost price cannot be negative');
+        }
+      }
+
+      double? sellingPrice = double.tryParse(sellingPriceRaw.trim());
+      if (sellingPrice == null) {
+        errors.add('Invalid selling price');
+      } else if (sellingPrice <= 0) {
+        errors.add('Selling price must be greater than 0');
+      }
+
+      double? wholesalePrice;
+      if (wholesalePriceRaw.trim().isNotEmpty) {
+        wholesalePrice = double.tryParse(wholesalePriceRaw.trim());
+        if (wholesalePrice == null) {
+          errors.add('Invalid wholesale price');
+        } else if (wholesalePrice < 0) {
+          errors.add('Wholesale price cannot be negative');
+        }
+      }
+
+      double? salePrice;
+      if (salePriceRaw.trim().isNotEmpty) {
+        salePrice = double.tryParse(salePriceRaw.trim());
+        if (salePrice == null) {
+          errors.add('Invalid sale price');
+        } else if (salePrice < 0) {
+          errors.add('Sale price cannot be negative');
+        }
+      }
+
+      final saleEnabled = _parseImportBool(saleEnabledRaw, fallback: false);
+      if (saleEnabled && (salePrice == null || salePrice <= 0)) {
+        errors.add('Active sale needs a valid sale price');
+      }
+
+      int? stock;
+      if (stockRaw.trim().isEmpty) {
+        stock = 0;
+      } else {
+        stock = int.tryParse(stockRaw.trim());
+        if (stock == null) {
+          errors.add('Invalid stock');
+        } else if (stock < 0) {
+          errors.add('Stock cannot be negative');
+        }
+      }
+
+      int? minStock;
+      if (minStockRaw.trim().isEmpty) {
+        minStock = 0;
+      } else {
+        minStock = int.tryParse(minStockRaw.trim());
+        if (minStock == null) {
+          errors.add('Invalid minimum stock level');
+        } else if (minStock < 0) {
+          errors.add('Minimum stock cannot be negative');
+        }
+      }
+
+      if (normalizedBarcode.isNotEmpty) {
+        seenBarcodes.add(normalizedBarcode);
+      }
+
+      final isExisting = normalizedBarcode.isNotEmpty && existingByBarcode.containsKey(normalizedBarcode);
+
+      preview.add(_BulkImportPreviewRow(
+        rowNumber: rowNumber,
+        isExisting: isExisting,
+        errors: errors,
+        data: {
+          'barcode': barcode.trim(),
+          'name': name.trim(),
+          'category': category.trim(),
+          'cost_price': costPrice ?? 0.0,
+          'selling_price': sellingPrice ?? 0.0,
+          'wholesale_price': wholesalePrice,
+          'sale_price': salePrice,
+          'sale_enabled': saleEnabled,
+          'stock': stock ?? 0,
+          'opening_stock': stock ?? 0,
+          'min_stock_level': minStock ?? 0,
+        },
+      ));
+    }
+
+    return preview;
   }
 
   Map<String, dynamic>? get _currentUserMap {
@@ -344,7 +619,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       },
     );
 
-    pinController.dispose();
+    _disposeControllersNextFrame([pinController]);
 
     if (approver == null && mounted) {
       _showMessage('Manager approval is required to continue.', isError: true);
@@ -848,21 +1123,832 @@ class _InventoryScreenState extends State<InventoryScreen> {
       },
     );
 
-    nameController.dispose();
-    barcodeController.dispose();
-    categoryController.dispose();
-    costPriceController.dispose();
-    sellingPriceController.dispose();
-    wholesalePriceController.dispose();
-    salePriceController.dispose();
-    openingStockController.dispose();
-    minStockController.dispose();
+    _disposeControllersNextFrame([
+      nameController,
+      barcodeController,
+      categoryController,
+      costPriceController,
+      sellingPriceController,
+      wholesalePriceController,
+      salePriceController,
+      openingStockController,
+      minStockController,
+    ]);
 
     if (saved == true) {
       await _loadData(showLoader: false);
       _showMessage('Product added successfully.');
     } else if (saved == false) {
       _showMessage('Could not create product.', isError: true);
+    }
+  }
+
+
+  void _exitBulkDeleteMode() {
+    if (!mounted) return;
+    setState(() {
+      _isBulkDeleteMode = false;
+      _selectedProductBarcodes.clear();
+      _bulkDeletePerformedByLabel = null;
+    });
+  }
+
+  Future<void> _enterBulkDeleteMode() async {
+    final approval = await _requireManagerApproval(
+      actionLabel: 'bulk delete products',
+      description: 'Approved bulk delete mode requested by $_currentUserName',
+    );
+    if (approval == null || !mounted) return;
+
+    setState(() {
+      _isBulkDeleteMode = true;
+      _selectedProductBarcodes.clear();
+      _bulkDeletePerformedByLabel = _buildPerformedByLabel(approval.approverName);
+    });
+  }
+
+  void _toggleProductSelection(Product product) {
+    setState(() {
+      if (_selectedProductBarcodes.contains(product.barcode)) {
+        _selectedProductBarcodes.remove(product.barcode);
+      } else {
+        _selectedProductBarcodes.add(product.barcode);
+      }
+    });
+  }
+
+  bool get _allVisibleProductsSelected {
+    final visible = _filteredProducts;
+    return visible.isNotEmpty &&
+        visible.every((product) => _selectedProductBarcodes.contains(product.barcode));
+  }
+
+  void _toggleSelectAllVisibleProducts() {
+    final visible = _filteredProducts;
+    if (visible.isEmpty) return;
+
+    setState(() {
+      final allSelected = visible.every(
+        (product) => _selectedProductBarcodes.contains(product.barcode),
+      );
+
+      if (allSelected) {
+        _selectedProductBarcodes.removeAll(
+          visible.map((product) => product.barcode),
+        );
+      } else {
+        _selectedProductBarcodes.addAll(
+          visible.map((product) => product.barcode),
+        );
+      }
+    });
+  }
+
+  Future<void> _confirmBulkDeleteSelected() async {
+    if (_selectedProductBarcodes.isEmpty) {
+      _showMessage('Select at least one product to delete.', isError: true);
+      return;
+    }
+
+    final confirmed = await _confirmAction(
+      title: 'Confirm Bulk Delete',
+      message:
+          'Delete ${_selectedProductBarcodes.length} selected products from inventory? This cannot be undone.',
+      confirmText: 'Delete Selected',
+      isDestructive: true,
+    );
+    if (!confirmed) return;
+
+    final deletedCount = await DatabaseHelper.instance.bulkDeleteProductsLocal(
+      _selectedProductBarcodes.toList(),
+      changedBy: _bulkDeletePerformedByLabel ?? _currentUserName,
+    );
+
+    if (!mounted) return;
+
+    if (deletedCount > 0) {
+      _exitBulkDeleteMode();
+      await _loadData(showLoader: false);
+      _showMessage('$deletedCount product(s) deleted successfully.');
+    } else {
+      _showMessage('Could not bulk delete products.', isError: true);
+    }
+  }
+
+  Future<void> _openEditProductFlow(Product product) async {
+    final approval = await _requireManagerApproval(
+      actionLabel: 'edit ${product.name}',
+      description:
+          'Approved product edit for ${product.name} (${product.barcode}) requested by $_currentUserName',
+    );
+    if (approval == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approval.approverName);
+
+    final nameController = TextEditingController(text: product.name);
+    final categoryController = TextEditingController(text: product.category);
+    final costPriceController = TextEditingController(
+      text: product.costPrice.toStringAsFixed(2),
+    );
+    final sellingPriceController = TextEditingController(
+      text: product.sellingPrice.toStringAsFixed(2),
+    );
+    final wholesalePriceController = TextEditingController(
+      text: product.wholesalePrice.toStringAsFixed(2),
+    );
+    final salePriceController = TextEditingController(
+      text: product.salePrice == null ? '' : product.salePrice!.toStringAsFixed(2),
+    );
+    final minStockController = TextEditingController(
+      text: product.minStockLevel.toString(),
+    );
+    bool saleEnabled = product.saleEnabled;
+
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return SafeArea(
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    8,
+                    16,
+                    MediaQuery.of(context).viewInsets.bottom + 16,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Edit Product',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Update product details. Use stock actions to change quantity.',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: nameController,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: InputDecoration(
+                          labelText: 'Product name',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade300),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Barcode',
+                              style: TextStyle(
+                                color: Colors.grey.shade700,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              product.barcode,
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: categoryController,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: InputDecoration(
+                          labelText: 'Category',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: costPriceController,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Cost price',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextField(
+                              controller: sellingPriceController,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Selling price',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: wholesalePriceController,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Wholesale price',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextField(
+                              controller: salePriceController,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Sale price (optional)',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: saleEnabled,
+                        title: const Text('Sale price active'),
+                        subtitle: const Text(
+                          'If off, billing will fall back to selling price.',
+                        ),
+                        onChanged: (value) {
+                          setModalState(() {
+                            saleEnabled = value;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: minStockController,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: 'Minimum stock level',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: () async {
+                            final name = nameController.text.trim();
+                            final category = categoryController.text.trim();
+
+                            if (name.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Enter a product name.')),
+                              );
+                              return;
+                            }
+
+                            final costError = _validateNonNegativeMoney(
+                              costPriceController.text,
+                              label: 'cost price',
+                            );
+                            if (costError != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(costError)),
+                              );
+                              return;
+                            }
+
+                            final sellingError = _validateNonNegativeMoney(
+                              sellingPriceController.text,
+                              label: 'selling price',
+                            );
+                            if (sellingError != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(sellingError)),
+                              );
+                              return;
+                            }
+
+                            final minStockError = _validatePositiveInt(
+                              minStockController.text,
+                              label: 'minimum stock level',
+                              allowZero: true,
+                            );
+                            if (minStockError != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(minStockError)),
+                              );
+                              return;
+                            }
+
+                            final rawWholesale = wholesalePriceController.text.trim();
+                            if (rawWholesale.isNotEmpty) {
+                              final wholesaleError = _validateNonNegativeMoney(
+                                rawWholesale,
+                                label: 'wholesale price',
+                              );
+                              if (wholesaleError != null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(wholesaleError)),
+                                );
+                                return;
+                              }
+                            }
+
+                            final rawSale = salePriceController.text.trim();
+                            if (rawSale.isNotEmpty) {
+                              final saleError = _validateNonNegativeMoney(
+                                rawSale,
+                                label: 'sale price',
+                              );
+                              if (saleError != null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(saleError)),
+                                );
+                                return;
+                              }
+                            }
+
+                            final sellingPrice = double.parse(
+                              sellingPriceController.text.trim(),
+                            );
+                            if (sellingPrice <= 0) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Selling price must be greater than 0.'),
+                                ),
+                              );
+                              return;
+                            }
+
+                            final costPrice = double.parse(costPriceController.text.trim());
+                            final wholesalePrice = rawWholesale.isEmpty
+                                ? sellingPrice
+                                : double.parse(rawWholesale);
+                            final salePrice = rawSale.isEmpty
+                                ? null
+                                : double.parse(rawSale);
+                            final minStock = int.parse(minStockController.text.trim());
+
+                            if (saleEnabled && (salePrice == null || salePrice <= 0)) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Enter a valid sale price before activating sale mode.',
+                                  ),
+                                ),
+                              );
+                              return;
+                            }
+
+                            final confirmed = await _confirmAction(
+                              title: 'Confirm Product Update',
+                              message: 'Save changes for ${product.name}?',
+                              confirmText: 'Save Changes',
+                            );
+                            if (!confirmed) return;
+
+                            final success = await DatabaseHelper.instance.updateProductDetailsLocal(
+                              barcode: product.barcode,
+                              name: name,
+                              category: category.isEmpty ? 'General' : category,
+                              costPrice: costPrice,
+                              sellingPrice: sellingPrice,
+                              wholesalePrice: wholesalePrice,
+                              salePrice: salePrice,
+                              saleEnabled: saleEnabled,
+                              minStockLevel: minStock,
+                              changedBy: changedBy,
+                            );
+
+                            if (!context.mounted) return;
+                            Navigator.pop(context, success);
+                          },
+                          icon: const Icon(Icons.edit_outlined),
+                          label: const Text('Save Product Changes'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    _disposeControllersNextFrame([
+      nameController,
+      categoryController,
+      costPriceController,
+      sellingPriceController,
+      wholesalePriceController,
+      salePriceController,
+      minStockController,
+    ]);
+
+    if (saved == true) {
+      await _loadData(showLoader: false);
+      _showMessage('Product updated successfully.');
+    } else if (saved == false) {
+      _showMessage('Could not update product.', isError: true);
+    }
+  }
+
+  Future<void> _deleteProduct(Product product) async {
+    final approval = await _requireManagerApproval(
+      actionLabel: 'delete ${product.name}',
+      description:
+          'Approved product delete for ${product.name} (${product.barcode}) requested by $_currentUserName',
+    );
+    if (approval == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approval.approverName);
+
+    final confirmed = await _confirmAction(
+      title: 'Delete Product',
+      message:
+          'Delete ${product.name} from inventory? This cannot be undone.',
+      confirmText: 'Delete',
+      isDestructive: true,
+    );
+    if (!confirmed) return;
+
+    final success = await DatabaseHelper.instance.deleteProductLocal(
+      product.barcode,
+      changedBy: changedBy,
+    );
+
+    if (!mounted) return;
+    if (success) {
+      await _loadData(showLoader: false);
+      _showMessage('Product deleted successfully.');
+    } else {
+      _showMessage('Could not delete product.', isError: true);
+    }
+  }
+
+  Future<void> _handleProductMenuAction(String value, Product product) async {
+    switch (value) {
+      case 'edit':
+        await _openEditProductFlow(product);
+        break;
+      case 'delete':
+        await _deleteProduct(product);
+        break;
+      case 'history':
+        await _openInventoryHistoryScreen(barcode: product.barcode);
+        break;
+    }
+  }
+
+  Future<void> _openBulkUploadFlow() async {
+    final approval = await _requireManagerApproval(
+      actionLabel: 'bulk upload products',
+      description: 'Approved bulk product upload requested by $_currentUserName',
+    );
+    if (approval == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approval.approverName);
+
+    String? selectedFileName;
+    List<_BulkImportPreviewRow> previewRows = [];
+    bool isParsing = false;
+    bool isImporting = false;
+
+    final imported = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            Future<void> pickCsvFile() async {
+              setModalState(() {
+                isParsing = true;
+              });
+
+              try {
+                final picked = await FilePicker.platform.pickFiles(
+                  type: FileType.custom,
+                  allowedExtensions: ['csv'],
+                  allowMultiple: false,
+                );
+
+                if (picked == null || picked.files.isEmpty) {
+                  setModalState(() {
+                    isParsing = false;
+                  });
+                  return;
+                }
+
+                final file = picked.files.single;
+                final path = file.path;
+                if (path == null || path.trim().isEmpty) {
+                  throw Exception('Selected file path is not available.');
+                }
+
+                final parsed = await _parseBulkImportFile(path);
+                setModalState(() {
+                  selectedFileName = file.name;
+                  previewRows = parsed;
+                  isParsing = false;
+                });
+              } catch (e) {
+                setModalState(() {
+                  isParsing = false;
+                  previewRows = [];
+                });
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+                );
+              }
+            }
+
+            final validRows = previewRows.where((row) => row.isValid).toList();
+            final createCount = validRows.where((row) => !row.isExisting).length;
+            final updateCount = validRows.where((row) => row.isExisting).length;
+            final failedCount = previewRows.where((row) => !row.isValid).length;
+
+            return SafeArea(
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.86,
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    8,
+                    16,
+                    MediaQuery.of(context).viewInsets.bottom + 16,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Bulk Upload Products',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Use a CSV file to create or update products by barcode.',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      ),
+                      const SizedBox(height: 14),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: [
+                          FilledButton.icon(
+                            onPressed: isParsing || isImporting ? null : pickCsvFile,
+                            icon: const Icon(Icons.upload_file),
+                            label: const Text('Choose CSV'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: isParsing || isImporting ? null : _downloadBulkImportTemplate,
+                            icon: const Icon(Icons.download_outlined),
+                            label: const Text('Download Template'),
+                          ),
+                        ],
+                      ),
+                      if (selectedFileName != null) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: Colors.grey.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.description_outlined),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  selectedFileName!,
+                                  style: const TextStyle(fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                              Text(
+                                '${previewRows.length} rows',
+                                style: TextStyle(color: Colors.grey.shade700),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(child: _buildSummaryCard(title: 'Valid', value: validRows.length.toString(), icon: Icons.check_circle, accent: Colors.green)),
+                          const SizedBox(width: 10),
+                          Expanded(child: _buildSummaryCard(title: 'Create', value: createCount.toString(), icon: Icons.add_box_outlined, accent: Colors.blue)),
+                          const SizedBox(width: 10),
+                          Expanded(child: _buildSummaryCard(title: 'Update', value: updateCount.toString(), icon: Icons.sync_alt, accent: Colors.deepPurple)),
+                          const SizedBox(width: 10),
+                          Expanded(child: _buildSummaryCard(title: 'Failed', value: failedCount.toString(), icon: Icons.error_outline, accent: Colors.red)),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Expanded(
+                        child: isParsing
+                            ? const Center(child: CircularProgressIndicator())
+                            : previewRows.isEmpty
+                                ? Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(24),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(18),
+                                      border: Border.all(color: Colors.grey.shade200),
+                                    ),
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.table_view_outlined, size: 42, color: Colors.grey.shade500),
+                                        const SizedBox(height: 12),
+                                        const Text('No CSV file selected yet.', style: TextStyle(fontWeight: FontWeight.w700)),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          'Download the template, fill your product list, then choose the CSV to preview it here.',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(color: Colors.grey.shade700, height: 1.4),
+                                        ),
+                                      ],
+                                    ),
+                                  )
+                                : ListView.separated(
+                                    itemCount: previewRows.length,
+                                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                                    itemBuilder: (context, index) {
+                                      final row = previewRows[index];
+                                      final data = row.data;
+                                      final accent = row.isValid
+                                          ? (row.isExisting ? Colors.deepPurple : Colors.blue)
+                                          : Colors.red;
+                                      final badgeText = row.isValid
+                                          ? (row.isExisting ? 'UPDATE' : 'CREATE')
+                                          : 'ERROR';
+
+                                      return Container(
+                                        padding: const EdgeInsets.all(14),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(16),
+                                          border: Border.all(color: Colors.grey.shade200),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    'Row ${row.rowNumber} • ${data['name']}',
+                                                    style: const TextStyle(fontWeight: FontWeight.w700),
+                                                  ),
+                                                ),
+                                                Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                  decoration: BoxDecoration(
+                                                    color: accent.withOpacity(0.10),
+                                                    borderRadius: BorderRadius.circular(999),
+                                                    border: Border.all(color: accent.withOpacity(0.20)),
+                                                  ),
+                                                  child: Text(
+                                                    badgeText,
+                                                    style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.w700),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              '${data['barcode']} • ${data['category']}',
+                                              style: TextStyle(color: Colors.grey.shade700),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              'Sell Rs. ${(data['selling_price'] as num).toStringAsFixed(2)} • Stock ${data['stock']} • Min ${data['min_stock_level']}',
+                                              style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+                                            ),
+                                            if (!row.isValid) ...[
+                                              const SizedBox(height: 8),
+                                              ...row.errors.map(
+                                                (error) => Padding(
+                                                  padding: const EdgeInsets.only(bottom: 4),
+                                                  child: Text(
+                                                    '• $error',
+                                                    style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: isImporting || validRows.isEmpty
+                              ? null
+                              : () async {
+                                  final confirmed = await _confirmAction(
+                                    title: 'Confirm Bulk Upload',
+                                    message: 'Import ${validRows.length} valid rows? ${createCount > 0 ? '$createCount will be created. ' : ''}${updateCount > 0 ? '$updateCount will be updated.' : ''}',
+                                    confirmText: 'Import',
+                                  );
+                                  if (!confirmed) return;
+
+                                  setModalState(() {
+                                    isImporting = true;
+                                  });
+
+                                  try {
+                                    final result = await DatabaseHelper.instance.bulkUpsertProductsLocal(
+                                      rows: validRows.map((row) => row.data).toList(),
+                                      changedBy: changedBy,
+                                    );
+                                    if (!context.mounted) return;
+                                    Navigator.pop(context, (result['created'] as int) + (result['updated'] as int) > 0);
+                                  } catch (e) {
+                                    setModalState(() {
+                                      isImporting = false;
+                                    });
+                                    if (!context.mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+                                    );
+                                  }
+                                },
+                          icon: isImporting
+                              ? const SizedBox(
+                                  height: 18,
+                                  width: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.playlist_add_check_circle),
+                          label: Text(isImporting ? 'Importing...' : 'Import Valid Rows'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (imported == true) {
+      await _loadData(showLoader: false);
+      _showMessage('Bulk upload completed successfully.');
     }
   }
 
@@ -1234,9 +2320,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
       },
     );
 
-    qtyController.dispose();
-    costController.dispose();
-    noteController.dispose();
+    _disposeControllersNextFrame([
+      qtyController,
+      costController,
+      noteController,
+    ]);
 
     if (saved == true) {
       await _loadData(showLoader: false);
@@ -1737,8 +2825,10 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
       },
     );
 
-    qtyController.dispose();
-    reasonController.dispose();
+    _disposeControllersNextFrame([
+      qtyController,
+      reasonController,
+    ]);
 
     if (saved == true) {
       await _loadData(showLoader: false);
@@ -1813,7 +2903,7 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
       },
     );
 
-    controller.dispose();
+    _disposeControllersNextFrame([controller]);
 
     if (changed == true) {
       await _loadData(showLoader: false);
@@ -2028,8 +3118,10 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
       },
     );
 
-    valueController.dispose();
-    noteController.dispose();
+    _disposeControllersNextFrame([
+      valueController,
+      noteController,
+    ]);
 
     if (saved == true) {
       await _loadData(showLoader: false);
@@ -2235,6 +3327,26 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
                         },
                         icon: const Icon(Icons.sell),
                         label: const Text('Change Price'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          await Future.delayed(const Duration(milliseconds: 120));
+                          if (!mounted) return;
+                          await _openEditProductFlow(product);
+                        },
+                        icon: const Icon(Icons.edit_outlined),
+                        label: const Text('Edit Item'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          await Future.delayed(const Duration(milliseconds: 120));
+                          if (!mounted) return;
+                          await _deleteProduct(product);
+                        },
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Delete'),
                       ),
                       OutlinedButton.icon(
                         onPressed: () async {
@@ -2526,7 +3638,13 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
     Color accent = Colors.blue;
     IconData icon = Icons.history;
 
-    if (actionType.contains('receive')) {
+    if (actionType.contains('deleted')) {
+      accent = Colors.red;
+      icon = Icons.delete_outline;
+    } else if (actionType.contains('product_')) {
+      accent = Colors.indigo;
+      icon = Icons.inventory_2_outlined;
+    } else if (actionType.contains('receive')) {
       accent = Colors.green;
       icon = Icons.inventory_2;
     } else if (actionType.contains('adjust')) {
@@ -2613,6 +3731,10 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
     switch (actionType) {
       case 'product_created':
         return 'Product Created';
+      case 'product_updated':
+        return 'Product Updated';
+      case 'product_deleted':
+        return 'Product Deleted';
       case 'stock_receive':
         return 'Stock Received';
       case 'stock_adjust_add':
@@ -2709,10 +3831,31 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FB),
       appBar: AppBar(
-        title: const Text('Inventory'),
+        title: Text(_isBulkDeleteMode ? 'Bulk Delete Products' : 'Inventory'),
         backgroundColor: Colors.blue.shade900,
         foregroundColor: Colors.white,
         actions: [
+          if (_isBulkDeleteMode) ...[
+            IconButton(
+              tooltip: _allVisibleProductsSelected ? 'Clear visible selection' : 'Select all visible products',
+              onPressed: _filteredProducts.isEmpty ? null : _toggleSelectAllVisibleProducts,
+              icon: Icon(
+                _allVisibleProductsSelected ? Icons.deselect : Icons.select_all,
+              ),
+            ),
+            IconButton(
+              tooltip: 'Delete selected',
+              onPressed: _selectedProductBarcodes.isEmpty
+                  ? null
+                  : _confirmBulkDeleteSelected,
+              icon: const Icon(Icons.delete_outline),
+            ),
+            IconButton(
+              tooltip: 'Exit bulk delete',
+              onPressed: _exitBulkDeleteMode,
+              icon: const Icon(Icons.close),
+            ),
+          ],
           IconButton(
             tooltip: 'Refresh inventory',
             onPressed: _isRefreshing ? null : _refresh,
@@ -2853,6 +3996,16 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
                               onTap: () => _openAddProductFlow(),
                             ),
                             _buildQuickActionButton(
+                              title: 'Bulk Upload',
+                              icon: Icons.upload_file_outlined,
+                              onTap: () => _openBulkUploadFlow(),
+                            ),
+                            _buildQuickActionButton(
+                              title: _isBulkDeleteMode ? 'Exit Bulk Delete' : 'Bulk Delete',
+                              icon: _isBulkDeleteMode ? Icons.close : Icons.delete_outline,
+                              onTap: _isBulkDeleteMode ? _exitBulkDeleteMode : _enterBulkDeleteMode,
+                            ),
+                            _buildQuickActionButton(
                               title: 'Receive Stock',
                               icon: Icons.inventory_2,
                               onTap: () => _openReceiveFlow(),
@@ -2886,19 +4039,49 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
                   Row(
                     children: [
                       Text(
-                        'Products (${visibleProducts.length})',
+                        _isBulkDeleteMode
+                            ? 'Select Products to Delete (${_selectedProductBarcodes.length})'
+                            : 'Products (${visibleProducts.length})',
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
                       const Spacer(),
-                      Text(
-                        'Tap a product for details',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
+                      if (_isBulkDeleteMode)
+                        TextButton.icon(
+                          onPressed: visibleProducts.isEmpty ? null : _toggleSelectAllVisibleProducts,
+                          icon: Icon(
+                            _allVisibleProductsSelected ? Icons.deselect : Icons.select_all,
+                            size: 18,
+                          ),
+                          label: Text(
+                            _allVisibleProductsSelected ? 'Clear All' : 'Select All',
+                          ),
+                        )
+                      else
+                        Text(
+                          'Tap a product for details',
+                          style: TextStyle(color: Colors.grey.shade700),
+                        ),
                     ],
                   ),
+                  if (_isBulkDeleteMode) ...[
+                    const SizedBox(height: 4),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        visibleProducts.isEmpty
+                            ? 'No products in the current filter'
+                            : 'Select all applies to the current filtered list',
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   if (visibleProducts.isEmpty)
                     Container(
@@ -2917,14 +4100,29 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
                       (product) => Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: InkWell(
-                          onTap: () => _openProductDetail(product),
+                          onTap: () {
+                            if (_isBulkDeleteMode) {
+                              _toggleProductSelection(product);
+                            } else {
+                              _openProductDetail(product);
+                            }
+                          },
                           borderRadius: BorderRadius.circular(18),
                           child: Ink(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(18),
-                              border: Border.all(color: Colors.grey.shade200),
+                              border: Border.all(
+                                color: _isBulkDeleteMode &&
+                                        _selectedProductBarcodes.contains(product.barcode)
+                                    ? Colors.red.shade200
+                                    : Colors.grey.shade200,
+                                width: _isBulkDeleteMode &&
+                                        _selectedProductBarcodes.contains(product.barcode)
+                                    ? 1.5
+                                    : 1,
+                              ),
                               boxShadow: [
                                 BoxShadow(
                                   color: Colors.black.withOpacity(0.03),
@@ -2936,6 +4134,14 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                if (_isBulkDeleteMode)
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 12, top: 4),
+                                    child: Checkbox(
+                                      value: _selectedProductBarcodes.contains(product.barcode),
+                                      onChanged: (_) => _toggleProductSelection(product),
+                                    ),
+                                  ),
                                 Expanded(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2952,6 +4158,32 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
                                             ),
                                           ),
                                           _buildStatusChip(product),
+                                          if (!_isBulkDeleteMode) ...[
+                                            const SizedBox(width: 8),
+                                            PopupMenuButton<String>(
+                                              tooltip: 'Product actions',
+                                              onSelected: (value) =>
+                                                  _handleProductMenuAction(value, product),
+                                              itemBuilder: (context) => const [
+                                                PopupMenuItem<String>(
+                                                  value: 'edit',
+                                                  child: Text('Edit Item'),
+                                                ),
+                                                PopupMenuItem<String>(
+                                                  value: 'history',
+                                                  child: Text('View History'),
+                                                ),
+                                                PopupMenuDivider(),
+                                                PopupMenuItem<String>(
+                                                  value: 'delete',
+                                                  child: Text(
+                                                    'Delete Item',
+                                                    style: TextStyle(color: Colors.red),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
                                         ],
                                       ),
                                       const SizedBox(height: 6),
@@ -3002,34 +4234,36 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
                                     ],
                                   ),
                                 ),
-                                const SizedBox(width: 12),
-                                Column(
-                                  children: [
-                                    IconButton.filledTonal(
-                                      tooltip: 'Receive stock',
-                                      onPressed: () => _openReceiveFlow(
-                                        initialProduct: product,
+                                if (!_isBulkDeleteMode) ...[
+                                  const SizedBox(width: 12),
+                                  Column(
+                                    children: [
+                                      IconButton.filledTonal(
+                                        tooltip: 'Receive stock',
+                                        onPressed: () => _openReceiveFlow(
+                                          initialProduct: product,
+                                        ),
+                                        icon: const Icon(Icons.inventory_2),
                                       ),
-                                      icon: const Icon(Icons.inventory_2),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    IconButton.filledTonal(
-                                      tooltip: 'Adjust stock',
-                                      onPressed: () => _openAdjustFlow(
-                                        initialProduct: product,
+                                      const SizedBox(height: 8),
+                                      IconButton.filledTonal(
+                                        tooltip: 'Adjust stock',
+                                        onPressed: () => _openAdjustFlow(
+                                          initialProduct: product,
+                                        ),
+                                        icon: const Icon(Icons.tune),
                                       ),
-                                      icon: const Icon(Icons.tune),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    IconButton.filledTonal(
-                                      tooltip: 'Change price',
-                                      onPressed: () => _openPriceChangeFlow(
-                                        initialProduct: product,
+                                      const SizedBox(height: 8),
+                                      IconButton.filledTonal(
+                                        tooltip: 'Change price',
+                                        onPressed: () => _openPriceChangeFlow(
+                                          initialProduct: product,
+                                        ),
+                                        icon: const Icon(Icons.sell),
                                       ),
-                                      icon: const Icon(Icons.sell),
-                                    ),
-                                  ],
-                                ),
+                                    ],
+                                  ),
+                                ],
                               ],
                             ),
                           ),
