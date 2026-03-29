@@ -1,19 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared/models/product.dart';
 
 import '../models/pos_supplier.dart';
+import '../models/stock_receipt_record.dart';
 import '../providers/auth_provider.dart';
-import '../models/supplier_analytics_summary.dart';
 import '../services/database_helper.dart';
-import '../services/purchase_order_service.dart';
 import '../services/supplier_service.dart';
-import 'purchase_order_editor_screen.dart';
-import 'purchase_order_list_screen.dart';
-import 'reorder_suggestion_screen.dart';
-import 'supplier_product_mapping_screen.dart';
-import 'supplier_purchase_history_screen.dart';
 import 'supplier_receive_history_screen.dart';
-import 'supplier_workspace_screen.dart';
 
 class SupplierManagementScreen extends StatefulWidget {
   const SupplierManagementScreen({
@@ -30,857 +24,1026 @@ class SupplierManagementScreen extends StatefulWidget {
 
 class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
   final SupplierService _supplierService = SupplierService();
-  final PurchaseOrderService _purchaseOrderService = PurchaseOrderService();
-  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _supplierSearchController =
+      TextEditingController();
 
   bool _isLoading = true;
+  bool _isSaving = false;
+  bool _isRefreshing = false;
+
   List<PosSupplier> _suppliers = const [];
-  List<SupplierAnalyticsSummary> _analytics = const [];
-  Map<String, dynamic> _receiveSummary = const {};
-  Map<String, dynamic> _poSummary = const {};
+  List<StockReceiptRecord> _history = const [];
+  Map<String, dynamic> _historySummary = const {};
+  Map<int, int> _linkedCounts = const {};
 
   @override
   void initState() {
     super.initState();
-    _loadData(refreshFromBackend: true);
+    _loadAll(refreshFromBackend: false);
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
+    _supplierSearchController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadData({bool refreshFromBackend = false}) async {
+  bool get _hasManagementAccess =>
+      context.read<AuthProvider>().hasManagementAccess;
+
+  Future<void> _loadAll({bool refreshFromBackend = false}) async {
+    if (!mounted) return;
+
     setState(() {
       _isLoading = true;
     });
 
-    final suppliers = await _supplierService.getSuppliers(
-      refreshFromBackend: refreshFromBackend,
+    try {
+      final suppliers = await _supplierService.getSuppliers(
+        refreshFromBackend: refreshFromBackend,
+        search: _supplierSearchController.text.trim(),
+      );
+      final linkedCounts =
+          await _supplierService.getLinkedProductCountsBySupplier();
+      final history = await _supplierService.getReceiveHistory();
+      final historySummary = await _supplierService.getReceiveSummary();
+
+      if (!mounted) return;
+      setState(() {
+        _suppliers = suppliers;
+        _linkedCounts = linkedCounts;
+        _history = history;
+        _historySummary = historySummary;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+      _showMessage(
+        e.toString().replaceFirst('Exception: ', ''),
+        isError: true,
+      );
+    }
+  }
+
+  Future<void> _refresh() async {
+    if (_isRefreshing) return;
+
+    setState(() {
+      _isRefreshing = true;
+    });
+
+    try {
+      await _loadAll(refreshFromBackend: false);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRefreshing = false;
+        });
+      }
+    }
+  }
+
+  void _showMessage(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : Colors.green,
+        behavior: SnackBarBehavior.floating,
+      ),
     );
-    final receiveSummary = await _supplierService.getReceiveSummary();
-    final poSummary = await _purchaseOrderService.getSummary();
-    final analytics = await _supplierService.getSupplierAnalyticsSummaries();
+  }
+
+  String _formatDateTime(String raw) {
+    if (raw.trim().isEmpty) return 'No activity yet';
+    try {
+      final date = DateTime.parse(raw).toLocal();
+      String two(int value) => value.toString().padLeft(2, '0');
+      return '${two(date.day)}/${two(date.month)}/${date.year} ${two(date.hour)}:${two(date.minute)}';
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  StockReceiptRecord? _lastReceiptForSupplier(int supplierId) {
+    for (final receipt in _history) {
+      if (receipt.supplierId == supplierId) {
+        return receipt;
+      }
+    }
+    return null;
+  }
+
+  InputDecoration _fieldDecoration({
+    required String hintText,
+    String? labelText,
+    IconData? icon,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      hintText: hintText,
+      labelText: labelText,
+      prefixIcon: icon == null ? null : Icon(icon, size: 20),
+      suffixIcon: suffixIcon,
+      filled: true,
+      fillColor: const Color(0xFFF8FAFD),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade300),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade300),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.blue.shade700, width: 1.4),
+      ),
+      isDense: true,
+    );
+  }
+
+  Future<void> _showSupplierFormBottomSheet({PosSupplier? supplier}) async {
+    final isEdit = supplier != null;
+    final nameController = TextEditingController(text: supplier?.name ?? '');
+    final phoneController = TextEditingController(text: supplier?.phone ?? '');
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        final bottomInset = MediaQuery.of(sheetContext).viewInsets.bottom;
+        bool isSubmitting = false;
+
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(bottom: bottomInset),
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+                ),
+                child: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 46,
+                            height: 5,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFD5DCE7),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    isEdit ? 'Edit Supplier' : 'Add Supplier',
+                                    style: const TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    isEdit
+                                        ? 'Update supplier contact details.'
+                                        : 'Create a supplier record for product linking and history.',
+                                    style: TextStyle(color: Colors.grey[700]),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: isSubmitting ? null : () => Navigator.pop(sheetContext),
+                              icon: const Icon(Icons.close),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 18),
+                        TextField(
+                          controller: nameController,
+                          enabled: !isSubmitting,
+                          textCapitalization: TextCapitalization.words,
+                          decoration: _fieldDecoration(
+                            hintText: 'Enter supplier name',
+                            labelText: 'Supplier Name',
+                            icon: Icons.local_shipping_outlined,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: phoneController,
+                          enabled: !isSubmitting,
+                          keyboardType: TextInputType.phone,
+                          decoration: _fieldDecoration(
+                            hintText: 'Phone number',
+                            labelText: 'Phone',
+                            icon: Icons.phone_outlined,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: isSubmitting
+                                ? null
+                                : () async {
+                                    final name = nameController.text.trim();
+                                    final phone = phoneController.text.trim();
+                                    if (name.isEmpty) {
+                                      _showMessage(
+                                        'Supplier name is required.',
+                                        isError: true,
+                                      );
+                                      return;
+                                    }
+
+                                    setSheetState(() {
+                                      isSubmitting = true;
+                                    });
+
+                                    try {
+                                      if (isEdit) {
+                                        await _supplierService.updateSupplier(
+                                          supplierId: supplier.id,
+                                          name: name,
+                                          phone: phone,
+                                        );
+                                      } else {
+                                        await _supplierService.createSupplier(
+                                          name: name,
+                                          phone: phone,
+                                        );
+                                      }
+
+                                      if (sheetContext.mounted) {
+                                        Navigator.pop(sheetContext);
+                                      }
+                                      if (!mounted) return;
+                                      await _loadAll(refreshFromBackend: false);
+                                      _showMessage(
+                                        isEdit
+                                            ? 'Supplier updated successfully.'
+                                            : 'Supplier created successfully.',
+                                      );
+                                    } catch (e) {
+                                      if (mounted) {
+                                        _showMessage(
+                                          e.toString().replaceFirst('Exception: ', ''),
+                                          isError: true,
+                                        );
+                                      }
+                                    } finally {
+                                      if (sheetContext.mounted) {
+                                        setSheetState(() {
+                                          isSubmitting = false;
+                                        });
+                                      }
+                                    }
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 15),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            child: isSubmitting
+                                ? const SizedBox(
+                                    height: 18,
+                                    width: 18,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : Text(
+                                    isEdit ? 'SAVE CHANGES' : 'CREATE SUPPLIER',
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _openAssignProductsSheet(PosSupplier supplier) async {
+    final products = await DatabaseHelper.instance.getProducts();
+    final mappings = await _supplierService.getSupplierProductMappings(
+      supplierId: supplier.id,
+      limit: 5000,
+    );
 
     if (!mounted) return;
 
-    setState(() {
-      _suppliers = suppliers;
-      _receiveSummary = receiveSummary;
-      _poSummary = poSummary;
-      _analytics = analytics;
-      _isLoading = false;
-    });
-  }
-
-  List<PosSupplier> get _filteredSuppliers {
-    final query = _searchController.text.trim().toLowerCase();
-    if (query.isEmpty) return _suppliers;
-
-    return _suppliers.where((supplier) {
-      return supplier.name.toLowerCase().contains(query) ||
-          supplier.phone.toLowerCase().contains(query) ||
-          supplier.id.toString().contains(query);
-    }).toList();
-  }
-
-  double get _analyticsTotalSpend {
-    return _analytics.fold<double>(0, (sum, item) => sum + item.totalSpend);
-  }
-
-  double get _analyticsSpend30Days {
-    return _analytics.fold<double>(0, (sum, item) => sum + item.spend30Days);
-  }
-
-  int get _analyticsOpenPoCount {
-    return _analytics.fold<int>(
-      0,
-      (sum, item) => sum + item.openPurchaseOrderCount,
-    );
-  }
-
-  int get _analyticsMappedProductCount {
-    return _analytics.fold<int>(
-      0,
-      (sum, item) => sum + item.mappedProductCount,
-    );
-  }
-
-  int get _analyticsReversedReceiptCount {
-    return _analytics.fold<int>(
-      0,
-      (sum, item) => sum + item.reversedReceiptCount,
-    );
-  }
-
-  List<SupplierAnalyticsSummary> get _topSuppliersBySpend {
-    final items = List<SupplierAnalyticsSummary>.from(_analytics);
-    items.sort((a, b) => b.totalSpend.compareTo(a.totalSpend));
-    return items.take(5).toList();
-  }
-
-  Map<String, dynamic>? get _currentUserMap {
-    final user = context.read<AuthProvider>().currentUser;
-    if (user == null) return null;
-    return {
-      'id': user.id,
-      'name': user.name,
-      'role': user.role,
-      'has_full_access': user.hasFullAccess,
+    final currentMappings = {
+      for (final mapping in mappings) mapping.barcode: mapping,
     };
-  }
+    final searchController = TextEditingController();
 
-  int? get _currentUserId => _currentUserMap?['id'] as int?;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final query = searchController.text.trim().toLowerCase();
+            final visibleProducts = products.where((product) {
+              if (query.isEmpty) return true;
+              return product.name.toLowerCase().contains(query) ||
+                  product.barcode.toLowerCase().contains(query) ||
+                  product.category.toLowerCase().contains(query);
+            }).toList();
 
-  String get _currentUserName {
-    final raw = (_currentUserMap?['name'] ?? widget.cashierName).toString().trim();
-    return raw.isEmpty ? 'Unknown User' : raw;
-  }
-
-  bool get _currentUserHasManagementAccess {
-    return context.read<AuthProvider>().hasManagementAccess;
-  }
-
-  Future<bool> _requireManagerApproval({
-    required String actionLabel,
-    required String description,
-  }) async {
-    if (_currentUserHasManagementAccess) {
-      return true;
-    }
-
-    final pinController = TextEditingController();
-    String? errorText;
-    bool isVerifying = false;
-
-    final approved = await showDialog<bool>(
-          context: context,
-          barrierDismissible: !isVerifying,
-          builder: (dialogContext) {
-            return StatefulBuilder(
-              builder: (dialogContext, setDialogState) {
-                Future<void> verify() async {
-                  final pin = pinController.text.trim();
-                  if (pin.isEmpty) {
-                    setDialogState(() {
-                      errorText = 'Enter manager or full-access PIN.';
-                    });
-                    return;
-                  }
-
-                  setDialogState(() {
-                    isVerifying = true;
-                    errorText = null;
-                  });
-
-                  try {
-                    final user = await DatabaseHelper.instance.findUserByPin(pin);
-
-                    if (!dialogContext.mounted) return;
-
-                    if (user == null) {
-                      setDialogState(() {
-                        isVerifying = false;
-                        errorText = 'Invalid PIN.';
-                      });
-                      return;
-                    }
-
-                    final userId = ((user['id'] as num?) ?? 0).toInt();
-                    final userName = (user['name'] ?? 'Manager').toString();
-                    final role = (user['role'] ?? '').toString().toLowerCase();
-                    final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
-                    final hasFullAccess = ((user['has_full_access'] as num?) ?? 0).toInt() == 1;
-                    final hasManagementAccess = role == 'manager' || hasFullAccess;
-
-                    if (!isActive) {
-                      setDialogState(() {
-                        isVerifying = false;
-                        errorText = 'This approver account is inactive.';
-                      });
-                      return;
-                    }
-
-                    if (!hasManagementAccess) {
-                      setDialogState(() {
-                        isVerifying = false;
-                        errorText = 'PIN does not belong to a manager or full-access user.';
-                      });
-                      return;
-                    }
-
-                    await DatabaseHelper.instance.logManagerApproval(
-                      actorUserId: userId,
-                      actorName: userName,
-                      targetUserId: _currentUserId,
-                      targetUserName: _currentUserName,
-                      description: description,
-                    );
-
-                    if (!dialogContext.mounted) return;
-                    Navigator.pop(dialogContext, true);
-                  } catch (_) {
-                    if (!dialogContext.mounted) return;
-                    setDialogState(() {
-                      isVerifying = false;
-                      errorText = 'Approval failed. Please try again.';
-                    });
-                  }
-                }
-
-                return AlertDialog(
-                  title: const Text('Approval Required'),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Enter manager or full-access PIN to $actionLabel.'),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: pinController,
-                        obscureText: true,
-                        autofocus: true,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          labelText: 'Approver PIN',
-                          border: const OutlineInputBorder(),
-                          errorText: errorText,
-                        ),
-                        onSubmitted: (_) {
-                          if (!isVerifying) {
-                            verify();
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: isVerifying
-                          ? null
-                          : () => Navigator.pop(dialogContext, false),
-                      child: const Text('Cancel'),
-                    ),
-                    FilledButton(
-                      onPressed: isVerifying ? null : verify,
-                      child: isVerifying
-                          ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Text('Approve'),
-                    ),
-                  ],
-                );
-              },
-            );
-          },
-        ) ??
-        false;
-
-    pinController.dispose();
-
-    if (!approved && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Approval is required to continue.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-
-    return approved;
-  }
-
-  Future<void> _openHistory() async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const SupplierReceiveHistoryScreen(),
-      ),
-    );
-    await _loadData(refreshFromBackend: false);
-  }
-
-  Future<void> _openPurchaseHistory({PosSupplier? supplier}) async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => SupplierPurchaseHistoryScreen(supplier: supplier),
-      ),
-    );
-    await _loadData(refreshFromBackend: false);
-  }
-
-  Future<void> _openPurchaseOrders({PosSupplier? supplier}) async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PurchaseOrderListScreen(
-          cashierName: widget.cashierName,
-          initialSupplier: supplier,
-        ),
-      ),
-    );
-    await _loadData(refreshFromBackend: false);
-  }
-
-  Future<void> _createPurchaseOrder({PosSupplier? supplier}) async {
-    final target = supplier == null ? 'supplier purchase orders' : 'purchase order for ${supplier.name}';
-    final approved = await _requireManagerApproval(
-      actionLabel: 'create $target',
-      description: supplier == null
-          ? 'Approved purchase order creation requested by $_currentUserName'
-          : 'Approved purchase order creation for ${supplier.name} requested by $_currentUserName',
-    );
-    if (!approved) return;
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PurchaseOrderEditorScreen(
-          cashierName: widget.cashierName,
-          initialSupplier: supplier,
-        ),
-      ),
-    );
-    await _loadData(refreshFromBackend: false);
-  }
-
-  Future<void> _openProductMappings({PosSupplier? supplier}) async {
-    final approved = await _requireManagerApproval(
-      actionLabel: supplier == null
-          ? 'open supplier product mappings'
-          : 'open product mappings for ${supplier.name}',
-      description: supplier == null
-          ? 'Approved supplier product mapping access requested by $_currentUserName'
-          : 'Approved supplier product mapping access for ${supplier.name} requested by $_currentUserName',
-    );
-    if (!approved) return;
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => SupplierProductMappingScreen(initialSupplier: supplier),
-      ),
-    );
-    await _loadData(refreshFromBackend: false);
-  }
-
-  Future<void> _openReorderSuggestions({PosSupplier? supplier}) async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ReorderSuggestionScreen(
-          cashierName: widget.cashierName,
-          initialSupplier: supplier,
-        ),
-      ),
-    );
-    await _loadData(refreshFromBackend: false);
-  }
-
-  Widget _buildSummaryCard({
-    required String label,
-    required String value,
-    required IconData icon,
-    required Color color,
-  }) {
-    return Container(
-      width: 200,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withOpacity(0.18)),
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            backgroundColor: color.withOpacity(0.14),
-            child: Icon(icon, color: color),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 18,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(label, style: TextStyle(color: Colors.grey[700])),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAnalyticsOverviewCard() {
-    return Card(
-      elevation: 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Supplier Analytics Overview',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Refined supplier insights from local receiving, purchase orders, mappings, and reversal activity.',
-              style: TextStyle(color: Colors.grey[700], height: 1.4),
-            ),
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _buildSummaryCard(
-                  label: 'Total Spend',
-                  value: 'Rs. ${_analyticsTotalSpend.toStringAsFixed(2)}',
-                  icon: Icons.payments_outlined,
-                  color: Colors.green,
-                ),
-                _buildSummaryCard(
-                  label: '30-Day Spend',
-                  value: 'Rs. ${_analyticsSpend30Days.toStringAsFixed(2)}',
-                  icon: Icons.calendar_month_outlined,
-                  color: Colors.blue,
-                ),
-                _buildSummaryCard(
-                  label: 'Open POs',
-                  value: _analyticsOpenPoCount.toString(),
-                  icon: Icons.pending_actions_outlined,
-                  color: Colors.deepPurple,
-                ),
-                _buildSummaryCard(
-                  label: 'Mapped Products',
-                  value: _analyticsMappedProductCount.toString(),
-                  icon: Icons.link_outlined,
-                  color: Colors.orange,
-                ),
-                _buildSummaryCard(
-                  label: 'Reversed Receipts',
-                  value: _analyticsReversedReceiptCount.toString(),
-                  icon: Icons.undo_outlined,
-                  color: Colors.red,
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTopSupplierAnalyticsSection() {
-    final items = _topSuppliersBySpend;
-
-    return Card(
-      elevation: 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Top Supplier Activity',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            if (items.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('No supplier analytics available yet.'),
-              )
-            else
-              ...items.map(
-                (item) => Container(
-                  margin: const EdgeInsets.only(top: 10),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade50,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.grey.shade200),
-                  ),
+            return SafeArea(
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.82,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        item.supplierName,
+                        'Assign Products • ${supplier.name}',
                         style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                       const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          _chip(
-                            'Spend: Rs. ${item.totalSpend.toStringAsFixed(2)}',
-                          ),
-                          _chip(
-                            '30D: Rs. ${item.spend30Days.toStringAsFixed(2)}',
-                          ),
-                          _chip('POs: ${item.purchaseOrderCount}'),
-                          _chip('Open: ${item.openPurchaseOrderCount}'),
-                          _chip('Mapped: ${item.mappedProductCount}'),
-                          _chip('Reversed: ${item.reversedReceiptCount}'),
-                          _chip(
-                            'Avg Cost: Rs. ${item.averageUnitCost.toStringAsFixed(2)}',
-                          ),
-                          if (item.lastReceivedAt.trim().isNotEmpty)
-                            _chip('Last Receive: ${item.lastReceivedAt}'),
-                        ],
+                      Text(
+                        'Set this supplier as the preferred supplier for selected products.',
+                        style: TextStyle(color: Colors.grey[700]),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: searchController,
+                        decoration: _fieldDecoration(
+                          hintText: 'Search by name, barcode, or category',
+                          icon: Icons.search,
+                        ),
+                        onChanged: (_) => setSheetState(() {}),
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: ListView.separated(
+                          itemCount: visibleProducts.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final product = visibleProducts[index];
+                            final mapping = currentMappings[product.barcode];
+                            final isAssigned = mapping != null;
+
+                            return Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFE3E9F2),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          product.name,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 15,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          '${product.barcode} • ${product.category} • Stock ${product.stock}',
+                                          style: TextStyle(
+                                            color: Colors.grey[700],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  if (isAssigned)
+                                    OutlinedButton.icon(
+                                      onPressed: () async {
+                                        if (mapping?.id == null) return;
+                                        await _supplierService
+                                            .deleteSupplierProductMapping(
+                                          mapping!.id!,
+                                        );
+                                        currentMappings.remove(product.barcode);
+                                        setSheetState(() {});
+                                      },
+                                      icon: const Icon(Icons.link_off),
+                                      label: const Text('Assigned'),
+                                    )
+                                  else
+                                    FilledButton.icon(
+                                      onPressed: () async {
+                                        await _supplierService
+                                            .assignProductToSupplier(
+                                          supplier: supplier,
+                                          product: product,
+                                          isPreferred: true,
+                                          defaultUnitCost: product.costPrice,
+                                        );
+                                        final refreshed = await _supplierService
+                                            .getPreferredSupplierMapping(
+                                          product.barcode,
+                                        );
+                                        if (refreshed != null) {
+                                          currentMappings[product.barcode] =
+                                              refreshed;
+                                        }
+                                        setSheetState(() {});
+                                      },
+                                      icon: const Icon(Icons.link),
+                                      label: const Text('Assign'),
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ],
                   ),
                 ),
               ),
-          ],
-        ),
-      ),
+            );
+          },
+        );
+      },
     );
+
+    searchController.dispose();
+    await _loadAll(refreshFromBackend: false);
   }
 
-  Future<void> _openWorkspace(PosSupplier supplier) async {
-    final approved = await _requireManagerApproval(
-      actionLabel: 'open supplier workspace for ${supplier.name}',
-      description: 'Approved supplier workspace access for ${supplier.name} requested by $_currentUserName',
-    );
-    if (!approved) return;
+  Future<void> _openLinkedProductsSheet(PosSupplier supplier) async {
+    final rows = await _supplierService.getLinkedProductsForSupplier(supplier.id);
+    if (!mounted) return;
 
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => SupplierWorkspaceScreen(
-          supplier: supplier,
-          cashierName: widget.cashierName,
-        ),
-      ),
-    );
-    await _loadData(refreshFromBackend: false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final filteredSuppliers = _filteredSuppliers;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Supplier Operations'),
-        actions: [
-          IconButton(
-            tooltip: 'Purchase orders',
-            onPressed: () => _openPurchaseOrders(),
-            icon: const Icon(Icons.description_outlined),
-          ),
-          IconButton(
-            tooltip: 'Receive history',
-            onPressed: _openHistory,
-            icon: const Icon(Icons.history),
-          ),
-          IconButton(
-            tooltip: 'Purchase history',
-            onPressed: () => _openPurchaseHistory(),
-            icon: const Icon(Icons.insights_outlined),
-          ),
-          IconButton(
-            tooltip: 'Reorder suggestions',
-            onPressed: () => _openReorderSuggestions(),
-            icon: const Icon(Icons.playlist_add_check_circle_outlined),
-          ),
-          IconButton(
-            tooltip: 'Supplier mappings',
-            onPressed: () => _openProductMappings(),
-            icon: const Icon(Icons.link_outlined),
-          ),
-          IconButton(
-            tooltip: 'Refresh suppliers',
-            onPressed: () => _loadData(refreshFromBackend: true),
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _createPurchaseOrder(),
-        icon: const Icon(Icons.add),
-        label: const Text('New PO'),
-      ),
-      body: RefreshIndicator(
-        onRefresh: () => _loadData(refreshFromBackend: true),
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Card(
-              elevation: 1,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Manager Supplier Workspace',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Use this area to receive stock from suppliers, create local purchase orders, keep supplier-product mappings, and monitor supplier activity on the store machine behind manager PIN.',
-                      style: TextStyle(color: Colors.grey[700], height: 1.4),
-                    ),
-                    const SizedBox(height: 14),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: () => _openPurchaseOrders(),
-                          icon: const Icon(Icons.description_outlined),
-                          label: const Text('Open Purchase Orders'),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: () => _createPurchaseOrder(),
-                          icon: const Icon(Icons.add_business_outlined),
-                          label: const Text('Create New PO'),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: _openHistory,
-                          icon: const Icon(Icons.history),
-                          label: const Text('Receive History'),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: () => _openPurchaseHistory(),
-                          icon: const Icon(Icons.insights_outlined),
-                          label: const Text('Purchase History'),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: () => _openReorderSuggestions(),
-                          icon:
-                              const Icon(Icons.playlist_add_check_circle_outlined),
-                          label: const Text('Reorder Suggestions'),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: () => _openProductMappings(),
-                          icon: const Icon(Icons.link_outlined),
-                          label: const Text('Product Mapping'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(context).size.height * 0.78,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildSummaryCard(
-                    label: 'Suppliers',
-                    value: _suppliers.length.toString(),
-                    icon: Icons.local_shipping,
-                    color: Colors.orange,
+                  Text(
+                    'Linked Products • ${supplier.name}',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                  const SizedBox(width: 10),
-                  _buildSummaryCard(
-                    label: 'Receipts Logged',
-                    value: ((_receiveSummary['receipt_count'] as num?) ?? 0)
-                        .toInt()
-                        .toString(),
-                    icon: Icons.receipt_long,
-                    color: Colors.blue,
+                  const SizedBox(height: 8),
+                  Text(
+                    'Products currently assigned to this supplier.',
+                    style: TextStyle(color: Colors.grey[700]),
                   ),
-                  const SizedBox(width: 10),
-                  _buildSummaryCard(
-                    label: 'Purchase Orders',
-                    value: ((_poSummary['order_count'] as num?) ?? 0)
-                        .toInt()
-                        .toString(),
-                    icon: Icons.description_outlined,
-                    color: Colors.deepPurple,
-                  ),
-                  const SizedBox(width: 10),
-                  _buildSummaryCard(
-                    label: 'PO Value',
-                    value:
-                        'Rs. ${(((_poSummary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
-                    icon: Icons.payments_outlined,
-                    color: Colors.green,
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: rows.isEmpty
+                        ? const Center(
+                            child: Text('No linked products yet.'),
+                          )
+                        : ListView.separated(
+                            itemCount: rows.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 8),
+                            itemBuilder: (context, index) {
+                              final row = rows[index];
+                              return Container(
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: const Color(0xFFE3E9F2),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            (row['product_name'] ?? 'Product')
+                                                .toString(),
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 15,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '${row['barcode']} • ${row['category']} • Stock ${(row['stock'] ?? 0)}',
+                                            style: TextStyle(
+                                              color: Colors.grey[700],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    if (((row['is_preferred'] as num?) ?? 0)
+                                            .toInt() ==
+                                        1)
+                                      _buildPill(
+                                        label: 'Primary',
+                                        color: Colors.blue,
+                                      ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 12),
-            _buildAnalyticsOverviewCard(),
-            const SizedBox(height: 12),
-            _buildTopSupplierAnalyticsSection(),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _searchController,
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                hintText: 'Search suppliers by name or phone',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchController.text.isEmpty
-                    ? null
-                    : IconButton(
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() {});
-                        },
-                        icon: const Icon(Icons.clear),
-                      ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openSupplierHistory(PosSupplier? supplier) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SupplierReceiveHistoryScreen(supplier: supplier),
+      ),
+    );
+
+    if (!mounted) return;
+    await _loadAll(refreshFromBackend: false);
+  }
+
+  Widget _buildSummaryCard({
+    required String title,
+    required String value,
+    required IconData icon,
+    required Color accent,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: accent.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(14),
             ),
-            const SizedBox(height: 12),
-            if (_isLoading)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (filteredSuppliers.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: Text('No suppliers found.')),
-              )
-            else
-              ...filteredSuppliers.map(
-                (supplier) => Card(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        CircleAvatar(
-                          radius: 22,
-                          backgroundColor: Colors.orange.withOpacity(0.12),
-                          child: const Icon(
-                            Icons.local_shipping,
-                            color: Colors.orange,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                supplier.name,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                supplier.phone.isEmpty
-                                    ? 'Phone not available'
-                                    : 'Phone: ${supplier.phone}',
-                                style: TextStyle(color: Colors.grey[700]),
-                              ),
-                              const SizedBox(height: 10),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  _chip('Supplier ID: ${supplier.id}'),
-                                  _chip('Receive + PO ready'),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  ElevatedButton.icon(
-                                    onPressed: () => _openWorkspace(supplier),
-                                    icon: const Icon(Icons.storefront_outlined),
-                                    label: const Text('Open Workspace'),
-                                  ),
-                                  OutlinedButton.icon(
-                                    onPressed: () =>
-                                        _createPurchaseOrder(supplier: supplier),
-                                    icon: const Icon(Icons.add_business_outlined),
-                                    label: const Text('New PO'),
-                                  ),
-                                  OutlinedButton.icon(
-                                    onPressed: () =>
-                                        _openPurchaseHistory(supplier: supplier),
-                                    icon: const Icon(Icons.insights_outlined),
-                                    label: const Text('History'),
-                                  ),
-                                  OutlinedButton.icon(
-                                    onPressed: () =>
-                                        _openProductMappings(supplier: supplier),
-                                    icon: const Icon(Icons.link_outlined),
-                                    label: const Text('Mapping'),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+            child: Icon(icon, color: accent),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-            const SizedBox(height: 80),
+              const SizedBox(height: 4),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickActionButton({
+    required String title,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Ink(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.grey.shade200),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18, color: Colors.blue.shade700),
+            const SizedBox(width: 8),
+            Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _chip(String text) {
+  Widget _buildPill({required String label, required Color color}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: color.withOpacity(0.10),
         borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.22)),
       ),
       child: Text(
-        text,
-        style: const TextStyle(fontWeight: FontWeight.w600),
+        label,
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+        ),
       ),
+    );
+  }
+
+  Widget _buildSupplierCard(PosSupplier supplier) {
+    final linkedCount = _linkedCounts[supplier.id] ?? 0;
+    final lastReceipt = _lastReceiptForSupplier(supplier.id);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          supplier.name,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEAF2FF),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(
+                          Icons.local_shipping_outlined,
+                          color: Color(0xFF1552C4),
+                          size: 20,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    supplier.phone.trim().isEmpty
+                        ? 'Phone not available'
+                        : supplier.phone.trim(),
+                    style: TextStyle(color: Colors.grey.shade700),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      _buildMiniDetailCard('Products', linkedCount.toString()),
+                      _buildMiniDetailCard(
+                        'Last Received',
+                        lastReceipt == null
+                            ? 'No activity'
+                            : _formatDateTime(lastReceipt.createdAt),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              children: [
+                IconButton.filledTonal(
+                  tooltip: 'Assign products',
+                  onPressed: () => _openAssignProductsSheet(supplier),
+                  icon: const Icon(Icons.link),
+                ),
+                const SizedBox(height: 8),
+                IconButton.filledTonal(
+                  tooltip: 'Linked products',
+                  onPressed: () => _openLinkedProductsSheet(supplier),
+                  icon: const Icon(Icons.inventory_2_outlined),
+                ),
+                const SizedBox(height: 8),
+                IconButton.filledTonal(
+                  tooltip: 'Edit supplier',
+                  onPressed: _hasManagementAccess
+                      ? () => _showSupplierFormBottomSheet(supplier: supplier)
+                      : null,
+                  icon: const Icon(Icons.edit_outlined),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    
+  }
+
+  Widget _buildMiniDetailCard(String title, String value) {
+    return Container(
+      width: 170,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: Colors.grey.shade700,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 14,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToolbarCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _supplierSearchController,
+                  decoration: _fieldDecoration(
+                    hintText: 'Search supplier by name, phone, or id',
+                    icon: Icons.search,
+                    suffixIcon: _supplierSearchController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            onPressed: () {
+                              _supplierSearchController.clear();
+                              setState(() {});
+                              _loadAll(refreshFromBackend: false);
+                            },
+                            icon: const Icon(Icons.close),
+                          ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: (_) => _loadAll(refreshFromBackend: false),
+                ),
+              ),
+              const SizedBox(width: 12),
+              _buildQuickActionButton(
+                title: 'Refresh',
+                icon: Icons.refresh,
+                onTap: _refresh,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _buildQuickActionButton(
+                title: 'Add Supplier',
+                icon: Icons.add_business_outlined,
+                onTap: _hasManagementAccess
+                    ? () => _showSupplierFormBottomSheet()
+                    : () => _showMessage(
+                          'Only management users can add suppliers.',
+                          isError: true,
+                        ),
+              ),
+              _buildQuickActionButton(
+                title: 'History',
+                icon: Icons.history,
+                onTap: () => _openSupplierHistory(null),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Container(
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: const Center(
+        child: Text('No suppliers match the current search.'),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final totalLinkedProducts =
+        _linkedCounts.values.fold<int>(0, (sum, count) => sum + count);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FB),
+      appBar: AppBar(
+        title: const Text('Supplier Module'),
+        backgroundColor: Colors.blue.shade900,
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            tooltip: 'Refresh suppliers',
+            onPressed: _isRefreshing ? null : _refresh,
+            icon: _isRefreshing
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    SizedBox(
+                      width: 250,
+                      child: _buildSummaryCard(
+                        title: 'Suppliers',
+                        value: _suppliers.length.toString(),
+                        icon: Icons.local_shipping_outlined,
+                        accent: Colors.blue,
+                      ),
+                    ),
+                    SizedBox(
+                      width: 250,
+                      child: _buildSummaryCard(
+                        title: 'Products Linked',
+                        value: totalLinkedProducts.toString(),
+                        icon: Icons.link_outlined,
+                        accent: Colors.deepPurple,
+                      ),
+                    ),
+                    SizedBox(
+                      width: 250,
+                      child: _buildSummaryCard(
+                        title: 'Receipts Logged',
+                        value: (((_historySummary['receipt_count'] as num?) ??
+                                    0)
+                                .toInt())
+                            .toString(),
+                        icon: Icons.receipt_long_outlined,
+                        accent: Colors.green,
+                      ),
+                    ),
+                    SizedBox(
+                      width: 250,
+                      child: _buildSummaryCard(
+                        title: 'Supplier Spend',
+                        value:
+                            'Rs. ${(((_historySummary['total_cost'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
+                        icon: Icons.payments_outlined,
+                        accent: Colors.orange,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _buildToolbarCard(),
+                const SizedBox(height: 18),
+                Text(
+                  'Suppliers (${_suppliers.length})',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (_suppliers.isEmpty)
+                  _buildEmptyState()
+                else
+                  ..._suppliers.map(
+                    (supplier) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _buildSupplierCard(supplier),
+                    ),
+                  ),
+              ],
+            ),
     );
   }
 }

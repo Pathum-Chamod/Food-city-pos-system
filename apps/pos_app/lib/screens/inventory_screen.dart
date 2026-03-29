@@ -3,10 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
 
+import '../models/pos_supplier.dart';
+import '../models/supplier_product_mapping.dart';
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 import 'inventory_history_screen.dart';
 import 'stock_take_screen.dart';
+import 'supplier_receive_history_screen.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -490,21 +493,428 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+
+  Future<void> _openAddProductFlow() async {
+    final approval = await _requireManagerApproval(
+      actionLabel: 'add a new product',
+      description: 'Approved product creation requested by $_currentUserName',
+    );
+    if (approval == null || !mounted) return;
+    final changedBy = _buildPerformedByLabel(approval.approverName);
+
+    final nameController = TextEditingController();
+    final barcodeController = TextEditingController();
+    final categoryController = TextEditingController(text: 'General');
+    final costPriceController = TextEditingController();
+    final sellingPriceController = TextEditingController();
+    final wholesalePriceController = TextEditingController();
+    final salePriceController = TextEditingController();
+    final openingStockController = TextEditingController(text: '0');
+    final minStockController = TextEditingController(text: '0');
+    bool saleEnabled = false;
+
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return SafeArea(
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    8,
+                    16,
+                    MediaQuery.of(context).viewInsets.bottom + 16,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Add Product',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Create a new product with opening stock and price setup.',
+                        style: TextStyle(color: Colors.grey.shade700),
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: nameController,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: InputDecoration(
+                          labelText: 'Product name',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: barcodeController,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: 'Barcode',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: categoryController,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: InputDecoration(
+                          labelText: 'Category',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: costPriceController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Cost price',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextField(
+                              controller: sellingPriceController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Selling price',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: wholesalePriceController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Wholesale price (optional)',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextField(
+                              controller: salePriceController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Sale price (optional)',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: saleEnabled,
+                        title: const Text('Sale price active'),
+                        subtitle: const Text(
+                          'If on, billing can use this product\'s sale price in Sale mode.',
+                        ),
+                        onChanged: (value) {
+                          setModalState(() {
+                            saleEnabled = value;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: openingStockController,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: 'Opening stock',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextField(
+                              controller: minStockController,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: 'Min stock',
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: () async {
+                            final name = nameController.text.trim();
+                            final barcode = barcodeController.text.trim();
+                            final category = categoryController.text.trim();
+
+                            if (name.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Enter a product name.')),
+                              );
+                              return;
+                            }
+                            if (barcode.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Enter a barcode.')),
+                              );
+                              return;
+                            }
+                            final barcodeExists = _products.any(
+                              (item) => item.barcode.trim().toLowerCase() == barcode.toLowerCase(),
+                            );
+                            if (barcodeExists) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('A product with this barcode already exists.')),
+                              );
+                              return;
+                            }
+
+                            final costError = _validateNonNegativeMoney(
+                              costPriceController.text,
+                              label: 'cost price',
+                            );
+                            if (costError != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(costError)),
+                              );
+                              return;
+                            }
+
+                            final sellingError = _validateNonNegativeMoney(
+                              sellingPriceController.text,
+                              label: 'selling price',
+                            );
+                            if (sellingError != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(sellingError)),
+                              );
+                              return;
+                            }
+
+                            final openingStockError = _validatePositiveInt(
+                              openingStockController.text,
+                              label: 'opening stock',
+                              allowZero: true,
+                            );
+                            if (openingStockError != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(openingStockError)),
+                              );
+                              return;
+                            }
+
+                            final minStockError = _validatePositiveInt(
+                              minStockController.text,
+                              label: 'minimum stock level',
+                              allowZero: true,
+                            );
+                            if (minStockError != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(minStockError)),
+                              );
+                              return;
+                            }
+
+                            final rawWholesale = wholesalePriceController.text.trim();
+                            if (rawWholesale.isNotEmpty) {
+                              final wholesaleError = _validateNonNegativeMoney(
+                                rawWholesale,
+                                label: 'wholesale price',
+                              );
+                              if (wholesaleError != null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(wholesaleError)),
+                                );
+                                return;
+                              }
+                            }
+
+                            final rawSale = salePriceController.text.trim();
+                            if (rawSale.isNotEmpty) {
+                              final saleError = _validateNonNegativeMoney(
+                                rawSale,
+                                label: 'sale price',
+                              );
+                              if (saleError != null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(saleError)),
+                                );
+                                return;
+                              }
+                            }
+
+                            final sellingPrice = double.parse(sellingPriceController.text.trim());
+                            if (sellingPrice <= 0) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Selling price must be greater than 0.')),
+                              );
+                              return;
+                            }
+
+                            final costPrice = double.parse(costPriceController.text.trim());
+                            final wholesalePrice = rawWholesale.isEmpty
+                                ? sellingPrice
+                                : double.parse(rawWholesale);
+                            final salePrice = rawSale.isEmpty ? null : double.parse(rawSale);
+                            final openingStock = int.parse(openingStockController.text.trim());
+                            final minStock = int.parse(minStockController.text.trim());
+
+                            if (saleEnabled && (salePrice == null || salePrice <= 0)) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Enter a valid sale price before activating sale mode.')),
+                              );
+                              return;
+                            }
+
+                            final confirmed = await _confirmAction(
+                              title: 'Confirm Add Product',
+                              message: 'Create $name with opening stock of $openingStock?',
+                              confirmText: 'Create',
+                            );
+                            if (!confirmed) return;
+
+                            final success = await DatabaseHelper.instance.createProductLocal(
+                              barcode: barcode,
+                              name: name,
+                              category: category.isEmpty ? 'General' : category,
+                              costPrice: costPrice,
+                              sellingPrice: sellingPrice,
+                              wholesalePrice: wholesalePrice,
+                              salePrice: salePrice,
+                              saleEnabled: saleEnabled,
+                              openingStock: openingStock,
+                              minStockLevel: minStock,
+                              changedBy: changedBy,
+                            );
+
+                            if (!context.mounted) return;
+                            Navigator.pop(context, success);
+                          },
+                          icon: const Icon(Icons.add_box_outlined),
+                          label: const Text('Create Product'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    nameController.dispose();
+    barcodeController.dispose();
+    categoryController.dispose();
+    costPriceController.dispose();
+    sellingPriceController.dispose();
+    wholesalePriceController.dispose();
+    salePriceController.dispose();
+    openingStockController.dispose();
+    minStockController.dispose();
+
+    if (saved == true) {
+      await _loadData(showLoader: false);
+      _showMessage('Product added successfully.');
+    } else if (saved == false) {
+      _showMessage('Could not create product.', isError: true);
+    }
+  }
+
   Future<void> _openReceiveFlow({Product? initialProduct}) async {
     final product = initialProduct ??
         await _pickProduct(title: 'Select a product to receive');
     if (product == null || !mounted) return;
 
+    final mappings = await DatabaseHelper.instance.getMappingsForProduct(
+      product.barcode,
+    );
+    if (mappings.isEmpty) {
+      _showMessage(
+        'No supplier is assigned to this product yet. Assign a supplier first before receiving stock.',
+        isError: true,
+      );
+      return;
+    }
+
+    final suppliers = await DatabaseHelper.instance.getMappedSuppliersForProduct(
+      product.barcode,
+    );
+    if (suppliers.isEmpty) {
+      _showMessage(
+        'Mapped suppliers for this product could not be loaded. Check supplier mappings and try again.',
+        isError: true,
+      );
+      return;
+    }
+
+    final mappingBySupplierId = {
+      for (final mapping in mappings) mapping.supplierId: mapping,
+    };
+    final preferredMapping = mappings.firstWhere(
+      (mapping) => mapping.isPreferred,
+      orElse: () => mappings.first,
+    );
+
     final approval = await _requireManagerApproval(
       actionLabel: 'receive stock for ${product.name}',
-      description: 'Approved stock receive for ${product.name} (${product.barcode}) requested by $_currentUserName',
+      description:
+          'Approved stock receive for ${product.name} (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final qtyController = TextEditingController();
+    final preferredCost = preferredMapping.defaultUnitCost > 0
+        ? preferredMapping.defaultUnitCost
+        : product.costPrice;
     final costController = TextEditingController(
-      text: product.costPrice > 0 ? product.costPrice.toStringAsFixed(2) : '',
+      text: preferredCost > 0 ? preferredCost.toStringAsFixed(2) : '',
     );
     final noteController = TextEditingController();
 
@@ -513,134 +923,313 @@ class _InventoryScreenState extends State<InventoryScreen> {
       isScrollControlled: true,
       showDragHandle: true,
       builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              16,
-              8,
-              16,
-              MediaQuery.of(context).viewInsets.bottom + 16,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Receive Stock',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                  ),
+        int? selectedSupplierId = preferredMapping.supplierId;
+        bool setAsPrimary = false;
+
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final selectedSupplier = selectedSupplierId == null
+                ? null
+                : suppliers
+                    .where((supplier) => supplier.id == selectedSupplierId)
+                    .cast<PosSupplier?>()
+                    .firstOrNull;
+            final selectedMapping = selectedSupplierId == null
+                ? null
+                : mappingBySupplierId[selectedSupplierId];
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  8,
+                  16,
+                  MediaQuery.of(context).viewInsets.bottom + 16,
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  '${product.name} • ${product.barcode}',
-                  style: TextStyle(color: Colors.grey.shade700),
-                ),
-                const SizedBox(height: 14),
-                Row(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: TextField(
-                        controller: qtyController,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          labelText: 'Received quantity',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                    const Text(
+                      'Receive Stock',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${product.name} • ${product.barcode}',
+                      style: TextStyle(color: Colors.grey.shade700),
+                    ),
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<int>(
+                      value: selectedSupplierId,
+                      decoration: InputDecoration(
+                        labelText: 'Supplier',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      items: suppliers
+                          .map(
+                            (supplier) => DropdownMenuItem<int>(
+                              value: supplier.id,
+                              child: Text(supplier.name),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        final mapping = mappingBySupplierId[value];
+                        setModalState(() {
+                          selectedSupplierId = value;
+                          setAsPrimary = value != preferredMapping.supplierId;
+                          final mappedCost = mapping?.defaultUnitCost ?? 0;
+                          final resolvedCost = mappedCost > 0
+                              ? mappedCost
+                              : product.costPrice;
+                          costController.text = resolvedCost > 0
+                              ? resolvedCost.toStringAsFixed(2)
+                              : '';
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Only suppliers already linked to this product are shown here.',
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (selectedSupplier != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF7F9FC),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: const Color(0xFFE3E9F2)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              selectedSupplier.phone.trim().isEmpty
+                                  ? 'Phone not available'
+                                  : 'Phone • ${selectedSupplier.phone.trim()}',
+                              style: TextStyle(
+                                color: Colors.grey.shade800,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (selectedMapping != null &&
+                                selectedMapping.defaultUnitCost > 0) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                'Mapped cost • Rs. ${selectedMapping.defaultUnitCost.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  color: Colors.grey.shade700,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: qtyController,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(
+                              labelText: 'Received quantity',
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
                           ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextField(
+                            controller: costController,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: InputDecoration(
+                              labelText: 'Unit cost (optional)',
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: setAsPrimary,
+                      title: const Text('Set as primary supplier for this product'),
+                      subtitle: Text(
+                        selectedSupplierId == preferredMapping.supplierId
+                            ? 'This supplier is already the primary supplier for this product.'
+                            : 'This supplier will be auto-selected next time you receive stock for this product.',
+                      ),
+                      onChanged: selectedSupplierId == null ||
+                              selectedSupplierId == preferredMapping.supplierId
+                          ? null
+                          : (value) {
+                              setModalState(() {
+                                setAsPrimary = value;
+                              });
+                            },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: noteController,
+                      maxLines: 2,
+                      decoration: InputDecoration(
+                        labelText: 'Note (optional)',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextField(
-                        controller: costController,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        decoration: InputDecoration(
-                          labelText: 'Unit cost (optional)',
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: () async {
+                          if (selectedSupplierId == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Select a mapped supplier first.'),
+                              ),
+                            );
+                            return;
+                          }
+
+                          final qtyError = _validatePositiveInt(
+                            qtyController.text,
+                            label: 'quantity',
+                          );
+                          if (qtyError != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(qtyError)),
+                            );
+                            return;
+                          }
+
+                          final rawCost = costController.text.trim();
+                          if (rawCost.isNotEmpty) {
+                            final costError = _validateNonNegativeMoney(
+                              rawCost,
+                              label: 'unit cost',
+                            );
+                            if (costError != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(costError)),
+                              );
+                              return;
+                            }
+                          }
+
+                          final supplier = suppliers.firstWhere(
+                            (item) => item.id == selectedSupplierId,
+                          );
+                          final selectedMapping = mappingBySupplierId[selectedSupplierId];
+                          if (selectedMapping == null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'This supplier is not linked to the selected product.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+
+                          final qty = int.parse(qtyController.text.trim());
+                          final unitCost = rawCost.isEmpty
+                              ? null
+                              : double.parse(rawCost);
+                          final resolvedCost = unitCost ??
+                              (selectedMapping.defaultUnitCost > 0
+                                  ? selectedMapping.defaultUnitCost
+                                  : product.costPrice);
+
+                          final confirmed = await _confirmAction(
+                            title: 'Confirm Stock Receive',
+                            message:
+                                'Receive $qty units of ${product.name} from ${supplier.name}? This will increase stock immediately.',
+                            confirmText: 'Receive',
+                          );
+                          if (!confirmed) return;
+
+                          final success = await DatabaseHelper.instance.receiveStockLocal(
+                            product.barcode,
+                            qty,
+                            unitCost: unitCost,
+                            performedBy: changedBy,
+                            reason: noteController.text.trim(),
+                          );
+
+                          if (!success) {
+                            if (!context.mounted) return;
+                            Navigator.pop(context, false);
+                            return;
+                          }
+
+                          await DatabaseHelper.instance.insertStockReceipt(
+                            barcode: product.barcode,
+                            productName: product.name,
+                            quantity: qty,
+                            supplierId: supplier.id,
+                            supplierName: supplier.name,
+                            cost: resolvedCost,
+                            referenceNote: noteController.text.trim(),
+                            cashierName: changedBy,
+                            backendStatus: 'local',
+                          );
+
+                          if (setAsPrimary) {
+                            await DatabaseHelper.instance.upsertSupplierProductMapping(
+                              selectedMapping.copyWith(
+                                isPreferred: true,
+                                defaultUnitCost: resolvedCost,
+                                updatedAt: DateTime.now().toIso8601String(),
+                              ),
+                            );
+                          } else if (resolvedCost > 0 &&
+                              resolvedCost != selectedMapping.defaultUnitCost) {
+                            await DatabaseHelper.instance.upsertSupplierProductMapping(
+                              selectedMapping.copyWith(
+                                defaultUnitCost: resolvedCost,
+                                updatedAt: DateTime.now().toIso8601String(),
+                              ),
+                            );
+                          }
+
+                          if (!context.mounted) return;
+                          Navigator.pop(context, true);
+                        },
+                        icon: const Icon(Icons.inventory_2),
+                        label: const Text('Save Receive Entry'),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: noteController,
-                  maxLines: 2,
-                  decoration: InputDecoration(
-                    labelText: 'Note (optional)',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () async {
-                      final qtyError = _validatePositiveInt(
-                        qtyController.text,
-                        label: 'quantity',
-                      );
-                      if (qtyError != null) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(qtyError)),
-                        );
-                        return;
-                      }
-
-                      final rawCost = costController.text.trim();
-                      if (rawCost.isNotEmpty) {
-                        final costError = _validateNonNegativeMoney(
-                          rawCost,
-                          label: 'unit cost',
-                        );
-                        if (costError != null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(costError)),
-                          );
-                          return;
-                        }
-                      }
-
-                      final qty = int.parse(qtyController.text.trim());
-                      final unitCost = rawCost.isEmpty
-                          ? null
-                          : double.parse(rawCost);
-
-                      final confirmed = await _confirmAction(
-                        title: 'Confirm Stock Receive',
-                        message:
-                            'Receive $qty units of ${product.name}? This will increase stock immediately.',
-                        confirmText: 'Receive',
-                      );
-                      if (!confirmed) return;
-
-                      final success = await DatabaseHelper.instance.receiveStockLocal(
-                        product.barcode,
-                        qty,
-                        unitCost: unitCost,
-                        performedBy: changedBy,
-                        reason: noteController.text.trim(),
-                      );
-
-                      if (!context.mounted) return;
-                      Navigator.pop(context, success);
-                    },
-                    icon: const Icon(Icons.inventory_2),
-                    label: const Text('Save Receive Entry'),
-                  ),
-                ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );
@@ -657,7 +1246,317 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
-  Future<void> _openAdjustFlow({Product? initialProduct}) async {
+  Future<void> _showSupplierInfoSheet(Product product) async {
+    final preferredMapping =
+        await DatabaseHelper.instance.getPreferredSupplierMapping(product.barcode);
+    final suppliers = await DatabaseHelper.instance.getSuppliers();
+    final currentSupplier = preferredMapping == null
+        ? null
+        : suppliers
+            .where((supplier) => supplier.id == preferredMapping.supplierId)
+            .cast<PosSupplier?>()
+            .firstOrNull;
+    final receipts = preferredMapping == null
+        ? []
+        : await DatabaseHelper.instance.getStockReceipts(
+            supplierId: preferredMapping.supplierId,
+            search: product.barcode,
+            limit: 20,
+          );
+    final dynamic lastReceipt = receipts.isEmpty ? null : receipts.first;
+
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(context).size.height * 0.60,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Supplier Info',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${product.name} • ${product.barcode}',
+                    style: TextStyle(color: Colors.grey.shade700),
+                  ),
+                  const SizedBox(height: 16),
+                  if (currentSupplier == null)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'No supplier assigned yet.',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Assign a preferred supplier so receiving stock becomes faster and supplier history stays linked to this product.',
+                            style: TextStyle(color: Colors.grey.shade700, height: 1.4),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: Colors.grey.shade200),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            currentSupplier.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            currentSupplier.phone.trim().isEmpty
+                                ? 'Phone not available'
+                                : 'Phone • ${currentSupplier.phone.trim()}',
+                            style: TextStyle(
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _buildPriceAvailabilityChip('Primary Supplier', Colors.blue),
+                              if (preferredMapping != null &&
+                                  preferredMapping.defaultUnitCost > 0)
+                                _buildPriceAvailabilityChip(
+                                  'Default Cost Rs. ${preferredMapping.defaultUnitCost.toStringAsFixed(2)}',
+                                  Colors.deepPurple,
+                                ),
+                            ],
+                          ),
+                          if (lastReceipt != null) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              'Last received • ${_formatDateTime((lastReceipt.createdAt ?? '').toString())}',
+                              style: TextStyle(
+                                color: Colors.grey.shade700,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Last cost • Rs. ${(((lastReceipt.cost as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
+                              style: TextStyle(
+                                color: Colors.grey.shade700,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          await Future.delayed(const Duration(milliseconds: 120));
+                          if (!mounted) return;
+                          await _openReceiveFlow(initialProduct: product);
+                        },
+                        icon: const Icon(Icons.inventory_2),
+                        label: const Text('Receive Stock'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final supplier = await _pickSupplierForProduct(product);
+                          if (supplier == null || !mounted) return;
+                          await DatabaseHelper.instance.upsertSupplierProductMapping(
+                            SupplierProductMapping(
+                              barcode: product.barcode,
+                              productName: product.name,
+                              supplierId: supplier.id,
+                              supplierName: supplier.name,
+                              isPreferred: true,
+                              defaultUnitCost: product.costPrice,
+                              minimumOrderQuantity: 1,
+                              packSize: 1,
+                              leadTimeDays: 0,
+                              note: '',
+                              updatedAt: DateTime.now().toIso8601String(),
+                            ),
+                          );
+                          if (!mounted) return;
+                          _showMessage('Supplier saved for ${product.name}.');
+                          await _loadData(showLoader: false);
+                          if (!context.mounted) return;
+                          Navigator.pop(context);
+                        },
+                        icon: const Icon(Icons.link_outlined),
+                        label: Text(
+                          currentSupplier == null ? 'Assign Supplier' : 'Change Supplier',
+                        ),
+                      ),
+                      if (currentSupplier != null)
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    SupplierReceiveHistoryScreen(supplier: currentSupplier),
+                              ),
+                            );
+                            if (!mounted) return;
+                            await _loadData(showLoader: false);
+                          },
+                          icon: const Icon(Icons.history_outlined),
+                          label: const Text('View History'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<PosSupplier?> _pickSupplierForProduct(Product product) async {
+    final suppliers = await DatabaseHelper.instance.getSuppliers();
+    if (suppliers.isEmpty) {
+      _showMessage('No suppliers available. Add a supplier first.', isError: true);
+      return null;
+    }
+
+    if (!mounted) return null;
+
+    return showModalBottomSheet<PosSupplier>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        String localQuery = '';
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final visibleSuppliers = suppliers.where((supplier) {
+              if (localQuery.trim().isEmpty) return true;
+              final q = localQuery.trim().toLowerCase();
+              return supplier.name.toLowerCase().contains(q) ||
+                  supplier.phone.toLowerCase().contains(q) ||
+                  supplier.id.toString().contains(q);
+            }).toList();
+
+            return SafeArea(
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.72,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Select Supplier • ${product.name}',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        autofocus: true,
+                        decoration: InputDecoration(
+                          hintText: 'Search supplier by name or phone',
+                          prefixIcon: const Icon(Icons.search),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          isDense: true,
+                        ),
+                        onChanged: (value) {
+                          setModalState(() {
+                            localQuery = value;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: visibleSuppliers.isEmpty
+                            ? const Center(
+                                child: Text('No matching suppliers found.'),
+                              )
+                            : ListView.separated(
+                                itemCount: visibleSuppliers.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 8),
+                                itemBuilder: (context, index) {
+                                  final supplier = visibleSuppliers[index];
+                                  return ListTile(
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      side: BorderSide(
+                                        color: Colors.grey.shade300,
+                                      ),
+                                    ),
+                                    title: Text(
+                                      supplier.name,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      supplier.phone.trim().isEmpty
+                                          ? 'Phone not available'
+                                          : 'Phone: ${supplier.phone.trim()}',
+                                    ),
+                                    onTap: () => Navigator.pop(context, supplier),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+Future<void> _openAdjustFlow({Product? initialProduct}) async {
     final product = initialProduct ??
         await _pickProduct(title: 'Select a product to adjust');
     if (product == null || !mounted) return;
@@ -1357,6 +2256,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         icon: const Icon(Icons.warning_amber_rounded),
                         label: const Text('Min Stock'),
                       ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          await Future.delayed(const Duration(milliseconds: 120));
+                          if (!mounted) return;
+                          await _showSupplierInfoSheet(product);
+                        },
+                        icon: const Icon(Icons.local_shipping_outlined),
+                        label: const Text('Supplier Info'),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 18),
@@ -1702,6 +2611,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   String _movementTitle(String actionType) {
     switch (actionType) {
+      case 'product_created':
+        return 'Product Created';
       case 'stock_receive':
         return 'Stock Received';
       case 'stock_adjust_add':
@@ -1937,6 +2848,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           runSpacing: 10,
                           children: [
                             _buildQuickActionButton(
+                              title: 'Add Product',
+                              icon: Icons.add_box_outlined,
+                              onTap: () => _openAddProductFlow(),
+                            ),
+                            _buildQuickActionButton(
                               title: 'Receive Stock',
                               icon: Icons.inventory_2,
                               onTap: () => _openReceiveFlow(),
@@ -2170,4 +3086,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
             ),
     );
   }
+
+}
+
+extension _FirstOrNullExtension<E> on Iterable<E> {
+  E? get firstOrNull => isEmpty ? null : first;
 }

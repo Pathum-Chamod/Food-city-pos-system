@@ -364,6 +364,147 @@ def update_min_stock_level(cursor, barcode, min_stock_level, reason=""):
     return True, "success"
 
 
+
+
+def create_or_update_product(
+    cursor,
+    barcode,
+    name,
+    category="General",
+    cost_price=0,
+    selling_price=0,
+    wholesale_price=None,
+    sale_price=None,
+    sale_enabled=False,
+    opening_stock=0,
+    min_stock_level=0,
+    reason="",
+):
+    barcode = str(barcode or "").strip()
+    name = str(name or "").strip()
+    category = str(category or "General").strip() or "General"
+
+    if not barcode:
+        return False, "Barcode is required"
+    if not name:
+        return False, "Product name is required"
+
+    selling_price = parse_float(selling_price, -1)
+    if selling_price <= 0:
+        return False, "Selling price must be greater than 0"
+
+    cost_price = parse_float(cost_price, 0)
+    if cost_price < 0:
+        return False, "Cost price cannot be negative"
+
+    resolved_wholesale = parse_float(wholesale_price, selling_price)
+    if resolved_wholesale <= 0:
+        resolved_wholesale = selling_price
+
+    resolved_sale_price = None if sale_price in (None, "") else parse_float(sale_price, -1)
+    if normalize_bool(sale_enabled, False) and (resolved_sale_price is None or resolved_sale_price <= 0):
+        return False, "Active sale price must be greater than 0"
+
+    opening_stock = parse_int(opening_stock, 0)
+    min_stock_level = parse_int(min_stock_level, 0)
+    if opening_stock < 0:
+        return False, "Opening stock cannot be negative"
+    if min_stock_level < 0:
+        return False, "Minimum stock level cannot be negative"
+
+    existing = get_product_row(cursor, barcode)
+    if existing:
+        cursor.execute(
+            f"""
+            UPDATE products
+            SET name = ?,
+                category = ?,
+                price = ?,
+                cost_price = ?,
+                selling_price = ?,
+                wholesale_price = ?,
+                sale_price = ?,
+                sale_enabled = ?,
+                stock = ?,
+                min_stock_level = ?,
+                is_active = 1,
+                updated_at = {now_sql()},
+                last_price_updated_at = {now_sql()}
+            WHERE barcode = ?
+            """,
+            (
+                name,
+                category,
+                selling_price,
+                cost_price,
+                selling_price,
+                resolved_wholesale,
+                resolved_sale_price,
+                1 if normalize_bool(sale_enabled, False) else 0,
+                opening_stock,
+                min_stock_level,
+                barcode,
+            ),
+        )
+    else:
+        cursor.execute(
+            f"""
+            INSERT INTO products (
+                barcode,
+                name,
+                category,
+                price,
+                cost_price,
+                selling_price,
+                wholesale_price,
+                sale_price,
+                sale_enabled,
+                stock,
+                min_stock_level,
+                is_active,
+                updated_at,
+                last_price_updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, {now_sql()}, {now_sql()})
+            """,
+            (
+                barcode,
+                name,
+                category,
+                selling_price,
+                cost_price,
+                selling_price,
+                resolved_wholesale,
+                resolved_sale_price,
+                1 if normalize_bool(sale_enabled, False) else 0,
+                opening_stock,
+                min_stock_level,
+            ),
+        )
+
+    log_inventory_history(
+        cursor,
+        barcode=barcode,
+        movement_type="product_created",
+        quantity=0,
+        reason=reason or "Product added to inventory",
+        reference_type="product_create",
+        reference_id=None,
+    )
+
+    if opening_stock > 0:
+        log_inventory_history(
+            cursor,
+            barcode=barcode,
+            movement_type="stock_receive",
+            quantity=opening_stock,
+            reason="Opening stock added during product creation",
+            reference_type="product_create",
+            reference_id=None,
+        )
+
+    return True, "success"
+
 def fetch_products(cursor):
     rows = cursor.execute(
         """
@@ -822,6 +963,32 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers()
                 self.wfile.write(json.dumps({"status": "success"}).encode())
 
+            elif sync_type == "PRODUCT_CREATE":
+                barcode = str(data.get("barcode", "")).strip()
+                name = str(data.get("name", "")).strip()
+                ok, message = create_or_update_product(
+                    c,
+                    barcode=barcode,
+                    name=name,
+                    category=data.get("category", "General"),
+                    cost_price=data.get("cost_price", 0),
+                    selling_price=data.get("selling_price", data.get("price", 0)),
+                    wholesale_price=data.get("wholesale_price"),
+                    sale_price=data.get("sale_price"),
+                    sale_enabled=data.get("sale_enabled"),
+                    opening_stock=data.get("opening_stock", data.get("stock", 0)),
+                    min_stock_level=data.get("min_stock_level", 0),
+                    reason=str(data.get("reason", "")).strip(),
+                )
+                if not ok:
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    conn.commit()
+                    print(f"  ✅ PRODUCT_CREATE: {barcode} • {name}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+
             elif sync_type == "PRICE_UPDATE":
                 barcode = str(data.get("barcode", "")).strip()
                 new_price = data.get("new_price", 0)
@@ -929,6 +1096,31 @@ class APIHandler(BaseHTTPRequestHandler):
                         {"status": "error", "message": f"Unsupported sync type: {sync_type}"}
                     ).encode()
                 )
+
+        elif action == "add_product":
+            ok, message = create_or_update_product(
+                c,
+                barcode=body.get("barcode", ""),
+                name=body.get("name", ""),
+                category=body.get("category", "General"),
+                cost_price=body.get("cost_price", 0),
+                selling_price=body.get("selling_price", body.get("price", 0)),
+                wholesale_price=body.get("wholesale_price"),
+                sale_price=body.get("sale_price"),
+                sale_enabled=body.get("sale_enabled"),
+                opening_stock=body.get("opening_stock", body.get("stock", 0)),
+                min_stock_level=body.get("min_stock_level", 0),
+                reason=str(body.get("reason", "")).strip(),
+            )
+
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                print(f"  ✅ Product added: {body.get('barcode', '')}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
 
         elif action == "update_price":
             barcode = str(body.get("barcode", "")).strip()

@@ -312,7 +312,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     Color accent = Colors.blue;
     String label = _movementTitle(actionType);
 
-    if (actionType.contains('receive')) {
+    if (actionType.contains('product_create')) {
+      accent = Colors.blueGrey;
+    } else if (actionType.contains('receive')) {
       accent = Colors.green;
     } else if (actionType.contains('adjust')) {
       accent = Colors.orange;
@@ -355,7 +357,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     Color accent = Colors.blue;
     IconData icon = Icons.history;
 
-    if (actionType.contains('receive')) {
+    if (actionType.contains('product_create')) {
+      accent = Colors.blueGrey;
+    } else if (actionType.contains('receive')) {
       accent = Colors.green;
       icon = Icons.inventory_2;
     } else if (actionType.contains('adjust')) {
@@ -460,6 +464,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
 
   String _movementTitle(String actionType) {
     switch (actionType) {
+      case 'product_created':
+        return 'Product Created';
       case 'stock_receive':
         return 'Stock Received';
       case 'stock_adjust_add':

@@ -1,6 +1,3 @@
-import 'package:flutter/foundation.dart';
-
-@immutable
 class SupplierProductMapping {
   final int? id;
   final String barcode;
@@ -21,35 +18,36 @@ class SupplierProductMapping {
     required this.productName,
     required this.supplierId,
     required this.supplierName,
-    required this.isPreferred,
-    required this.defaultUnitCost,
-    required this.minimumOrderQuantity,
-    required this.packSize,
-    required this.leadTimeDays,
-    required this.note,
+    this.isPreferred = true,
+    this.defaultUnitCost = 0,
+    this.minimumOrderQuantity = 1,
+    this.packSize = 1,
+    this.leadTimeDays = 0,
+    this.note = '',
     required this.updatedAt,
   });
 
-  factory SupplierProductMapping.fromMap(Map<dynamic, dynamic> map) {
+  factory SupplierProductMapping.fromMap(Map<String, dynamic> map) {
     return SupplierProductMapping(
       id: (map['id'] as num?)?.toInt(),
       barcode: (map['barcode'] ?? '').toString(),
       productName: (map['product_name'] ?? '').toString(),
-      supplierId: (map['supplier_id'] as num?)?.toInt() ?? 0,
+      supplierId: ((map['supplier_id'] as num?) ?? 0).toInt(),
       supplierName: (map['supplier_name'] ?? '').toString(),
-      isPreferred: ((map['is_preferred'] as num?)?.toInt() ?? 0) == 1,
+      isPreferred: ((map['is_preferred'] as num?) ?? 0).toInt() == 1 ||
+          map['is_preferred'] == true,
       defaultUnitCost: ((map['default_unit_cost'] as num?) ?? 0).toDouble(),
-      minimumOrderQuantity: (map['minimum_order_quantity'] as num?)?.toInt() ?? 1,
-      packSize: (map['pack_size'] as num?)?.toInt() ?? 1,
-      leadTimeDays: (map['lead_time_days'] as num?)?.toInt() ?? 0,
+      minimumOrderQuantity:
+          ((map['minimum_order_quantity'] as num?) ?? 1).toInt(),
+      packSize: ((map['pack_size'] as num?) ?? 1).toInt(),
+      leadTimeDays: ((map['lead_time_days'] as num?) ?? 0).toInt(),
       note: (map['note'] ?? '').toString(),
       updatedAt: (map['updated_at'] ?? '').toString(),
     );
   }
 
   Map<String, dynamic> toMap() {
-    return {
-      if (id != null) 'id': id,
+    final map = <String, dynamic>{
       'barcode': barcode,
       'product_name': productName,
       'supplier_id': supplierId,
@@ -62,6 +60,12 @@ class SupplierProductMapping {
       'note': note,
       'updated_at': updatedAt,
     };
+
+    if (id != null) {
+      map['id'] = id;
+    }
+
+    return map;
   }
 
   SupplierProductMapping copyWith({
@@ -86,7 +90,8 @@ class SupplierProductMapping {
       supplierName: supplierName ?? this.supplierName,
       isPreferred: isPreferred ?? this.isPreferred,
       defaultUnitCost: defaultUnitCost ?? this.defaultUnitCost,
-      minimumOrderQuantity: minimumOrderQuantity ?? this.minimumOrderQuantity,
+      minimumOrderQuantity:
+          minimumOrderQuantity ?? this.minimumOrderQuantity,
       packSize: packSize ?? this.packSize,
       leadTimeDays: leadTimeDays ?? this.leadTimeDays,
       note: note ?? this.note,
