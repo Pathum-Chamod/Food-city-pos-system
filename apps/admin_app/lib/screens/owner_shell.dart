@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -19,12 +18,12 @@ class OwnerShell extends StatefulWidget {
 class _OwnerShellState extends State<OwnerShell> {
   int _currentIndex = 0;
 
-  final List<Widget> _pages = const [
-    OwnerDashboardScreen(),
-    OwnerAlertsScreen(),
-    OwnerInventoryScreen(),
-    OwnerSalesScreen(),
-    OwnerMoreScreen(),
+  late final List<Widget> _pages = [
+    const OwnerDashboardScreen(),
+    const OwnerAlertsScreen(),
+    const OwnerInventoryScreen(),
+    const OwnerSalesScreen(),
+    const OwnerMoreScreen(),
   ];
 
   @override
