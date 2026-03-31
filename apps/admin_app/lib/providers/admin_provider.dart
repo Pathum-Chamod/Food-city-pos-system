@@ -1,3 +1,4 @@
+
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -9,18 +10,19 @@ import '../models/stock_adjustment_request.dart';
 import '../models/supplier.dart';
 
 class AdminProvider with ChangeNotifier {
-  // Product inventory fetched from backend
   List<Product> _products = [];
-
-  // Shared loading state for admin screens
   bool _isLoading = false;
 
-  // Dashboard analytics
   double _todayTotalSales = 0.0;
   List<dynamic> _cashierBreakdown = [];
 
-  // Strongly typed suppliers list
   List<Supplier> _suppliers = [];
+
+  bool _isOwnerShellLoading = false;
+  Map<String, dynamic> _ownerDashboardSummary = {};
+  List<Map<String, dynamic>> _ownerSalesTrend = [];
+  List<Map<String, dynamic>> _ownerTopProducts = [];
+  List<Map<String, dynamic>> _ownerAlerts = [];
 
   List<Product> get products => _products;
   bool get isLoading => _isLoading;
@@ -28,13 +30,62 @@ class AdminProvider with ChangeNotifier {
   List<dynamic> get cashierBreakdown => _cashierBreakdown;
   List<Supplier> get suppliers => _suppliers;
 
-  // Local Python backend for Android emulator
-  final String apiUrl = "http://10.0.2.2:8080/api/pos_sync.php";
+  bool get isOwnerShellLoading => _isOwnerShellLoading;
+  Map<String, dynamic> get ownerDashboardSummary => _ownerDashboardSummary;
+  List<Map<String, dynamic>> get ownerSalesTrend => _ownerSalesTrend;
+  List<Map<String, dynamic>> get ownerTopProducts => _ownerTopProducts;
+  List<Map<String, dynamic>> get ownerAlerts => _ownerAlerts;
 
-  // If you run admin_app on Windows desktop instead, use this:
+  List<Map<String, dynamic>> get topAlertsPreview => _ownerAlerts.take(3).toList();
+
+  int get transactionCount {
+    return _cashierBreakdown.fold<int>(
+      0,
+      (sum, cashier) =>
+          sum + (int.tryParse('${cashier['transaction_count'] ?? 0}') ?? 0),
+    );
+  }
+
+  double get averageSale {
+    if (transactionCount <= 0) return 0.0;
+    return _todayTotalSales / transactionCount;
+  }
+
+  int get totalProducts => _products.length;
+  int get outOfStockCount => _products.where((p) => p.stock <= 0).length;
+  int get lowStockCount => _products
+      .where(
+        (p) => p.stock > 0 && p.stock <= (p.minStockLevel > 0 ? p.minStockLevel : 10),
+      )
+      .length;
+
+  final String apiUrl = "http://10.0.2.2:8080/api/pos_sync.php";
   // final String apiUrl = "http://127.0.0.1:8080/api/pos_sync.php";
 
-  // Fetch product master list
+  Future<void> loadOwnerShellData({bool forceRefresh = false}) async {
+    if (_isOwnerShellLoading && !forceRefresh) return;
+
+    _isOwnerShellLoading = true;
+    notifyListeners();
+
+    try {
+      await fetchProducts();
+      await fetchDashboardStats();
+      await fetchOwnerDashboard();
+      await fetchOwnerAlerts();
+    } finally {
+      _isOwnerShellLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshOwnerDashboard() async {
+    await fetchProducts();
+    await fetchDashboardStats();
+    await fetchOwnerDashboard();
+    await fetchOwnerAlerts();
+  }
+
   Future<void> fetchProducts() async {
     _isLoading = true;
     notifyListeners();
@@ -54,7 +105,6 @@ class AdminProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // Fetch dashboard summary data
   Future<void> fetchDashboardStats() async {
     try {
       final response = await http.get(Uri.parse('$apiUrl?action=get_sales'));
@@ -63,8 +113,8 @@ class AdminProvider with ChangeNotifier {
         final data = json.decode(response.body);
 
         if (data['status'] == 'success') {
-          _todayTotalSales = (data['grand_total'] as num).toDouble();
-          _cashierBreakdown = data['cashier_sales'];
+          _todayTotalSales = (data['grand_total'] as num?)?.toDouble() ?? 0.0;
+          _cashierBreakdown = (data['cashier_sales'] as List?) ?? [];
           notifyListeners();
         }
       }
@@ -73,7 +123,64 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
-  // Fetch supplier list and map into Supplier model objects
+  Future<void> fetchOwnerDashboard() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$apiUrl?action=get_owner_dashboard'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['status'] == 'success') {
+          _ownerDashboardSummary = Map<String, dynamic>.from(
+            (data['summary'] as Map?) ?? <String, dynamic>{},
+          );
+          _ownerSalesTrend = ((data['trend'] as List?) ?? [])
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
+          _ownerTopProducts = ((data['top_products'] as List?) ?? [])
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
+          notifyListeners();
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint("Owner dashboard fetch error: $e");
+    }
+
+    _ownerDashboardSummary = _buildFallbackOwnerSummary();
+    _ownerSalesTrend = [];
+    _ownerTopProducts = [];
+    notifyListeners();
+  }
+
+  Future<void> fetchOwnerAlerts() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$apiUrl?action=get_owner_alerts'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['status'] == 'success') {
+          _ownerAlerts = ((data['alerts'] as List?) ?? [])
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
+          notifyListeners();
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint("Owner alerts fetch error: $e");
+    }
+
+    _ownerAlerts = _buildFallbackAlertsFromProducts();
+    notifyListeners();
+  }
+
   Future<void> fetchSuppliers() async {
     try {
       final response = await http.get(Uri.parse('$apiUrl?action=get_suppliers'));
@@ -90,8 +197,11 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
-  // Update a product selling price
-  Future<bool> updateProductPrice(String barcode, double newPrice) async {
+  Future<bool> updateProductPrice(
+    String barcode,
+    double newPrice, {
+    String priceType = 'selling',
+  }) async {
     try {
       final response = await http.post(
         Uri.parse('$apiUrl?action=update_price'),
@@ -99,6 +209,7 @@ class AdminProvider with ChangeNotifier {
         body: json.encode({
           "barcode": barcode,
           "new_price": newPrice,
+          "price_type": priceType,
         }),
       );
 
@@ -107,6 +218,7 @@ class AdminProvider with ChangeNotifier {
 
         if (result['status'] == 'success') {
           await fetchProducts();
+          await fetchOwnerAlerts();
           return true;
         }
       }
@@ -118,7 +230,32 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
-  // Submit stock receiving data
+  Future<bool> updateMinStockLevel(String barcode, int minStockLevel) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$apiUrl?action=update_min_stock'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "barcode": barcode,
+          "min_stock_level": minStockLevel,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final result = json.decode(response.body);
+
+        if (result['status'] == 'success') {
+          await fetchProducts();
+          await fetchOwnerAlerts();
+          return true;
+        }
+      }
+    } catch (e) {
+      debugPrint("Min stock update error: $e");
+    }
+    return false;
+  }
+
   Future<bool> receiveStock(
     String barcode,
     int quantity,
@@ -142,6 +279,7 @@ class AdminProvider with ChangeNotifier {
 
         if (result['status'] == 'success') {
           await fetchProducts();
+          await fetchOwnerAlerts();
           return true;
         }
       }
@@ -153,7 +291,6 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
-  // Submit manual stock adjustment
   Future<bool> adjustStock(StockAdjustmentRequest request) async {
     try {
       final response = await http.post(
@@ -167,6 +304,7 @@ class AdminProvider with ChangeNotifier {
 
         if (result['status'] == 'success') {
           await fetchProducts();
+          await fetchOwnerAlerts();
           return true;
         }
       }
@@ -178,7 +316,6 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
-  // Fetch real inventory history for a product
   Future<List<InventoryHistoryItem>> fetchInventoryHistory(
     String barcode,
   ) async {
@@ -224,6 +361,64 @@ class AdminProvider with ChangeNotifier {
     );
   }
 
+  Map<String, dynamic> _buildFallbackOwnerSummary() {
+    final transactions = transactionCount;
+    return {
+      'today_sales': _todayTotalSales,
+      'transaction_count': transactions,
+      'average_sale': transactions > 0 ? _todayTotalSales / transactions : 0.0,
+      'items_sold': 0,
+    };
+  }
+
+  List<Map<String, dynamic>> _buildFallbackAlertsFromProducts() {
+    final alerts = <Map<String, dynamic>>[];
+
+    final outOfStock = _products.where((p) => p.stock <= 0).toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+
+    final lowStock = _products
+        .where(
+          (p) =>
+              p.stock > 0 &&
+              p.stock <= (p.minStockLevel > 0 ? p.minStockLevel : 10),
+        )
+        .toList()
+      ..sort((a, b) => a.stock.compareTo(b.stock));
+
+    for (final product in outOfStock.take(5)) {
+      alerts.add({
+        'type': 'out_of_stock',
+        'severity': 'critical',
+        'title': '${product.name} is out of stock',
+        'subtitle': 'Barcode ${product.barcode} • stock 0',
+        'barcode': product.barcode,
+      });
+    }
+
+    for (final product in lowStock.take(5)) {
+      alerts.add({
+        'type': 'low_stock',
+        'severity': 'warning',
+        'title': '${product.name} is low in stock',
+        'subtitle':
+            'Barcode ${product.barcode} • stock ${product.stock} • min ${product.minStockLevel}',
+        'barcode': product.barcode,
+      });
+    }
+
+    if ((_todayTotalSales) <= 0) {
+      alerts.add({
+        'type': 'weak_sales',
+        'severity': 'warning',
+        'title': 'No sales recorded today',
+        'subtitle': 'Check store activity and cashier flow.',
+      });
+    }
+
+    return alerts;
+  }
+
   String _historyTitle(String movementType) {
     switch (movementType) {
       case 'sale':
@@ -231,11 +426,21 @@ class AdminProvider with ChangeNotifier {
       case 'refund':
         return 'Refund';
       case 'stock_in':
+      case 'stock_receive':
         return 'Stock Received';
       case 'adjustment':
+      case 'stock_adjust_add':
+      case 'stock_adjust_remove':
+      case 'stock_adjust_set':
         return 'Manual Adjustment';
       case 'price_update':
+      case 'price_change_selling':
+      case 'price_change_wholesale':
+      case 'price_change_sale':
+      case 'price_change_cost':
         return 'Price Update';
+      case 'min_stock_change':
+        return 'Minimum Stock Updated';
       default:
         return 'Inventory Activity';
     }
@@ -252,20 +457,30 @@ class AdminProvider with ChangeNotifier {
       case 'refund':
         return 'Item returned to stock';
       case 'stock_in':
+      case 'stock_receive':
         return 'Stock received from supplier';
       case 'adjustment':
+      case 'stock_adjust_add':
+      case 'stock_adjust_remove':
+      case 'stock_adjust_set':
         return quantity >= 0
             ? 'Manual stock increase'
             : 'Manual stock decrease';
       case 'price_update':
-        return 'Selling price changed';
+      case 'price_change_selling':
+      case 'price_change_wholesale':
+      case 'price_change_sale':
+      case 'price_change_cost':
+        return 'Price changed';
+      case 'min_stock_change':
+        return 'Minimum stock level changed';
       default:
         return 'Inventory activity';
     }
   }
 
   String _historyQuantityText(String movementType, int quantity) {
-    if (movementType == 'price_update') {
+    if (movementType.startsWith('price_') || movementType == 'min_stock_change') {
       return '—';
     }
 
@@ -301,11 +516,21 @@ class AdminProvider with ChangeNotifier {
       case 'refund':
         return Icons.assignment_return;
       case 'stock_in':
+      case 'stock_receive':
         return Icons.local_shipping;
       case 'adjustment':
+      case 'stock_adjust_add':
+      case 'stock_adjust_remove':
+      case 'stock_adjust_set':
         return Icons.tune;
       case 'price_update':
+      case 'price_change_selling':
+      case 'price_change_wholesale':
+      case 'price_change_sale':
+      case 'price_change_cost':
         return Icons.edit;
+      case 'min_stock_change':
+        return Icons.vertical_align_center;
       default:
         return Icons.inventory_2_outlined;
     }
@@ -318,11 +543,21 @@ class AdminProvider with ChangeNotifier {
       case 'refund':
         return Colors.deepPurple;
       case 'stock_in':
+      case 'stock_receive':
         return Colors.green;
       case 'adjustment':
+      case 'stock_adjust_add':
+      case 'stock_adjust_remove':
+      case 'stock_adjust_set':
         return Colors.orange;
       case 'price_update':
+      case 'price_change_selling':
+      case 'price_change_wholesale':
+      case 'price_change_sale':
+      case 'price_change_cost':
         return Colors.blue;
+      case 'min_stock_change':
+        return Colors.teal;
       default:
         return Colors.grey;
     }

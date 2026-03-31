@@ -583,6 +583,288 @@ def fetch_products(cursor):
     return [dict(r) for r in rows]
 
 
+
+def _safe_json_loads(raw_value):
+    try:
+        return json.loads(raw_value or "[]")
+    except Exception:
+        return []
+
+
+def _extract_item_quantity(item):
+    return parse_int(item.get("quantity", 0), 0)
+
+
+def _extract_item_price(item):
+    direct_keys = [
+        "selected_price",
+        "unit_price",
+        "price",
+        "effective_price",
+        "sale_price",
+    ]
+    for key in direct_keys:
+        value = parse_float(item.get(key), -1)
+        if value >= 0:
+            return value
+
+    product = item.get("product", {}) or {}
+    for key in ["selling_price", "price", "wholesale_price", "sale_price"]:
+        value = parse_float(product.get(key), -1)
+        if value >= 0:
+            return value
+
+    return 0.0
+
+
+def _extract_item_name(item):
+    product = item.get("product", {}) or {}
+    return str(product.get("name") or item.get("name") or "Unknown Item")
+
+
+def _extract_item_barcode(item):
+    product = item.get("product", {}) or {}
+    return str(product.get("barcode") or item.get("barcode") or "")
+
+
+def _sales_rows_between(cursor, start_sql_expr, end_sql_expr):
+    return cursor.execute(
+        f"""
+        SELECT total_amount, items, cashier_name, created_at
+        FROM sales
+        WHERE datetime(created_at) >= {start_sql_expr}
+          AND datetime(created_at) < {end_sql_expr}
+        ORDER BY datetime(created_at) ASC
+        """
+    ).fetchall()
+
+
+def _build_owner_summary_from_rows(rows):
+    today_sales = 0.0
+    transaction_count = len(rows)
+    items_sold = 0
+    products = {}
+
+    for row in rows:
+        today_sales += parse_float(row["total_amount"], 0.0)
+        items = _safe_json_loads(row["items"])
+
+        for item in items:
+            quantity = max(_extract_item_quantity(item), 0)
+            price = max(_extract_item_price(item), 0.0)
+            name = _extract_item_name(item)
+            barcode = _extract_item_barcode(item)
+
+            items_sold += quantity
+            product_key = barcode or name
+
+            if product_key not in products:
+                products[product_key] = {
+                    "barcode": barcode,
+                    "product_name": name,
+                    "quantity_sold": 0,
+                    "total_sales": 0.0,
+                }
+
+            products[product_key]["quantity_sold"] += quantity
+            products[product_key]["total_sales"] += quantity * price
+
+    average_sale = today_sales / transaction_count if transaction_count > 0 else 0.0
+    top_products = sorted(
+        products.values(),
+        key=lambda item: (item["total_sales"], item["quantity_sold"]),
+        reverse=True,
+    )[:3]
+
+    return {
+        "summary": {
+            "today_sales": round(today_sales, 2),
+            "transaction_count": transaction_count,
+            "average_sale": round(average_sale, 2),
+            "items_sold": items_sold,
+        },
+        "top_products": top_products,
+    }
+
+
+def _owner_trend(cursor, days=7):
+    rows = cursor.execute(
+        """
+        SELECT
+            DATE(created_at) AS sales_date,
+            COALESCE(SUM(total_amount), 0) AS total_sales
+        FROM sales
+        WHERE DATE(created_at) >= DATE('now','localtime', ?)
+          AND DATE(created_at) <= DATE('now','localtime')
+        GROUP BY DATE(created_at)
+        ORDER BY DATE(created_at) ASC
+        """,
+        (f"-{days - 1} day",),
+    ).fetchall()
+
+    raw_map = {row["sales_date"]: parse_float(row["total_sales"], 0.0) for row in rows}
+    date_rows = cursor.execute(
+        """
+        WITH RECURSIVE dates(day, idx) AS (
+            SELECT DATE('now','localtime', ?) AS day, 0
+            UNION ALL
+            SELECT DATE(day, '+1 day'), idx + 1
+            FROM dates
+            WHERE idx < ?
+        )
+        SELECT day FROM dates
+        """,
+        (f"-{days - 1} day", days - 1),
+    ).fetchall()
+
+    trend = []
+    for row in date_rows:
+        day = row["day"]
+        trend.append(
+            {
+                "date": day,
+                "label": day[5:].replace("-", "/"),
+                "total_sales": round(raw_map.get(day, 0.0), 2),
+            }
+        )
+    return trend
+
+
+def _top_sellers_last_days(cursor, days=30, limit=10):
+    rows = _sales_rows_between(
+        cursor,
+        f"datetime('now','localtime','-{days - 1} day','start of day')",
+        "datetime('now','localtime','+1 day','start of day')",
+    )
+
+    by_product = {}
+    for row in rows:
+        items = _safe_json_loads(row["items"])
+        for item in items:
+            barcode = _extract_item_barcode(item)
+            name = _extract_item_name(item)
+            quantity = max(_extract_item_quantity(item), 0)
+            price = max(_extract_item_price(item), 0.0)
+            key = barcode or name
+            if key not in by_product:
+                by_product[key] = {
+                    "barcode": barcode,
+                    "product_name": name,
+                    "quantity_sold": 0,
+                    "total_sales": 0.0,
+                }
+            by_product[key]["quantity_sold"] += quantity
+            by_product[key]["total_sales"] += quantity * price
+
+    return sorted(
+        by_product.values(),
+        key=lambda item: (item["quantity_sold"], item["total_sales"]),
+        reverse=True,
+    )[:limit]
+
+
+def _build_owner_alerts(cursor):
+    alerts = []
+
+    products = fetch_products(cursor)
+    out_of_stock = [p for p in products if parse_int(p.get("stock", 0), 0) <= 0]
+    low_stock = [
+        p
+        for p in products
+        if parse_int(p.get("stock", 0), 0) > 0
+        and parse_int(p.get("stock", 0), 0)
+        <= (parse_int(p.get("min_stock_level", 0), 0) or 10)
+    ]
+
+    out_of_stock = sorted(out_of_stock, key=lambda item: item["name"])
+    low_stock = sorted(low_stock, key=lambda item: item["stock"])
+
+    for product in out_of_stock[:6]:
+        alerts.append(
+            {
+                "type": "out_of_stock",
+                "severity": "critical",
+                "title": f"{product['name']} is out of stock",
+                "subtitle": f"Barcode {product['barcode']} • stock 0",
+                "barcode": product["barcode"],
+            }
+        )
+
+    top_sellers = _top_sellers_last_days(cursor, days=30, limit=20)
+    product_by_barcode = {str(p["barcode"]): p for p in products if p.get("barcode")}
+    best_seller_risk = []
+    for seller in top_sellers:
+        barcode = str(seller.get("barcode") or "")
+        if not barcode or barcode not in product_by_barcode:
+            continue
+        product = product_by_barcode[barcode]
+        stock = parse_int(product.get("stock", 0), 0)
+        min_stock = parse_int(product.get("min_stock_level", 0), 0) or 10
+        if stock > 0 and stock <= min_stock:
+            best_seller_risk.append((seller, product))
+
+    for seller, product in best_seller_risk[:4]:
+        alerts.append(
+            {
+                "type": "best_seller_low_stock",
+                "severity": "warning",
+                "title": f"Best seller low in stock: {product['name']}",
+                "subtitle": f"Sold {seller['quantity_sold']} recently • stock {product['stock']}",
+                "barcode": product["barcode"],
+            }
+        )
+
+    already_added = {alert.get("barcode") for alert in alerts if alert.get("barcode")}
+    for product in low_stock[:6]:
+        if product["barcode"] in already_added:
+            continue
+        alerts.append(
+            {
+                "type": "low_stock",
+                "severity": "warning",
+                "title": f"{product['name']} is low in stock",
+                "subtitle": f"Barcode {product['barcode']} • stock {product['stock']}",
+                "barcode": product["barcode"],
+            }
+        )
+
+    today_rows = _sales_rows_between(
+        cursor,
+        "datetime('now','localtime','start of day')",
+        "datetime('now','localtime','+1 day','start of day')",
+    )
+    yesterday_rows = _sales_rows_between(
+        cursor,
+        "datetime('now','localtime','-1 day','start of day')",
+        "datetime('now','localtime','start of day')",
+    )
+
+    today_total = sum(parse_float(row["total_amount"], 0.0) for row in today_rows)
+    yesterday_total = sum(parse_float(row["total_amount"], 0.0) for row in yesterday_rows)
+
+    if today_total <= 0:
+        alerts.insert(
+            0,
+            {
+                "type": "weak_sales",
+                "severity": "warning",
+                "title": "No sales recorded today",
+                "subtitle": "Check store activity and cashier flow.",
+            },
+        )
+    elif yesterday_total > 0 and today_total < yesterday_total * 0.6:
+        alerts.append(
+            {
+                "type": "weak_sales",
+                "severity": "warning",
+                "title": "Sales are weaker than yesterday",
+                "subtitle": f"Today Rs.{today_total:.2f} vs yesterday Rs.{yesterday_total:.2f}",
+            }
+        )
+
+    return alerts
+
+
 def init_db():
     conn = get_db()
     c = conn.cursor()
@@ -827,6 +1109,40 @@ class APIHandler(BaseHTTPRequestHandler):
                         "status": "success",
                         "grand_total": grand_total,
                         "cashier_sales": cashier_sales,
+                    }
+                ).encode()
+            )
+
+
+        elif action == "get_owner_dashboard":
+            today_rows = _sales_rows_between(
+                c,
+                "datetime('now','localtime','start of day')",
+                "datetime('now','localtime','+1 day','start of day')",
+            )
+            summary_data = _build_owner_summary_from_rows(today_rows)
+            trend = _owner_trend(c, days=7)
+
+            self._set_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "status": "success",
+                        "summary": summary_data["summary"],
+                        "trend": trend,
+                        "top_products": summary_data["top_products"],
+                    }
+                ).encode()
+            )
+
+        elif action == "get_owner_alerts":
+            alerts = _build_owner_alerts(c)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "status": "success",
+                        "alerts": alerts,
                     }
                 ).encode()
             )
@@ -1455,6 +1771,8 @@ def main():
 ║   Endpoints:                                             ║
 ║     GET  ?action=get_products            → Product list  ║
 ║     GET  ?action=get_sales               → Dashboard     ║
+║     GET  ?action=get_owner_dashboard     → Owner home    ║
+║     GET  ?action=get_owner_alerts        → Owner alerts  ║
 ║     GET  ?action=get_suppliers           → Suppliers     ║
 ║     GET  ?action=get_inventory_history   → History       ║
 ║     POST ?action=pos_sync                → POS sync      ║
