@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
@@ -6,17 +5,37 @@ import 'package:shared/shared.dart';
 import '../providers/admin_provider.dart';
 import 'inventory_history_screen.dart';
 
-class OwnerAlertsScreen extends StatelessWidget {
+class OwnerAlertsScreen extends StatefulWidget {
   const OwnerAlertsScreen({super.key});
+
+  @override
+  State<OwnerAlertsScreen> createState() => _OwnerAlertsScreenState();
+}
+
+enum _AlertFilter { all, urgent, stock, sales }
+
+class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
+  _AlertFilter _selectedFilter = _AlertFilter.all;
 
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AdminProvider>();
     final alerts = provider.ownerAlerts;
+
     final urgentAlerts = alerts
         .where((alert) => (alert['severity'] ?? '').toString() == 'critical')
         .toList();
     final attentionAlerts = alerts
+        .where((alert) => (alert['severity'] ?? '').toString() != 'critical')
+        .toList();
+    final stockAlerts = alerts.where(_isStockAlert).toList();
+    final salesAlerts = alerts.where(_isSalesAlert).toList();
+
+    final filteredAlerts = _applyFilter(alerts);
+    final filteredUrgent = filteredAlerts
+        .where((alert) => (alert['severity'] ?? '').toString() == 'critical')
+        .toList();
+    final filteredAttention = filteredAlerts
         .where((alert) => (alert['severity'] ?? '').toString() != 'critical')
         .toList();
 
@@ -26,34 +45,77 @@ class OwnerAlertsScreen extends StatelessWidget {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
-            _HeaderCard(
-              title: 'Alerts',
-              subtitle: 'Attention-needed items for the owner.',
-              urgentCount: urgentAlerts.length,
-              attentionCount: attentionAlerts.length,
+            const _HeaderCard(),
+            const SizedBox(height: 16),
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.50,
+              children: [
+                _SummaryCard(
+                  label: 'Urgent',
+                  value: '${urgentAlerts.length}',
+                  icon: Icons.priority_high_rounded,
+                  color: const Color(0xFFD92D20),
+                ),
+                _SummaryCard(
+                  label: 'Attention',
+                  value: '${attentionAlerts.length}',
+                  icon: Icons.notification_important_outlined,
+                  color: const Color(0xFFF79009),
+                ),
+                _SummaryCard(
+                  label: 'Stock Alerts',
+                  value: '${stockAlerts.length}',
+                  icon: Icons.inventory_2_outlined,
+                  color: const Color(0xFF2F6FE4),
+                ),
+                _SummaryCard(
+                  label: 'Sales Alerts',
+                  value: '${salesAlerts.length}',
+                  icon: Icons.trending_down_rounded,
+                  color: const Color(0xFF7A1CAC),
+                ),
+              ],
             ),
             const SizedBox(height: 16),
-            if (alerts.isEmpty)
+            _FilterBar(
+              value: _selectedFilter,
+              onChanged: (value) {
+                setState(() {
+                  _selectedFilter = value;
+                });
+              },
+            ),
+            const SizedBox(height: 16),
+            if (filteredAlerts.isEmpty)
               const _EmptyAlertsState()
             else ...[
-              if (urgentAlerts.isNotEmpty) ...[
+              if (filteredUrgent.isNotEmpty) ...[
                 const _SectionTitle('Urgent'),
                 const SizedBox(height: 10),
-                ...urgentAlerts.map(
+                ...filteredUrgent.map(
                   (alert) => _AlertCard(
                     alert: alert,
-                    onTap: () => _openAlertTarget(context, provider, alert),
+                    onOpenHistory: () => _openAlertTarget(context, provider, alert),
+                    onUpdateMinStock: () =>
+                        _showMinStockDialog(context, provider, alert),
                   ),
                 ),
                 const SizedBox(height: 16),
               ],
-              if (attentionAlerts.isNotEmpty) ...[
+              if (filteredAttention.isNotEmpty) ...[
                 const _SectionTitle('Needs attention'),
                 const SizedBox(height: 10),
-                ...attentionAlerts.map(
+                ...filteredAttention.map(
                   (alert) => _AlertCard(
                     alert: alert,
-                    onTap: () => _openAlertTarget(context, provider, alert),
+                    onOpenHistory: () => _openAlertTarget(context, provider, alert),
+                    onUpdateMinStock: () =>
+                        _showMinStockDialog(context, provider, alert),
                   ),
                 ),
               ],
@@ -64,6 +126,42 @@ class OwnerAlertsScreen extends StatelessWidget {
     );
   }
 
+  List<Map<String, dynamic>> _applyFilter(List<Map<String, dynamic>> alerts) {
+    switch (_selectedFilter) {
+      case _AlertFilter.urgent:
+        return alerts
+            .where((alert) => (alert['severity'] ?? '').toString() == 'critical')
+            .toList();
+      case _AlertFilter.stock:
+        return alerts.where(_isStockAlert).toList();
+      case _AlertFilter.sales:
+        return alerts.where(_isSalesAlert).toList();
+      case _AlertFilter.all:
+        return alerts;
+    }
+  }
+
+  bool _isStockAlert(Map<String, dynamic> alert) {
+    final type = (alert['type'] ?? '').toString();
+    return type == 'out_of_stock' ||
+        type == 'low_stock' ||
+        type == 'best_seller_low_stock';
+  }
+
+  bool _isSalesAlert(Map<String, dynamic> alert) {
+    final type = (alert['type'] ?? '').toString();
+    return type == 'weak_sales';
+  }
+
+  Product? _findProduct(AdminProvider provider, String barcode) {
+    for (final item in provider.products) {
+      if (item.barcode == barcode) {
+        return item;
+      }
+    }
+    return null;
+  }
+
   void _openAlertTarget(
     BuildContext context,
     AdminProvider provider,
@@ -72,37 +170,140 @@ class OwnerAlertsScreen extends StatelessWidget {
     final barcode = (alert['barcode'] ?? '').toString();
     if (barcode.isEmpty) return;
 
-    Product? product;
-    for (final item in provider.products) {
-      if (item.barcode == barcode) {
-        product = item;
-        break;
-      }
-    }
-
+    final product = _findProduct(provider, barcode);
     if (product == null) return;
 
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => InventoryHistoryScreen(product: product!),
+        builder: (_) => InventoryHistoryScreen(product: product),
       ),
+    );
+  }
+
+  Future<void> _showMinStockDialog(
+    BuildContext context,
+    AdminProvider provider,
+    Map<String, dynamic> alert,
+  ) async {
+    final barcode = (alert['barcode'] ?? '').toString();
+    if (barcode.isEmpty) return;
+
+    final product = _findProduct(provider, barcode);
+    if (product == null) return;
+
+    final controller = TextEditingController(
+      text: '${product.minStockLevel > 0 ? product.minStockLevel : 10}',
+    );
+    bool isSaving = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: const Text('Update Min Stock'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    product.name,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Current stock: ${product.stock}',
+                    style: const TextStyle(
+                      color: Color(0xFF667085),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: controller,
+                    enabled: !isSaving,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Minimum stock level',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSaving ? null : () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: isSaving
+                      ? null
+                      : () async {
+                          final value = int.tryParse(controller.text.trim());
+                          if (value == null || value < 0) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Enter a valid minimum stock level.',
+                                ),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                            return;
+                          }
+
+                          setDialogState(() {
+                            isSaving = true;
+                          });
+
+                          final success = await provider.updateMinStockLevel(
+                            product.barcode,
+                            value,
+                          );
+
+                          if (!mounted) return;
+
+                          if (success) {
+                            Navigator.pop(dialogContext);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Minimum stock updated.'),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                          } else {
+                            setDialogState(() {
+                              isSaving = false;
+                            });
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Failed to update minimum stock.'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        },
+                  child: isSaving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }
 
 class _HeaderCard extends StatelessWidget {
-  const _HeaderCard({
-    required this.title,
-    required this.subtitle,
-    required this.urgentCount,
-    required this.attentionCount,
-  });
-
-  final String title;
-  final String subtitle;
-  final int urgentCount;
-  final int attentionCount;
+  const _HeaderCard();
 
   @override
   Widget build(BuildContext context) {
@@ -116,38 +317,40 @@ class _HeaderCard extends StatelessWidget {
         ),
         borderRadius: BorderRadius.circular(22),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: const Row(
         children: [
-          const Icon(
-            Icons.notification_important_outlined,
-            color: Colors.white,
-            size: 32,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            title,
-            style: const TextStyle(
+          CircleAvatar(
+            radius: 22,
+            backgroundColor: Color(0x33FFFFFF),
+            child: Icon(
+              Icons.notification_important_outlined,
               color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
+              size: 24,
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.86),
-              fontWeight: FontWeight.w500,
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Owner Alerts',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Attention-needed items for the owner.',
+                  style: TextStyle(
+                    color: Color(0xFFEFEFF4),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              _TopPill(label: 'Urgent', value: '$urgentCount'),
-              const SizedBox(width: 8),
-              _TopPill(label: 'Attention', value: '$attentionCount'),
-            ],
           ),
         ],
       ),
@@ -155,25 +358,146 @@ class _HeaderCard extends StatelessWidget {
   }
 }
 
-class _TopPill extends StatelessWidget {
-  const _TopPill({required this.label, required this.value});
+class _SummaryCard extends StatelessWidget {
+  const _SummaryCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
 
   final String label;
   final String value;
+  final IconData icon;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.14),
-        borderRadius: BorderRadius.circular(999),
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 15,
+              backgroundColor: color.withOpacity(0.12),
+              child: Icon(icon, color: color, size: 17),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF6B7482),
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    value,
+                    maxLines: 1,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF182431),
+                      height: 1.0,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
-      child: Text(
-        '$label: $value',
-        style: const TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w700,
+    );
+  }
+}
+
+class _FilterBar extends StatelessWidget {
+  const _FilterBar({
+    required this.value,
+    required this.onChanged,
+  });
+
+  final _AlertFilter value;
+  final ValueChanged<_AlertFilter> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          _FilterChip(
+            label: 'All',
+            selected: value == _AlertFilter.all,
+            onTap: () => onChanged(_AlertFilter.all),
+          ),
+          const SizedBox(width: 8),
+          _FilterChip(
+            label: 'Urgent',
+            selected: value == _AlertFilter.urgent,
+            onTap: () => onChanged(_AlertFilter.urgent),
+          ),
+          const SizedBox(width: 8),
+          _FilterChip(
+            label: 'Stock',
+            selected: value == _AlertFilter.stock,
+            onTap: () => onChanged(_AlertFilter.stock),
+          ),
+          const SizedBox(width: 8),
+          _FilterChip(
+            label: 'Sales',
+            selected: value == _AlertFilter.sales,
+            onTap: () => onChanged(_AlertFilter.sales),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected ? const Color(0xFF182B6B) : Colors.white,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected ? const Color(0xFF182B6B) : const Color(0xFFD6DEEB),
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : const Color(0xFF667085),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ),
       ),
     );
@@ -201,11 +525,13 @@ class _SectionTitle extends StatelessWidget {
 class _AlertCard extends StatelessWidget {
   const _AlertCard({
     required this.alert,
-    required this.onTap,
+    required this.onOpenHistory,
+    required this.onUpdateMinStock,
   });
 
   final Map<String, dynamic> alert;
-  final VoidCallback onTap;
+  final VoidCallback onOpenHistory;
+  final VoidCallback onUpdateMinStock;
 
   Color get _accent {
     switch ((alert['severity'] ?? '').toString()) {
@@ -215,6 +541,32 @@ class _AlertCard extends StatelessWidget {
         return const Color(0xFFF79009);
       default:
         return const Color(0xFF2F6FE4);
+    }
+  }
+
+  String get _severityLabel {
+    switch ((alert['severity'] ?? '').toString()) {
+      case 'critical':
+        return 'Urgent';
+      case 'warning':
+        return 'Attention';
+      default:
+        return 'Info';
+    }
+  }
+
+  IconData get _icon {
+    switch ((alert['type'] ?? '').toString()) {
+      case 'out_of_stock':
+        return Icons.remove_shopping_cart_outlined;
+      case 'low_stock':
+        return Icons.inventory_2_outlined;
+      case 'best_seller_low_stock':
+        return Icons.local_fire_department_outlined;
+      case 'weak_sales':
+        return Icons.trending_down_rounded;
+      default:
+        return Icons.notification_important_outlined;
     }
   }
 
@@ -229,56 +581,112 @@ class _AlertCard extends StatelessWidget {
       child: Material(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(18),
-          onTap: hasTarget ? onTap : null,
-          child: Ink(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: _accent.withOpacity(0.20)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 22,
-                    backgroundColor: _accent.withOpacity(0.12),
-                    child: Icon(
-                      hasTarget ? Icons.inventory_2_outlined : Icons.insights_outlined,
-                      color: _accent,
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: _accent.withOpacity(0.20)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CircleAvatar(
+                      radius: 22,
+                      backgroundColor: _accent.withOpacity(0.12),
+                      child: Icon(_icon, color: _accent),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF172433),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  title,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    color: Color(0xFF172433),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _accent.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  _severityLabel,
+                                  style: TextStyle(
+                                    color: _accent,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            subtitle,
+                            style: const TextStyle(
+                              color: Color(0xFF667085),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (hasTarget) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: onOpenHistory,
+                          icon: const Icon(Icons.history),
+                          label: const Text('History'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF182B6B),
+                            side: const BorderSide(color: Color(0xFFD6DEEB)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          subtitle,
-                          style: const TextStyle(
-                            color: Color(0xFF667085),
-                            fontWeight: FontWeight.w500,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: onUpdateMinStock,
+                          icon: const Icon(Icons.tune, size: 18),
+                          label: const Text('Min Stock'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _accent,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                  if (hasTarget)
-                    const Icon(
-                      Icons.chevron_right,
-                      color: Color(0xFF98A2B3),
-                    ),
                 ],
-              ),
+              ],
             ),
           ),
         ),
