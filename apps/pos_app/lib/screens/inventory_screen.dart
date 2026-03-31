@@ -2050,7 +2050,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     ),
                     const SizedBox(height: 14),
                     DropdownButtonFormField<int>(
-                      value: selectedSupplierId,
+                      initialValue: selectedSupplierId,
                       decoration: InputDecoration(
                         labelText: 'Supplier',
                         border: OutlineInputBorder(
@@ -2693,7 +2693,7 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
                     ),
                     const SizedBox(height: 14),
                     DropdownButtonFormField<String>(
-                      value: adjustmentType,
+                      initialValue: adjustmentType,
                       decoration: InputDecoration(
                         labelText: 'Adjustment type',
                         border: OutlineInputBorder(
@@ -2985,7 +2985,7 @@ Future<void> _openAdjustFlow({Product? initialProduct}) async {
                     ),
                     const SizedBox(height: 14),
                     DropdownButtonFormField<String>(
-                      value: priceType,
+                      initialValue: priceType,
                       decoration: InputDecoration(
                         labelText: 'Price field',
                         border: OutlineInputBorder(

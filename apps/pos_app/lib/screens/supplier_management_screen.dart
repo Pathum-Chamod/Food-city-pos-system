@@ -28,7 +28,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
       TextEditingController();
 
   bool _isLoading = true;
-  bool _isSaving = false;
+  final bool _isSaving = false;
   bool _isRefreshing = false;
 
   List<PosSupplier> _suppliers = const [];
@@ -454,10 +454,10 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                   if (isAssigned)
                                     OutlinedButton.icon(
                                       onPressed: () async {
-                                        if (mapping?.id == null) return;
+                                        if (mapping.id == null) return;
                                         await _supplierService
                                             .deleteSupplierProductMapping(
-                                          mapping!.id!,
+                                          mapping.id!,
                                         );
                                         currentMappings.remove(product.barcode);
                                         setSheetState(() {});
