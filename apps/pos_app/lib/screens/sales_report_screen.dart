@@ -669,24 +669,35 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                         label: '30 Days',
                       ),
                       ActionChip(
-                        avatar: const Icon(
+                        avatar: Icon(
                           Icons.calendar_month_rounded,
                           size: 18,
-                          color: Colors.white,
+                          color: _selectedRange == SalesReportRange.specificDate
+                              ? Colors.white
+                              : _textPrimary,
                         ),
                         label: Text(selectedDateLabel),
                         onPressed: _pickSpecificDate,
-                        backgroundColor: Colors.white.withOpacity(0.10),
+                        backgroundColor:
+                            _selectedRange == SalesReportRange.specificDate
+                                ? const Color(0xFF3B82F6)
+                                : Colors.white,
                         side: BorderSide(
-                          color: Colors.white.withOpacity(0.10),
+                          color: _selectedRange == SalesReportRange.specificDate
+                              ? const Color(0xFF93C5FD)
+                              : Colors.white.withOpacity(0.18),
                         ),
-                        labelStyle: const TextStyle(
-                          color: Colors.white,
+                        labelStyle: TextStyle(
+                          color: _selectedRange == SalesReportRange.specificDate
+                              ? Colors.white
+                              : _textPrimary,
                           fontWeight: FontWeight.w700,
                         ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(14),
                         ),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
                       ),
                     ],
                   ),
@@ -1245,10 +1256,7 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           const SizedBox(height: 16),
           LayoutBuilder(
             builder: (context, constraints) {
-              final forceInsightsBelow =
-                  _selectedRange == SalesReportRange.last30Days;
-              final isSideLayout =
-                  constraints.maxWidth >= 980 && !forceInsightsBelow;
+              final isSideLayout = constraints.maxWidth >= 980;
 
               final insightCards = [
                 _buildInsightStrip(
@@ -2027,35 +2035,30 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
     }
 
     return ListView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
       children: [
-        Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1280),
-            child: Column(
+        Column(
+          children: [
+            placeholder(height: 260),
+            const SizedBox(height: 16),
+            placeholder(height: 360),
+            const SizedBox(height: 16),
+            Row(
               children: [
-                placeholder(height: 260),
-                const SizedBox(height: 16),
-                placeholder(height: 360),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(child: placeholder(height: 340)),
-                    const SizedBox(width: 16),
-                    Expanded(child: placeholder(height: 340)),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(child: placeholder(height: 420)),
-                    const SizedBox(width: 16),
-                    Expanded(child: placeholder(height: 420)),
-                  ],
-                ),
+                Expanded(child: placeholder(height: 340)),
+                const SizedBox(width: 16),
+                Expanded(child: placeholder(height: 340)),
               ],
             ),
-          ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(child: placeholder(height: 420)),
+                const SizedBox(width: 16),
+                Expanded(child: placeholder(height: 420)),
+              ],
+            ),
+          ],
         ),
       ],
     );
@@ -2092,39 +2095,34 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
         final isWide = constraints.maxWidth >= 1080;
 
         return ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
-            Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1280),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildOverviewCard(summary),
-                    const SizedBox(height: 16),
-                    _buildTrendCard(),
-                    const SizedBox(height: 16),
-                    _buildSalesCompositionCard(summary),
-                    const SizedBox(height: 16),
-                    _buildCashierBreakdownCard(),
-                    const SizedBox(height: 16),
-                    if (!isWide) ...[
-                      _buildProductPerformanceCard(),
-                      const SizedBox(height: 16),
-                      _buildSlowMoversCard(),
-                    ] else ...[
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(child: _buildProductPerformanceCard()),
-                          const SizedBox(width: 16),
-                          Expanded(child: _buildSlowMoversCard()),
-                        ],
-                      ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildOverviewCard(summary),
+                const SizedBox(height: 16),
+                _buildTrendCard(),
+                const SizedBox(height: 16),
+                _buildSalesCompositionCard(summary),
+                const SizedBox(height: 16),
+                _buildCashierBreakdownCard(),
+                const SizedBox(height: 16),
+                if (!isWide) ...[
+                  _buildProductPerformanceCard(),
+                  const SizedBox(height: 16),
+                  _buildSlowMoversCard(),
+                ] else ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: _buildProductPerformanceCard()),
+                      const SizedBox(width: 16),
+                      Expanded(child: _buildSlowMoversCard()),
                     ],
-                  ],
-                ),
-              ),
+                  ),
+                ],
+              ],
             ),
           ],
         );
