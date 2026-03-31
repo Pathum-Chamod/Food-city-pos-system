@@ -92,6 +92,16 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     }
   }
 
+  String _formatSummaryDateTime(String raw) {
+    try {
+      final dt = DateTime.parse(raw).toLocal();
+      String two(int value) => value.toString().padLeft(2, '0');
+      return '${two(dt.day)}/${two(dt.month)}/${dt.year} ${two(dt.hour)}:${two(dt.minute)}';
+    } catch (_) {
+      return raw;
+    }
+  }
+
   int _selectedFor(String barcode) => _selectedQty[barcode] ?? 0;
 
   void _increaseQty(String barcode, int refundableQty) {
@@ -157,7 +167,8 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     required String refundReason,
   }) {
     final trimmedReason = refundReason.trim();
-    final safeReason = trimmedReason.isEmpty ? 'No reason provided' : trimmedReason;
+    final safeReason =
+        trimmedReason.isEmpty ? 'No reason provided' : trimmedReason;
 
     return 'Approved linked refund for sale #${widget.originalSaleId} '
         'requested by $requesterName '
@@ -217,7 +228,8 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
       context,
       () => _processRefundAfterApproval(selectedItems),
       title: 'Approval Required',
-      message: 'Enter an active manager or full-access PIN to approve this refund.',
+      message:
+          'Enter an active manager or full-access PIN to approve this refund.',
       requesterUserId: requester?.id,
       requesterUserName: requesterName,
       approvalDescription: _buildApprovalDescription(
@@ -282,6 +294,437 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     }
   }
 
+  Widget _buildSummaryCard({
+    required String title,
+    required String value,
+    required IconData icon,
+    required Color accent,
+    double valueFontSize = 18,
+  }) {
+    return Container(
+      width: 250,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: accent.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: accent),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: valueFontSize,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMiniInfoCard(String title, String value) {
+    return Container(
+      width: 150,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: Colors.grey.shade700,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQtyButton({
+    required IconData icon,
+    required VoidCallback? onTap,
+  }) {
+    final enabled = onTap != null;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Ink(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          color: enabled ? const Color(0xFFF3F6FB) : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: enabled ? const Color(0xFFDCE5F0) : Colors.grey.shade200,
+          ),
+        ),
+        child: Icon(
+          icon,
+          color: enabled ? Colors.blue.shade800 : Colors.grey.shade400,
+          size: 20,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRefundItemCard(Map<String, dynamic> item) {
+    final barcode = (item['barcode'] ?? '').toString();
+    final name = (item['product_name'] ?? 'Unknown').toString();
+    final unitPrice = ((item['unit_price'] as num?) ?? 0).toDouble();
+    final originalQty = (item['original_quantity'] as num?)?.toInt() ?? 0;
+    final refundedQty = (item['refunded_quantity'] as num?)?.toInt() ?? 0;
+    final refundableQty = (item['refundable_quantity'] as num?)?.toInt() ?? 0;
+    final selectedQty = _selectedFor(barcode);
+    final refundAmount = unitPrice * selectedQty;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Barcode: $barcode',
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    _buildMiniInfoCard(
+                      'Unit Price',
+                      'Rs. ${unitPrice.toStringAsFixed(2)}',
+                    ),
+                    _buildMiniInfoCard('Sold', originalQty.toString()),
+                    _buildMiniInfoCard('Refunded', refundedQty.toString()),
+                    _buildMiniInfoCard('Remaining', refundableQty.toString()),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          SizedBox(
+            width: 220,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: Colors.red.shade100),
+                  ),
+                  child: Text(
+                    'Refund: Rs. ${refundAmount.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      color: Colors.red.shade700,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    _buildQtyButton(
+                      icon: Icons.remove,
+                      onTap: selectedQty > 0 ? () => _decreaseQty(barcode) : null,
+                    ),
+                    Container(
+                      width: 56,
+                      alignment: Alignment.center,
+                      child: Text(
+                        '$selectedQty',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    _buildQtyButton(
+                      icon: Icons.add,
+                      onTap: refundableQty > selectedQty
+                          ? () => _increaseQty(barcode, refundableQty)
+                          : null,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryHeader(Map<String, dynamic> summary) {
+    final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
+    final dateText =
+        _formatSummaryDateTime((summary['created_at'] ?? '').toString());
+    final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
+
+    return Column(
+      children: [
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            _buildSummaryCard(
+              title: 'Original Sale',
+              value: '#${summary['id']}',
+              icon: Icons.receipt_long_outlined,
+              accent: Colors.blue,
+            ),
+            _buildSummaryCard(
+              title: 'Cashier',
+              value: cashierName,
+              icon: Icons.person_outline,
+              accent: Colors.deepPurple,
+            ),
+            _buildSummaryCard(
+              title: 'Date / Time',
+              value: dateText,
+              valueFontSize: 16,
+              icon: Icons.schedule_outlined,
+              accent: Colors.green,
+            ),
+            _buildSummaryCard(
+              title: 'Sale Total',
+              value: 'Rs. ${total.toStringAsFixed(2)}',
+              icon: Icons.payments_outlined,
+              accent: Colors.orange,
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Select the quantities to refund from this sale. Remaining quantities are limited by previous linked refunds.',
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    fontWeight: FontWeight.w500,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                'Items (${_refundableItems.length})',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBottomPanel(bool hasRefundableQty) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Colors.grey.shade200)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 14,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _reasonController,
+              maxLines: 2,
+              decoration: InputDecoration(
+                labelText: 'Refund Reason',
+                hintText: 'Enter reason for refund',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: Colors.red.shade400),
+                ),
+                filled: true,
+                fillColor: const Color(0xFFF8FAFD),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Selected Items: ${_selectedRefundItems.length}',
+                    style: TextStyle(
+                      color: Colors.grey.shade700,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Text(
+                  'Refund Total: Rs. ${_refundTotal.toStringAsFixed(2)}',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.red.shade700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: (!hasRefundableQty || _isProcessing)
+                    ? null
+                    : _processRefund,
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.red.shade600,
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                child: _isProcessing
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text(
+                        'PROCESS LINKED REFUND',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(String text) {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Center(child: Text(text)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final summary = _saleSummary;
@@ -290,191 +733,37 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     );
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F7FB),
       appBar: AppBar(
         title: const Text('Refund Items'),
-        backgroundColor: Colors.blue[900],
+        backgroundColor: Colors.blue.shade900,
         foregroundColor: Colors.white,
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : summary == null
-              ? const Center(child: Text('Transaction not found'))
+              ? _buildEmptyState('Transaction not found')
               : Column(
                   children: [
-                    Container(
-                      width: double.infinity,
-                      color: Colors.grey[100],
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Original Sale #${summary['id']}',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Cashier: ${(summary['cashier_name'] ?? 'Unknown').toString()}',
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Date/Time: ${_formatDateTime((summary['created_at'] ?? '').toString())}',
-                          ),
-                        ],
-                      ),
-                    ),
                     Expanded(
-                      child: _refundableItems.isEmpty
-                          ? const Center(
-                              child: Text('No items found for this sale'),
-                            )
-                          : ListView.builder(
-                              itemCount: _refundableItems.length,
-                              itemBuilder: (context, index) {
-                                final item = _refundableItems[index];
-                                final barcode =
-                                    (item['barcode'] ?? '').toString();
-                                final name =
-                                    (item['product_name'] ?? 'Unknown').toString();
-                                final unitPrice =
-                                    ((item['unit_price'] as num?) ?? 0)
-                                        .toDouble();
-                                final originalQty =
-                                    (item['original_quantity'] as num?)?.toInt() ?? 0;
-                                final refundedQty =
-                                    (item['refunded_quantity'] as num?)?.toInt() ?? 0;
-                                final refundableQty =
-                                    (item['refundable_quantity'] as num?)?.toInt() ?? 0;
-                                final selectedQty = _selectedFor(barcode);
-
-                                return Card(
-                                  margin: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 6,
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(12),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          name,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text('Barcode: $barcode'),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          'Unit Price: Rs. ${unitPrice.toStringAsFixed(2)}',
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Wrap(
-                                          spacing: 12,
-                                          runSpacing: 6,
-                                          children: [
-                                            Text('Sold: $originalQty'),
-                                            Text('Already Refunded: $refundedQty'),
-                                            Text('Remaining: $refundableQty'),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 10),
-                                        Row(
-                                          children: [
-                                            IconButton(
-                                              onPressed: selectedQty > 0
-                                                  ? () => _decreaseQty(barcode)
-                                                  : null,
-                                              icon: const Icon(
-                                                Icons.remove_circle_outline,
-                                              ),
-                                            ),
-                                            Text(
-                                              '$selectedQty',
-                                              style: const TextStyle(
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                            IconButton(
-                                              onPressed: refundableQty >
-                                                      selectedQty
-                                                  ? () => _increaseQty(
-                                                        barcode,
-                                                        refundableQty,
-                                                      )
-                                                  : null,
-                                              icon: const Icon(
-                                                Icons.add_circle_outline,
-                                              ),
-                                            ),
-                                            const Spacer(),
-                                            Text(
-                                              'Refund: Rs. ${(unitPrice * selectedQty).toStringAsFixed(2)}',
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      color: Colors.red[50],
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                      child: ListView(
+                        padding: const EdgeInsets.all(16),
                         children: [
-                          TextField(
-                            controller: _reasonController,
-                            decoration: const InputDecoration(
-                              labelText: 'Refund Reason',
-                              hintText: 'Enter reason for refund',
-                              border: OutlineInputBorder(),
-                              filled: true,
-                              fillColor: Colors.white,
+                          _buildSummaryHeader(summary),
+                          const SizedBox(height: 18),
+                          if (_refundableItems.isEmpty)
+                            _buildEmptyState('No items found for this sale')
+                          else
+                            ..._refundableItems.map(
+                              (item) => Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: _buildRefundItemCard(item),
+                              ),
                             ),
-                            maxLines: 2,
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Refund Total: Rs. ${_refundTotal.toStringAsFixed(2)}',
-                            textAlign: TextAlign.right,
-                            style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.red,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          ElevatedButton(
-                            onPressed: (!hasRefundableQty || _isProcessing)
-                                ? null
-                                : _processRefund,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.red,
-                              padding: const EdgeInsets.symmetric(vertical: 18),
-                            ),
-                            child: Text(
-                              _isProcessing
-                                  ? 'PROCESSING...'
-                                  : 'PROCESS LINKED REFUND',
-                              style: const TextStyle(color: Colors.white),
-                            ),
-                          ),
                         ],
                       ),
                     ),
+                    _buildBottomPanel(hasRefundableQty),
                   ],
                 ),
     );

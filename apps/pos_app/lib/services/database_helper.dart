@@ -5510,4 +5510,416 @@ class DatabaseHelper {
     };
   }
 
+
+
+  Future<List<Map<String, dynamic>>> getSalesTrendByDay({
+    String? cashierName,
+    DateTime? start,
+    DateTime? end,
+  }) async {
+    final db = await database;
+
+    final startTime = start ?? DateTime.now();
+    final endTime = end ?? DateTime.now();
+
+    final salesConditions = <String>[
+      'datetime(s.created_at) >= datetime(?)',
+      'datetime(s.created_at) <= datetime(?)',
+    ];
+    final salesArgs = <Object?>[
+      startTime.toIso8601String(),
+      endTime.toIso8601String(),
+    ];
+
+    final trimmedCashier = cashierName?.trim();
+    if (trimmedCashier != null && trimmedCashier.isNotEmpty) {
+      salesConditions.add('s.cashier_name = ?');
+      salesArgs.add(trimmedCashier);
+    }
+
+    final salesRows = await db.rawQuery(
+      '''
+      SELECT
+        date(s.created_at) AS sales_date,
+        COALESCE(SUM(CASE WHEN s.transaction_type = 'sale' THEN 1 ELSE 0 END), 0) AS sale_count,
+        COALESCE(SUM(CASE WHEN s.transaction_type = 'refund' THEN 1 ELSE 0 END), 0) AS refund_count,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.subtotal_amount) ELSE 0 END),
+          0
+        ) AS gross_sales,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.discount_amount) ELSE 0 END),
+          0
+        ) AS total_discounts,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.total_amount) ELSE 0 END),
+          0
+        ) AS net_sales,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'refund' THEN ABS(s.total_amount) ELSE 0 END),
+          0
+        ) AS refund_total
+      FROM sales s
+      WHERE ${salesConditions.join(' AND ')}
+      GROUP BY date(s.created_at)
+      ORDER BY date(s.created_at) ASC
+      ''',
+      salesArgs,
+    );
+
+    final itemConditions = <String>[
+      "s.transaction_type = 'sale'",
+      'datetime(s.created_at) >= datetime(?)',
+      'datetime(s.created_at) <= datetime(?)',
+    ];
+    final itemArgs = <Object?>[
+      startTime.toIso8601String(),
+      endTime.toIso8601String(),
+    ];
+
+    if (trimmedCashier != null && trimmedCashier.isNotEmpty) {
+      itemConditions.add('s.cashier_name = ?');
+      itemArgs.add(trimmedCashier);
+    }
+
+    final itemRows = await db.rawQuery(
+      '''
+      SELECT
+        date(s.created_at) AS sales_date,
+        COALESCE(SUM(si.quantity), 0) AS items_sold
+      FROM sales s
+      INNER JOIN sale_items si ON si.sale_id = s.id
+      WHERE ${itemConditions.join(' AND ')}
+      GROUP BY date(s.created_at)
+      ''',
+      itemArgs,
+    );
+
+    final itemsByDate = <String, int>{
+      for (final row in itemRows)
+        (row['sales_date'] ?? '').toString():
+            (row['items_sold'] as num?)?.toInt() ?? 0,
+    };
+
+    return salesRows.map((row) {
+      final salesDate = (row['sales_date'] ?? '').toString();
+      final saleCount = (row['sale_count'] as num?)?.toInt() ?? 0;
+      final refundCount = (row['refund_count'] as num?)?.toInt() ?? 0;
+      final grossSales = ((row['gross_sales'] as num?) ?? 0).toDouble();
+      final totalDiscounts = ((row['total_discounts'] as num?) ?? 0).toDouble();
+      final netSales = ((row['net_sales'] as num?) ?? 0).toDouble();
+      final refundTotal = ((row['refund_total'] as num?) ?? 0).toDouble();
+
+      return {
+        'sales_date': salesDate,
+        'sale_count': saleCount,
+        'refund_count': refundCount,
+        'transaction_count': saleCount + refundCount,
+        'gross_sales': _roundMoney(grossSales),
+        'total_discounts': _roundMoney(totalDiscounts),
+        'net_sales': _roundMoney(netSales),
+        'refund_total': _roundMoney(refundTotal),
+        'net_after_refunds': _roundMoney(netSales - refundTotal),
+        'items_sold': itemsByDate[salesDate] ?? 0,
+      };
+    }).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> getHourlySalesSummaryForDay({
+    String? cashierName,
+    required DateTime day,
+  }) async {
+    final db = await database;
+
+    final startTime = DateTime(day.year, day.month, day.day);
+    final endTime = DateTime(day.year, day.month, day.day, 23, 59, 59, 999);
+
+    final salesConditions = <String>[
+      'datetime(s.created_at) >= datetime(?)',
+      'datetime(s.created_at) <= datetime(?)',
+    ];
+    final salesArgs = <Object?>[
+      startTime.toIso8601String(),
+      endTime.toIso8601String(),
+    ];
+
+    final trimmedCashier = cashierName?.trim();
+    if (trimmedCashier != null && trimmedCashier.isNotEmpty) {
+      salesConditions.add('s.cashier_name = ?');
+      salesArgs.add(trimmedCashier);
+    }
+
+    final salesRows = await db.rawQuery(
+      '''
+      SELECT
+        strftime('%H', s.created_at) AS hour_key,
+        COALESCE(SUM(CASE WHEN s.transaction_type = 'sale' THEN 1 ELSE 0 END), 0) AS sale_count,
+        COALESCE(SUM(CASE WHEN s.transaction_type = 'refund' THEN 1 ELSE 0 END), 0) AS refund_count,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.total_amount) ELSE 0 END),
+          0
+        ) AS net_sales,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'refund' THEN ABS(s.total_amount) ELSE 0 END),
+          0
+        ) AS refund_total
+      FROM sales s
+      WHERE ${salesConditions.join(' AND ')}
+      GROUP BY strftime('%H', s.created_at)
+      ORDER BY hour_key ASC
+      ''',
+      salesArgs,
+    );
+
+    final itemConditions = <String>[
+      "s.transaction_type = 'sale'",
+      'datetime(s.created_at) >= datetime(?)',
+      'datetime(s.created_at) <= datetime(?)',
+    ];
+    final itemArgs = <Object?>[
+      startTime.toIso8601String(),
+      endTime.toIso8601String(),
+    ];
+
+    if (trimmedCashier != null && trimmedCashier.isNotEmpty) {
+      itemConditions.add('s.cashier_name = ?');
+      itemArgs.add(trimmedCashier);
+    }
+
+    final itemRows = await db.rawQuery(
+      '''
+      SELECT
+        strftime('%H', s.created_at) AS hour_key,
+        COALESCE(SUM(si.quantity), 0) AS items_sold
+      FROM sales s
+      INNER JOIN sale_items si ON si.sale_id = s.id
+      WHERE ${itemConditions.join(' AND ')}
+      GROUP BY strftime('%H', s.created_at)
+      ORDER BY hour_key ASC
+      ''',
+      itemArgs,
+    );
+
+    final itemsByHour = <String, int>{
+      for (final row in itemRows)
+        (row['hour_key'] ?? '').toString():
+            (row['items_sold'] as num?)?.toInt() ?? 0,
+    };
+
+    return salesRows.map((row) {
+      final hourKey = (row['hour_key'] ?? '00').toString();
+      final saleCount = (row['sale_count'] as num?)?.toInt() ?? 0;
+      final refundCount = (row['refund_count'] as num?)?.toInt() ?? 0;
+      final netSales = ((row['net_sales'] as num?) ?? 0).toDouble();
+      final refundTotal = ((row['refund_total'] as num?) ?? 0).toDouble();
+
+      return {
+        'hour': int.tryParse(hourKey) ?? 0,
+        'hour_key': hourKey,
+        'sale_count': saleCount,
+        'refund_count': refundCount,
+        'transaction_count': saleCount + refundCount,
+        'net_sales': _roundMoney(netSales),
+        'refund_total': _roundMoney(refundTotal),
+        'net_after_refunds': _roundMoney(netSales - refundTotal),
+        'items_sold': itemsByHour[hourKey] ?? 0,
+      };
+    }).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> getProductPerformanceSummary({
+    String? cashierName,
+    DateTime? start,
+    DateTime? end,
+    int limit = 10,
+  }) async {
+    final db = await database;
+
+    final startTime = start ?? DateTime.now();
+    final endTime = end ?? DateTime.now();
+
+    final conditions = <String>[
+      "s.transaction_type IN ('sale', 'refund')",
+      'datetime(s.created_at) >= datetime(?)',
+      'datetime(s.created_at) <= datetime(?)',
+    ];
+    final args = <Object?>[
+      startTime.toIso8601String(),
+      endTime.toIso8601String(),
+    ];
+
+    final trimmedCashier = cashierName?.trim();
+    if (trimmedCashier != null && trimmedCashier.isNotEmpty) {
+      conditions.add('s.cashier_name = ?');
+      args.add(trimmedCashier);
+    }
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        si.barcode,
+        si.product_name,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'sale' THEN si.quantity ELSE 0 END),
+          0
+        ) AS quantity_sold,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'refund' THEN si.quantity ELSE 0 END),
+          0
+        ) AS refunded_quantity,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(si.line_total) ELSE 0 END),
+          0
+        ) AS sales_amount,
+        COALESCE(
+          SUM(CASE WHEN s.transaction_type = 'refund' THEN ABS(si.line_total) ELSE 0 END),
+          0
+        ) AS refund_amount,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN s.transaction_type = 'sale' THEN ABS(si.line_total)
+              ELSE -ABS(si.line_total)
+            END
+          ),
+          0
+        ) AS net_sales_after_refunds,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN s.transaction_type = 'sale' THEN (si.cost_price_snapshot * si.quantity)
+              ELSE -(si.cost_price_snapshot * si.quantity)
+            END
+          ),
+          0
+        ) AS net_cost_amount
+      FROM sales s
+      INNER JOIN sale_items si ON si.sale_id = s.id
+      WHERE ${conditions.join(' AND ')}
+      GROUP BY si.barcode, si.product_name
+      ORDER BY net_sales_after_refunds DESC, quantity_sold DESC, si.product_name ASC
+      LIMIT ?
+      ''',
+      [...args, limit],
+    );
+
+    return rows.map((row) {
+      final quantitySold = (row['quantity_sold'] as num?)?.toInt() ?? 0;
+      final refundedQuantity = (row['refunded_quantity'] as num?)?.toInt() ?? 0;
+      final salesAmount = ((row['sales_amount'] as num?) ?? 0).toDouble();
+      final refundAmount = ((row['refund_amount'] as num?) ?? 0).toDouble();
+      final netSalesAfterRefunds =
+          ((row['net_sales_after_refunds'] as num?) ?? 0).toDouble();
+      final netCostAmount = ((row['net_cost_amount'] as num?) ?? 0).toDouble();
+      final estimatedProfit = _roundMoney(netSalesAfterRefunds - netCostAmount);
+      final marginPercent = netSalesAfterRefunds <= 0
+          ? 0.0
+          : _roundMoney((estimatedProfit / netSalesAfterRefunds) * 100);
+
+      return {
+        'barcode': row['barcode'],
+        'product_name': row['product_name'],
+        'quantity_sold': quantitySold,
+        'refunded_quantity': refundedQuantity,
+        'net_quantity_sold': quantitySold - refundedQuantity,
+        'sales_amount': _roundMoney(salesAmount),
+        'refund_amount': _roundMoney(refundAmount),
+        'net_sales_after_refunds': _roundMoney(netSalesAfterRefunds),
+        'net_cost_amount': _roundMoney(netCostAmount),
+        'estimated_profit': estimatedProfit,
+        'margin_percent': marginPercent,
+      };
+    }).toList();
+  }
+
+
+
+  Future<List<Map<String, dynamic>>> getSlowMovingProductsSummary({
+    DateTime? start,
+    DateTime? end,
+    int limit = 10,
+  }) async {
+    final db = await database;
+
+    final startTime = start ?? DateTime.now();
+    final endTime = end ?? DateTime.now();
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        p.barcode,
+        p.name AS product_name,
+        p.category,
+        p.stock,
+        p.min_stock_level,
+        p.cost_price,
+        p.selling_price,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN s.transaction_type = 'sale' THEN si.quantity
+              ELSE 0
+            END
+          ),
+          0
+        ) AS quantity_sold,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN s.transaction_type = 'sale' THEN ABS(si.line_total)
+              ELSE 0
+            END
+          ),
+          0
+        ) AS sales_amount
+      FROM products p
+      LEFT JOIN sale_items si
+        ON si.barcode = p.barcode
+      LEFT JOIN sales s
+        ON s.id = si.sale_id
+       AND datetime(s.created_at) >= datetime(?)
+       AND datetime(s.created_at) <= datetime(?)
+      WHERE p.is_active = 1
+        AND p.stock > 0
+      GROUP BY
+        p.barcode,
+        p.name,
+        p.category,
+        p.stock,
+        p.min_stock_level,
+        p.cost_price,
+        p.selling_price
+      ORDER BY
+        quantity_sold ASC,
+        p.stock DESC,
+        (p.cost_price * p.stock) DESC,
+        p.name COLLATE NOCASE ASC
+      LIMIT ?
+      ''',
+      [startTime.toIso8601String(), endTime.toIso8601String(), limit],
+    );
+
+    return rows.map((row) {
+      final stock = (row['stock'] as num?)?.toInt() ?? 0;
+      final quantitySold = (row['quantity_sold'] as num?)?.toInt() ?? 0;
+      final costPrice = ((row['cost_price'] as num?) ?? 0).toDouble();
+      final sellingPrice = ((row['selling_price'] as num?) ?? 0).toDouble();
+      final salesAmount = ((row['sales_amount'] as num?) ?? 0).toDouble();
+
+      return {
+        'barcode': row['barcode'],
+        'product_name': row['product_name'],
+        'category': row['category'],
+        'stock': stock,
+        'min_stock_level': (row['min_stock_level'] as num?)?.toInt() ?? 0,
+        'cost_price': _roundMoney(costPrice),
+        'selling_price': _roundMoney(sellingPrice),
+        'quantity_sold': quantitySold,
+        'sales_amount': _roundMoney(salesAmount),
+        'stock_value': _roundMoney(costPrice * stock),
+        'is_dead_stock': quantitySold <= 0,
+      };
+    }).toList();
+  }
+
 }

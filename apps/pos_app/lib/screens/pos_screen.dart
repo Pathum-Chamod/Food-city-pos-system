@@ -1387,20 +1387,21 @@ class _PosScreenState extends State<PosScreen> {
             },
             icon: const Icon(Icons.inventory_2_outlined, color: Colors.white),
           ),
-          IconButton(
-            tooltip: 'Store sales report',
-            onPressed: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const SalesReportScreen(),
-                ),
-              );
+          if (auth.hasManagementAccess)
+            IconButton(
+              tooltip: 'Store sales report',
+              onPressed: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const SalesReportScreen(),
+                  ),
+                );
 
-              _focusBarcodeField();
-            },
-            icon: const Icon(Icons.analytics, color: Colors.white),
-          ),
+                _focusBarcodeField();
+              },
+              icon: const Icon(Icons.analytics, color: Colors.white),
+            ),
           IconButton(
             tooltip: 'Supplier operations',
             onPressed: _openSupplierOperations,
