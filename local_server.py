@@ -9,6 +9,7 @@ Endpoint: http://localhost:8080/api/pos_sync.php
 import json
 import os
 import sqlite3
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -617,6 +618,54 @@ def _extract_item_price(item):
     return 0.0
 
 
+def _extract_item_line_total(item):
+    if item.get("line_total") is None:
+        return None
+    return parse_float(item.get("line_total"), 0.0)
+
+
+def _extract_item_base_line_total(item):
+    if item.get("base_line_total") is None:
+        return None
+    return parse_float(item.get("base_line_total"), 0.0)
+
+
+def _extract_item_discount_amount(item):
+    if item.get("item_discount_amount") is None:
+        return None
+    return parse_float(item.get("item_discount_amount"), 0.0)
+
+
+def _extract_item_cost_snapshot(item):
+    for key in ["cost_price_snapshot", "unit_cost", "cost_price"]:
+        if item.get(key) is not None:
+            return parse_float(item.get(key), 0.0)
+    product = item.get("product", {}) or {}
+    return parse_float(product.get("cost_price"), 0.0)
+
+
+def _extract_item_sales_amount(item):
+    line_total = _extract_item_line_total(item)
+    if line_total is not None:
+        return abs(line_total)
+    base_line_total = _extract_item_base_line_total(item)
+    item_discount = _extract_item_discount_amount(item)
+    if base_line_total is not None:
+        return max(0.0, abs(base_line_total) - abs(item_discount or 0.0))
+    quantity = max(_extract_item_quantity(item), 0)
+    unit_price = max(_extract_item_price(item), 0.0)
+    return quantity * unit_price
+
+
+def _extract_item_refund_amount(item):
+    line_total = _extract_item_line_total(item)
+    if line_total is not None:
+        return abs(line_total)
+    quantity = max(_extract_item_quantity(item), 0)
+    unit_price = max(_extract_item_price(item), 0.0)
+    return quantity * unit_price
+
+
 def _extract_item_name(item):
     product = item.get("product", {}) or {}
     return str(product.get("name") or item.get("name") or "Unknown Item")
@@ -865,6 +914,331 @@ def _build_owner_alerts(cursor):
     return alerts
 
 
+def _safe_iso_date(raw_value):
+    try:
+        return datetime.fromisoformat(str(raw_value)[:10]).date()
+    except Exception:
+        return None
+
+
+def _resolve_sales_report_window(params):
+    today = datetime.now().date()
+    range_key = str(params.get("range", ["today"])[0] or "today").strip().lower()
+
+    if range_key in {"7d", "last7", "last_7", "weekly"}:
+        start = today - timedelta(days=6)
+        end = today
+        label = "Last 7 Days"
+    elif range_key in {"30d", "last30", "last_30", "monthly"}:
+        start = today - timedelta(days=29)
+        end = today
+        label = "Last 30 Days"
+    elif range_key in {"specific", "date"}:
+        picked = _safe_iso_date(params.get("date", [""])[0]) or today
+        start = picked
+        end = picked
+        label = picked.isoformat()
+    elif range_key in {"custom", "range_custom", "date_range"}:
+        start = _safe_iso_date(params.get("start_date", [""])[0]) or today
+        end = _safe_iso_date(params.get("end_date", [""])[0]) or today
+        if end < start:
+            start, end = end, start
+        label = f"{start.isoformat()} to {end.isoformat()}"
+    else:
+        start = today
+        end = today
+        label = "Today"
+
+    return {
+        "range_key": range_key,
+        "label": label,
+        "start_date": start,
+        "end_date": end,
+        "start_sql": f"{start.isoformat()} 00:00:00",
+        "end_sql": f"{(end + timedelta(days=1)).isoformat()} 00:00:00",
+    }
+
+
+def _sales_rows_between_values(cursor, start_sql_value, end_sql_value):
+    return cursor.execute(
+        """
+        SELECT
+            id,
+            COALESCE(total_amount, 0) AS total_amount,
+            COALESCE(subtotal_amount, 0) AS subtotal_amount,
+            COALESCE(discount_amount, 0) AS discount_amount,
+            COALESCE(payment_method, '') AS payment_method,
+            COALESCE(transaction_type, 'sale') AS transaction_type,
+            COALESCE(items_count, 0) AS items_count,
+            COALESCE(gross_profit, 0) AS gross_profit,
+            cashier_name,
+            items,
+            created_at
+        FROM sales
+        WHERE datetime(created_at) >= ?
+          AND datetime(created_at) < ?
+        ORDER BY datetime(created_at) ASC, id ASC
+        """,
+        (start_sql_value, end_sql_value),
+    ).fetchall()
+
+
+def _build_owner_sales_report(cursor, params):
+    window = _resolve_sales_report_window(params)
+    rows = _sales_rows_between_values(cursor, window["start_sql"], window["end_sql"])
+    products = fetch_products(cursor)
+    product_by_barcode = {str(p.get("barcode") or ""): p for p in products}
+
+    gross_sales = 0.0
+    sales_net = 0.0
+    discounts = 0.0
+    refunds = 0.0
+    cash_sales = 0.0
+    card_sales = 0.0
+    legacy_untyped_payment_sales = 0.0
+    items_sold = 0
+    sale_count = 0
+    refund_count = 0
+    gross_profit = 0.0
+    by_cashier = {}
+    by_product = {}
+    day_buckets = {}
+
+    span_days = (window["end_date"] - window["start_date"]).days + 1
+
+    for row in rows:
+        transaction_type = str(row["transaction_type"] or "sale").strip().lower()
+        total_amount = abs(parse_float(row["total_amount"], 0.0))
+        subtotal_amount = abs(parse_float(row["subtotal_amount"], 0.0))
+        discount_amount = abs(parse_float(row["discount_amount"], 0.0))
+        payment_method = str(row["payment_method"] or "").strip().lower()
+        created_at = str(row["created_at"] or "")
+        sale_day = created_at[:10]
+        cashier_name = str(row["cashier_name"] or "Unknown")
+        items = _safe_json_loads(row["items"])
+
+        day_bucket = day_buckets.setdefault(
+            sale_day,
+            {
+                "date": sale_day,
+                "label": sale_day[5:].replace('-', '/'),
+                "gross_sales": 0.0,
+                "discounts": 0.0,
+                "net_sales": 0.0,
+                "refund_total": 0.0,
+                "net_after_refunds": 0.0,
+                "gross_profit": 0.0,
+                "sale_count": 0,
+                "refund_count": 0,
+                "items_sold": 0,
+            },
+        )
+        cashier_bucket = by_cashier.setdefault(
+            cashier_name,
+            {
+                "cashier_name": cashier_name,
+                "sale_count": 0,
+                "refund_count": 0,
+                "transaction_count": 0,
+                "items_sold": 0,
+                "gross_sales": 0.0,
+                "discounts": 0.0,
+                "net_sales": 0.0,
+                "refund_total": 0.0,
+                "net_after_refunds": 0.0,
+                "gross_profit": 0.0,
+            },
+        )
+
+        row_profit = 0.0
+        if transaction_type == "refund":
+            refund_count += 1
+            refunds += total_amount
+            day_bucket["refund_count"] += 1
+            day_bucket["refund_total"] += total_amount
+            cashier_bucket["refund_count"] += 1
+            cashier_bucket["transaction_count"] += 1
+            cashier_bucket["refund_total"] += total_amount
+        else:
+            sale_count += 1
+            effective_subtotal = subtotal_amount if subtotal_amount > 0 else total_amount + discount_amount
+            gross_sales += effective_subtotal
+            discounts += discount_amount
+            sales_net += total_amount
+            day_bucket["sale_count"] += 1
+            day_bucket["gross_sales"] += effective_subtotal
+            day_bucket["discounts"] += discount_amount
+            day_bucket["net_sales"] += total_amount
+            cashier_bucket["sale_count"] += 1
+            cashier_bucket["transaction_count"] += 1
+            cashier_bucket["gross_sales"] += effective_subtotal
+            cashier_bucket["discounts"] += discount_amount
+            cashier_bucket["net_sales"] += total_amount
+            if payment_method == "card":
+                card_sales += total_amount
+            elif payment_method == "cash":
+                cash_sales += total_amount
+            else:
+                cash_sales += total_amount
+                legacy_untyped_payment_sales += total_amount
+
+        for item in items:
+            quantity = max(_extract_item_quantity(item), 0)
+            if quantity <= 0:
+                continue
+            barcode = _extract_item_barcode(item)
+            name = _extract_item_name(item)
+            unit_cost = _extract_item_cost_snapshot(item)
+            if unit_cost <= 0:
+                unit_cost = parse_float(product_by_barcode.get(barcode, {}).get("cost_price"), 0.0)
+            product_key = barcode or name
+            bucket = by_product.setdefault(
+                product_key,
+                {
+                    "barcode": barcode,
+                    "product_name": name,
+                    "quantity_sold": 0,
+                    "refunded_quantity": 0,
+                    "net_quantity_sold": 0,
+                    "sales_amount": 0.0,
+                    "refund_amount": 0.0,
+                    "net_sales_after_refunds": 0.0,
+                    "net_cost_amount": 0.0,
+                    "estimated_profit": 0.0,
+                },
+            )
+            if transaction_type == "refund":
+                amount = _extract_item_refund_amount(item)
+                cost_total = unit_cost * quantity
+                bucket["refunded_quantity"] += quantity
+                bucket["refund_amount"] += amount
+                bucket["net_sales_after_refunds"] -= amount
+                bucket["net_cost_amount"] -= cost_total
+                bucket["estimated_profit"] -= (amount - cost_total)
+                row_profit += (amount - cost_total)
+            else:
+                amount = _extract_item_sales_amount(item)
+                cost_total = unit_cost * quantity
+                items_sold += quantity
+                day_bucket["items_sold"] += quantity
+                cashier_bucket["items_sold"] += quantity
+                bucket["quantity_sold"] += quantity
+                bucket["sales_amount"] += amount
+                bucket["net_sales_after_refunds"] += amount
+                bucket["net_cost_amount"] += cost_total
+                bucket["estimated_profit"] += (amount - cost_total)
+                row_profit += (amount - cost_total)
+
+        if transaction_type == "refund":
+            gross_profit -= row_profit
+            day_bucket["gross_profit"] -= row_profit
+            cashier_bucket["gross_profit"] -= row_profit
+        else:
+            gross_profit += row_profit
+            day_bucket["gross_profit"] += row_profit
+            cashier_bucket["gross_profit"] += row_profit
+
+        day_bucket["net_after_refunds"] = day_bucket["net_sales"] - day_bucket["refund_total"]
+        cashier_bucket["net_after_refunds"] = cashier_bucket["net_sales"] - cashier_bucket["refund_total"]
+
+    average_sale = (sales_net / sale_count) if sale_count > 0 else 0.0
+    net_after_refunds = sales_net - refunds
+    margin_percent = (gross_profit / net_after_refunds * 100.0) if net_after_refunds > 0 else 0.0
+
+    trend = []
+    days_with_sales = 0
+    for i in range(span_days):
+        day = window["start_date"] + timedelta(days=i)
+        key = day.isoformat()
+        existing = day_buckets.get(key, {
+            "date": key,
+            "label": key[5:].replace('-', '/'),
+            "gross_sales": 0.0,
+            "discounts": 0.0,
+            "net_sales": 0.0,
+            "refund_total": 0.0,
+            "net_after_refunds": 0.0,
+            "gross_profit": 0.0,
+            "sale_count": 0,
+            "refund_count": 0,
+            "items_sold": 0,
+        })
+        for k in ["gross_sales", "discounts", "net_sales", "refund_total", "net_after_refunds", "gross_profit"]:
+            existing[k] = round(parse_float(existing[k], 0.0), 2)
+        if existing["sale_count"] or existing["refund_count"]:
+            days_with_sales += 1
+        trend.append(existing)
+
+    cashier_summary = sorted(by_cashier.values(), key=lambda item: (item["net_after_refunds"], item["sale_count"]), reverse=True)
+    for row in cashier_summary:
+        sales_only = parse_int(row["sale_count"], 0)
+        for k in ["gross_sales", "discounts", "net_sales", "refund_total", "net_after_refunds", "gross_profit"]:
+            row[k] = round(parse_float(row[k], 0.0), 2)
+        row["average_sale"] = round(parse_float(row["net_after_refunds"], 0.0) / sales_only, 2) if sales_only > 0 else 0.0
+
+    top_products = sorted(by_product.values(), key=lambda item: (item["net_sales_after_refunds"], item["quantity_sold"] - item["refunded_quantity"]), reverse=True)[:8]
+    for row in top_products:
+        row["net_quantity_sold"] = parse_int(row["quantity_sold"], 0) - parse_int(row["refunded_quantity"], 0)
+        for k in ["sales_amount", "refund_amount", "net_sales_after_refunds", "net_cost_amount", "estimated_profit"]:
+            row[k] = round(parse_float(row[k], 0.0), 2)
+        sales_val = parse_float(row["net_sales_after_refunds"], 0.0)
+        profit_val = parse_float(row["estimated_profit"], 0.0)
+        row["margin_percent"] = round((profit_val / sales_val * 100.0), 1) if sales_val > 0 else 0.0
+
+    sold_map = {str(item.get("barcode") or item.get("product_name") or ""): item for item in by_product.values()}
+    slow_movers = []
+    for product in products:
+        stock = parse_int(product.get("stock", 0), 0)
+        if stock <= 0:
+            continue
+        key = str(product.get("barcode") or product.get("name") or "")
+        sold = sold_map.get(key, {})
+        qty = max(parse_int(sold.get("net_quantity_sold", sold.get("quantity_sold", 0)), 0), 0)
+        slow_movers.append({
+            "barcode": product.get("barcode"),
+            "product_name": product.get("name"),
+            "quantity_sold": qty,
+            "stock": stock,
+            "stock_value": round(stock * parse_float(product.get("cost_price"), 0.0), 2),
+        })
+    slow_movers = sorted(slow_movers, key=lambda item: (item["quantity_sold"], -item["stock_value"]))[:8]
+
+    return {
+        "window": {
+            "range_key": window["range_key"],
+            "label": window["label"],
+            "start_date": window["start_date"].isoformat(),
+            "end_date": window["end_date"].isoformat(),
+            "days_in_window": span_days,
+            "days_with_sales": days_with_sales,
+        },
+        "summary": {
+            "gross_sales": round(gross_sales, 2),
+            "net_sales": round(sales_net, 2),
+            "net_after_refunds": round(net_after_refunds, 2),
+            "discounts": round(discounts, 2),
+            "refunds": round(refunds, 2),
+            "refund_count": refund_count,
+            "cash_sales": round(cash_sales, 2),
+            "card_sales": round(card_sales, 2),
+            "legacy_untyped_payment_sales": round(legacy_untyped_payment_sales, 2),
+            "payment_data_complete": legacy_untyped_payment_sales <= 0.0,
+            "sale_count": sale_count,
+            "transaction_count": sale_count + refund_count,
+            "items_sold": items_sold,
+            "average_sale": round(average_sale, 2),
+            "gross_profit": round(gross_profit, 2),
+            "profit": round(gross_profit, 2),
+            "margin_percent": round(margin_percent, 1),
+        },
+        "trend": trend,
+        "cashier_summary": cashier_summary,
+        "top_products": top_products,
+        "slow_movers": slow_movers,
+    }
+
+
+
 def init_db():
     conn = get_db()
     c = conn.cursor()
@@ -923,6 +1297,14 @@ def init_db():
         )
         """
     )
+
+    ensure_column(c, "sales", "subtotal_amount", "subtotal_amount REAL DEFAULT 0")
+    ensure_column(c, "sales", "discount_amount", "discount_amount REAL DEFAULT 0")
+    ensure_column(c, "sales", "discount_type", "discount_type TEXT")
+    ensure_column(c, "sales", "payment_method", "payment_method TEXT")
+    ensure_column(c, "sales", "transaction_type", "transaction_type TEXT DEFAULT 'sale'")
+    ensure_column(c, "sales", "items_count", "items_count INTEGER DEFAULT 0")
+    ensure_column(c, "sales", "gross_profit", "gross_profit REAL DEFAULT 0")
 
     c.execute(
         """
@@ -1091,8 +1473,8 @@ class APIHandler(BaseHTTPRequestHandler):
             rows = c.execute(
                 """
                 SELECT cashier_name,
-                       SUM(total_amount) AS total_sales,
-                       COUNT(id) AS transaction_count
+                       SUM(CASE WHEN COALESCE(transaction_type, 'sale') = 'refund' THEN -COALESCE(total_amount, 0) ELSE COALESCE(total_amount, 0) END) AS total_sales,
+                       SUM(CASE WHEN COALESCE(transaction_type, 'sale') = 'sale' THEN 1 ELSE 0 END) AS transaction_count
                 FROM sales
                 WHERE DATE(created_at) = DATE('now','localtime')
                 GROUP BY cashier_name
@@ -1100,7 +1482,7 @@ class APIHandler(BaseHTTPRequestHandler):
             ).fetchall()
 
             cashier_sales = [dict(r) for r in rows]
-            grand_total = sum(float(r["total_sales"]) for r in rows) if rows else 0
+            grand_total = sum(float(r["total_sales"] or 0) for r in rows) if rows else 0
 
             self._set_headers()
             self.wfile.write(
@@ -1143,6 +1525,18 @@ class APIHandler(BaseHTTPRequestHandler):
                     {
                         "status": "success",
                         "alerts": alerts,
+                    }
+                ).encode()
+            )
+
+        elif action == "get_owner_sales_report":
+            report = _build_owner_sales_report(c, params)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "status": "success",
+                        **report,
                     }
                 ).encode()
             )
@@ -1266,24 +1660,59 @@ class APIHandler(BaseHTTPRequestHandler):
                         conn.close()
                         return
 
+                subtotal_amount = parse_float(data.get("subtotal_amount", 0), 0.0)
+                total_amount = parse_float(data.get("total_amount", 0), 0.0)
+                discount_amount = parse_float(data.get("discount_amount", 0), 0.0)
+                payment_method = str(data.get("payment_method", "") or "").strip().lower()
+                if subtotal_amount <= 0:
+                    subtotal_amount = total_amount + max(discount_amount, 0.0)
+                if discount_amount <= 0 and subtotal_amount > total_amount:
+                    discount_amount = subtotal_amount - total_amount
+                items_count = sum(max(_extract_item_quantity(item), 0) for item in items)
+                gross_profit = 0.0
+                for item in items:
+                    quantity = max(_extract_item_quantity(item), 0)
+                    barcode = _extract_item_barcode(item)
+                    unit_price = max(_extract_item_price(item), 0.0)
+                    product_row = get_product_row(c, barcode) if barcode else None
+                    unit_cost = parse_float(product_row["cost_price"], 0.0) if product_row else 0.0
+                    gross_profit += (unit_price - unit_cost) * quantity
+
+                created_at = str(data.get("created_at", "") or "").strip() or datetime.now().astimezone().isoformat()
+
                 c.execute(
-                    f"""
+                    """
                     INSERT INTO sales (
                         total_amount,
+                        subtotal_amount,
+                        discount_amount,
+                        discount_type,
+                        payment_method,
+                        transaction_type,
+                        items_count,
+                        gross_profit,
                         cashier_name,
                         branch,
                         vendor,
                         items,
                         created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, {now_sql()})
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        data.get("total_amount", 0),
+                        total_amount,
+                        subtotal_amount,
+                        discount_amount,
+                        str(data.get("discount_type", "") or ""),
+                        payment_method,
+                        transaction_type,
+                        items_count,
+                        gross_profit,
                         data.get("cashier", "Unknown"),
                         data.get("branch", ""),
                         data.get("vendor", ""),
                         json.dumps(items),
+                        created_at,
                     ),
                 )
                 sale_id = c.lastrowid
@@ -1773,6 +2202,7 @@ def main():
 ║     GET  ?action=get_sales               → Dashboard     ║
 ║     GET  ?action=get_owner_dashboard     → Owner home    ║
 ║     GET  ?action=get_owner_alerts        → Owner alerts  ║
+║     GET  ?action=get_owner_sales_report  → Sales report  ║
 ║     GET  ?action=get_suppliers           → Suppliers     ║
 ║     GET  ?action=get_inventory_history   → History       ║
 ║     POST ?action=pos_sync                → POS sync      ║

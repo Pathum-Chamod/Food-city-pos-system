@@ -24,6 +24,9 @@ class AdminProvider with ChangeNotifier {
   List<Map<String, dynamic>> _ownerTopProducts = [];
   List<Map<String, dynamic>> _ownerAlerts = [];
 
+  bool _isOwnerSalesLoading = false;
+  Map<String, dynamic> _ownerSalesReport = {};
+
   List<Product> get products => _products;
   bool get isLoading => _isLoading;
   double get todayTotalSales => _todayTotalSales;
@@ -35,6 +38,14 @@ class AdminProvider with ChangeNotifier {
   List<Map<String, dynamic>> get ownerSalesTrend => _ownerSalesTrend;
   List<Map<String, dynamic>> get ownerTopProducts => _ownerTopProducts;
   List<Map<String, dynamic>> get ownerAlerts => _ownerAlerts;
+
+  bool get isOwnerSalesLoading => _isOwnerSalesLoading;
+  Map<String, dynamic> get ownerSalesReport => _ownerSalesReport;
+  Map<String, dynamic> get ownerSalesSummary => Map<String, dynamic>.from((_ownerSalesReport['summary'] as Map?) ?? <String, dynamic>{});
+  List<Map<String, dynamic>> get ownerSalesTrendReport => ((_ownerSalesReport['trend'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
+  List<Map<String, dynamic>> get ownerSalesCashiers => ((_ownerSalesReport['cashier_summary'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
+  List<Map<String, dynamic>> get ownerSalesTopProducts => ((_ownerSalesReport['top_products'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
+  List<Map<String, dynamic>> get ownerSalesSlowMovers => ((_ownerSalesReport['slow_movers'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
 
   List<Map<String, dynamic>> get topAlertsPreview => _ownerAlerts.take(3).toList();
 
@@ -179,6 +190,149 @@ class AdminProvider with ChangeNotifier {
 
     _ownerAlerts = _buildFallbackAlertsFromProducts();
     notifyListeners();
+  }
+
+  Future<void> fetchOwnerSalesReport({
+    String range = 'today',
+    DateTime? specificDate,
+    DateTimeRange? dateRange,
+  }) async {
+    _isOwnerSalesLoading = true;
+    notifyListeners();
+
+    try {
+      final query = <String, String>{'action': 'get_owner_sales_report'};
+
+      switch (range) {
+        case 'last7':
+          query['range'] = '7d';
+          break;
+        case 'last30':
+          query['range'] = '30d';
+          break;
+        case 'specific':
+          query['range'] = 'specific';
+          query['date'] = _formatDateOnly(specificDate ?? DateTime.now());
+          break;
+        case 'custom':
+          final start = dateRange?.start ?? DateTime.now();
+          final end = dateRange?.end ?? DateTime.now();
+          query['range'] = 'custom';
+          query['start_date'] = _formatDateOnly(start);
+          query['end_date'] = _formatDateOnly(end);
+          break;
+        case 'today':
+        default:
+          query['range'] = 'today';
+      }
+
+      final uri = Uri.parse(apiUrl).replace(queryParameters: query);
+      final response = await http.get(uri);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          _ownerSalesReport = Map<String, dynamic>.from(data as Map);
+          _isOwnerSalesLoading = false;
+          notifyListeners();
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint('Owner sales report fetch error: $e');
+    }
+
+    _ownerSalesReport = _buildFallbackOwnerSalesReport(
+      range: range,
+      specificDate: specificDate,
+      dateRange: dateRange,
+    );
+    _isOwnerSalesLoading = false;
+    notifyListeners();
+  }
+
+  Map<String, dynamic> _buildFallbackOwnerSalesReport({
+    required String range,
+    DateTime? specificDate,
+    DateTimeRange? dateRange,
+  }) {
+    final now = DateTime.now();
+    DateTime start;
+    DateTime end;
+    String label;
+
+    switch (range) {
+      case 'last7':
+        start = DateTime(now.year, now.month, now.day).subtract(const Duration(days: 6));
+        end = DateTime(now.year, now.month, now.day);
+        label = 'Last 7 Days';
+        break;
+      case 'last30':
+        start = DateTime(now.year, now.month, now.day).subtract(const Duration(days: 29));
+        end = DateTime(now.year, now.month, now.day);
+        label = 'Last 30 Days';
+        break;
+      case 'specific':
+        final picked = specificDate ?? now;
+        start = DateTime(picked.year, picked.month, picked.day);
+        end = start;
+        label = _formatDateOnly(start);
+        break;
+      case 'custom':
+        start = DateTime(
+          (dateRange?.start ?? now).year,
+          (dateRange?.start ?? now).month,
+          (dateRange?.start ?? now).day,
+        );
+        end = DateTime(
+          (dateRange?.end ?? now).year,
+          (dateRange?.end ?? now).month,
+          (dateRange?.end ?? now).day,
+        );
+        label = '${_formatDateOnly(start)} to ${_formatDateOnly(end)}';
+        break;
+      case 'today':
+      default:
+        start = DateTime(now.year, now.month, now.day);
+        end = start;
+        label = 'Today';
+    }
+
+    return {
+      'window': {
+        'range_key': range,
+        'label': label,
+        'start_date': _formatDateOnly(start),
+        'end_date': _formatDateOnly(end),
+      },
+      'summary': {
+        'gross_sales': _todayTotalSales,
+        'net_sales': _todayTotalSales,
+        'discounts': 0.0,
+        'refunds': 0.0,
+        'cash_sales': 0.0,
+        'card_sales': 0.0,
+        'transaction_count': transactionCount,
+        'items_sold': 0,
+        'average_sale': averageSale,
+        'gross_profit': 0.0,
+        'margin_percent': 0.0,
+      },
+      'trend': <Map<String, dynamic>>[],
+      'cashier_summary': _cashierBreakdown
+          .map((item) => {
+                'cashier_name': (item['cashier_name'] ?? 'Unknown').toString(),
+                'transaction_count': int.tryParse('${item['transaction_count'] ?? 0}') ?? 0,
+                'items_sold': 0,
+                'net_sales': double.tryParse('${item['total_sales'] ?? 0}') ?? 0.0,
+                'refund_total': 0.0,
+                'gross_profit': 0.0,
+                'average_sale': 0.0,
+              })
+          .toList(),
+      'top_products': <Map<String, dynamic>>[],
+      'slow_movers': <Map<String, dynamic>>[],
+    };
   }
 
   Future<void> fetchSuppliers() async {
@@ -417,6 +571,14 @@ class AdminProvider with ChangeNotifier {
     }
 
     return alerts;
+  }
+
+
+  String _formatDateOnly(DateTime value) {
+    final y = value.year.toString().padLeft(4, '0');
+    final m = value.month.toString().padLeft(2, '0');
+    final d = value.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
   }
 
   String _historyTitle(String movementType) {

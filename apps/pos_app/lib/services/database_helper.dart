@@ -1942,8 +1942,41 @@ class DatabaseHelper {
           );
         }
 
+        final syncItems = saleItemInputs.map((item) {
+          final barcode = item['barcode'] as String;
+          final productName = item['product_name'] as String;
+          final unitPrice = (item['unit_price'] as num).toDouble();
+          final priceCategoryUsed =
+              (item['price_category_used'] ?? 'selling').toString();
+          final costPriceSnapshot =
+              (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
+          final quantity = item['quantity'] as int;
+          final baseLineTotal = (item['base_line_total'] as num).toDouble();
+          final itemDiscount =
+              (item['item_discount_amount'] as num?)?.toDouble() ?? 0.0;
+          final finalLineTotal = (item['line_total'] as num).toDouble();
+
+          return {
+            'product': {
+              'barcode': barcode,
+              'name': productName,
+              'price': unitPrice,
+              'selling_price': unitPrice,
+              'cost_price': costPriceSnapshot,
+            },
+            'quantity': quantity,
+            'unit_price_used': unitPrice,
+            'price_type_used': priceCategoryUsed,
+            'cost_price_snapshot': costPriceSnapshot,
+            'base_line_total': baseLineTotal,
+            'item_discount_amount': itemDiscount,
+            'line_total': finalLineTotal,
+          };
+        }).toList(growable: false);
+
         final syncData = jsonEncode({
           'local_sale_id': saleId,
+          'created_at': now,
           'subtotal_amount': signedSubtotal,
           'discount_type': resolvedDiscountType,
           'discount_value': resolvedDiscountValue,
@@ -1956,7 +1989,7 @@ class DatabaseHelper {
           'payment_method': resolvedPaymentMethod,
           'amount_tendered': resolvedAmountTendered,
           'change_amount': resolvedChangeAmount,
-          'items': cartItems,
+          'items': syncItems,
         });
 
         await txn.insert('sync_queue', {
@@ -2177,6 +2210,7 @@ class DatabaseHelper {
 
         final syncData = jsonEncode({
           'local_sale_id': refundSaleId,
+          'created_at': now,
           'subtotal_amount': -refundTotal,
           'discount_type': 'none',
           'discount_value': 0.0,
