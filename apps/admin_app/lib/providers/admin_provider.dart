@@ -27,6 +27,11 @@ class AdminProvider with ChangeNotifier {
   bool _isOwnerSalesLoading = false;
   Map<String, dynamic> _ownerSalesReport = {};
 
+  bool _isOwnerUsersLoading = false;
+  Map<String, dynamic> _ownerUsersSummary = {};
+  List<Map<String, dynamic>> _ownerUsers = [];
+  List<Map<String, dynamic>> _ownerActivityLogs = [];
+
   List<Product> get products => _products;
   bool get isLoading => _isLoading;
   double get todayTotalSales => _todayTotalSales;
@@ -46,6 +51,11 @@ class AdminProvider with ChangeNotifier {
   List<Map<String, dynamic>> get ownerSalesCashiers => ((_ownerSalesReport['cashier_summary'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
   List<Map<String, dynamic>> get ownerSalesTopProducts => ((_ownerSalesReport['top_products'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
   List<Map<String, dynamic>> get ownerSalesSlowMovers => ((_ownerSalesReport['slow_movers'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
+
+  bool get isOwnerUsersLoading => _isOwnerUsersLoading;
+  Map<String, dynamic> get ownerUsersSummary => _ownerUsersSummary;
+  List<Map<String, dynamic>> get ownerUsers => _ownerUsers;
+  List<Map<String, dynamic>> get ownerActivityLogs => _ownerActivityLogs;
 
   List<Map<String, dynamic>> get topAlertsPreview => _ownerAlerts.take(3).toList();
 
@@ -335,6 +345,206 @@ class AdminProvider with ChangeNotifier {
     };
   }
 
+
+  Future<void> fetchOwnerUsersActivity({
+    String userSearch = '',
+    String role = 'all',
+    String status = 'all',
+    String activitySearch = '',
+    String activityFilter = 'all',
+    int activityLimit = 30,
+  }) async {
+    _isOwnerUsersLoading = true;
+    notifyListeners();
+
+    try {
+      final summaryUri = Uri.parse(apiUrl).replace(
+        queryParameters: const {'action': 'get_owner_user_summary'},
+      );
+      final usersUri = Uri.parse(apiUrl).replace(
+        queryParameters: {
+          'action': 'get_owner_users',
+          'search': userSearch,
+          'role': role,
+          'status': status,
+        },
+      );
+      final logsUri = Uri.parse(apiUrl).replace(
+        queryParameters: {
+          'action': 'get_owner_activity_logs',
+          'search': activitySearch,
+          'filter': activityFilter,
+          'limit': '$activityLimit',
+        },
+      );
+
+      final summaryResponse = await http.get(summaryUri);
+      final usersResponse = await http.get(usersUri);
+      final logsResponse = await http.get(logsUri);
+
+      if (summaryResponse.statusCode == 200) {
+        final data = json.decode(summaryResponse.body);
+        if (data['status'] == 'success') {
+          _ownerUsersSummary = Map<String, dynamic>.from(
+            (data['summary'] as Map?) ?? <String, dynamic>{},
+          );
+        }
+      }
+
+      if (usersResponse.statusCode == 200) {
+        final data = json.decode(usersResponse.body);
+        if (data['status'] == 'success') {
+          _ownerUsers = ((data['users'] as List?) ?? [])
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
+        }
+      }
+
+      if (logsResponse.statusCode == 200) {
+        final data = json.decode(logsResponse.body);
+        if (data['status'] == 'success') {
+          _ownerActivityLogs = ((data['logs'] as List?) ?? [])
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('Owner users/activity fetch error: $e');
+      _ownerUsersSummary = {};
+      _ownerUsers = [];
+      _ownerActivityLogs = [];
+    }
+
+    _isOwnerUsersLoading = false;
+    notifyListeners();
+  }
+
+
+
+  Future<String?> _postOwnerUserAction(
+    String action,
+    Map<String, dynamic> payload,
+  ) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$apiUrl?action=$action'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode(payload),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          return null;
+        }
+        return (data['message'] ?? 'Request failed').toString();
+      }
+
+      try {
+        final data = json.decode(response.body);
+        return (data['message'] ?? 'Request failed').toString();
+      } catch (_) {
+        return 'Request failed';
+      }
+    } catch (e) {
+      debugPrint('Owner user action error ($action): $e');
+      return 'Network error';
+    }
+  }
+
+  Future<String?> createOwnerUser({
+    required String name,
+    required String role,
+    required String pin,
+  }) async {
+    final message = await _postOwnerUserAction(
+      'create_owner_user',
+      {
+        'name': name,
+        'role': role,
+        'pin': pin,
+        'actor_name': 'Admin Mobile',
+      },
+    );
+    if (message == null) {
+      await fetchOwnerUsersActivity();
+    }
+    return message;
+  }
+
+  Future<String?> updateOwnerUserProfile({
+    required int userId,
+    required String name,
+    required String role,
+  }) async {
+    final message = await _postOwnerUserAction(
+      'update_owner_user',
+      {
+        'user_id': userId,
+        'name': name,
+        'role': role,
+        'actor_name': 'Admin Mobile',
+      },
+    );
+    if (message == null) {
+      await fetchOwnerUsersActivity();
+    }
+    return message;
+  }
+
+  Future<String?> resetOwnerUserPin({
+    required int userId,
+    required String newPin,
+  }) async {
+    final message = await _postOwnerUserAction(
+      'reset_owner_user_pin',
+      {
+        'user_id': userId,
+        'new_pin': newPin,
+        'actor_name': 'Admin Mobile',
+      },
+    );
+    if (message == null) {
+      await fetchOwnerUsersActivity();
+    }
+    return message;
+  }
+
+  Future<String?> setOwnerUserActiveStatus({
+    required int userId,
+    required bool isActive,
+  }) async {
+    final message = await _postOwnerUserAction(
+      'set_owner_user_active_status',
+      {
+        'user_id': userId,
+        'is_active': isActive,
+        'actor_name': 'Admin Mobile',
+      },
+    );
+    if (message == null) {
+      await fetchOwnerUsersActivity();
+    }
+    return message;
+  }
+
+  Future<String?> setOwnerUserFullAccess({
+    required int userId,
+    required bool hasFullAccess,
+  }) async {
+    final message = await _postOwnerUserAction(
+      'set_owner_user_full_access',
+      {
+        'user_id': userId,
+        'has_full_access': hasFullAccess,
+        'actor_name': 'Admin Mobile',
+      },
+    );
+    if (message == null) {
+      await fetchOwnerUsersActivity();
+    }
+    return message;
+  }
   Future<void> fetchSuppliers() async {
     try {
       final response = await http.get(Uri.parse('$apiUrl?action=get_suppliers'));

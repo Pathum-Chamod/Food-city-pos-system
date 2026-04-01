@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'admin_home.dart';
+import 'users_activity_screen.dart';
 
 class OwnerMoreScreen extends StatelessWidget {
   const OwnerMoreScreen({super.key});
@@ -26,13 +27,21 @@ class OwnerMoreScreen extends StatelessWidget {
             status: 'Coming Soon',
             enabled: false,
           ),
-          const _FeatureTile(
+          _FeatureTile(
             icon: Icons.group_outlined,
-            color: Color(0xFF147A5A),
+            color: const Color(0xFF147A5A),
             title: 'Users & Activity',
             subtitle: 'Owner users, activity logs, and permission controls.',
-            status: 'Coming Soon',
-            enabled: false,
+            status: 'Available',
+            enabled: true,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const UsersActivityScreen(),
+                ),
+              );
+            },
           ),
           const _FeatureTile(
             icon: Icons.ios_share_outlined,

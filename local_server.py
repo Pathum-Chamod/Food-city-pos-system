@@ -14,6 +14,79 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "local_admin.db")
+POS_DB_PATH = os.path.join(os.path.dirname(__file__), "apps", "pos_app", ".dart_tool", "sqflite_common_ffi", "databases", "food_city_pos.db")
+
+
+def get_pos_db():
+    conn = sqlite3.connect(POS_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def get_owner_users_db():
+    if os.path.exists(POS_DB_PATH):
+        return get_pos_db()
+    return get_db()
+
+def _db_identity(path):
+    return os.path.abspath(path)
+
+
+def _get_user_db_connections(include_backend=True):
+    conns = []
+    seen = set()
+    if os.path.exists(POS_DB_PATH):
+        pos_abs = _db_identity(POS_DB_PATH)
+        if pos_abs not in seen:
+            conns.append(("pos", get_pos_db(), pos_abs))
+            seen.add(pos_abs)
+    if include_backend:
+        admin_abs = _db_identity(DB_PATH)
+        if admin_abs not in seen and os.path.exists(DB_PATH):
+            conns.append(("admin", get_db(), admin_abs))
+            seen.add(admin_abs)
+    return conns
+
+
+def _close_user_db_connections(conns):
+    for _name, conn, _path in conns:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _dedupe_user_rows(rows):
+    seen = set()
+    output = []
+    for row in rows:
+        row_id = parse_int(row.get("id"), 0)
+        name = str(row.get("name") or "").strip().lower()
+        pin = str(row.get("pin") or "").strip()
+        key = (row_id if row_id > 0 else None, name, pin)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(row)
+    return output
+
+
+def _dedupe_activity_rows(rows):
+    seen = set()
+    output = []
+    for row in rows:
+        key = (
+            str(row.get("created_at") or ""),
+            str(row.get("action_type") or ""),
+            str(row.get("actor_name") or ""),
+            str(row.get("target_user_name") or ""),
+            str(row.get("description") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(row)
+    return output
 
 
 def get_db():
@@ -1239,6 +1312,523 @@ def _build_owner_sales_report(cursor, params):
 
 
 
+
+
+def _normalize_user_role(value):
+    normalized = str(value or '').strip().lower()
+    return 'manager' if normalized == 'manager' else 'cashier'
+
+
+def _normalize_user_status_filter(value):
+    normalized = str(value or '').strip().lower()
+    if normalized == 'active':
+        return 'active'
+    if normalized == 'inactive':
+        return 'inactive'
+    return 'all'
+
+
+def _normalize_user_log_filter(value):
+    normalized = str(value or '').strip().lower()
+    return normalized or 'all'
+
+
+def create_user_tables(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL,
+            pin TEXT UNIQUE NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            has_full_access INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_login_at TEXT,
+            created_by INTEGER,
+            updated_by INTEGER
+        )
+        """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor_user_id INTEGER,
+            actor_name TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            target_user_id INTEGER,
+            target_user_name TEXT,
+            description TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def insert_user_log(cursor, actor_user_id=None, actor_name='System', action_type='user_updated',
+                    target_user_id=None, target_user_name=None, description='', created_at=None):
+    cursor.execute(
+        """
+        INSERT INTO user_logs (
+            actor_user_id,
+            actor_name,
+            action_type,
+            target_user_id,
+            target_user_name,
+            description,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            actor_user_id,
+            str(actor_name or 'System').strip() or 'System',
+            str(action_type or 'user_updated').strip() or 'user_updated',
+            target_user_id,
+            str(target_user_name).strip() if target_user_name is not None else None,
+            str(description or '').strip() or 'User activity recorded',
+            created_at or datetime.now().astimezone().isoformat(),
+        ),
+    )
+
+
+def seed_users_if_needed(cursor):
+    count = cursor.execute("SELECT COUNT(*) AS count FROM users").fetchone()[0]
+    if count > 0:
+        return
+
+    now = datetime.now().astimezone().isoformat()
+    rows = [
+        ('Pathum (Manager)', 'manager', '1234', 1, 0, now, now, None, None, None),
+        ('Amal (Cashier)', 'cashier', '5555', 1, 0, now, now, None, None, None),
+    ]
+    cursor.executemany(
+        """
+        INSERT INTO users (
+            name, role, pin, is_active, has_full_access,
+            created_at, updated_at, last_login_at, created_by, updated_by
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    created = cursor.execute("SELECT id, name, role, created_at FROM users ORDER BY id ASC").fetchall()
+    for row in created:
+        insert_user_log(
+            cursor,
+            actor_user_id=None,
+            actor_name='System',
+            action_type='user_created',
+            target_user_id=row['id'],
+            target_user_name=row['name'],
+            description=f"Created user {row['name']} ({'Manager' if row['role'] == 'manager' else 'Cashier'})",
+            created_at=row['created_at'],
+        )
+
+
+def get_owner_user_summary(cursor):
+    row = cursor.execute(
+        """
+        SELECT
+            COUNT(*) AS total_users,
+            COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_users,
+            COALESCE(SUM(CASE WHEN role = 'manager' THEN 1 ELSE 0 END), 0) AS managers,
+            COALESCE(SUM(CASE WHEN role = 'cashier' THEN 1 ELSE 0 END), 0) AS cashiers
+        FROM users
+        """
+    ).fetchone()
+    return {
+        'total_users': parse_int(row['total_users'], 0),
+        'active_users': parse_int(row['active_users'], 0),
+        'managers': parse_int(row['managers'], 0),
+        'cashiers': parse_int(row['cashiers'], 0),
+    }
+
+
+def get_owner_users(cursor, params):
+    search = str(params.get('search', [''])[0] or '').strip().lower()
+    role = _normalize_user_role(params.get('role', ['all'])[0]) if str(params.get('role', ['all'])[0] or '').strip().lower() in {'manager','cashier'} else 'all'
+    status = _normalize_user_status_filter(params.get('status', ['all'])[0])
+
+    where_clauses = []
+    where_args = []
+
+    if role in {'manager', 'cashier'}:
+        where_clauses.append('role = ?')
+        where_args.append(role)
+    if status == 'active':
+        where_clauses.append('is_active = 1')
+    elif status == 'inactive':
+        where_clauses.append('is_active = 0')
+    if search:
+        where_clauses.append("(LOWER(name) LIKE ? OR LOWER(role) LIKE ? OR pin LIKE ?)")
+        pattern = f"%{search}%"
+        where_args.extend([pattern, pattern, pattern])
+
+    query = """
+        SELECT
+            id,
+            name,
+            role,
+            pin,
+            COALESCE(is_active, 1) AS is_active,
+            COALESCE(has_full_access, 0) AS has_full_access,
+            created_at,
+            updated_at,
+            last_login_at
+        FROM users
+    """
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY is_active DESC, role ASC, has_full_access DESC, name COLLATE NOCASE ASC"
+
+    merged_rows = []
+    conns = _get_user_db_connections(include_backend=True)
+    try:
+        for _name, conn, _path in conns:
+            cur = conn.cursor()
+            create_user_tables(cur)
+            seed_users_if_needed(cur)
+            conn.commit()
+            rows = cur.execute(query, where_args).fetchall()
+            merged_rows.extend([dict(row) for row in rows])
+    finally:
+        _close_user_db_connections(conns)
+
+    merged_rows = _dedupe_user_rows(merged_rows)
+    merged_rows.sort(key=lambda row: (-(parse_int(row.get('is_active'),1)), str(row.get('role') or ''), -parse_int(row.get('has_full_access'),0), str(row.get('name') or '').lower()))
+    return merged_rows
+
+
+def get_owner_activity_logs(cursor, params):
+    search = str(params.get('search', [''])[0] or '').strip().lower()
+    action_filter = _normalize_user_log_filter(params.get('filter', ['all'])[0])
+    limit = parse_int(params.get('limit', ['50'])[0], 50)
+    if limit <= 0:
+        limit = 50
+    if limit > 200:
+        limit = 200
+
+    where_clauses = []
+    where_args = []
+
+    if action_filter != 'all':
+        if action_filter == 'logins':
+            where_clauses.append("(action_type = 'login_success' OR action_type = 'login_failed' OR action_type = 'logout')")
+        elif action_filter == 'user_changes':
+            where_clauses.append("(action_type = 'user_created' OR action_type = 'user_updated' OR action_type = 'user_deactivated' OR action_type = 'user_reactivated' OR action_type = 'role_changed' OR action_type = 'full_access_granted' OR action_type = 'full_access_revoked')")
+        elif action_filter == 'pin_changes':
+            where_clauses.append("action_type = 'pin_reset'")
+        elif action_filter == 'approvals':
+            where_clauses.append("action_type = 'manager_approval'")
+        else:
+            where_clauses.append('action_type = ?')
+            where_args.append(action_filter)
+
+    if search:
+        where_clauses.append("(LOWER(actor_name) LIKE ? OR LOWER(COALESCE(target_user_name, '')) LIKE ? OR LOWER(description) LIKE ?)")
+        pattern = f"%{search}%"
+        where_args.extend([pattern, pattern, pattern])
+
+    query = """
+        SELECT
+            id,
+            actor_user_id,
+            actor_name,
+            action_type,
+            target_user_id,
+            target_user_name,
+            description,
+            created_at
+        FROM user_logs
+    """
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY datetime(created_at) DESC, id DESC"
+
+    merged_rows = []
+    conns = _get_user_db_connections(include_backend=True)
+    try:
+        for _name, conn, _path in conns:
+            cur = conn.cursor()
+            create_user_tables(cur)
+            conn.commit()
+            rows = cur.execute(query, where_args).fetchall()
+            merged_rows.extend([dict(row) for row in rows])
+    finally:
+        _close_user_db_connections(conns)
+
+    merged_rows = _dedupe_activity_rows(merged_rows)
+    merged_rows.sort(key=lambda row: str(row.get('created_at') or ''), reverse=True)
+    return merged_rows[:limit]
+
+
+
+def _active_manager_count(cursor, excluding_user_id=None):
+    query = """
+        SELECT COUNT(*) AS count
+        FROM users
+        WHERE role = 'manager' AND COALESCE(is_active, 1) = 1
+    """
+    args = []
+    if excluding_user_id is not None:
+        query += ' AND id != ?'
+        args.append(excluding_user_id)
+    row = cursor.execute(query, args).fetchone()
+    return parse_int(row['count'] if row else 0, 0)
+
+
+def create_owner_user(cursor, body):
+    create_user_tables(cursor)
+    seed_users_if_needed(cursor)
+
+    name = str(body.get('name', '') or '').strip()
+    role = _normalize_user_role(body.get('role', 'cashier'))
+    pin = str(body.get('pin', '') or '').strip()
+    actor_name = str(body.get('actor_name', 'Admin Mobile') or 'Admin Mobile').strip() or 'Admin Mobile'
+
+    if not name:
+        return False, 'User name is required'
+    if len(pin) != 4 or not pin.isdigit():
+        return False, 'PIN must be exactly 4 digits'
+
+    duplicate = cursor.execute(
+        'SELECT id FROM users WHERE pin = ? LIMIT 1',
+        (pin,),
+    ).fetchone()
+    if duplicate:
+        return False, 'PIN is already used by another user'
+
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        """
+        INSERT INTO users (
+            name, role, pin, is_active, has_full_access,
+            created_at, updated_at, last_login_at, created_by, updated_by
+        )
+        VALUES (?, ?, ?, 1, 0, ?, ?, NULL, NULL, NULL)
+        """,
+        (name, role, pin, now, now),
+    )
+    user_id = cursor.lastrowid
+    role_label = 'Manager' if role == 'manager' else 'Cashier'
+    insert_user_log(
+        cursor,
+        actor_user_id=None,
+        actor_name=actor_name,
+        action_type='user_created',
+        target_user_id=user_id,
+        target_user_name=name,
+        description=f'Created user {name} ({role_label})',
+        created_at=now,
+    )
+    return True, 'success'
+
+
+def update_owner_user(cursor, body):
+    create_user_tables(cursor)
+    seed_users_if_needed(cursor)
+
+    user_id = parse_int(body.get('user_id'), 0)
+    name = str(body.get('name', '') or '').strip()
+    role = _normalize_user_role(body.get('role', 'cashier'))
+    actor_name = str(body.get('actor_name', 'Admin Mobile') or 'Admin Mobile').strip() or 'Admin Mobile'
+
+    if user_id <= 0:
+        return False, 'Invalid user'
+    if not name:
+        return False, 'User name is required'
+
+    row = cursor.execute(
+        'SELECT id, name, role, COALESCE(is_active, 1) AS is_active FROM users WHERE id = ? LIMIT 1',
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return False, 'User not found'
+
+    old_name = str(row['name'] or '').strip()
+    old_role = _normalize_user_role(row['role'])
+    is_active = parse_int(row['is_active'], 1) == 1
+
+    if old_role == 'manager' and role != 'manager' and is_active:
+        if _active_manager_count(cursor) <= 1:
+            return False, 'You cannot change the last active manager to cashier'
+
+    now = datetime.now().astimezone().isoformat()
+    updates_has_full = 0 if role == 'manager' else None
+    if updates_has_full is None:
+        cursor.execute(
+            'UPDATE users SET name = ?, role = ?, updated_at = ?, updated_by = NULL WHERE id = ?',
+            (name, role, now, user_id),
+        )
+    else:
+        cursor.execute(
+            'UPDATE users SET name = ?, role = ?, has_full_access = 0, updated_at = ?, updated_by = NULL WHERE id = ?',
+            (name, role, now, user_id),
+        )
+
+    if old_role != role:
+        description = f'Changed role for {name} from {"Manager" if old_role == "manager" else "Cashier"} to {"Manager" if role == "manager" else "Cashier"}'
+        action_type = 'role_changed'
+    elif old_name != name:
+        description = f'Renamed user {old_name} to {name}'
+        action_type = 'user_updated'
+    else:
+        description = f'Updated user {name} ({"Manager" if role == "manager" else "Cashier"}) details'
+        action_type = 'user_updated'
+
+    insert_user_log(
+        cursor,
+        actor_user_id=None,
+        actor_name=actor_name,
+        action_type=action_type,
+        target_user_id=user_id,
+        target_user_name=name,
+        description=description,
+        created_at=now,
+    )
+    return True, 'success'
+
+
+def reset_owner_user_pin(cursor, body):
+    create_user_tables(cursor)
+    seed_users_if_needed(cursor)
+
+    user_id = parse_int(body.get('user_id'), 0)
+    new_pin = str(body.get('new_pin', '') or '').strip()
+    actor_name = str(body.get('actor_name', 'Admin Mobile') or 'Admin Mobile').strip() or 'Admin Mobile'
+
+    if user_id <= 0:
+        return False, 'Invalid user'
+    if len(new_pin) != 4 or not new_pin.isdigit():
+        return False, 'PIN must be exactly 4 digits'
+
+    row = cursor.execute('SELECT id, name FROM users WHERE id = ? LIMIT 1', (user_id,)).fetchone()
+    if not row:
+        return False, 'User not found'
+
+    duplicate = cursor.execute(
+        'SELECT id FROM users WHERE pin = ? AND id != ? LIMIT 1',
+        (new_pin, user_id),
+    ).fetchone()
+    if duplicate:
+        return False, 'PIN is already used by another user'
+
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        'UPDATE users SET pin = ?, updated_at = ?, updated_by = NULL WHERE id = ?',
+        (new_pin, now, user_id),
+    )
+    target_name = str(row['name'] or 'User')
+    insert_user_log(
+        cursor,
+        actor_user_id=None,
+        actor_name=actor_name,
+        action_type='pin_reset',
+        target_user_id=user_id,
+        target_user_name=target_name,
+        description=f'Reset PIN for {target_name}',
+        created_at=now,
+    )
+    return True, 'success'
+
+
+def set_owner_user_active_status(cursor, body):
+    create_user_tables(cursor)
+    seed_users_if_needed(cursor)
+
+    user_id = parse_int(body.get('user_id'), 0)
+    is_active = normalize_bool(body.get('is_active'), True)
+    actor_name = str(body.get('actor_name', 'Admin Mobile') or 'Admin Mobile').strip() or 'Admin Mobile'
+
+    if user_id <= 0:
+        return False, 'Invalid user'
+
+    row = cursor.execute(
+        'SELECT id, name, role, COALESCE(is_active, 1) AS is_active FROM users WHERE id = ? LIMIT 1',
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return False, 'User not found'
+
+    current_active = parse_int(row['is_active'], 1) == 1
+    current_role = _normalize_user_role(row['role'])
+    target_name = str(row['name'] or 'User').strip() or 'User'
+
+    if current_active == is_active:
+        return True, 'success'
+
+    if not is_active and current_role == 'manager' and _active_manager_count(cursor) <= 1:
+        return False, 'You cannot deactivate the last active manager'
+
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        'UPDATE users SET is_active = ?, updated_at = ?, updated_by = NULL WHERE id = ?',
+        (1 if is_active else 0, now, user_id),
+    )
+    action_type = 'user_reactivated' if is_active else 'user_deactivated'
+    description = ('Reactivated user ' if is_active else 'Deactivated user ') + target_name
+    insert_user_log(
+        cursor,
+        actor_user_id=None,
+        actor_name=actor_name,
+        action_type=action_type,
+        target_user_id=user_id,
+        target_user_name=target_name,
+        description=description,
+        created_at=now,
+    )
+    return True, 'success'
+
+
+def set_owner_user_full_access(cursor, body):
+    create_user_tables(cursor)
+    seed_users_if_needed(cursor)
+
+    user_id = parse_int(body.get('user_id'), 0)
+    has_full_access = normalize_bool(body.get('has_full_access'), False)
+    actor_name = str(body.get('actor_name', 'Admin Mobile') or 'Admin Mobile').strip() or 'Admin Mobile'
+
+    if user_id <= 0:
+        return False, 'Invalid user'
+
+    row = cursor.execute(
+        'SELECT id, name, role, COALESCE(has_full_access, 0) AS has_full_access FROM users WHERE id = ? LIMIT 1',
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return False, 'User not found'
+
+    role = _normalize_user_role(row['role'])
+    if role == 'manager':
+        return False, 'Managers already have full access by role'
+
+    current_full = parse_int(row['has_full_access'], 0) == 1
+    if current_full == has_full_access:
+        return True, 'success'
+
+    target_name = str(row['name'] or 'User').strip() or 'User'
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        'UPDATE users SET has_full_access = ?, updated_at = ?, updated_by = NULL WHERE id = ?',
+        (1 if has_full_access else 0, now, user_id),
+    )
+    action_type = 'full_access_granted' if has_full_access else 'full_access_revoked'
+    description = ('Granted full access to ' if has_full_access else 'Removed full access from ') + target_name
+    insert_user_log(
+        cursor,
+        actor_user_id=None,
+        actor_name=actor_name,
+        action_type=action_type,
+        target_user_id=user_id,
+        target_user_name=target_name,
+        description=description,
+        created_at=now,
+    )
+    return True, 'success'
 def init_db():
     conn = get_db()
     c = conn.cursor()
@@ -1440,6 +2030,10 @@ def init_db():
             )
         print("✅ Seeded 2 mock suppliers")
 
+
+    create_user_tables(c)
+    seed_users_if_needed(c)
+
     conn.commit()
     conn.close()
 
@@ -1495,6 +2089,51 @@ class APIHandler(BaseHTTPRequestHandler):
                 ).encode()
             )
 
+
+        elif action == "get_owner_user_summary":
+            owner_conn = get_owner_users_db()
+            owner_cursor = owner_conn.cursor()
+            try:
+                summary = get_owner_user_summary(owner_cursor)
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps({
+                        "status": "success",
+                        "summary": summary,
+                    }).encode()
+                )
+            finally:
+                owner_conn.close()
+
+        elif action == "get_owner_users":
+            owner_conn = get_owner_users_db()
+            owner_cursor = owner_conn.cursor()
+            try:
+                users = get_owner_users(owner_cursor, params)
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps({
+                        "status": "success",
+                        "users": users,
+                    }).encode()
+                )
+            finally:
+                owner_conn.close()
+
+        elif action == "get_owner_activity_logs":
+            owner_conn = get_owner_users_db()
+            owner_cursor = owner_conn.cursor()
+            try:
+                logs = get_owner_activity_logs(owner_cursor, params)
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps({
+                        "status": "success",
+                        "logs": logs,
+                    }).encode()
+                )
+            finally:
+                owner_conn.close()
 
         elif action == "get_owner_dashboard":
             today_rows = _sales_rows_between(
@@ -1976,6 +2615,146 @@ class APIHandler(BaseHTTPRequestHandler):
                     ).encode()
                 )
 
+        elif action == "create_owner_user":
+            conns = _get_user_db_connections(include_backend=True)
+            try:
+                ok = True
+                message = 'success'
+                for _name, owner_conn, _path in conns:
+                    owner_cursor = owner_conn.cursor()
+                    create_user_tables(owner_cursor)
+                    seed_users_if_needed(owner_cursor)
+                    ok, message = create_owner_user(owner_cursor, body)
+                    if not ok:
+                        break
+                if not ok:
+                    for _name, owner_conn, _path in conns:
+                        try:
+                            owner_conn.rollback()
+                        except Exception:
+                            pass
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    for _name, owner_conn, _path in conns:
+                        owner_conn.commit()
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+            finally:
+                _close_user_db_connections(conns)
+
+        elif action == "update_owner_user":
+            conns = _get_user_db_connections(include_backend=True)
+            try:
+                ok = True
+                message = 'success'
+                for _name, owner_conn, _path in conns:
+                    owner_cursor = owner_conn.cursor()
+                    create_user_tables(owner_cursor)
+                    seed_users_if_needed(owner_cursor)
+                    ok, message = update_owner_user(owner_cursor, body)
+                    if not ok:
+                        break
+                if not ok:
+                    for _name, owner_conn, _path in conns:
+                        try:
+                            owner_conn.rollback()
+                        except Exception:
+                            pass
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    for _name, owner_conn, _path in conns:
+                        owner_conn.commit()
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+            finally:
+                _close_user_db_connections(conns)
+
+        elif action == "reset_owner_user_pin":
+            conns = _get_user_db_connections(include_backend=True)
+            try:
+                ok = True
+                message = 'success'
+                for _name, owner_conn, _path in conns:
+                    owner_cursor = owner_conn.cursor()
+                    create_user_tables(owner_cursor)
+                    seed_users_if_needed(owner_cursor)
+                    ok, message = reset_owner_user_pin(owner_cursor, body)
+                    if not ok:
+                        break
+                if not ok:
+                    for _name, owner_conn, _path in conns:
+                        try:
+                            owner_conn.rollback()
+                        except Exception:
+                            pass
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    for _name, owner_conn, _path in conns:
+                        owner_conn.commit()
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+            finally:
+                _close_user_db_connections(conns)
+
+        elif action == "set_owner_user_active_status":
+            conns = _get_user_db_connections(include_backend=True)
+            try:
+                ok = True
+                message = 'success'
+                for _name, owner_conn, _path in conns:
+                    owner_cursor = owner_conn.cursor()
+                    create_user_tables(owner_cursor)
+                    seed_users_if_needed(owner_cursor)
+                    ok, message = set_owner_user_active_status(owner_cursor, body)
+                    if not ok:
+                        break
+                if not ok:
+                    for _name, owner_conn, _path in conns:
+                        try:
+                            owner_conn.rollback()
+                        except Exception:
+                            pass
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    for _name, owner_conn, _path in conns:
+                        owner_conn.commit()
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+            finally:
+                _close_user_db_connections(conns)
+
+        elif action == "set_owner_user_full_access":
+            conns = _get_user_db_connections(include_backend=True)
+            try:
+                ok = True
+                message = 'success'
+                for _name, owner_conn, _path in conns:
+                    owner_cursor = owner_conn.cursor()
+                    create_user_tables(owner_cursor)
+                    seed_users_if_needed(owner_cursor)
+                    ok, message = set_owner_user_full_access(owner_cursor, body)
+                    if not ok:
+                        break
+                if not ok:
+                    for _name, owner_conn, _path in conns:
+                        try:
+                            owner_conn.rollback()
+                        except Exception:
+                            pass
+                    self._set_headers(400)
+                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                else:
+                    for _name, owner_conn, _path in conns:
+                        owner_conn.commit()
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+            finally:
+                _close_user_db_connections(conns)
+
         elif action == "add_product":
             ok, message = create_or_update_product(
                 c,
@@ -2201,6 +2980,14 @@ def main():
 ║     GET  ?action=get_products            → Product list  ║
 ║     GET  ?action=get_sales               → Dashboard     ║
 ║     GET  ?action=get_owner_dashboard     → Owner home    ║
+║     GET  ?action=get_owner_user_summary  → Users counts  ║
+║     GET  ?action=get_owner_users         → Users list    ║
+║     GET  ?action=get_owner_activity_logs → Activity logs ║
+║     POST ?action=create_owner_user      → Add user      ║
+║     POST ?action=update_owner_user      → Edit user     ║
+║     POST ?action=reset_owner_user_pin   → Reset PIN     ║
+║     POST ?action=set_owner_user_active_status → Status  ║
+║     POST ?action=set_owner_user_full_access  → Access   ║
 ║     GET  ?action=get_owner_alerts        → Owner alerts  ║
 ║     GET  ?action=get_owner_sales_report  → Sales report  ║
 ║     GET  ?action=get_suppliers           → Suppliers     ║
