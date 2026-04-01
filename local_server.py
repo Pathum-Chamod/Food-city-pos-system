@@ -1314,6 +1314,124 @@ def _build_owner_sales_report(cursor, params):
 
 
 
+def create_business_info_table(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS business_info (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            store_name TEXT NOT NULL,
+            branch_name TEXT,
+            phone_number TEXT,
+            email TEXT,
+            address TEXT,
+            business_hours TEXT,
+            currency_code TEXT NOT NULL DEFAULT 'LKR',
+            business_note TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def seed_business_info_if_needed(cursor):
+    create_business_info_table(cursor)
+    row = cursor.execute('SELECT id FROM business_info WHERE id = 1 LIMIT 1').fetchone()
+    if row:
+        return
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        """
+        INSERT INTO business_info (
+            id, store_name, branch_name, phone_number, email, address,
+            business_hours, currency_code, business_note, updated_at
+        )
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            'Food City',
+            'Main Branch',
+            '',
+            '',
+            '',
+            '8:00 AM - 10:00 PM',
+            'LKR',
+            '',
+            now,
+        ),
+    )
+
+
+def get_business_info(cursor):
+    create_business_info_table(cursor)
+    seed_business_info_if_needed(cursor)
+    row = cursor.execute(
+        """
+        SELECT id, store_name, branch_name, phone_number, email, address,
+               business_hours, currency_code, business_note, updated_at
+        FROM business_info
+        WHERE id = 1
+        LIMIT 1
+        """
+    ).fetchone()
+    return dict(row) if row else {
+        'store_name': 'Food City',
+        'branch_name': 'Main Branch',
+        'phone_number': '',
+        'email': '',
+        'address': '',
+        'business_hours': '8:00 AM - 10:00 PM',
+        'currency_code': 'LKR',
+        'business_note': '',
+        'updated_at': datetime.now().astimezone().isoformat(),
+    }
+
+
+def update_business_info(cursor, body):
+    create_business_info_table(cursor)
+    seed_business_info_if_needed(cursor)
+
+    store_name = str(body.get('store_name', '') or '').strip()
+    if not store_name:
+        return False, 'Store name is required'
+
+    branch_name = str(body.get('branch_name', '') or '').strip()
+    phone_number = str(body.get('phone_number', '') or '').strip()
+    email = str(body.get('email', '') or '').strip()
+    address = str(body.get('address', '') or '').strip()
+    business_hours = str(body.get('business_hours', '') or '').strip()
+    currency_code = str(body.get('currency_code', 'LKR') or 'LKR').strip().upper() or 'LKR'
+    business_note = str(body.get('business_note', '') or '').strip()
+    now = datetime.now().astimezone().isoformat()
+
+    cursor.execute(
+        """
+        UPDATE business_info
+        SET store_name = ?,
+            branch_name = ?,
+            phone_number = ?,
+            email = ?,
+            address = ?,
+            business_hours = ?,
+            currency_code = ?,
+            business_note = ?,
+            updated_at = ?
+        WHERE id = 1
+        """,
+        (
+            store_name,
+            branch_name,
+            phone_number,
+            email,
+            address,
+            business_hours,
+            currency_code,
+            business_note,
+            now,
+        ),
+    )
+    return True, 'success'
+
+
 def _normalize_user_role(value):
     normalized = str(value or '').strip().lower()
     return 'manager' if normalized == 'manager' else 'cashier'
@@ -2031,6 +2149,9 @@ def init_db():
         print("✅ Seeded 2 mock suppliers")
 
 
+    create_business_info_table(c)
+    seed_business_info_if_needed(c)
+
     create_user_tables(c)
     seed_users_if_needed(c)
 
@@ -2089,6 +2210,16 @@ class APIHandler(BaseHTTPRequestHandler):
                 ).encode()
             )
 
+
+        elif action == "get_business_info":
+            info = get_business_info(c)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({
+                    "status": "success",
+                    "business_info": info,
+                }).encode()
+            )
 
         elif action == "get_owner_user_summary":
             owner_conn = get_owner_users_db()
@@ -2615,6 +2746,16 @@ class APIHandler(BaseHTTPRequestHandler):
                     ).encode()
                 )
 
+        elif action == "update_business_info":
+            ok, message = update_business_info(c, body)
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
         elif action == "create_owner_user":
             conns = _get_user_db_connections(include_backend=True)
             try:
@@ -2980,9 +3121,11 @@ def main():
 ║     GET  ?action=get_products            → Product list  ║
 ║     GET  ?action=get_sales               → Dashboard     ║
 ║     GET  ?action=get_owner_dashboard     → Owner home    ║
+║     GET  ?action=get_business_info       → Business info ║
 ║     GET  ?action=get_owner_user_summary  → Users counts  ║
 ║     GET  ?action=get_owner_users         → Users list    ║
 ║     GET  ?action=get_owner_activity_logs → Activity logs ║
+║     POST ?action=update_business_info   → Save biz info ║
 ║     POST ?action=create_owner_user      → Add user      ║
 ║     POST ?action=update_owner_user      → Edit user     ║
 ║     POST ?action=reset_owner_user_pin   → Reset PIN     ║

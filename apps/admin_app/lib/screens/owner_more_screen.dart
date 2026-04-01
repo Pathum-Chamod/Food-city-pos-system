@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'admin_home.dart';
+import 'business_info_screen.dart';
 import 'users_activity_screen.dart';
 
 class OwnerMoreScreen extends StatelessWidget {
@@ -19,13 +20,21 @@ class OwnerMoreScreen extends StatelessWidget {
             subtitle: 'Support features for the owner app.',
           ),
           const SizedBox(height: 10),
-          const _FeatureTile(
+          _FeatureTile(
             icon: Icons.store_outlined,
-            color: Color(0xFF0F3D91),
+            color: const Color(0xFF0F3D91),
             title: 'Business Info',
             subtitle: 'Store details, contact info, and business settings.',
-            status: 'Coming Soon',
-            enabled: false,
+            status: 'Available',
+            enabled: true,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const BusinessInfoScreen(),
+                ),
+              );
+            },
           ),
           _FeatureTile(
             icon: Icons.group_outlined,

@@ -32,6 +32,9 @@ class AdminProvider with ChangeNotifier {
   List<Map<String, dynamic>> _ownerUsers = [];
   List<Map<String, dynamic>> _ownerActivityLogs = [];
 
+  bool _isBusinessInfoLoading = false;
+  Map<String, dynamic> _businessInfo = {};
+
   List<Product> get products => _products;
   bool get isLoading => _isLoading;
   double get todayTotalSales => _todayTotalSales;
@@ -56,6 +59,9 @@ class AdminProvider with ChangeNotifier {
   Map<String, dynamic> get ownerUsersSummary => _ownerUsersSummary;
   List<Map<String, dynamic>> get ownerUsers => _ownerUsers;
   List<Map<String, dynamic>> get ownerActivityLogs => _ownerActivityLogs;
+
+  bool get isBusinessInfoLoading => _isBusinessInfoLoading;
+  Map<String, dynamic> get businessInfo => _businessInfo;
 
   List<Map<String, dynamic>> get topAlertsPreview => _ownerAlerts.take(3).toList();
 
@@ -342,6 +348,97 @@ class AdminProvider with ChangeNotifier {
           .toList(),
       'top_products': <Map<String, dynamic>>[],
       'slow_movers': <Map<String, dynamic>>[],
+    };
+  }
+
+
+  Future<void> fetchBusinessInfo() async {
+    _isBusinessInfoLoading = true;
+    notifyListeners();
+
+    try {
+      final response = await http.get(
+        Uri.parse('$apiUrl?action=get_business_info'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          _businessInfo = Map<String, dynamic>.from(
+            (data['business_info'] as Map?) ?? <String, dynamic>{},
+          );
+          _isBusinessInfoLoading = false;
+          notifyListeners();
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint('Business info fetch error: $e');
+    }
+
+    _businessInfo = _buildFallbackBusinessInfo();
+    _isBusinessInfoLoading = false;
+    notifyListeners();
+  }
+
+  Future<String?> updateBusinessInfo({
+    required String storeName,
+    required String branchName,
+    required String phoneNumber,
+    required String email,
+    required String address,
+    required String businessHours,
+    required String currencyCode,
+    required String businessNote,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$apiUrl?action=update_business_info'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          'store_name': storeName,
+          'branch_name': branchName,
+          'phone_number': phoneNumber,
+          'email': email,
+          'address': address,
+          'business_hours': businessHours,
+          'currency_code': currencyCode,
+          'business_note': businessNote,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          await fetchBusinessInfo();
+          return null;
+        }
+        return (data['message'] ?? 'Unable to update business info').toString();
+      }
+
+      try {
+        final data = json.decode(response.body);
+        return (data['message'] ?? 'Unable to update business info').toString();
+      } catch (_) {
+        return 'Unable to update business info';
+      }
+    } catch (e) {
+      debugPrint('Business info update error: $e');
+      return 'Network error';
+    }
+  }
+
+  Map<String, dynamic> _buildFallbackBusinessInfo() {
+    return {
+      'store_name': 'Food City',
+      'branch_name': 'Main Branch',
+      'phone_number': '',
+      'email': '',
+      'address': '',
+      'business_hours': '8:00 AM - 10:00 PM',
+      'currency_code': 'LKR',
+      'business_note': '',
+      'updated_at': DateTime.now().toIso8601String(),
     };
   }
 
