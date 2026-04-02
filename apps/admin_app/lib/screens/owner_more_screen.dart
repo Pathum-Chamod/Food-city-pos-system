@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'admin_home.dart';
 import 'business_info_screen.dart';
 import 'users_activity_screen.dart';
+import 'settings_screen.dart';
 
 class OwnerMoreScreen extends StatelessWidget {
   const OwnerMoreScreen({super.key});
@@ -52,21 +53,21 @@ class OwnerMoreScreen extends StatelessWidget {
               );
             },
           ),
-          const _FeatureTile(
-            icon: Icons.ios_share_outlined,
-            color: Color(0xFF9C5A00),
-            title: 'Export / Share',
-            subtitle: 'Share snapshots and reports when export tools are added.',
-            status: 'Coming Soon',
-            enabled: false,
-          ),
-          const _FeatureTile(
+          _FeatureTile(
             icon: Icons.settings_outlined,
-            color: Color(0xFF7A1CAC),
+            color: const Color(0xFF7A1CAC),
             title: 'Settings',
-            subtitle: 'Owner app preferences and future notification settings.',
-            status: 'Coming Soon',
-            enabled: false,
+            subtitle: 'Logout and data backup export for the owner app.',
+            status: 'Available',
+            enabled: true,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const SettingsScreen(),
+                ),
+              );
+            },
           ),
           const SizedBox(height: 18),
           const _SectionTitle(

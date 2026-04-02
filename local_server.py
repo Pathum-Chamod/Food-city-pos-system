@@ -1685,6 +1685,157 @@ def get_owner_activity_logs(cursor, params):
 
 
 
+
+
+def authenticate_owner_login(pin):
+    pin = str(pin or '').strip()
+    if len(pin) != 4 or not pin.isdigit():
+        return False, 'PIN must be exactly 4 digits', None
+
+    conns = _get_user_db_connections(include_backend=True)
+    matches = []
+    try:
+        for _name, conn, _path in conns:
+            cursor = conn.cursor()
+            create_user_tables(cursor)
+            seed_users_if_needed(cursor)
+            conn.commit()
+            row = cursor.execute(
+                """
+                SELECT
+                    id,
+                    name,
+                    role,
+                    pin,
+                    COALESCE(is_active, 1) AS is_active,
+                    COALESCE(has_full_access, 0) AS has_full_access,
+                    last_login_at
+                FROM users
+                WHERE pin = ?
+                LIMIT 1
+                """,
+                (pin,),
+            ).fetchone()
+            if row:
+                matches.append((conn, cursor, dict(row)))
+
+        if not matches:
+            admin_conn = get_db()
+            try:
+                admin_cursor = admin_conn.cursor()
+                create_user_tables(admin_cursor)
+                insert_user_log(
+                    admin_cursor,
+                    actor_user_id=None,
+                    actor_name='Unknown',
+                    action_type='login_failed',
+                    target_user_id=None,
+                    target_user_name=None,
+                    description='Admin app login failed',
+                )
+                admin_conn.commit()
+            finally:
+                admin_conn.close()
+            return False, 'Invalid PIN', None
+
+        primary = matches[0][2]
+        is_active = parse_int(primary.get('is_active'), 1) == 1
+        role = _normalize_user_role(primary.get('role'))
+        has_full_access = parse_int(primary.get('has_full_access'), 0) == 1
+        name = str(primary.get('name') or 'User').strip() or 'User'
+
+        if not is_active:
+            return False, 'This user is inactive', None
+
+        if role != 'manager' and not has_full_access:
+            return False, 'Only managers or full-access users can access Admin App', None
+
+        now = datetime.now().astimezone().isoformat()
+        for conn, cursor, row in matches:
+            cursor.execute(
+                """
+                UPDATE users
+                SET last_login_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, now, row['id']),
+            )
+            insert_user_log(
+                cursor,
+                actor_user_id=row['id'],
+                actor_name=row['name'],
+                action_type='login_success',
+                target_user_id=row['id'],
+                target_user_name=row['name'],
+                description=f"{row['name']} logged in from Admin Mobile",
+                created_at=now,
+            )
+            conn.commit()
+
+        return True, 'success', {
+            'id': parse_int(primary.get('id'), 0),
+            'name': name,
+            'role': role,
+            'is_active': True,
+            'has_full_access': has_full_access,
+            'last_login_at': now,
+        }
+    finally:
+        _close_user_db_connections(conns)
+
+
+def record_owner_logout(user_id=None, user_name='Owner'):
+    safe_name = str(user_name or 'Owner').strip() or 'Owner'
+    now = datetime.now().astimezone().isoformat()
+    conns = _get_user_db_connections(include_backend=True)
+    try:
+        for _name, conn, _path in conns:
+            cursor = conn.cursor()
+            create_user_tables(cursor)
+            insert_user_log(
+                cursor,
+                actor_user_id=parse_int(user_id, 0) or None,
+                actor_name=safe_name,
+                action_type='logout',
+                target_user_id=parse_int(user_id, 0) or None,
+                target_user_name=safe_name,
+                description=f'{safe_name} logged out from Admin Mobile',
+                created_at=now,
+            )
+            conn.commit()
+    finally:
+        _close_user_db_connections(conns)
+
+
+def build_data_backup(cursor):
+    create_business_info_table(cursor)
+    seed_business_info_if_needed(cursor)
+    create_user_tables(cursor)
+
+    def query_rows(sql, args=()):
+        return [dict(row) for row in cursor.execute(sql, args).fetchall()]
+
+    backup = {
+        'status': 'success',
+        'generated_at': datetime.now().astimezone().isoformat(),
+        'source': 'Food City Admin App',
+        'meta': {
+            'backend_db_path': os.path.abspath(DB_PATH),
+            'pos_db_path': os.path.abspath(POS_DB_PATH),
+            'pos_db_present': os.path.exists(POS_DB_PATH),
+        },
+        'business_info': get_business_info(cursor),
+        'products': fetch_products(cursor),
+        'suppliers': query_rows('SELECT * FROM suppliers ORDER BY name COLLATE NOCASE ASC'),
+        'stock_receipts': query_rows('SELECT * FROM stock_receipts ORDER BY datetime(created_at) DESC, id DESC'),
+        'inventory_history': query_rows('SELECT * FROM inventory_history ORDER BY datetime(created_at) DESC, id DESC'),
+        'sales': query_rows('SELECT * FROM sales ORDER BY datetime(created_at) DESC, id DESC'),
+        'owner_users': get_owner_users(cursor, {'search': [''], 'role': ['all'], 'status': ['all']}),
+        'owner_activity_logs': get_owner_activity_logs(cursor, {'search': [''], 'filter': ['all'], 'limit': ['500']}),
+    }
+    return backup
+
 def _active_manager_count(cursor, excluding_user_id=None):
     query = """
         SELECT COUNT(*) AS count
@@ -2266,6 +2417,11 @@ class APIHandler(BaseHTTPRequestHandler):
             finally:
                 owner_conn.close()
 
+        elif action == "export_data_backup":
+            backup = build_data_backup(c)
+            self._set_headers()
+            self.wfile.write(json.dumps(backup).encode())
+
         elif action == "get_owner_dashboard":
             today_rows = _sales_rows_between(
                 c,
@@ -2365,7 +2521,24 @@ class APIHandler(BaseHTTPRequestHandler):
         conn = get_db()
         c = conn.cursor()
 
-        if action == "pos_sync":
+        if action == "owner_login":
+            ok, message, user = authenticate_owner_login(body.get('pin', ''))
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "user": user}).encode())
+
+        elif action == "owner_logout":
+            record_owner_logout(
+                user_id=body.get('user_id'),
+                user_name=body.get('user_name', 'Owner'),
+            )
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success"}).encode())
+
+        elif action == "pos_sync":
             sync_type = str(body.get("type", "")).strip().upper()
             data = body.get("data", {})
 
@@ -3121,10 +3294,13 @@ def main():
 ║     GET  ?action=get_products            → Product list  ║
 ║     GET  ?action=get_sales               → Dashboard     ║
 ║     GET  ?action=get_owner_dashboard     → Owner home    ║
+║     GET  ?action=export_data_backup    → JSON backup   ║
 ║     GET  ?action=get_business_info       → Business info ║
 ║     GET  ?action=get_owner_user_summary  → Users counts  ║
 ║     GET  ?action=get_owner_users         → Users list    ║
 ║     GET  ?action=get_owner_activity_logs → Activity logs ║
+║     POST ?action=owner_login           → Admin login   ║
+║     POST ?action=owner_logout          → Admin logout  ║
 ║     POST ?action=update_business_info   → Save biz info ║
 ║     POST ?action=create_owner_user      → Add user      ║
 ║     POST ?action=update_owner_user      → Edit user     ║

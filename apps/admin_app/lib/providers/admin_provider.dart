@@ -1,15 +1,29 @@
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:cross_file/cross_file.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared/shared.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/inventory_history_item.dart';
 import '../models/stock_adjustment_request.dart';
 import '../models/supplier.dart';
 
 class AdminProvider with ChangeNotifier {
+  AdminProvider() {
+    _restoreSession();
+  }
+
+  static const String _sessionUserIdKey = 'admin_session_user_id';
+  static const String _sessionUserNameKey = 'admin_session_user_name';
+  static const String _sessionUserRoleKey = 'admin_session_user_role';
+  static const String _sessionUserFullAccessKey = 'admin_session_user_full_access';
+
   List<Product> _products = [];
   bool _isLoading = false;
 
@@ -34,6 +48,10 @@ class AdminProvider with ChangeNotifier {
 
   bool _isBusinessInfoLoading = false;
   Map<String, dynamic> _businessInfo = {};
+
+  bool _isSessionReady = false;
+  bool _isAuthenticating = false;
+  Map<String, dynamic>? _currentOwnerUser;
 
   List<Product> get products => _products;
   bool get isLoading => _isLoading;
@@ -63,6 +81,18 @@ class AdminProvider with ChangeNotifier {
   bool get isBusinessInfoLoading => _isBusinessInfoLoading;
   Map<String, dynamic> get businessInfo => _businessInfo;
 
+  bool get isSessionReady => _isSessionReady;
+  bool get isAuthenticating => _isAuthenticating;
+  bool get isAuthenticated => _currentOwnerUser != null;
+  Map<String, dynamic>? get currentOwnerUser => _currentOwnerUser == null
+      ? null
+      : Map<String, dynamic>.from(_currentOwnerUser!);
+  String get currentOwnerName => (_currentOwnerUser?['name'] ?? 'Owner').toString();
+  String get currentOwnerRole => (_currentOwnerUser?['role'] ?? '').toString();
+  bool get currentOwnerHasFullAccess =>
+      (_currentOwnerUser?['has_full_access'] == true) ||
+      (_currentOwnerUser?['has_full_access'] == 1);
+
   List<Map<String, dynamic>> get topAlertsPreview => _ownerAlerts.take(3).toList();
 
   int get transactionCount {
@@ -88,6 +118,145 @@ class AdminProvider with ChangeNotifier {
 
   final String apiUrl = "http://10.0.2.2:8080/api/pos_sync.php";
   // final String apiUrl = "http://127.0.0.1:8080/api/pos_sync.php";
+
+  Future<void> _restoreSession() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getInt(_sessionUserIdKey);
+      final userName = prefs.getString(_sessionUserNameKey);
+      final userRole = prefs.getString(_sessionUserRoleKey);
+      final hasFullAccess = prefs.getBool(_sessionUserFullAccessKey) ?? false;
+
+      if (userId != null && userName != null && userName.trim().isNotEmpty) {
+        _currentOwnerUser = {
+          'id': userId,
+          'name': userName,
+          'role': userRole ?? 'cashier',
+          'has_full_access': hasFullAccess,
+        };
+      }
+    } catch (e) {
+      debugPrint('Session restore error: $e');
+    } finally {
+      _isSessionReady = true;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _saveSession(Map<String, dynamic> user) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('$_sessionUserIdKey', (user['id'] as num?)?.toInt() ?? 0);
+    await prefs.setString('$_sessionUserNameKey', (user['name'] ?? '').toString());
+    await prefs.setString('$_sessionUserRoleKey', (user['role'] ?? 'cashier').toString());
+    await prefs.setBool(
+      '$_sessionUserFullAccessKey',
+      user['has_full_access'] == true || user['has_full_access'] == 1,
+    );
+  }
+
+  Future<void> _clearSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_sessionUserIdKey);
+    await prefs.remove(_sessionUserNameKey);
+    await prefs.remove(_sessionUserRoleKey);
+    await prefs.remove(_sessionUserFullAccessKey);
+  }
+
+  Future<String?> loginOwner(String pin) async {
+    final trimmedPin = pin.trim();
+    if (trimmedPin.length != 4 || int.tryParse(trimmedPin) == null) {
+      return 'Enter a valid 4-digit PIN.';
+    }
+
+    _isAuthenticating = true;
+    notifyListeners();
+
+    try {
+      final response = await http.post(
+        Uri.parse('$apiUrl?action=owner_login'),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({'pin': trimmedPin}),
+      );
+
+      final Map<String, dynamic> data = json.decode(response.body) as Map<String, dynamic>;
+      if (response.statusCode == 200 && data['status'] == 'success') {
+        final user = Map<String, dynamic>.from((data['user'] as Map?) ?? <String, dynamic>{});
+        _currentOwnerUser = user;
+        await _saveSession(user);
+        _isAuthenticating = false;
+        notifyListeners();
+        return null;
+      }
+
+      _isAuthenticating = false;
+      notifyListeners();
+      return (data['message'] ?? 'Unable to sign in').toString();
+    } catch (e) {
+      debugPrint('Owner login error: $e');
+      _isAuthenticating = false;
+      notifyListeners();
+      return 'Network error';
+    }
+  }
+
+  Future<void> logout() async {
+    final currentUser = _currentOwnerUser == null
+        ? null
+        : Map<String, dynamic>.from(_currentOwnerUser!);
+
+    try {
+      if (currentUser != null) {
+        await http.post(
+          Uri.parse('$apiUrl?action=owner_logout'),
+          headers: {"Content-Type": "application/json"},
+          body: json.encode({
+            'user_id': currentUser['id'],
+            'user_name': currentUser['name'],
+          }),
+        );
+      }
+    } catch (e) {
+      debugPrint('Owner logout sync warning: $e');
+    }
+
+    await _clearSession();
+    _currentOwnerUser = null;
+    notifyListeners();
+  }
+
+  Future<String?> exportDataBackup() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$apiUrl?action=export_data_backup'),
+      );
+
+      final Map<String, dynamic> data = json.decode(response.body) as Map<String, dynamic>;
+      if (response.statusCode != 200 || data['status'] != 'success') {
+        return (data['message'] ?? 'Unable to export backup').toString();
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final timestamp = DateTime.now()
+          .toIso8601String()
+          .replaceAll(':', '-')
+          .replaceAll('.', '-')
+          .replaceAll('T', '_');
+      final file = File('${tempDir.path}/food_city_backup_$timestamp.json');
+      final prettyJson = const JsonEncoder.withIndent('  ').convert(data);
+      await file.writeAsString(prettyJson, flush: true);
+
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'Food City backup export',
+        subject: 'Food City backup export',
+      );
+
+      return null;
+    } catch (e) {
+      debugPrint('Backup export error: $e');
+      return 'Unable to export backup';
+    }
+  }
 
   Future<void> loadOwnerShellData({bool forceRefresh = false}) async {
     if (_isOwnerShellLoading && !forceRefresh) return;

@@ -1,8 +1,8 @@
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'providers/admin_provider.dart';
+import 'screens/admin_login_screen.dart';
 import 'screens/owner_shell.dart';
 
 void main() {
@@ -73,7 +73,54 @@ class AdminApp extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         ),
       ),
-      home: const OwnerShell(),
+      home: const _AdminRoot(),
+    );
+  }
+}
+
+class _AdminRoot extends StatelessWidget {
+  const _AdminRoot();
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AdminProvider>(
+      builder: (context, provider, _) {
+        if (!provider.isSessionReady) {
+          return const _SessionLoadingScreen();
+        }
+
+        if (provider.isAuthenticated) {
+          return const OwnerShell();
+        }
+
+        return const AdminLoginScreen();
+      },
+    );
+  }
+}
+
+class _SessionLoadingScreen extends StatelessWidget {
+  const _SessionLoadingScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 14),
+            Text(
+              'Preparing Admin App...',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF172433),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
