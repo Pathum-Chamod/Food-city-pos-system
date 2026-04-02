@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared/models/product.dart';
 
 import '../models/pos_supplier.dart';
 import '../models/stock_receipt_record.dart';
