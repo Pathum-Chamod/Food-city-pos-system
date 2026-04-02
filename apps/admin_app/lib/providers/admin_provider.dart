@@ -51,6 +51,7 @@ class AdminProvider with ChangeNotifier {
 
   bool _isSessionReady = false;
   bool _isAuthenticating = false;
+  bool _showWelcomeAnimation = false;
   Map<String, dynamic>? _currentOwnerUser;
 
   List<Product> get products => _products;
@@ -83,6 +84,7 @@ class AdminProvider with ChangeNotifier {
 
   bool get isSessionReady => _isSessionReady;
   bool get isAuthenticating => _isAuthenticating;
+  bool get showWelcomeAnimation => _showWelcomeAnimation;
   bool get isAuthenticated => _currentOwnerUser != null;
   Map<String, dynamic>? get currentOwnerUser => _currentOwnerUser == null
       ? null
@@ -182,6 +184,7 @@ class AdminProvider with ChangeNotifier {
       if (response.statusCode == 200 && data['status'] == 'success') {
         final user = Map<String, dynamic>.from((data['user'] as Map?) ?? <String, dynamic>{});
         _currentOwnerUser = user;
+        _showWelcomeAnimation = true;
         await _saveSession(user);
         _isAuthenticating = false;
         notifyListeners();
@@ -221,6 +224,13 @@ class AdminProvider with ChangeNotifier {
 
     await _clearSession();
     _currentOwnerUser = null;
+    _showWelcomeAnimation = false;
+    notifyListeners();
+  }
+
+  void completeWelcomeAnimation() {
+    if (!_showWelcomeAnimation) return;
+    _showWelcomeAnimation = false;
     notifyListeners();
   }
 
