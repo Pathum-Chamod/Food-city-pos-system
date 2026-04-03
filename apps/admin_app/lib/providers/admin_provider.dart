@@ -1284,6 +1284,12 @@ class AdminProvider with ChangeNotifier {
         return 'Price Update';
       case 'min_stock_change':
         return 'Minimum Stock Updated';
+      case 'product_updated':
+        return 'Product Updated';
+      case 'product_created':
+        return 'Product Added';
+      case 'product_deleted':
+        return 'Product Deleted';
       default:
         return 'Inventory Activity';
     }
@@ -1317,13 +1323,23 @@ class AdminProvider with ChangeNotifier {
         return 'Price changed';
       case 'min_stock_change':
         return 'Minimum stock level changed';
+      case 'product_updated':
+        return 'Product details updated';
+      case 'product_created':
+        return 'Product added to inventory';
+      case 'product_deleted':
+        return 'Product removed from inventory';
       default:
         return 'Inventory activity';
     }
   }
 
   String _historyQuantityText(String movementType, int quantity) {
-    if (movementType.startsWith('price_') || movementType == 'min_stock_change') {
+    if (movementType.startsWith('price_') ||
+        movementType == 'min_stock_change' ||
+        movementType == 'product_updated' ||
+        movementType == 'product_created' ||
+        movementType == 'product_deleted') {
       return '—';
     }
 
@@ -1374,6 +1390,12 @@ class AdminProvider with ChangeNotifier {
         return Icons.edit;
       case 'min_stock_change':
         return Icons.vertical_align_center;
+      case 'product_updated':
+        return Icons.edit_outlined;
+      case 'product_created':
+        return Icons.add_box_outlined;
+      case 'product_deleted':
+        return Icons.delete_outline;
       default:
         return Icons.inventory_2_outlined;
     }
@@ -1401,6 +1423,12 @@ class AdminProvider with ChangeNotifier {
         return Colors.blue;
       case 'min_stock_change':
         return Colors.teal;
+      case 'product_updated':
+        return Colors.blue;
+      case 'product_created':
+        return Colors.green;
+      case 'product_deleted':
+        return Colors.red;
       default:
         return Colors.grey;
     }

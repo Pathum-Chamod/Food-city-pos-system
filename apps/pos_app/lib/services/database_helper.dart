@@ -4875,6 +4875,10 @@ class DatabaseHelper {
         }
         if (oldMinStockLevel != minStockLevel) changes.add('min stock');
 
+        if (changes.isEmpty) {
+          return;
+        }
+
         await _insertInventoryMovement(
           txn,
           barcode: trimmedBarcode,

@@ -187,7 +187,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   void _disposeControllersNextFrame(List<TextEditingController> controllers) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    Future<void>.delayed(const Duration(milliseconds: 350), () {
       for (final controller in controllers) {
         controller.dispose();
       }
@@ -1540,6 +1540,43 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                   ),
                                 ),
                               );
+                              return;
+                            }
+
+                            final normalizedCategory =
+                                category.isEmpty ? 'General' : category;
+                            final normalizedWholesale = double.parse(
+                              ((wholesalePrice <= 0 ? sellingPrice : wholesalePrice)
+                                      .toStringAsFixed(2)),
+                            );
+                            final normalizedSalePrice = salePrice == null
+                                ? null
+                                : double.parse(salePrice.toStringAsFixed(2));
+
+                            final noChanges =
+                                name == product.name &&
+                                normalizedCategory == product.category &&
+                                double.parse(costPrice.toStringAsFixed(2)) ==
+                                    double.parse(product.costPrice.toStringAsFixed(2)) &&
+                                double.parse(sellingPrice.toStringAsFixed(2)) ==
+                                    double.parse(product.sellingPrice.toStringAsFixed(2)) &&
+                                normalizedWholesale ==
+                                    double.parse(product.wholesalePrice.toStringAsFixed(2)) &&
+                                ((normalizedSalePrice == null && product.salePrice == null) ||
+                                    (normalizedSalePrice != null &&
+                                        product.salePrice != null &&
+                                        normalizedSalePrice ==
+                                            double.parse(product.salePrice!.toStringAsFixed(2)))) &&
+                                saleEnabled == product.saleEnabled &&
+                                minStock == product.minStockLevel;
+
+                            if (noChanges) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('No changes detected.'),
+                                ),
+                              );
+                              Navigator.pop(context, null);
                               return;
                             }
 
