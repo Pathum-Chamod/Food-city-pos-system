@@ -13,6 +13,36 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _isExporting = false;
   bool _isLoggingOut = false;
+  bool _isUpdatingBiometrics = false;
+
+  Future<void> _handleBiometricToggle(bool value) async {
+    setState(() => _isUpdatingBiometrics = true);
+
+    final provider = context.read<AdminProvider>();
+    String? message;
+
+    if (value) {
+      message = await provider.enableBiometricUnlock();
+    } else {
+      await provider.disableBiometricUnlock();
+    }
+
+    if (!mounted) return;
+    setState(() => _isUpdatingBiometrics = false);
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            message ??
+                (value
+                    ? 'Biometric unlock is now enabled.'
+                    : 'Biometric unlock has been turned off.'),
+          ),
+        ),
+      );
+  }
 
   Future<void> _handleBackupExport() async {
     setState(() => _isExporting = true);
@@ -142,6 +172,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 10),
+            _SwitchSettingsTile(
+              icon: Icons.fingerprint_rounded,
+              color: const Color(0xFF173E96),
+              title: 'Fingerprint / Biometrics',
+              subtitle: provider.biometricSettingsSubtitle,
+              value: provider.biometricEnabled,
+              isBusy: _isUpdatingBiometrics || provider.isBiometricBusy,
+              onChanged: _handleBiometricToggle,
+            ),
             _SettingsTile(
               icon: Icons.backup_outlined,
               color: const Color(0xFF9C5A00),
@@ -249,6 +288,87 @@ class _SettingsTile extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+
+class _SwitchSettingsTile extends StatelessWidget {
+  const _SwitchSettingsTile({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+    required this.isBusy,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final bool isBusy;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE6EBF3)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: color.withOpacity(0.12),
+              child: Icon(icon, color: color),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF172433),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: Color(0xFF667085),
+                      fontWeight: FontWeight.w500,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (isBusy)
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              Switch.adaptive(
+                value: value,
+                onChanged: onChanged,
+              ),
+          ],
         ),
       ),
     );

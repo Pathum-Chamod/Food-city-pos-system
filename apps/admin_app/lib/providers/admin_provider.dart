@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -19,10 +20,13 @@ class AdminProvider with ChangeNotifier {
     _restoreSession();
   }
 
+  final LocalAuthentication _localAuth = LocalAuthentication();
+
   static const String _sessionUserIdKey = 'admin_session_user_id';
   static const String _sessionUserNameKey = 'admin_session_user_name';
   static const String _sessionUserRoleKey = 'admin_session_user_role';
   static const String _sessionUserFullAccessKey = 'admin_session_user_full_access';
+  static const String _biometricEnabledKey = 'admin_biometric_enabled';
 
   List<Product> _products = [];
   bool _isLoading = false;
@@ -52,6 +56,13 @@ class AdminProvider with ChangeNotifier {
   bool _isSessionReady = false;
   bool _isAuthenticating = false;
   bool _showWelcomeAnimation = false;
+  bool _biometricEnabled = false;
+  bool _biometricAvailable = false;
+  bool _biometricEnrolled = false;
+  bool _biometricUnlockRequired = false;
+  bool _manualUnlockRequested = false;
+  bool _isBiometricBusy = false;
+  List<BiometricType> _availableBiometrics = const [];
   Map<String, dynamic>? _currentOwnerUser;
 
   List<Product> get products => _products;
@@ -85,6 +96,17 @@ class AdminProvider with ChangeNotifier {
   bool get isSessionReady => _isSessionReady;
   bool get isAuthenticating => _isAuthenticating;
   bool get showWelcomeAnimation => _showWelcomeAnimation;
+  bool get biometricEnabled => _biometricEnabled;
+  bool get biometricAvailable => _biometricAvailable;
+  bool get biometricEnrolled => _biometricEnrolled;
+  bool get biometricUnlockRequired => _biometricUnlockRequired;
+  bool get isBiometricBusy => _isBiometricBusy;
+  bool get shouldShowBiometricUnlock =>
+      _currentOwnerUser != null &&
+      _biometricEnabled &&
+      _biometricUnlockRequired &&
+      !_manualUnlockRequested;
+  bool get shouldShowPinLogin => _currentOwnerUser == null || _manualUnlockRequested;
   bool get isAuthenticated => _currentOwnerUser != null;
   Map<String, dynamic>? get currentOwnerUser => _currentOwnerUser == null
       ? null
@@ -94,6 +116,27 @@ class AdminProvider with ChangeNotifier {
   bool get currentOwnerHasFullAccess =>
       (_currentOwnerUser?['has_full_access'] == true) ||
       (_currentOwnerUser?['has_full_access'] == 1);
+
+  String get biometricTypeLabel {
+    if (_availableBiometrics.contains(BiometricType.face)) {
+      return 'Face ID / biometrics';
+    }
+    if (_availableBiometrics.contains(BiometricType.fingerprint)) {
+      return 'Fingerprint';
+    }
+    if (_availableBiometrics.contains(BiometricType.strong) ||
+        _availableBiometrics.contains(BiometricType.weak)) {
+      return 'Biometrics';
+    }
+    return 'Biometrics';
+  }
+
+  String get biometricSettingsSubtitle {
+    if (!_biometricAvailable || !_biometricEnrolled) {
+      return 'Not available on this device yet. Set up fingerprint or biometrics in device settings first.';
+    }
+    return 'Use $biometricTypeLabel to unlock the owner app faster on this device.';
+  }
 
   List<Map<String, dynamic>> get topAlertsPreview => _ownerAlerts.take(3).toList();
 
@@ -128,6 +171,7 @@ class AdminProvider with ChangeNotifier {
       final userName = prefs.getString(_sessionUserNameKey);
       final userRole = prefs.getString(_sessionUserRoleKey);
       final hasFullAccess = prefs.getBool(_sessionUserFullAccessKey) ?? false;
+      _biometricEnabled = prefs.getBool(_biometricEnabledKey) ?? false;
 
       if (userId != null && userName != null && userName.trim().isNotEmpty) {
         _currentOwnerUser = {
@@ -137,6 +181,15 @@ class AdminProvider with ChangeNotifier {
           'has_full_access': hasFullAccess,
         };
       }
+
+      await refreshBiometricAvailability(notify: false);
+
+      if (_currentOwnerUser != null &&
+          _biometricEnabled &&
+          _biometricAvailable &&
+          _biometricEnrolled) {
+        _biometricUnlockRequired = true;
+      }
     } catch (e) {
       debugPrint('Session restore error: $e');
     } finally {
@@ -145,13 +198,151 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
+
+  Future<void> refreshBiometricAvailability({bool notify = true}) async {
+    try {
+      final canCheck = await _localAuth.canCheckBiometrics;
+      final available = canCheck ? await _localAuth.getAvailableBiometrics() : <BiometricType>[];
+      _availableBiometrics = available;
+      _biometricAvailable = canCheck;
+      _biometricEnrolled = available.isNotEmpty;
+    } catch (e) {
+      debugPrint('Biometric availability check error: $e');
+      _availableBiometrics = const [];
+      _biometricAvailable = false;
+      _biometricEnrolled = false;
+    }
+
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  Future<String?> enableBiometricUnlock() async {
+    if (_currentOwnerUser == null) {
+      return 'Sign in with your owner PIN first.';
+    }
+
+    _isBiometricBusy = true;
+    notifyListeners();
+
+    try {
+      await refreshBiometricAvailability(notify: false);
+
+      if (!_biometricAvailable) {
+        return 'Biometric hardware is not available on this device.';
+      }
+
+      if (!_biometricEnrolled) {
+        return 'No fingerprint or biometrics are enrolled on this device.';
+      }
+
+      final didAuthenticate = await _localAuth.authenticate(
+        localizedReason: 'Scan your fingerprint to enable biometric unlock for Food City Admin.',
+        biometricOnly: true,
+        persistAcrossBackgrounding: true,
+      );
+
+      if (!didAuthenticate) {
+        return 'Biometric setup was cancelled.';
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_biometricEnabledKey, true);
+
+      _biometricEnabled = true;
+      _biometricUnlockRequired = false;
+      _manualUnlockRequested = false;
+      return null;
+    } on LocalAuthException catch (e) {
+      if (e.code == LocalAuthExceptionCode.noBiometricHardware) {
+        return 'Biometric hardware is not available on this device.';
+      }
+      if (e.code == LocalAuthExceptionCode.noBiometricsEnrolled) {
+        return 'No fingerprint or biometrics are enrolled on this device.';
+      }
+      if (e.code == LocalAuthExceptionCode.noCredentialsSet) {
+        return 'Set up a screen lock and biometrics on this device first.';
+      }
+      if (e.code == LocalAuthExceptionCode.temporaryLockout ||
+          e.code == LocalAuthExceptionCode.biometricLockout) {
+        return 'Biometrics are temporarily locked. Unlock the device and try again.';
+      }
+      return 'Unable to enable biometric unlock.';
+    } catch (e) {
+      debugPrint('Enable biometric error: $e');
+      return 'Unable to enable biometric unlock.';
+    } finally {
+      _isBiometricBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> disableBiometricUnlock() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_biometricEnabledKey, false);
+
+    _biometricEnabled = false;
+    _biometricUnlockRequired = false;
+    _manualUnlockRequested = false;
+    notifyListeners();
+  }
+
+  Future<String?> unlockWithBiometrics() async {
+    if (_currentOwnerUser == null) {
+      return 'Please sign in with your owner PIN first.';
+    }
+
+    _isBiometricBusy = true;
+    notifyListeners();
+
+    try {
+      final didAuthenticate = await _localAuth.authenticate(
+        localizedReason: 'Scan your fingerprint to unlock Food City Admin.',
+        biometricOnly: true,
+        persistAcrossBackgrounding: true,
+      );
+
+      if (!didAuthenticate) {
+        return 'Biometric unlock was cancelled.';
+      }
+
+      _biometricUnlockRequired = false;
+      _manualUnlockRequested = false;
+      return null;
+    } on LocalAuthException catch (e) {
+      if (e.code == LocalAuthExceptionCode.noBiometricsEnrolled) {
+        return 'No fingerprint or biometrics are enrolled on this device.';
+      }
+      if (e.code == LocalAuthExceptionCode.noBiometricHardware) {
+        return 'Biometric hardware is not available on this device.';
+      }
+      if (e.code == LocalAuthExceptionCode.temporaryLockout ||
+          e.code == LocalAuthExceptionCode.biometricLockout) {
+        return 'Biometrics are temporarily locked. Unlock the device and try again.';
+      }
+      return 'Unable to unlock with biometrics.';
+    } catch (e) {
+      debugPrint('Biometric unlock error: $e');
+      return 'Unable to unlock with biometrics.';
+    } finally {
+      _isBiometricBusy = false;
+      notifyListeners();
+    }
+  }
+
+  void usePinInsteadOfBiometrics() {
+    _manualUnlockRequested = true;
+    notifyListeners();
+  }
+
   Future<void> _saveSession(Map<String, dynamic> user) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('$_sessionUserIdKey', (user['id'] as num?)?.toInt() ?? 0);
-    await prefs.setString('$_sessionUserNameKey', (user['name'] ?? '').toString());
-    await prefs.setString('$_sessionUserRoleKey', (user['role'] ?? 'cashier').toString());
+    await prefs.setInt(_sessionUserIdKey, (user['id'] as num?)?.toInt() ?? 0);
+    await prefs.setString(_sessionUserNameKey, (user['name'] ?? '').toString());
+    await prefs.setString(_sessionUserRoleKey, (user['role'] ?? 'cashier').toString());
     await prefs.setBool(
-      '$_sessionUserFullAccessKey',
+      _sessionUserFullAccessKey,
       user['has_full_access'] == true || user['has_full_access'] == 1,
     );
   }
@@ -185,6 +376,8 @@ class AdminProvider with ChangeNotifier {
         final user = Map<String, dynamic>.from((data['user'] as Map?) ?? <String, dynamic>{});
         _currentOwnerUser = user;
         _showWelcomeAnimation = true;
+        _manualUnlockRequested = false;
+        _biometricUnlockRequired = false;
         await _saveSession(user);
         _isAuthenticating = false;
         notifyListeners();
@@ -225,6 +418,8 @@ class AdminProvider with ChangeNotifier {
     await _clearSession();
     _currentOwnerUser = null;
     _showWelcomeAnimation = false;
+    _biometricUnlockRequired = false;
+    _manualUnlockRequested = false;
     notifyListeners();
   }
 

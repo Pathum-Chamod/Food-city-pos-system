@@ -5,6 +5,7 @@ import 'providers/admin_provider.dart';
 import 'screens/admin_login_screen.dart';
 import 'screens/owner_shell.dart';
 import 'screens/owner_welcome_screen.dart';
+import 'screens/owner_biometric_unlock_screen.dart';
 
 void main() {
   runApp(
@@ -87,7 +88,11 @@ class _AdminRoot extends StatelessWidget {
       return const _SessionLoadingScreen(key: ValueKey('loading'));
     }
 
-    if (!provider.isAuthenticated) {
+    if (provider.shouldShowBiometricUnlock) {
+      return const OwnerBiometricUnlockScreen(key: ValueKey('biometric'));
+    }
+
+    if (provider.shouldShowPinLogin) {
       return const AdminLoginScreen(key: ValueKey('login'));
     }
 
