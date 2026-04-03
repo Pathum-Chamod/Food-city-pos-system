@@ -18,7 +18,7 @@ POS_DB_PATH = os.path.join(os.path.dirname(__file__), "apps", "pos_app", ".dart_
 
 
 def get_pos_db():
-    conn = sqlite3.connect(POS_DB_PATH)
+    conn = sqlite3.connect(POS_DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -168,6 +168,133 @@ def get_product_row(cursor, barcode):
     ).fetchone()
 
 
+def ensure_pos_inventory_movements_table(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inventory_movements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            barcode TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            quantity_change INTEGER,
+            stock_before INTEGER,
+            stock_after INTEGER,
+            old_price REAL,
+            new_price REAL,
+            price_type TEXT,
+            reason TEXT,
+            reference_id INTEGER,
+            reference_type TEXT,
+            performed_by TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def mirror_inventory_movement_to_pos(
+    *,
+    barcode,
+    product_name,
+    action_type,
+    quantity_change=None,
+    stock_before=None,
+    stock_after=None,
+    old_price=None,
+    new_price=None,
+    price_type=None,
+    reason="",
+    reference_id=None,
+    reference_type="backend_history",
+    performed_by="Admin App",
+    created_at=None,
+):
+    if not os.path.exists(POS_DB_PATH):
+        return
+
+    barcode = str(barcode or "").strip()
+    action_type = str(action_type or "").strip()
+    if not barcode or not action_type:
+        return
+
+    conn = None
+    try:
+        conn = get_pos_db()
+        cursor = conn.cursor()
+        ensure_pos_inventory_movements_table(cursor)
+
+        resolved_product_name = str(product_name or "").strip()
+        if not resolved_product_name:
+            row = cursor.execute(
+                "SELECT name FROM products WHERE barcode = ? LIMIT 1",
+                (barcode,),
+            ).fetchone()
+            resolved_product_name = str((row["name"] if row else "Unknown product") or "Unknown product")
+
+        safe_reference_type = str(reference_type or "backend_history").strip() or "backend_history"
+        existing = cursor.execute(
+            """
+            SELECT id
+            FROM inventory_movements
+            WHERE barcode = ?
+              AND action_type = ?
+              AND COALESCE(reference_type, '') = ?
+              AND COALESCE(reference_id, -1) = COALESCE(?, -1)
+            LIMIT 1
+            """,
+            (barcode, action_type, safe_reference_type, reference_id),
+        ).fetchone()
+        if existing:
+            return
+
+        cursor.execute(
+            """
+            INSERT INTO inventory_movements (
+                barcode,
+                product_name,
+                action_type,
+                quantity_change,
+                stock_before,
+                stock_after,
+                old_price,
+                new_price,
+                price_type,
+                reason,
+                reference_id,
+                reference_type,
+                performed_by,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                barcode,
+                resolved_product_name,
+                action_type,
+                quantity_change,
+                stock_before,
+                stock_after,
+                old_price,
+                new_price,
+                price_type,
+                reason,
+                reference_id,
+                safe_reference_type,
+                str(performed_by or "Admin App").strip() or "Admin App",
+                created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"  ⚠️ POS inventory mirror warning: {e}")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def log_inventory_history(
     cursor,
     barcode,
@@ -177,6 +304,7 @@ def log_inventory_history(
     reference_type="",
     reference_id=None,
 ):
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute(
         """
         INSERT INTO inventory_history (
@@ -188,7 +316,7 @@ def log_inventory_history(
             reference_id,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'))
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             barcode,
@@ -197,8 +325,13 @@ def log_inventory_history(
             reason,
             reference_type,
             reference_id,
+            created_at,
         ),
     )
+    return {
+        "id": cursor.lastrowid,
+        "created_at": created_at,
+    }
 
 
 def update_product_price(
@@ -220,6 +353,15 @@ def update_product_price(
     new_price = parse_float(new_price, -1)
     if new_price < 0:
         return False, "Invalid price"
+
+    product_name = str(row["name"] or "Unknown product")
+    old_price = parse_float(
+        row["cost_price"] if normalized == "cost"
+        else row["wholesale_price"] if normalized == "wholesale"
+        else row["sale_price"] if normalized == "sale"
+        else row["selling_price"],
+        0,
+    )
 
     if normalized == "selling":
         cursor.execute(
@@ -269,7 +411,7 @@ def update_product_price(
             (new_price, barcode),
         )
 
-    log_inventory_history(
+    history_entry = log_inventory_history(
         cursor,
         barcode=barcode,
         movement_type=f"price_change_{normalized}",
@@ -277,6 +419,20 @@ def update_product_price(
         reason=reason or f"{normalized.title()} price updated to Rs.{new_price:.2f}",
         reference_type="price_update",
         reference_id=None,
+    )
+
+    mirror_inventory_movement_to_pos(
+        barcode=barcode,
+        product_name=product_name,
+        action_type=f"price_change_{normalized}",
+        old_price=old_price,
+        new_price=new_price,
+        price_type=normalized,
+        reason=reason or f"{normalized.title()} price updated to Rs.{new_price:.2f}",
+        reference_id=history_entry["id"],
+        reference_type="backend_history",
+        performed_by="Admin App",
+        created_at=history_entry["created_at"],
     )
     return True, "success"
 
@@ -299,6 +455,9 @@ def update_stock_receive(
         return False, "Quantity must be greater than 0", None
 
     cost = parse_float(cost, 0)
+    product_name = str(row["name"] or "Unknown product")
+    stock_before = parse_int(row["stock"], 0)
+    stock_after = stock_before + quantity
 
     cursor.execute(
         f"""
@@ -342,7 +501,7 @@ def update_stock_receive(
     if supplier_name:
         note = f"{note} ({supplier_name})"
 
-    log_inventory_history(
+    history_entry = log_inventory_history(
         cursor,
         barcode=barcode,
         movement_type="stock_in",
@@ -350,6 +509,20 @@ def update_stock_receive(
         reason=note,
         reference_type="stock_receipt",
         reference_id=receipt_id,
+    )
+
+    mirror_inventory_movement_to_pos(
+        barcode=barcode,
+        product_name=product_name,
+        action_type="stock_receive",
+        quantity_change=quantity,
+        stock_before=stock_before,
+        stock_after=stock_after,
+        reason=note,
+        reference_id=history_entry["id"],
+        reference_type="backend_history",
+        performed_by="Admin App",
+        created_at=history_entry["created_at"],
     )
     return True, "success", receipt_id
 
@@ -360,6 +533,7 @@ def update_stock_adjustment(cursor, barcode, adjustment_type, quantity, reason="
         return False, "Product not found", None, None
 
     current_stock = parse_int(row["stock"], 0)
+    product_name = str(row["name"] or "Unknown product")
     normalized = str(adjustment_type or "").strip().lower()
     quantity = parse_int(quantity, 0)
 
@@ -396,14 +570,29 @@ def update_stock_adjustment(cursor, barcode, adjustment_type, quantity, reason="
         (resulting_stock, barcode),
     )
 
-    log_inventory_history(
+    note = reason or "Manual stock adjustment"
+    history_entry = log_inventory_history(
         cursor,
         barcode=barcode,
         movement_type=movement_type,
         quantity=stock_delta,
-        reason=reason or "Manual stock adjustment",
+        reason=note,
         reference_type="manual_adjustment",
         reference_id=None,
+    )
+
+    mirror_inventory_movement_to_pos(
+        barcode=barcode,
+        product_name=product_name,
+        action_type=movement_type,
+        quantity_change=stock_delta,
+        stock_before=current_stock,
+        stock_after=resulting_stock,
+        reason=note,
+        reference_id=history_entry["id"],
+        reference_type="backend_history",
+        performed_by="Admin App",
+        created_at=history_entry["created_at"],
     )
     return True, "success", resulting_stock, stock_delta
 
@@ -417,6 +606,8 @@ def update_min_stock_level(cursor, barcode, min_stock_level, reason=""):
     if min_stock_level < 0:
         return False, "Minimum stock level cannot be negative"
 
+    product_name = str(row["name"] or "Unknown product")
+
     cursor.execute(
         f"""
         UPDATE products
@@ -426,14 +617,26 @@ def update_min_stock_level(cursor, barcode, min_stock_level, reason=""):
         (min_stock_level, barcode),
     )
 
-    log_inventory_history(
+    note = reason or f"Minimum stock level updated to {min_stock_level}"
+    history_entry = log_inventory_history(
         cursor,
         barcode=barcode,
         movement_type="min_stock_change",
         quantity=0,
-        reason=reason or f"Minimum stock level updated to {min_stock_level}",
+        reason=note,
         reference_type="min_stock_update",
         reference_id=None,
+    )
+
+    mirror_inventory_movement_to_pos(
+        barcode=barcode,
+        product_name=product_name,
+        action_type="min_stock_change",
+        reason=note,
+        reference_id=history_entry["id"],
+        reference_type="backend_history",
+        performed_by="Admin App",
+        created_at=history_entry["created_at"],
     )
     return True, "success"
 
@@ -559,18 +762,32 @@ def create_or_update_product(
 
     movement_type = "product_updated" if existing else "product_created"
     reference_type = "product_update" if existing else "product_create"
-    log_inventory_history(
+    main_reason = reason or ("Product updated" if existing else "Product added to inventory")
+    main_history = log_inventory_history(
         cursor,
         barcode=barcode,
         movement_type=movement_type,
         quantity=0,
-        reason=reason or ("Product updated" if existing else "Product added to inventory"),
+        reason=main_reason,
         reference_type=reference_type,
         reference_id=None,
     )
 
+    mirror_inventory_movement_to_pos(
+        barcode=barcode,
+        product_name=name,
+        action_type=movement_type,
+        stock_before=previous_stock if existing else None,
+        stock_after=opening_stock if existing else opening_stock,
+        reason=main_reason,
+        reference_id=main_history["id"],
+        reference_type="backend_history",
+        performed_by="Admin App",
+        created_at=main_history["created_at"],
+    )
+
     if not existing and opening_stock > 0:
-        log_inventory_history(
+        stock_history = log_inventory_history(
             cursor,
             barcode=barcode,
             movement_type="stock_receive",
@@ -579,8 +796,21 @@ def create_or_update_product(
             reference_type="product_create",
             reference_id=None,
         )
+        mirror_inventory_movement_to_pos(
+            barcode=barcode,
+            product_name=name,
+            action_type="stock_receive",
+            quantity_change=opening_stock,
+            stock_before=0,
+            stock_after=opening_stock,
+            reason="Opening stock added during product creation",
+            reference_id=stock_history["id"],
+            reference_type="backend_history",
+            performed_by="Admin App",
+            created_at=stock_history["created_at"],
+        )
     elif existing and previous_stock != opening_stock:
-        log_inventory_history(
+        stock_history = log_inventory_history(
             cursor,
             barcode=barcode,
             movement_type="product_updated",
@@ -588,6 +818,19 @@ def create_or_update_product(
             reason="Product stock replaced during update",
             reference_type="product_update",
             reference_id=None,
+        )
+        mirror_inventory_movement_to_pos(
+            barcode=barcode,
+            product_name=name,
+            action_type="stock_adjust_set",
+            quantity_change=opening_stock - previous_stock,
+            stock_before=previous_stock,
+            stock_after=opening_stock,
+            reason="Product stock replaced during update",
+            reference_id=stock_history["id"],
+            reference_type="backend_history",
+            performed_by="Admin App",
+            created_at=stock_history["created_at"],
         )
 
     return True, "success"
@@ -602,16 +845,32 @@ def delete_product(cursor, barcode, reason=""):
     if not row:
         return False, "Product not found"
 
+    product_name = str(row["name"] or "Unknown product")
+    stock_before = parse_int(row["stock"], 0)
     cursor.execute("DELETE FROM products WHERE barcode = ?", (barcode,))
 
-    log_inventory_history(
+    note = reason or "Product removed from inventory"
+    history_entry = log_inventory_history(
         cursor,
         barcode=barcode,
         movement_type="product_deleted",
         quantity=0,
-        reason=reason or "Product removed from inventory",
+        reason=note,
         reference_type="product_delete",
         reference_id=None,
+    )
+
+    mirror_inventory_movement_to_pos(
+        barcode=barcode,
+        product_name=product_name,
+        action_type="product_deleted",
+        stock_before=stock_before,
+        stock_after=0,
+        reason=note,
+        reference_id=history_entry["id"],
+        reference_type="backend_history",
+        performed_by="Admin App",
+        created_at=history_entry["created_at"],
     )
     return True, "success"
 

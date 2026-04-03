@@ -4367,7 +4367,7 @@ class DatabaseHelper {
       'inventory_movements',
       where: clauses.isEmpty ? null : clauses.join(' AND '),
       whereArgs: args.isEmpty ? null : args,
-      orderBy: 'created_at DESC, id DESC',
+      orderBy: 'datetime(created_at) DESC, id DESC',
       limit: limit,
     );
 

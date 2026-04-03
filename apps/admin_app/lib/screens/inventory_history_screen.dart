@@ -34,8 +34,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     });
 
     final history = await context.read<AdminProvider>().fetchInventoryHistory(
-      widget.product.barcode,
-    );
+          widget.product.barcode,
+        );
 
     if (!mounted) return;
 
@@ -55,30 +55,88 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         case 'sales':
           return item.type == 'sale' || item.type == 'refund';
         case 'stock_in':
-          return item.type == 'stock_in';
+          return item.type == 'stock_in' || item.type == 'stock_receive';
         case 'adjustments':
-          return item.type == 'adjustment';
+          return item.type == 'adjustment' ||
+              item.type == 'stock_adjust_add' ||
+              item.type == 'stock_adjust_remove' ||
+              item.type == 'stock_adjust_set' ||
+              item.type == 'min_stock_change';
         case 'price_updates':
-          return item.type == 'price_update';
+          return item.type == 'price_update' ||
+              item.type == 'price_change_selling' ||
+              item.type == 'price_change_wholesale' ||
+              item.type == 'price_change_sale' ||
+              item.type == 'price_change_cost';
         default:
           return true;
       }
     }).toList();
   }
 
-  Widget _buildFilterChip(String label, String value) {
+  Widget _buildFilterChip({
+    required String label,
+    required String value,
+    required IconData icon,
+  }) {
     final isSelected = _selectedFilter == value;
 
     return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: ChoiceChip(
-        label: Text(label),
-        selected: isSelected,
-        onSelected: (_) {
+      padding: const EdgeInsets.only(right: 10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
           setState(() {
             _selectedFilter = value;
           });
         },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected ? const Color(0xFFE8F1FF) : Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected
+                  ? const Color(0xFF0F3D91)
+                  : const Color(0xFFD7E0EE),
+              width: isSelected ? 1.4 : 1,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFF0F3D91).withOpacity(0.08),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isSelected ? Icons.check_rounded : icon,
+                size: 16,
+                color: isSelected
+                    ? const Color(0xFF0F3D91)
+                    : const Color(0xFF667085),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected
+                      ? const Color(0xFF0F3D91)
+                      : const Color(0xFF344054),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -105,7 +163,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       case 'stock_in':
         return 'Stock receive records will appear here';
       case 'adjustments':
-        return 'Manual adjustments will appear here';
+        return 'Manual adjustments and minimum stock changes will appear here';
       case 'price_updates':
         return 'Price changes will appear here';
       default:
@@ -190,18 +248,39 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
               ],
             ),
           ),
-          Padding(
+          Container(
+            width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: SizedBox(
-              height: 40,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
                 children: [
-                  _buildFilterChip('All', 'all'),
-                  _buildFilterChip('Sales', 'sales'),
-                  _buildFilterChip('Stock In', 'stock_in'),
-                  _buildFilterChip('Adjustments', 'adjustments'),
-                  _buildFilterChip('Price Updates', 'price_updates'),
+                  _buildFilterChip(
+                    label: 'All',
+                    value: 'all',
+                    icon: Icons.apps_rounded,
+                  ),
+                  _buildFilterChip(
+                    label: 'Sales',
+                    value: 'sales',
+                    icon: Icons.point_of_sale_rounded,
+                  ),
+                  _buildFilterChip(
+                    label: 'Stock In',
+                    value: 'stock_in',
+                    icon: Icons.inventory_2_rounded,
+                  ),
+                  _buildFilterChip(
+                    label: 'Adjustments',
+                    value: 'adjustments',
+                    icon: Icons.tune_rounded,
+                  ),
+                  _buildFilterChip(
+                    label: 'Price Updates',
+                    value: 'price_updates',
+                    icon: Icons.sell_rounded,
+                  ),
                 ],
               ),
             ),
