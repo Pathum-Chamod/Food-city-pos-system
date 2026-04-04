@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../widgets/premium_dialog.dart';
+
 Future<Map<String, dynamic>?> showCartDiscountDialog(
   BuildContext context, {
   required double subtotal,
@@ -38,7 +40,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
     return 0.0;
   }
 
-  final result = await showDialog<Map<String, dynamic>>(
+  final result = await showPremiumDialog<Map<String, dynamic>>(
     context: context,
     builder: (context) {
       return StatefulBuilder(

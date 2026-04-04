@@ -9,11 +9,13 @@ import 'package:shared/models/product.dart';
 import '../config/pos_feature_flags.dart';
 import '../providers/auth_provider.dart';
 import '../providers/cart_provider.dart';
+import '../providers/app_theme_provider.dart';
 import '../services/card_terminal_service.dart';
 import '../services/database_helper.dart';
 import '../services/receipt_printer_service.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
+import '../widgets/premium_dialog.dart';
 import 'cart_discount_dialog.dart';
 import 'cashier_summary_screen.dart';
 import 'checkout_payment_dialog.dart';
@@ -38,7 +40,6 @@ class _PosScreenState extends State<PosScreen> {
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
   bool _isRefreshingProducts = false;
-  bool _isDarkMode = true;
   Timer? _productRefreshTimer;
   Timer? _barcodeInputTimer;
 
@@ -54,7 +55,7 @@ class _PosScreenState extends State<PosScreen> {
   String _searchQuery = '';
   Map<String, dynamic>? _currentShiftSummary;
 
-  bool get _isDark => _isDarkMode;
+  bool get _isDark => context.read<AppThemeProvider>().isDarkMode;
   Color get _screenBackground =>
       _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
   Color get _screenBackgroundAlt =>
@@ -429,7 +430,7 @@ class _PosScreenState extends State<PosScreen> {
 
     if (!mounted) return;
 
-    await showDialog<void>(
+    await showPremiumDialog<void>(
       context: context,
       builder: (context) {
         var ports = List<String>.from(initialPorts);
@@ -912,7 +913,7 @@ class _PosScreenState extends State<PosScreen> {
     if (cart.isRefundMode || cart.selectedPriceType == newType) return;
 
     if (cart.items.isNotEmpty) {
-      final confirmed = await showDialog<bool>(
+      final confirmed = await showPremiumDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Change Billing Price Category?'),
@@ -1169,7 +1170,13 @@ class _PosScreenState extends State<PosScreen> {
       _isProcessingCheckout = true;
     });
 
+    BuildContext? processingDialogContext;
+
     try {
+      processingDialogContext = await _showCheckoutProcessingOverlay(
+        isRefund: isRefund,
+      );
+
       final saleId = await DatabaseHelper.instance.processTransaction(
         subtotalAmount: subtotal,
         totalAmount: displayTotal,
@@ -1221,37 +1228,23 @@ class _PosScreenState extends State<PosScreen> {
         }
       }
 
-      final title = isRefund ? 'Refund Completed' : 'Payment Successful';
-      final amountLabel = isRefund ? 'Refund Amount' : 'Total Paid';
-
-      showDialog(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: Text(title),
-          content: Text(
-            '$amountLabel: Rs. ${displayTotal.toStringAsFixed(2)}\n\n'
-            'Transaction #$saleId was saved locally. Sync was attempted now and the product list has been refreshed from backend.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-                _focusBarcodeField();
-              },
-              child: const Text('Next Customer'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                Navigator.pop(dialogContext);
-                await _showReceiptForTransaction(saleId);
-              },
-              child: const Text('View Receipt'),
-            ),
-          ],
-        ),
+      final action = await _showTransactionSuccessFlow(
+        overlayContext: processingDialogContext,
+        isRefund: isRefund,
+        displayTotal: displayTotal,
+        saleId: saleId,
       );
+
+      if (action == 'receipt') {
+        await _showReceiptForTransaction(saleId);
+      } else {
+        _focusBarcodeField();
+      }
     } catch (e) {
       if (!mounted) return;
+
+      await _dismissProcessingOverlay(processingDialogContext);
+      processingDialogContext = null;
 
       final message = e.toString().replaceFirst('Exception: ', '');
 
@@ -1261,12 +1254,271 @@ class _PosScreenState extends State<PosScreen> {
       );
       _focusBarcodeField();
     } finally {
+      await _dismissProcessingOverlay(processingDialogContext);
       if (mounted) {
         setState(() {
           _isProcessingCheckout = false;
         });
       }
     }
+  }
+
+  Future<BuildContext?> _showCheckoutProcessingOverlay({
+    required bool isRefund,
+  }) async {
+    if (!mounted) return null;
+
+    final completer = Completer<BuildContext>();
+    final title = isRefund ? 'Processing refund' : 'Processing payment';
+    final subtitle = isRefund
+        ? 'Please wait while the refund is saved and synced.'
+        : 'Please wait while the payment is being finalized.';
+    final tone = isRefund ? _dangerColor : _brandColor;
+    final toneSoft = isRefund ? _dangerSoft : _brandSoft;
+
+    unawaited(
+      showPremiumDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        barrierColor: Colors.black.withOpacity(_isDark ? 0.30 : 0.22),
+        transitionDuration: const Duration(milliseconds: 220),
+        builder: (dialogContext) {
+          if (!completer.isCompleted) {
+            completer.complete(dialogContext);
+          }
+
+          return PopScope(
+            canPop: false,
+            child: Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 380),
+                padding: const EdgeInsets.all(24),
+                decoration: _panelDecoration(color: _panelColor),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 66,
+                      height: 66,
+                      decoration: BoxDecoration(
+                        color: toneSoft,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: tone.withOpacity(0.22)),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 3,
+                          color: tone,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      title,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      subtitle,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        height: 1.45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    return completer.future;
+  }
+
+  Future<void> _dismissProcessingOverlay(BuildContext? overlayContext) async {
+    if (overlayContext == null || !overlayContext.mounted) return;
+    Navigator.of(overlayContext, rootNavigator: true).pop();
+    await Future<void>.delayed(const Duration(milliseconds: 90));
+  }
+
+  Future<String?> _showTransactionSuccessFlow({
+    required BuildContext? overlayContext,
+    required bool isRefund,
+    required double displayTotal,
+    required int saleId,
+  }) async {
+    final dialogContext = overlayContext ?? context;
+    final title = isRefund ? 'Refund Completed' : 'Payment Successful';
+    final amountLabel = isRefund ? 'Refund Amount' : 'Total Paid';
+    final tone = isRefund ? _dangerColor : _brandColor;
+    final toneSoft = isRefund ? _dangerSoft : _brandSoft;
+
+    final result = await showPremiumDialog<String>(
+      context: dialogContext,
+      barrierDismissible: false,
+      includeBackdrop: false,
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 220),
+      builder: (successContext) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 460),
+          padding: const EdgeInsets.all(24),
+          decoration: _panelDecoration(color: _panelColor),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      color: toneSoft,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: tone.withOpacity(0.24)),
+                    ),
+                    child: Icon(
+                      isRefund ? Icons.restart_alt_rounded : Icons.check_circle_rounded,
+                      color: tone,
+                      size: 28,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: TextStyle(
+                            color: _textPrimary,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Transaction #$saleId completed successfully.',
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: toneSoft,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: tone.withOpacity(0.22)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            amountLabel.toUpperCase(),
+                            style: TextStyle(
+                              color: _textSecondary,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Rs. ${displayTotal.toStringAsFixed(2)}',
+                            style: TextStyle(
+                              color: tone,
+                              fontSize: 28,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _panelColor,
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: _borderColor),
+                      ),
+                      child: Text(
+                        isRefund ? 'REFUND' : 'PAID',
+                        style: TextStyle(
+                          color: tone,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 11,
+                          letterSpacing: 0.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Local save, sync attempt, and product refresh are complete for this transaction.',
+                style: TextStyle(
+                  color: _textSecondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(successContext).pop('next'),
+                      child: const Text('Next Customer'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.of(successContext).pop('receipt'),
+                      child: const Text('View Receipt'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    return result;
   }
 
   Future<void> _openUserManagement() async {
@@ -1337,7 +1589,7 @@ class _PosScreenState extends State<PosScreen> {
 
     final controller = TextEditingController();
 
-    final cartName = await showDialog<String>(
+    final cartName = await showPremiumDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Hold Cart'),
@@ -1408,7 +1660,7 @@ class _PosScreenState extends State<PosScreen> {
   Future<bool> _confirmReplaceCurrentCartIfNeeded(CartProvider cart) async {
     if (cart.items.isEmpty) return true;
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showPremiumDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Replace Current Cart?'),
@@ -1884,9 +2136,7 @@ class _PosScreenState extends State<PosScreen> {
             tooltip: _isDark ? 'Switch to light mode' : 'Switch to dark mode',
             icon: _isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
             onPressed: () {
-              setState(() {
-                _isDarkMode = !_isDarkMode;
-              });
+              context.read<AppThemeProvider>().toggleTheme();
             },
             iconColor: _brandColor,
           ),
@@ -3090,6 +3340,7 @@ class _PosScreenState extends State<PosScreen> {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
     final cart = context.watch<CartProvider>();
+    context.watch<AppThemeProvider>();
 
     _syncCartAutoScroll(cart);
 
