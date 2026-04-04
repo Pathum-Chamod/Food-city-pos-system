@@ -2,13 +2,16 @@ import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
 
 import '../config/pos_feature_flags.dart';
 import '../providers/auth_provider.dart';
 import '../providers/cart_provider.dart';
+import '../services/card_terminal_service.dart';
 import '../services/database_helper.dart';
+import '../services/receipt_printer_service.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
 import 'cart_discount_dialog.dart';
@@ -36,11 +39,13 @@ class _PosScreenState extends State<PosScreen> {
   bool _isProcessingCheckout = false;
   bool _isRefreshingProducts = false;
   Timer? _productRefreshTimer;
+  Timer? _barcodeInputTimer;
 
   final TextEditingController _barcodeController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _barcodeFocusNode = FocusNode();
   final FocusNode _searchFocusNode = FocusNode();
+  final FocusNode _keyboardListenerFocusNode = FocusNode();
 
   String _searchQuery = '';
   Map<String, dynamic>? _currentShiftSummary;
@@ -52,7 +57,8 @@ class _PosScreenState extends State<PosScreen> {
     _refreshProductsFromBackendAndReload(silentOnFailure: true);
     _startAutoRefresh();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _restoreHardwareConnections();
       _focusBarcodeField();
       if (PosFeatureFlags.enableShiftManagement) {
         _loadShiftSummary();
@@ -63,10 +69,12 @@ class _PosScreenState extends State<PosScreen> {
   @override
   void dispose() {
     _productRefreshTimer?.cancel();
+    _barcodeInputTimer?.cancel();
     _barcodeController.dispose();
     _searchController.dispose();
     _barcodeFocusNode.dispose();
     _searchFocusNode.dispose();
+    _keyboardListenerFocusNode.dispose();
     super.dispose();
   }
 
@@ -97,6 +105,372 @@ class _PosScreenState extends State<PosScreen> {
       if (!mounted) return;
       _barcodeFocusNode.requestFocus();
     });
+  }
+
+
+  Future<void> _restoreHardwareConnections() async {
+    final cardTerminal = CardTerminalService.instance;
+    final printer = ReceiptPrinterService.instance;
+
+    final cardConnected = await cardTerminal.restoreSavedConnection();
+    final printerConnected = await printer.restoreSavedPrinter();
+
+    if (!mounted) return;
+
+    if (cardConnected || printerConnected) {
+      final parts = <String>[];
+      if (cardConnected && cardTerminal.connectedPortName != null) {
+        parts.add('Card terminal: ${cardTerminal.connectedPortName}');
+      }
+      if (printerConnected && printer.connectedPrinterName != null) {
+        parts.add('Printer: ${printer.connectedPrinterName}');
+      }
+
+      if (parts.isNotEmpty) {
+        _showInfoMessage(
+          parts.join(' • '),
+          backgroundColor: Colors.green,
+        );
+      }
+    }
+  }
+
+  void _handleGlobalKeyboardEvent(RawKeyEvent event) {
+    if (event is! RawKeyDownEvent) return;
+
+    final isModifierOnly =
+        event.isAltPressed ||
+        event.isControlPressed ||
+        event.isMetaPressed;
+    if (isModifierOnly) return;
+
+    if (!_barcodeFocusNode.hasFocus && !_searchFocusNode.hasFocus) {
+      _barcodeFocusNode.requestFocus();
+    }
+  }
+
+  void _handleBarcodeChanged(CartProvider cart, String value) {
+    setState(() {});
+    _barcodeInputTimer?.cancel();
+
+    final trimmed = value.trim();
+    if (trimmed.length < 6) {
+      return;
+    }
+
+    _barcodeInputTimer = Timer(const Duration(milliseconds: 150), () {
+      if (!mounted) return;
+      if (_barcodeController.text.trim() != trimmed) return;
+      if (_searchFocusNode.hasFocus) return;
+      _handleBarcodeSubmit(cart);
+    });
+  }
+
+  Future<void> _showHardwareSetupDialog() async {
+    final cardTerminal = CardTerminalService.instance;
+    final printer = ReceiptPrinterService.instance;
+
+    final initialPorts = cardTerminal.getAvailablePorts();
+    final initialPrinters = await printer.getInstalledPrinters();
+
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        var ports = List<String>.from(initialPorts);
+        var printers = List<String>.from(initialPrinters);
+        var selectedBaudRate = cardTerminal.baudRate;
+        var isBusy = false;
+
+        Future<void> refreshLists(StateSetter setState) async {
+          setState(() {
+            isBusy = true;
+          });
+
+          final nextPrinters = await printer.getInstalledPrinters();
+
+          if (!context.mounted) return;
+
+          setState(() {
+            ports = cardTerminal.getAvailablePorts();
+            printers = nextPrinters;
+            isBusy = false;
+          });
+        }
+
+        Future<void> connectCardPort(String port, StateSetter setState) async {
+          setState(() {
+            isBusy = true;
+          });
+
+          final ok = await cardTerminal.connect(
+            port,
+            baudRate: selectedBaudRate,
+          );
+
+          if (!context.mounted) return;
+
+          setState(() {
+            isBusy = false;
+          });
+
+          _showInfoMessage(
+            ok
+                ? 'Connected card terminal on $port'
+                : 'Failed to connect card terminal on $port',
+            backgroundColor: ok ? Colors.green : Colors.red,
+          );
+        }
+
+        Future<void> selectPrinter(String printerName, StateSetter setState) async {
+          setState(() {
+            isBusy = true;
+          });
+
+          final ok = await printer.selectPrinter(printerName);
+
+          if (!context.mounted) return;
+
+          setState(() {
+            isBusy = false;
+          });
+
+          _showInfoMessage(
+            ok
+                ? 'Receipt printer set to $printerName'
+                : 'Could not set printer $printerName',
+            backgroundColor: ok ? Colors.green : Colors.red,
+          );
+        }
+
+        Future<void> runTestPrint(StateSetter setState) async {
+          setState(() {
+            isBusy = true;
+          });
+
+          final response = await printer.printTestSlip();
+
+          if (!context.mounted) return;
+
+          setState(() {
+            isBusy = false;
+          });
+
+          _showInfoMessage(
+            response.message,
+            backgroundColor: response.isSuccess ? Colors.green : Colors.red,
+          );
+        }
+
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Hardware Setup'),
+              content: SizedBox(
+                width: 560,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Card Terminal',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ),
+                          if (cardTerminal.isConnected)
+                            Chip(
+                              label: Text(
+                                cardTerminal.connectedPortName ?? 'Connected',
+                              ),
+                              backgroundColor: Colors.green.shade50,
+                              side: BorderSide(color: Colors.green.shade200),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Text(
+                            'Baud rate:',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(width: 12),
+                          DropdownButton<int>(
+                            value: selectedBaudRate,
+                            items: const [9600, 19200, 38400, 57600, 115200]
+                                .map(
+                                  (value) => DropdownMenuItem<int>(
+                                    value: value,
+                                    child: Text('$value'),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: isBusy
+                                ? null
+                                : (value) {
+                                    if (value == null) return;
+                                    setState(() {
+                                      selectedBaudRate = value;
+                                    });
+                                  },
+                          ),
+                          const Spacer(),
+                          TextButton.icon(
+                            onPressed: isBusy ? null : () => refreshLists(setState),
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Refresh'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      if (ports.isEmpty)
+                        const Text(
+                          'No COM ports found. Connect the terminal, then refresh.',
+                          style: TextStyle(color: Colors.red),
+                        )
+                      else
+                        ...ports.map(
+                          (port) => ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(port),
+                            subtitle: Text(
+                              port == cardTerminal.connectedPortName
+                                  ? 'Currently connected'
+                                  : 'Available serial port',
+                            ),
+                            trailing: port == cardTerminal.connectedPortName
+                                ? OutlinedButton(
+                                    onPressed: isBusy
+                                        ? null
+                                        : () async {
+                                            setState(() {
+                                              isBusy = true;
+                                            });
+                                            await cardTerminal.disconnect(clearSaved: true);
+                                            if (!context.mounted) return;
+                                            setState(() {
+                                              isBusy = false;
+                                            });
+                                            _showInfoMessage(
+                                              'Card terminal disconnected.',
+                                              backgroundColor: Colors.orange,
+                                            );
+                                          },
+                                    child: const Text('Disconnect'),
+                                  )
+                                : ElevatedButton(
+                                    onPressed: isBusy
+                                        ? null
+                                        : () => connectCardPort(port, setState),
+                                    child: const Text('Connect'),
+                                  ),
+                          ),
+                        ),
+                      const Divider(height: 28),
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Receipt Printer',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ),
+                          if (printer.isConnected)
+                            Chip(
+                              label: Text(
+                                printer.connectedPrinterName ?? 'Selected',
+                              ),
+                              backgroundColor: Colors.green.shade50,
+                              side: BorderSide(color: Colors.green.shade200),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      if (printers.isEmpty)
+                        const Text(
+                          'No Windows printers found. Install or share the receipt printer first.',
+                          style: TextStyle(color: Colors.red),
+                        )
+                      else
+                        ...printers.map(
+                          (printerName) => ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(printerName),
+                            subtitle: Text(
+                              printerName == printer.connectedPrinterName
+                                  ? 'Currently selected printer'
+                                  : 'Installed Windows printer',
+                            ),
+                            trailing: printerName == printer.connectedPrinterName
+                                ? OutlinedButton(
+                                    onPressed: isBusy
+                                        ? null
+                                        : () async {
+                                            setState(() {
+                                              isBusy = true;
+                                            });
+                                            await printer.disconnect(clearSaved: true);
+                                            if (!context.mounted) return;
+                                            setState(() {
+                                              isBusy = false;
+                                            });
+                                            _showInfoMessage(
+                                              'Receipt printer cleared.',
+                                              backgroundColor: Colors.orange,
+                                            );
+                                          },
+                                    child: const Text('Clear'),
+                                  )
+                                : ElevatedButton(
+                                    onPressed: isBusy
+                                        ? null
+                                        : () => selectPrinter(printerName, setState),
+                                    child: const Text('Use'),
+                                  ),
+                          ),
+                        ),
+                      const SizedBox(height: 12),
+                      if (printer.isConnected)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: OutlinedButton.icon(
+                            onPressed: isBusy ? null : () => runTestPrint(setState),
+                            icon: const Icon(Icons.print),
+                            label: const Text('Print Test Slip'),
+                          ),
+                        ),
+                      if (isBusy) ...[
+                        const SizedBox(height: 12),
+                        const LinearProgressIndicator(),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isBusy ? null : () => Navigator.pop(context),
+                  child: const Text('Close'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    _focusBarcodeField();
   }
 
 
@@ -548,17 +922,32 @@ class _PosScreenState extends State<PosScreen> {
 
     final isRefund = cart.isRefundMode;
     final subtotal = cart.subtotal;
+    final discountAmount = cart.discountAmount;
     final displayTotal = cart.cartTotal;
     final itemsMap = cart.getCartItemsAsMap();
+    final receiptItems = itemsMap.map((item) {
+      final product = Map<String, dynamic>.from(item['product'] as Map);
+      return {
+        'name': (product['name'] ?? 'Item').toString(),
+        'qty': ((item['quantity'] as num?) ?? 0).toInt(),
+        'unitPrice': ((item['unit_price_used'] as num?) ?? 0).toDouble(),
+        'lineTotal': ((item['line_total'] as num?) ?? 0).toDouble(),
+      };
+    }).toList();
 
     String? paymentMethod;
     double? amountTendered;
     double? changeAmount;
+    String? approvalCode;
+    String? authCode;
+    String? cardLast4;
+    String? cardType;
 
     if (!isRefund) {
       final paymentResult = await showCheckoutPaymentDialog(
         context,
         totalAmount: displayTotal,
+        onOpenHardwareSetup: _showHardwareSetupDialog,
       );
 
       if (paymentResult == null) {
@@ -569,6 +958,10 @@ class _PosScreenState extends State<PosScreen> {
       paymentMethod = paymentResult['payment_method']?.toString();
       amountTendered = (paymentResult['amount_tendered'] as num?)?.toDouble();
       changeAmount = (paymentResult['change_amount'] as num?)?.toDouble();
+      approvalCode = paymentResult['approval_code']?.toString();
+      authCode = paymentResult['auth_code']?.toString();
+      cardLast4 = paymentResult['card_last4']?.toString();
+      cardType = paymentResult['card_type']?.toString();
     }
 
     setState(() {
@@ -587,7 +980,7 @@ class _PosScreenState extends State<PosScreen> {
         changeAmount: changeAmount,
         discountType: cart.discountType,
         discountValue: cart.discountValue,
-        discountAmount: cart.discountAmount,
+        discountAmount: discountAmount,
       );
 
       cart.clearCart();
@@ -599,6 +992,33 @@ class _PosScreenState extends State<PosScreen> {
       }
 
       if (!mounted) return;
+
+      final printer = ReceiptPrinterService.instance;
+      if (printer.isConnected) {
+        final printResponse = await printer.printReceipt(
+          transactionId: saleId,
+          cashierName: cashierName,
+          paymentMethod: paymentMethod ?? 'cash',
+          items: receiptItems,
+          subtotal: subtotal,
+          discountAmount: discountAmount,
+          total: displayTotal,
+          amountTendered: amountTendered,
+          changeAmount: changeAmount,
+          isRefund: isRefund,
+          approvalCode: approvalCode,
+          authCode: authCode,
+          cardLast4: cardLast4,
+          cardType: cardType,
+        );
+
+        if (!printResponse.isSuccess) {
+          _showInfoMessage(
+            printResponse.message,
+            backgroundColor: Colors.orange,
+          );
+        }
+      }
 
       final title = isRefund ? '✅ Refund Completed' : '✅ Payment Successful';
       final amountLabel = isRefund ? 'Refund Amount' : 'Total Paid';
@@ -950,6 +1370,7 @@ class _PosScreenState extends State<PosScreen> {
                         : IconButton(
                             tooltip: 'Clear barcode',
                             onPressed: () {
+                              _barcodeInputTimer?.cancel();
                               _barcodeController.clear();
                               setState(() {});
                               _focusBarcodeField();
@@ -962,7 +1383,7 @@ class _PosScreenState extends State<PosScreen> {
                     filled: true,
                     fillColor: Colors.white,
                   ),
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (value) => _handleBarcodeChanged(cart, value),
                 ),
               ),
               const SizedBox(width: 10),
@@ -1293,7 +1714,11 @@ class _PosScreenState extends State<PosScreen> {
     final auth = context.watch<AuthProvider>();
     final cart = context.watch<CartProvider>();
 
-    return Scaffold(
+    return RawKeyboardListener(
+      focusNode: _keyboardListenerFocusNode,
+      autofocus: true,
+      onKey: _handleGlobalKeyboardEvent,
+      child: Scaffold(
       appBar: AppBar(
         title: Text(
           'Supermarket POS — ${auth.currentUser?.name ?? 'Not Logged In'}',
@@ -1366,6 +1791,11 @@ class _PosScreenState extends State<PosScreen> {
               _focusBarcodeField();
             },
             icon: const Icon(Icons.bar_chart, color: Colors.white),
+          ),
+          IconButton(
+            tooltip: 'Hardware setup',
+            onPressed: _showHardwareSetupDialog,
+            icon: const Icon(Icons.usb, color: Colors.white),
           ),
           if (auth.hasManagementAccess)
             IconButton(
@@ -1763,6 +2193,7 @@ class _PosScreenState extends State<PosScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }
