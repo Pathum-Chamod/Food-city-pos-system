@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
@@ -25,13 +26,15 @@ class DatabaseHelper {
     sqfliteFfiInit();
     final databaseFactory = databaseFactoryFfi;
 
-    final dbPath = await databaseFactory.getDatabasesPath();
-    final path = join(dbPath, filePath);
+    final legacyPath = await _resolveLegacyDbPath(databaseFactory, filePath);
+    final stablePath = await _resolveStableDbPath(filePath);
+    await _migrateLegacyDbIfNeeded(legacyPath: legacyPath, stablePath: stablePath);
 
-    debugPrint('POS local DB path: $path');
+    debugPrint('POS local DB legacy path: $legacyPath');
+    debugPrint('POS local DB stable path: $stablePath');
 
     return databaseFactory.openDatabase(
-      path,
+      stablePath,
       options: OpenDatabaseOptions(
         version: 19,
         onConfigure: (db) async {
@@ -41,6 +44,59 @@ class DatabaseHelper {
         onUpgrade: _upgradeDB,
       ),
     );
+  }
+
+  Future<String> _resolveLegacyDbPath(
+    DatabaseFactory databaseFactory,
+    String filePath,
+  ) async {
+    final dbPath = await databaseFactory.getDatabasesPath();
+    return join(dbPath, filePath);
+  }
+
+  Future<String> _resolveStableDbPath(String filePath) async {
+    final env = Platform.environment;
+    final localAppData = (env['LOCALAPPDATA'] ?? env['APPDATA'] ?? '').trim();
+
+    final baseDir = localAppData.isNotEmpty
+        ? join(localAppData, 'Food City POS', 'data')
+        : join(Directory.current.path, 'food_city_pos_data');
+
+    await Directory(baseDir).create(recursive: true);
+    return join(baseDir, filePath);
+  }
+
+  Future<void> _migrateLegacyDbIfNeeded({
+    required String legacyPath,
+    required String stablePath,
+  }) async {
+    if (legacyPath == stablePath) return;
+
+    final stableFile = File(stablePath);
+    if (await stableFile.exists()) {
+      return;
+    }
+
+    final legacyFile = File(legacyPath);
+    if (!await legacyFile.exists()) {
+      return;
+    }
+
+    await stableFile.parent.create(recursive: true);
+    await legacyFile.copy(stablePath);
+    await _copySidecarDbFileIfExists('$legacyPath-wal', '$stablePath-wal');
+    await _copySidecarDbFileIfExists('$legacyPath-shm', '$stablePath-shm');
+
+    debugPrint('Migrated POS DB from legacy path to stable path.');
+  }
+
+  Future<void> _copySidecarDbFileIfExists(String sourcePath, String targetPath) async {
+    final sourceFile = File(sourcePath);
+    if (!await sourceFile.exists()) return;
+
+    final targetFile = File(targetPath);
+    await targetFile.parent.create(recursive: true);
+    await sourceFile.copy(targetPath);
   }
 
   double _roundMoney(num value) {
@@ -4367,7 +4423,7 @@ class DatabaseHelper {
       'inventory_movements',
       where: clauses.isEmpty ? null : clauses.join(' AND '),
       whereArgs: args.isEmpty ? null : args,
-      orderBy: 'datetime(created_at) DESC, id DESC',
+      orderBy: 'created_at DESC, id DESC',
       limit: limit,
     );
 
@@ -4874,10 +4930,6 @@ class DatabaseHelper {
           changes.add('sale');
         }
         if (oldMinStockLevel != minStockLevel) changes.add('min stock');
-
-        if (changes.isEmpty) {
-          return;
-        }
 
         await _insertInventoryMovement(
           txn,

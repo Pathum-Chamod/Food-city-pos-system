@@ -8,16 +8,65 @@ Endpoint: http://localhost:8080/api/pos_sync.php
 
 import json
 import os
+import shutil
 import sqlite3
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "local_admin.db")
-POS_DB_PATH = os.path.join(os.path.dirname(__file__), "apps", "pos_app", ".dart_tool", "sqflite_common_ffi", "databases", "food_city_pos.db")
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(PROJECT_ROOT, "local_admin.db")
+LEGACY_POS_DB_PATH = os.path.join(
+    PROJECT_ROOT,
+    "apps",
+    "pos_app",
+    ".dart_tool",
+    "sqflite_common_ffi",
+    "databases",
+    "food_city_pos.db",
+)
+
+
+def _resolve_stable_pos_db_path():
+    local_appdata = (
+        os.environ.get("LOCALAPPDATA")
+        or os.environ.get("APPDATA")
+        or os.path.join(os.path.expanduser("~"), "food_city_pos_data")
+    )
+    return os.path.join(local_appdata, "Food City POS", "data", "food_city_pos.db")
+
+
+STABLE_POS_DB_PATH = _resolve_stable_pos_db_path()
+
+
+def _copy_pos_sidecar_if_exists(source_path, target_path):
+    if not os.path.exists(source_path):
+        return
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    shutil.copy2(source_path, target_path)
+
+
+def _ensure_pos_db_path():
+    os.makedirs(os.path.dirname(STABLE_POS_DB_PATH), exist_ok=True)
+
+    if os.path.exists(STABLE_POS_DB_PATH):
+        return STABLE_POS_DB_PATH
+
+    if os.path.exists(LEGACY_POS_DB_PATH):
+        shutil.copy2(LEGACY_POS_DB_PATH, STABLE_POS_DB_PATH)
+        _copy_pos_sidecar_if_exists(f"{LEGACY_POS_DB_PATH}-wal", f"{STABLE_POS_DB_PATH}-wal")
+        _copy_pos_sidecar_if_exists(f"{LEGACY_POS_DB_PATH}-shm", f"{STABLE_POS_DB_PATH}-shm")
+        print(f"✅ Migrated POS DB to stable path: {STABLE_POS_DB_PATH}")
+        return STABLE_POS_DB_PATH
+
+    return STABLE_POS_DB_PATH
+
+
+POS_DB_PATH = _ensure_pos_db_path()
 
 
 def get_pos_db():
+    os.makedirs(os.path.dirname(POS_DB_PATH), exist_ok=True)
     conn = sqlite3.connect(POS_DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
@@ -642,92 +691,6 @@ def update_min_stock_level(cursor, barcode, min_stock_level, reason=""):
 
 
 
-def _money_changed(old_value, new_value):
-    return round(parse_float(old_value, 0.0), 2) != round(parse_float(new_value, 0.0), 2)
-
-
-def _normalize_reason_text(reason):
-    return str(reason or "").strip().lower()
-
-
-def _is_generic_product_update_reason(reason):
-    normalized = _normalize_reason_text(reason)
-    return normalized in {
-        "",
-        "product updated",
-        "updated product",
-        "product details updated",
-        "updated product details",
-    }
-
-
-def _build_product_update_reason(
-    existing_row,
-    *,
-    name,
-    category,
-    cost_price,
-    selling_price,
-    wholesale_price,
-    sale_price,
-    sale_enabled,
-    opening_stock,
-    min_stock_level,
-    fallback_reason="Product updated",
-):
-    changes = []
-
-    old_name = str(existing_row["name"] or "").strip()
-    old_category = str(existing_row["category"] or "General").strip() or "General"
-    old_cost = parse_float(existing_row["cost_price"], 0.0)
-    old_selling = parse_float(existing_row["selling_price"], 0.0)
-    old_wholesale = parse_float(existing_row["wholesale_price"], old_selling)
-    old_sale_price = None if existing_row["sale_price"] is None else round(parse_float(existing_row["sale_price"], 0.0), 2)
-    old_sale_enabled = normalize_bool(existing_row["sale_enabled"], False)
-    old_min_stock = parse_int(existing_row["min_stock_level"], 0)
-    old_stock = parse_int(existing_row["stock"], 0)
-
-    new_name = str(name or "").strip()
-    new_category = str(category or "General").strip() or "General"
-    new_cost = round(parse_float(cost_price, 0.0), 2)
-    new_selling = round(parse_float(selling_price, 0.0), 2)
-    new_wholesale = round(parse_float(wholesale_price, new_selling), 2)
-    new_sale_price = None if sale_price in (None, "") else round(parse_float(sale_price, 0.0), 2)
-    new_sale_enabled = normalize_bool(sale_enabled, False)
-    new_min_stock = parse_int(min_stock_level, 0)
-    new_stock = parse_int(opening_stock, 0)
-
-    if old_name != new_name:
-        changes.append("name")
-    if old_category != new_category:
-        changes.append("category")
-    if _money_changed(old_cost, new_cost):
-        changes.append("cost price")
-    if _money_changed(old_selling, new_selling):
-        changes.append("selling price")
-    if _money_changed(old_wholesale, new_wholesale):
-        changes.append("wholesale price")
-    if old_sale_price != new_sale_price or old_sale_enabled != new_sale_enabled:
-        if new_sale_enabled and new_sale_price is not None:
-            changes.append("sale price")
-        elif old_sale_price is not None or old_sale_enabled:
-            changes.append("sale price")
-    if old_min_stock != new_min_stock:
-        changes.append("minimum stock level")
-    if old_stock != new_stock and not changes:
-        changes.append("stock")
-
-    if not changes:
-        return fallback_reason
-
-    if len(changes) == 1:
-        return f"Updated {changes[0]}"
-    if len(changes) == 2:
-        return f"Updated {changes[0]} and {changes[1]}"
-
-    return f"Updated {', '.join(changes[:-1])}, and {changes[-1]}"
-
-
 
 def create_or_update_product(
     cursor,
@@ -849,26 +812,7 @@ def create_or_update_product(
 
     movement_type = "product_updated" if existing else "product_created"
     reference_type = "product_update" if existing else "product_create"
-    if existing:
-        main_reason = (
-            _build_product_update_reason(
-                existing,
-                name=name,
-                category=category,
-                cost_price=cost_price,
-                selling_price=selling_price,
-                wholesale_price=resolved_wholesale,
-                sale_price=resolved_sale_price,
-                sale_enabled=sale_enabled,
-                opening_stock=opening_stock,
-                min_stock_level=min_stock_level,
-                fallback_reason="Product updated",
-            )
-            if _is_generic_product_update_reason(reason)
-            else str(reason).strip()
-        )
-    else:
-        main_reason = str(reason).strip() or "Product added to inventory"
+    main_reason = reason or ("Product updated" if existing else "Product added to inventory")
     main_history = log_inventory_history(
         cursor,
         barcode=barcode,
