@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
+import 'premium_dialog.dart';
 
 class AdminDialogs {
   static Future<bool> showPinDialog(
@@ -28,8 +29,9 @@ class AdminDialogs {
         auth.hasManagementAccess && currentUser?.id != null;
 
     if (canBypassWithCurrentUser) {
-      final bypassedSelfApproval =
-          requireDifferentManager && requesterUserId != null && requesterUserId == currentUser!.id;
+      final bypassedSelfApproval = requireDifferentManager &&
+          requesterUserId != null &&
+          requesterUserId == currentUser!.id;
 
       if (!bypassedSelfApproval) {
         final description = _buildApprovalDescription(
@@ -52,9 +54,11 @@ class AdminDialogs {
       }
     }
 
-    await showDialog<void>(
+    final palette = _DialogPalette.of(context);
+
+    await showPremiumDialog<void>(
       context: context,
-      barrierDismissible: !isVerifying,
+      barrierDismissible: false,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setState) {
@@ -104,7 +108,8 @@ class AdminDialogs {
 
                 if (!canApprove) {
                   setState(() {
-                    errorText = 'Only an active manager or full-access user can approve this action.';
+                    errorText =
+                        'Only an active manager or full-access user can approve this action.';
                     isVerifying = false;
                   });
                   return;
@@ -151,43 +156,128 @@ class AdminDialogs {
               }
             }
 
-            return AlertDialog(
-              title: Text(title),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(message),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: pinController,
-                    obscureText: true,
-                    autofocus: true,
-                    maxLength: 4,
-                    keyboardType: TextInputType.number,
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => verify(),
-                    decoration: InputDecoration(
-                      border: const OutlineInputBorder(),
-                      labelText: 'Approval PIN',
-                      counterText: '',
-                      errorText: errorText,
+            return Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: Dialog(
+                  backgroundColor: Colors.transparent,
+                  insetPadding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 24,
+                  ),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: palette.surfaceAlt,
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(color: palette.border),
+                      boxShadow: [
+                        BoxShadow(
+                          color: palette.shadow,
+                          blurRadius: 28,
+                          offset: const Offset(0, 16),
+                        ),
+                      ],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 48,
+                                height: 48,
+                                decoration: BoxDecoration(
+                                  color: palette.brandSoft,
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Icon(
+                                  Icons.admin_panel_settings_rounded,
+                                  color: palette.brand,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      style: TextStyle(
+                                        color: palette.textPrimary,
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      message,
+                                      style: TextStyle(
+                                        color: palette.textSecondary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          TextField(
+                            controller: pinController,
+                            obscureText: true,
+                            autofocus: true,
+                            maxLength: 4,
+                            keyboardType: TextInputType.number,
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) => verify(),
+                            decoration: InputDecoration(
+                              labelText: 'Approval PIN',
+                              counterText: '',
+                              errorText: errorText,
+                              prefixIcon: Icon(
+                                Icons.lock_outline_rounded,
+                                color: palette.brand,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: isVerifying
+                                      ? null
+                                      : () => Navigator.of(dialogContext).pop(),
+                                  child: const Text('Cancel'),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: isVerifying ? null : verify,
+                                  child: isVerifying
+                                      ? const SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Text('Verify'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ],
+                ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: isVerifying
-                      ? null
-                      : () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: isVerifying ? null : verify,
-                  child: Text(isVerifying ? 'Verifying...' : 'Verify'),
-                ),
-              ],
             );
           },
         );
@@ -206,55 +296,175 @@ class AdminDialogs {
     VoidCallback onComplete,
   ) async {
     final TextEditingController priceController =
-        TextEditingController(text: currentPrice.toString());
+        TextEditingController(text: currentPrice.toStringAsFixed(2));
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final palette = _DialogPalette.of(context);
+    String? errorText;
+    bool isSaving = false;
 
-    await showDialog(
+    await showPremiumDialog<void>(
       context: context,
-      builder: (context) {
-        final scaffoldMessenger = ScaffoldMessenger.of(context);
-        return AlertDialog(
-          title: Text('Edit Price: $currentName'),
-          content: TextField(
-            controller: priceController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              labelText: 'New Price (Rs.)',
-              prefixText: 'Rs. ',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-              onPressed: () async {
-                final newPrice = double.tryParse(priceController.text);
-                if (newPrice != null && newPrice > 0) {
-                  await DatabaseHelper.instance.updateProductPriceLocal(
-                    barcode,
-                    newPrice,
-                  );
-                  if (!context.mounted) return;
-                  Navigator.pop(context);
-                  onComplete();
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            Future<void> save() async {
+              if (isSaving) return;
 
-                  scaffoldMessenger.showSnackBar(
-                    const SnackBar(
-                      content: Text('Price updated locally and queued for sync!'),
-                      backgroundColor: Colors.green,
+              final newPrice = double.tryParse(priceController.text.trim());
+              if (newPrice == null || newPrice <= 0) {
+                setState(() {
+                  errorText = 'Enter a valid price greater than zero.';
+                });
+                return;
+              }
+
+              setState(() {
+                isSaving = true;
+                errorText = null;
+              });
+
+              await DatabaseHelper.instance.updateProductPriceLocal(
+                barcode,
+                newPrice,
+              );
+
+              if (!context.mounted) return;
+              Navigator.pop(dialogContext);
+              onComplete();
+
+              scaffoldMessenger.showSnackBar(
+                const SnackBar(
+                  content: Text('Price updated locally and queued for sync!'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            }
+
+            return Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 500),
+                child: Dialog(
+                  backgroundColor: Colors.transparent,
+                  insetPadding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 24,
+                  ),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: palette.surfaceAlt,
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(color: palette.border),
+                      boxShadow: [
+                        BoxShadow(
+                          color: palette.shadow,
+                          blurRadius: 28,
+                          offset: const Offset(0, 16),
+                        ),
+                      ],
                     ),
-                  );
-                }
-              },
-              child: const Text(
-                'Save Price',
-                style: TextStyle(color: Colors.white),
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 48,
+                                height: 48,
+                                decoration: BoxDecoration(
+                                  color: palette.warningSoft,
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Icon(
+                                  Icons.sell_outlined,
+                                  color: palette.warning,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Edit Price',
+                                      style: TextStyle(
+                                        color: palette.textPrimary,
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      currentName,
+                                      style: TextStyle(
+                                        color: palette.textSecondary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          TextField(
+                            controller: priceController,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: InputDecoration(
+                              labelText: 'New Price (Rs.)',
+                              prefixText: 'Rs. ',
+                              errorText: errorText,
+                              prefixIcon: Icon(
+                                Icons.currency_rupee_rounded,
+                                color: palette.brand,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: isSaving
+                                      ? null
+                                      : () => Navigator.pop(dialogContext),
+                                  child: const Text('Cancel'),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: palette.warning,
+                                  ),
+                                  onPressed: isSaving ? null : save,
+                                  child: isSaving
+                                      ? const SizedBox(
+                                          width: 18,
+                                          height: 18,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white,
+                                          ),
+                                        )
+                                      : const Text('Save Price'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ],
+            );
+          },
         );
       },
     );
@@ -282,6 +492,7 @@ class AdminDialogs {
       'Enter manager PIN to continue.',
       'Enter manager PIN to approve.',
       'Manager approval is required to continue.',
+      'Enter an active manager or full-access PIN to continue.',
     };
 
     if (cleanTitle.isNotEmpty && cleanTitle != 'Manager Approval Required') {
@@ -306,4 +517,30 @@ class AdminDialogs {
 
     return 'Manager approval granted';
   }
+}
+
+class _DialogPalette {
+  const _DialogPalette({required this.isDark});
+
+  final bool isDark;
+
+  static _DialogPalette of(BuildContext context) {
+    return _DialogPalette(
+      isDark: Theme.of(context).brightness == Brightness.dark,
+    );
+  }
+
+  Color get surfaceAlt =>
+      isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
+  Color get border =>
+      isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get textPrimary =>
+      isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get textSecondary =>
+      isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get brand => const Color(0xFF2AAA8A);
+  Color get brandSoft => brand.withOpacity(isDark ? 0.16 : 0.10);
+  Color get warning => const Color(0xFFFFB65C);
+  Color get warningSoft => warning.withOpacity(isDark ? 0.18 : 0.10);
+  Color get shadow => Colors.black.withOpacity(isDark ? 0.26 : 0.05);
 }

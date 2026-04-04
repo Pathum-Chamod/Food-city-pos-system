@@ -78,20 +78,6 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     }
   }
 
-  String _formatDateTime(String raw) {
-    try {
-      final dt = DateTime.parse(raw).toLocal();
-      final y = dt.year.toString().padLeft(4, '0');
-      final m = dt.month.toString().padLeft(2, '0');
-      final d = dt.day.toString().padLeft(2, '0');
-      final h = dt.hour.toString().padLeft(2, '0');
-      final min = dt.minute.toString().padLeft(2, '0');
-      return '$y-$m-$d  $h:$min';
-    } catch (_) {
-      return raw;
-    }
-  }
-
   String _formatSummaryDateTime(String raw) {
     try {
       final dt = DateTime.parse(raw).toLocal();
@@ -118,11 +104,11 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     if (current <= 0) return;
 
     setState(() {
-      final newQty = current - 1;
-      if (newQty <= 0) {
+      final next = current - 1;
+      if (next <= 0) {
         _selectedQty.remove(barcode);
       } else {
-        _selectedQty[barcode] = newQty;
+        _selectedQty[barcode] = next;
       }
     });
   }
@@ -134,12 +120,16 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
       final barcode = (item['barcode'] ?? '').toString();
       final unitPrice = ((item['unit_price'] as num?) ?? 0).toDouble();
       final qty = _selectedFor(barcode);
-
       total += unitPrice * qty;
     }
 
     return total;
   }
+
+  int get _selectedLineCount => _selectedRefundItems.length;
+
+  int get _selectedUnitsCount =>
+      _selectedQty.values.fold<int>(0, (sum, qty) => sum + qty);
 
   List<Map<String, dynamic>> get _selectedRefundItems {
     return _refundableItems
@@ -274,7 +264,6 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
       await SyncService().refreshProductsFromBackend();
 
       if (!mounted) return;
-
       Navigator.pop(context, refundSaleId);
     } catch (e) {
       if (!mounted) return;
@@ -294,129 +283,400 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     }
   }
 
-  Widget _buildSummaryCard({
-    required String title,
-    required String value,
-    required IconData icon,
-    required Color accent,
-    double valueFontSize = 18,
-  }) {
+  Widget _buildHeader(_RefundPalette palette) {
     return Container(
-      width: 250,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
+        gradient: LinearGradient(
+          colors: [palette.surfaceAlt, palette.surface],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: palette.border),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+            color: palette.shadow,
+            blurRadius: 28,
+            offset: const Offset(0, 14),
           ),
         ],
       ),
       child: Row(
         children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(icon, color: accent),
+          _buildCircleButton(
+            palette: palette,
+            icon: Icons.arrow_back_rounded,
+            onTap: () => Navigator.of(context).maybePop(),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  title,
+                  'Linked Refund Workspace',
                   style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontWeight: FontWeight.w600,
+                    color: palette.textPrimary,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.1,
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  value,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                  'Review the original sale, choose refundable quantities, then submit for approval.',
                   style: TextStyle(
-                    fontSize: valueFontSize,
-                    fontWeight: FontWeight.w800,
+                    color: palette.textSecondary,
+                    fontWeight: FontWeight.w600,
+                    height: 1.4,
                   ),
                 ),
               ],
             ),
           ),
+          const SizedBox(width: 14),
+          _buildHeaderPill(
+            palette: palette,
+            icon: Icons.receipt_long_rounded,
+            label: 'Sale #${widget.originalSaleId}',
+            tone: palette.danger,
+            soft: palette.dangerSoft,
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildMiniInfoCard(String title, String value) {
-    return Container(
-      width: 150,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+  Widget _buildStepRail(_RefundPalette palette) {
+    Widget step({
+      required int number,
+      required String title,
+      required String subtitle,
+      required Color tone,
+      required bool active,
+    }) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: active ? tone.withOpacity(palette.isDark ? 0.18 : 0.10) : palette.soft,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: active ? tone.withOpacity(0.40) : palette.border,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: active ? tone.withOpacity(palette.isDark ? 0.22 : 0.14) : palette.surface,
+                  borderRadius: BorderRadius.circular(13),
+                  border: Border.all(color: active ? tone.withOpacity(0.30) : palette.border),
+                ),
+                child: Center(
+                  child: Text(
+                    '$number',
+                    style: TextStyle(
+                      color: active ? tone : palette.textSecondary,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: palette.textPrimary,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: palette.textSecondary,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        step(
+          number: 1,
+          title: 'Review sale',
+          subtitle: 'Original bill context',
+          tone: palette.accentBlue,
+          active: true,
+        ),
+        const SizedBox(width: 12),
+        step(
+          number: 2,
+          title: 'Select items',
+          subtitle: 'Choose refund quantities',
+          tone: palette.brand,
+          active: true,
+        ),
+        const SizedBox(width: 12),
+        step(
+          number: 3,
+          title: 'Approval',
+          subtitle: 'Reason and manager PIN',
+          tone: palette.danger,
+          active: _selectedLineCount > 0,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCircleButton({
+    required _RefundPalette palette,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        child: Ink(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: palette.soft,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: palette.border),
+          ),
+          child: Icon(icon, color: palette.textPrimary),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeaderPill({
+    required _RefundPalette palette,
+    required IconData icon,
+    required String label,
+    required Color tone,
+    required Color soft,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: soft,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: tone.withOpacity(0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: tone),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              color: tone,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSaleOverview(_RefundPalette palette, Map<String, dynamic> summary) {
+    final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
+    final dateText =
+        _formatSummaryDateTime((summary['created_at'] ?? '').toString());
+    final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
+
+    Widget tile({
+      required String title,
+      required String value,
+      required IconData icon,
+      required Color tone,
+    }) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            color: palette.surface,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: palette.border),
+            boxShadow: [
+              BoxShadow(
+                color: palette.shadow,
+                blurRadius: 14,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: tone.withOpacity(palette.isDark ? 0.16 : 0.10),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(icon, color: tone, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: palette.textSecondary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.textPrimary,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 14.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        tile(
+          title: 'Original Sale',
+          value: '#${summary['id']}',
+          icon: Icons.receipt_long_outlined,
+          tone: palette.accentBlue,
+        ),
+        const SizedBox(width: 12),
+        tile(
+          title: 'Cashier',
+          value: cashierName,
+          icon: Icons.person_outline_rounded,
+          tone: palette.brand,
+        ),
+        const SizedBox(width: 12),
+        tile(
+          title: 'Date / Time',
+          value: dateText,
+          icon: Icons.schedule_rounded,
+          tone: palette.success,
+        ),
+        const SizedBox(width: 12),
+        tile(
+          title: 'Sale Total',
+          value: 'Rs. ${total.toStringAsFixed(2)}',
+          icon: Icons.payments_outlined,
+          tone: palette.warning,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildItemsSection(_RefundPalette palette) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: palette.border),
+        boxShadow: [
+          BoxShadow(
+            color: palette.shadow,
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: TextStyle(
-              color: Colors.grey.shade700,
-              fontWeight: FontWeight.w600,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Refundable Items',
+                      style: TextStyle(
+                        color: palette.textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Choose the quantities to refund. Remaining quantity already respects earlier linked refunds.',
+                      style: TextStyle(
+                        color: palette.textSecondary,
+                        fontWeight: FontWeight.w600,
+                        height: 1.35,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              _buildHeaderPill(
+                palette: palette,
+                icon: Icons.widgets_outlined,
+                label: '${_refundableItems.length} item${_refundableItems.length == 1 ? '' : 's'}',
+                tone: palette.accentBlue,
+                soft: palette.accentBlueSoft,
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 14,
+          const SizedBox(height: 14),
+          if (_refundableItems.isEmpty)
+            _buildEmptyStateInline(palette, 'No items found for this sale')
+          else
+            ..._refundableItems.map(
+              (item) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _buildRefundItemCard(palette, item),
+              ),
             ),
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildQtyButton({
-    required IconData icon,
-    required VoidCallback? onTap,
-  }) {
-    final enabled = onTap != null;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Ink(
-        width: 38,
-        height: 38,
-        decoration: BoxDecoration(
-          color: enabled ? const Color(0xFFF3F6FB) : Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: enabled ? const Color(0xFFDCE5F0) : Colors.grey.shade200,
-          ),
-        ),
-        child: Icon(
-          icon,
-          color: enabled ? Colors.blue.shade800 : Colors.grey.shade400,
-          size: 20,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRefundItemCard(Map<String, dynamic> item) {
+  Widget _buildRefundItemCard(_RefundPalette palette, Map<String, dynamic> item) {
     final barcode = (item['barcode'] ?? '').toString();
     final name = (item['product_name'] ?? 'Unknown').toString();
     final unitPrice = ((item['unit_price'] as num?) ?? 0).toDouble();
@@ -425,112 +685,492 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     final refundableQty = (item['refundable_quantity'] as num?)?.toInt() ?? 0;
     final selectedQty = _selectedFor(barcode);
     final refundAmount = unitPrice * selectedQty;
+    final hasSelection = selectedQty > 0;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
+    Widget statChip(String title, String value) {
+      return Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: palette.soft,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: palette.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  color: palette.textSecondary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 10.5,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                value,
+                style: TextStyle(
+                  color: palette.textPrimary,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
+        color: hasSelection ? palette.brandSoftStrong : palette.surfaceAlt,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: hasSelection ? palette.brand.withOpacity(0.30) : palette.border,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: palette.shadow.withOpacity(hasSelection ? 0.9 : 0.7),
+            blurRadius: hasSelection ? 18 : 12,
+            offset: const Offset(0, 8),
           ),
         ],
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: hasSelection
+                      ? palette.brand.withOpacity(palette.isDark ? 0.18 : 0.12)
+                      : palette.soft,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: hasSelection
+                        ? palette.brand.withOpacity(0.24)
+                        : palette.border,
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Barcode: $barcode',
-                  style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontWeight: FontWeight.w500,
-                  ),
+                child: Icon(
+                  Icons.inventory_2_rounded,
+                  color: hasSelection ? palette.brand : palette.textSecondary,
+                  size: 20,
                 ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildMiniInfoCard(
-                      'Unit Price',
-                      'Rs. ${unitPrice.toStringAsFixed(2)}',
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.textPrimary,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 15,
+                      ),
                     ),
-                    _buildMiniInfoCard('Sold', originalQty.toString()),
-                    _buildMiniInfoCard('Refunded', refundedQty.toString()),
-                    _buildMiniInfoCard('Remaining', refundableQty.toString()),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Barcode: $barcode',
+                      style: TextStyle(
+                        color: palette.textSecondary,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11.5,
+                      ),
+                    ),
                   ],
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 16),
-          SizedBox(
-            width: 220,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: Colors.red.shade100),
-                  ),
-                  child: Text(
-                    'Refund: Rs. ${refundAmount.toStringAsFixed(2)}',
-                    style: TextStyle(
-                      color: Colors.red.shade700,
-                      fontWeight: FontWeight.w800,
-                    ),
+              ),
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: BoxDecoration(
+                  color: palette.dangerSoft,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: palette.danger.withOpacity(0.20)),
+                ),
+                child: Text(
+                  'Rs. ${refundAmount.toStringAsFixed(2)}',
+                  style: TextStyle(
+                    color: palette.danger,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 12,
                   ),
                 ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
+              ),
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: palette.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: palette.border),
+                ),
+                child: Row(
                   children: [
                     _buildQtyButton(
-                      icon: Icons.remove,
+                      palette: palette,
+                      icon: Icons.remove_rounded,
                       onTap: selectedQty > 0 ? () => _decreaseQty(barcode) : null,
                     ),
-                    Container(
-                      width: 56,
-                      alignment: Alignment.center,
+                    SizedBox(
+                      width: 34,
                       child: Text(
                         '$selectedQty',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: palette.textPrimary,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 20,
                         ),
                       ),
                     ),
                     _buildQtyButton(
-                      icon: Icons.add,
+                      palette: palette,
+                      icon: Icons.add_rounded,
                       onTap: refundableQty > selectedQty
                           ? () => _increaseQty(barcode, refundableQty)
                           : null,
                     ),
                   ],
                 ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              statChip('Unit Price', 'Rs. ${unitPrice.toStringAsFixed(2)}'),
+              const SizedBox(width: 8),
+              statChip('Sold', '$originalQty'),
+              const SizedBox(width: 8),
+              statChip('Refunded', '$refundedQty'),
+              const SizedBox(width: 8),
+              statChip('Remaining', '$refundableQty'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQtyButton({
+    required _RefundPalette palette,
+    required IconData icon,
+    required VoidCallback? onTap,
+  }) {
+    final enabled = onTap != null;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            color: enabled ? palette.soft : palette.surfaceAlt,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: palette.border),
+          ),
+          child: Icon(
+            icon,
+            size: 18,
+            color: enabled ? palette.accentBlue : palette.textSecondary.withOpacity(0.45),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSidebar(_RefundPalette palette, bool hasRefundableQty) {
+    final summary = _saleSummary;
+    final total = ((summary?['total_amount'] as num?) ?? 0).toDouble().abs();
+    final previewItems = _selectedRefundItems.take(4).toList();
+
+    Widget stat(String label, String value, {Color? valueColor}) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: palette.textSecondary,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              value,
+              style: TextStyle(
+                color: valueColor ?? palette.textPrimary,
+                fontWeight: FontWeight.w900,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: palette.border),
+        boxShadow: [
+          BoxShadow(
+            color: palette.shadow,
+            blurRadius: 22,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: palette.dangerSoft,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(Icons.assignment_return_rounded, color: palette.danger),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Refund Summary',
+                      style: TextStyle(
+                        color: palette.textPrimary,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Complete the reason and approval to finalize this linked refund.',
+                      style: TextStyle(
+                        color: palette.textSecondary,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: palette.soft,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: palette.border),
+            ),
+            child: Column(
+              children: [
+                stat('Original Sale', 'Rs. ${total.toStringAsFixed(2)}'),
+                stat('Selected Lines', '$_selectedLineCount'),
+                stat('Selected Units', '$_selectedUnitsCount'),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: palette.dangerSoft,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: palette.danger.withOpacity(0.24)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Refund Total',
+                              style: TextStyle(
+                                color: palette.textSecondary,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 11,
+                                letterSpacing: 0.4,
+                              ),
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              'Rs. ${_refundTotal.toStringAsFixed(2)}',
+                              style: TextStyle(
+                                color: palette.danger,
+                                fontWeight: FontWeight.w900,
+                                fontSize: 26,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: palette.danger.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Icon(Icons.undo_rounded, color: palette.danger),
+                      ),
+                    ],
+                  ),
+                ),
               ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Refund reason',
+            style: TextStyle(
+              color: palette.textPrimary,
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _reasonController,
+            maxLines: 5,
+            decoration: const InputDecoration(
+              hintText: 'Explain why this linked refund is being processed...',
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Selected items preview',
+            style: TextStyle(
+              color: palette.textPrimary,
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (previewItems.isEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: palette.soft,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: palette.border),
+              ),
+              child: Text(
+                'No items selected yet.',
+                style: TextStyle(
+                  color: palette.textSecondary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            )
+          else
+            ...previewItems.map(
+              (item) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: palette.soft,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: palette.border),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              (item['product_name'] ?? 'Item').toString(),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: palette.textPrimary,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 13,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${item['quantity']} × Rs. ${(((item['unit_price'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
+                              style: TextStyle(
+                                color: palette.textSecondary,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Rs. ${((((item['unit_price'] as num?) ?? 0).toDouble()) * (((item['quantity'] as num?) ?? 0).toInt())).toStringAsFixed(2)}',
+                        style: TextStyle(
+                          color: palette.danger,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          if (_selectedLineCount > previewItems.length)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '+ ${_selectedLineCount - previewItems.length} more selected',
+                style: TextStyle(
+                  color: palette.textSecondary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 11,
+                ),
+              ),
+            ),
+          const Spacer(),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: (!hasRefundableQty || _isProcessing) ? null : _processRefund,
+              icon: Icon(
+                _isProcessing ? Icons.sync_rounded : Icons.lock_open_rounded,
+                size: 18,
+              ),
+              label: Text(_isProcessing ? 'Processing...' : 'Process Linked Refund'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: palette.danger,
+                foregroundColor: Colors.white,
+                minimumSize: const Size.fromHeight(52),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
             ),
           ),
         ],
@@ -538,234 +1178,158 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     );
   }
 
-  Widget _buildSummaryHeader(Map<String, dynamic> summary) {
-    final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
-    final dateText =
-        _formatSummaryDateTime((summary['created_at'] ?? '').toString());
-    final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
-
-    return Column(
-      children: [
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            _buildSummaryCard(
-              title: 'Original Sale',
-              value: '#${summary['id']}',
-              icon: Icons.receipt_long_outlined,
-              accent: Colors.blue,
-            ),
-            _buildSummaryCard(
-              title: 'Cashier',
-              value: cashierName,
-              icon: Icons.person_outline,
-              accent: Colors.deepPurple,
-            ),
-            _buildSummaryCard(
-              title: 'Date / Time',
-              value: dateText,
-              valueFontSize: 16,
-              icon: Icons.schedule_outlined,
-              accent: Colors.green,
-            ),
-            _buildSummaryCard(
-              title: 'Sale Total',
-              value: 'Rs. ${total.toStringAsFixed(2)}',
-              icon: Icons.payments_outlined,
-              accent: Colors.orange,
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: Colors.grey.shade200),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Select the quantities to refund from this sale. Remaining quantities are limited by previous linked refunds.',
-                  style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontWeight: FontWeight.w500,
-                    height: 1.4,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Items (${_refundableItems.length})',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-              ),
-            ],
+  Widget _buildEmptyStateInline(_RefundPalette palette, String text) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        color: palette.surfaceAlt,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: palette.border),
+      ),
+      child: Center(
+        child: Text(
+          text,
+          style: TextStyle(
+            color: palette.textSecondary,
+            fontWeight: FontWeight.w700,
           ),
         ),
-      ],
+      ),
     );
   }
 
-  Widget _buildBottomPanel(bool hasRefundableQty) {
-    return SafeArea(
-      top: false,
+  Widget _buildEmptyStatePage(_RefundPalette palette, String text) {
+    return Center(
       child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+        width: 460,
+        padding: const EdgeInsets.all(28),
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Colors.grey.shade200)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.04),
-              blurRadius: 14,
-              offset: const Offset(0, -2),
-            ),
-          ],
+          color: palette.surface,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: palette.border),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              controller: _reasonController,
-              maxLines: 2,
-              decoration: InputDecoration(
-                labelText: 'Refund Reason',
-                hintText: 'Enter reason for refund',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide(color: Colors.grey.shade300),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide(color: Colors.red.shade400),
-                ),
-                filled: true,
-                fillColor: const Color(0xFFF8FAFD),
+            Container(
+              width: 70,
+              height: 70,
+              decoration: BoxDecoration(
+                color: palette.soft,
+                shape: BoxShape.circle,
+                border: Border.all(color: palette.border),
               ),
+              child: Icon(Icons.inventory_2_outlined, color: palette.textSecondary, size: 30),
             ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Selected Items: ${_selectedRefundItems.length}',
-                    style: TextStyle(
-                      color: Colors.grey.shade700,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                Text(
-                  'Refund Total: Rs. ${_refundTotal.toStringAsFixed(2)}',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.red.shade700,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: (!hasRefundableQty || _isProcessing)
-                    ? null
-                    : _processRefund,
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.red.shade600,
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-                child: _isProcessing
-                    ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text(
-                        'PROCESS LINKED REFUND',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+            const SizedBox(height: 16),
+            Text(
+              text,
+              style: TextStyle(
+                color: palette.textPrimary,
+                fontWeight: FontWeight.w900,
+                fontSize: 18,
               ),
             ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildEmptyState(String text) {
-    return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Center(child: Text(text)),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final palette = _RefundPalette.of(context);
     final summary = _saleSummary;
     final hasRefundableQty = _refundableItems.any(
       (item) => ((item['refundable_quantity'] as num?)?.toInt() ?? 0) > 0,
     );
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FB),
-      appBar: AppBar(
-        title: const Text('Refund Items'),
-        backgroundColor: Colors.blue.shade900,
-        foregroundColor: Colors.white,
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : summary == null
-              ? _buildEmptyState('Transaction not found')
-              : Column(
-                  children: [
-                    Expanded(
-                      child: ListView(
-                        padding: const EdgeInsets.all(16),
+      backgroundColor: palette.background,
+      body: SafeArea(
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [palette.background, palette.backgroundAlt],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: _isLoading
+              ? Center(child: CircularProgressIndicator(color: palette.brand))
+              : summary == null
+                  ? _buildEmptyStatePage(palette, 'Transaction not found')
+                  : Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
                         children: [
-                          _buildSummaryHeader(summary),
-                          const SizedBox(height: 18),
-                          if (_refundableItems.isEmpty)
-                            _buildEmptyState('No items found for this sale')
-                          else
-                            ..._refundableItems.map(
-                              (item) => Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: _buildRefundItemCard(item),
-                              ),
+                          _buildHeader(palette),
+                          const SizedBox(height: 14),
+                          _buildSaleOverview(palette, summary),
+                          const SizedBox(height: 16),
+                          Expanded(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  flex: 9,
+                                  child: SingleChildScrollView(
+                                    child: _buildItemsSection(palette),
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                SizedBox(
+                                  width: 360,
+                                  child: _buildSidebar(palette, hasRefundableQty),
+                                ),
+                              ],
                             ),
+                          ),
                         ],
                       ),
                     ),
-                    _buildBottomPanel(hasRefundableQty),
-                  ],
-                ),
+        ),
+      ),
     );
   }
+}
+
+class _RefundPalette {
+  const _RefundPalette({required this.isDark});
+
+  final bool isDark;
+
+  static _RefundPalette of(BuildContext context) {
+    return _RefundPalette(
+      isDark: Theme.of(context).brightness == Brightness.dark,
+    );
+  }
+
+  Color get background =>
+      isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get backgroundAlt =>
+      isDark ? const Color(0xFF0B1729) : const Color(0xFFFFFFFF);
+  Color get surface =>
+      isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
+  Color get surfaceAlt =>
+      isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
+  Color get soft =>
+      isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get border =>
+      isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get textPrimary =>
+      isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get textSecondary =>
+      isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get brand => const Color(0xFF2AAA8A);
+  Color get brandSoftStrong => brand.withOpacity(isDark ? 0.10 : 0.06);
+  Color get brandSoft => brand.withOpacity(isDark ? 0.16 : 0.10);
+  Color get accentBlue => const Color(0xFF4B8DFF);
+  Color get accentBlueSoft => accentBlue.withOpacity(isDark ? 0.16 : 0.10);
+  Color get success => const Color(0xFF1FCF9A);
+  Color get warning => const Color(0xFFFFB65C);
+  Color get danger => const Color(0xFFFF6B7A);
+  Color get dangerSoft => danger.withOpacity(isDark ? 0.16 : 0.10);
+  Color get shadow => Colors.black.withOpacity(isDark ? 0.26 : 0.05);
 }

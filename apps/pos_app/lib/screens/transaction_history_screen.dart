@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/database_helper.dart';
+import '../widgets/premium_dialog.dart';
 import 'refund_transaction_screen.dart';
 
 class TransactionHistoryScreen extends StatefulWidget {
@@ -139,41 +140,43 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
 
   int get _saleCount => _transactions
       .where(
-        (tx) => (tx['transaction_type'] ?? 'sale').toString().toLowerCase() == 'sale',
+        (tx) =>
+            (tx['transaction_type'] ?? 'sale').toString().toLowerCase() ==
+            'sale',
       )
       .length;
 
   int get _refundCount => _transactions
       .where(
-        (tx) => (tx['transaction_type'] ?? 'sale').toString().toLowerCase() == 'refund',
+        (tx) =>
+            (tx['transaction_type'] ?? 'sale').toString().toLowerCase() ==
+            'refund',
       )
       .length;
 
   double get _salesTotal => _transactions
       .where(
-        (tx) => (tx['transaction_type'] ?? 'sale').toString().toLowerCase() == 'sale',
+        (tx) =>
+            (tx['transaction_type'] ?? 'sale').toString().toLowerCase() ==
+            'sale',
       )
       .fold<double>(
         0,
-        (sum, tx) => sum + (((tx['total_amount'] as num?) ?? 0).toDouble().abs()),
+        (sum, tx) =>
+            sum + (((tx['total_amount'] as num?) ?? 0).toDouble().abs()),
       );
 
   double get _refundTotal => _transactions
       .where(
-        (tx) => (tx['transaction_type'] ?? 'sale').toString().toLowerCase() == 'refund',
+        (tx) =>
+            (tx['transaction_type'] ?? 'sale').toString().toLowerCase() ==
+            'refund',
       )
       .fold<double>(
         0,
-        (sum, tx) => sum + (((tx['total_amount'] as num?) ?? 0).toDouble().abs()),
+        (sum, tx) =>
+            sum + (((tx['total_amount'] as num?) ?? 0).toDouble().abs()),
       );
-
-  Color _typeColor(String type) {
-    return type == 'refund' ? Colors.red : Colors.green;
-  }
-
-  String _typeLabel(String type) {
-    return type == 'refund' ? 'Refund' : 'Sale';
-  }
 
   String _formatDateTime(String raw) {
     try {
@@ -202,7 +205,15 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     }
   }
 
-  Widget _buildFilterChip(String value, String label) {
+  Color _typeColor(_TxPalette palette, String type) {
+    return type == 'refund' ? palette.danger : palette.success;
+  }
+
+  String _typeLabel(String type) {
+    return type == 'refund' ? 'Refund' : 'Sale';
+  }
+
+  Widget _buildFilterChip(_TxPalette palette, String value, String label) {
     final selected = _filter == value;
 
     return ChoiceChip(
@@ -214,83 +225,91 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
         });
         _loadTransactions();
       },
-      selectedColor: Colors.blue.shade100,
-      labelStyle: TextStyle(
-        color: selected ? Colors.blue.shade800 : Colors.grey.shade800,
-        fontWeight: FontWeight.w600,
-      ),
+      selectedColor: palette.brandSoft,
+      backgroundColor: palette.soft,
       side: BorderSide(
-        color: selected ? Colors.blue.shade200 : Colors.grey.shade300,
+        color: selected ? palette.brand : palette.border,
       ),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      labelStyle: TextStyle(
+        color: selected ? palette.brand : palette.textSecondary,
+        fontWeight: FontWeight.w700,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     );
   }
 
   Widget _buildSummaryCard({
+    required _TxPalette palette,
     required String title,
     required String value,
     required IconData icon,
     required Color accent,
   }) {
     return Container(
-      width: 250,
+      width: 240,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: palette.border),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+            color: palette.shadow,
+            blurRadius: 24,
+            offset: const Offset(0, 12),
           ),
         ],
       ),
       child: Row(
         children: [
           Container(
-            width: 46,
-            height: 46,
+            width: 48,
+            height: 48,
             decoration: BoxDecoration(
-              color: accent.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(14),
+              color: accent.withOpacity(palette.isDark ? 0.18 : 0.12),
+              borderRadius: BorderRadius.circular(16),
             ),
             child: Icon(icon, color: accent),
           ),
           const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  color: Colors.grey.shade700,
-                  fontWeight: FontWeight.w600,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: palette.textSecondary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: palette.textPrimary,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildToolbarCard() {
+  Widget _buildToolbarCard(_TxPalette palette) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: palette.border),
       ),
       child: Column(
         children: [
@@ -300,8 +319,9 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                 child: TextField(
                   controller: _searchController,
                   decoration: InputDecoration(
-                    hintText: 'Search by transaction, cashier, payment, or type',
-                    prefixIcon: const Icon(Icons.search),
+                    hintText:
+                        'Search by transaction, cashier, payment, or type',
+                    prefixIcon: Icon(Icons.search_rounded, color: palette.brand),
                     suffixIcon: _searchController.text.isEmpty
                         ? null
                         : IconButton(
@@ -311,22 +331,8 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                                 _searchQuery = '';
                               });
                             },
-                            icon: const Icon(Icons.close),
+                            icon: const Icon(Icons.close_rounded),
                           ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide(color: Colors.grey.shade300),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide(color: Colors.blue.shade700),
-                    ),
-                    filled: true,
-                    fillColor: const Color(0xFFF8FAFD),
-                    isDense: true,
                   ),
                   onChanged: (value) {
                     setState(() {
@@ -336,87 +342,75 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                 ),
               ),
               const SizedBox(width: 12),
-              InkWell(
-                onTap: _isRefreshing ? null : _refresh,
-                borderRadius: BorderRadius.circular(14),
-                child: Ink(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.grey.shade200),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _isRefreshing
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : Icon(
-                              Icons.refresh,
-                              size: 18,
-                              color: Colors.blue.shade700,
-                            ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'Refresh',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
+              SizedBox(
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed: _isRefreshing ? null : _refresh,
+                  icon: _isRefreshing
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Refresh'),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              _buildFilterChip('all', 'All'),
-              _buildFilterChip('sale', 'Sales'),
-              _buildFilterChip('refund', 'Refunds'),
-            ],
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _buildFilterChip(palette, 'all', 'All'),
+                _buildFilterChip(palette, 'sale', 'Sales'),
+                _buildFilterChip(palette, 'refund', 'Refunds'),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildTypeChip(String type) {
-    final color = _typeColor(type);
+  Widget _buildTypeChip(_TxPalette palette, String type) {
+    final color = _typeColor(palette, type);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.10),
+        color: color.withOpacity(palette.isDark ? 0.18 : 0.10),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withOpacity(0.25)),
+        border: Border.all(color: color.withOpacity(0.28)),
       ),
       child: Text(
         _typeLabel(type),
         style: TextStyle(
-          color: type == 'refund' ? Colors.red.shade700 : Colors.green.shade700,
-          fontWeight: FontWeight.w700,
+          color: color,
+          fontWeight: FontWeight.w800,
           fontSize: 12,
         ),
       ),
     );
   }
 
-  Widget _buildMiniInfoCard(String title, String value) {
+  Widget _buildMiniInfoCard(
+    _TxPalette palette,
+    String title,
+    String value,
+  ) {
     return Container(
-      width: 165,
+      width: 160,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: palette.soft,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: palette.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -424,16 +418,20 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
           Text(
             title,
             style: TextStyle(
-              color: Colors.grey.shade700,
-              fontWeight: FontWeight.w600,
+              color: palette.textSecondary,
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
             ),
           ),
           const SizedBox(height: 4),
           Text(
             value,
-            style: const TextStyle(
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: palette.textPrimary,
               fontWeight: FontWeight.w800,
-              fontSize: 14,
+              fontSize: 13,
             ),
           ),
         ],
@@ -441,9 +439,9 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     );
   }
 
-  Widget _buildTransactionCard(Map<String, dynamic> tx) {
+  Widget _buildTransactionCard(_TxPalette palette, Map<String, dynamic> tx) {
     final type = (tx['transaction_type'] ?? 'sale').toString().toLowerCase();
-    final color = _typeColor(type);
+    final color = _typeColor(palette, type);
     final total = ((tx['total_amount'] as num?) ?? 0).toDouble().abs();
     final id = tx['id'];
     final cashier = (tx['cashier_name'] ?? 'Unknown').toString();
@@ -454,219 +452,310 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     final discountAmount =
         ((tx['discount_amount'] as num?) ?? 0).toDouble().abs();
 
-    return InkWell(
-      onTap: () async {
-        await TransactionHistoryScreen.showReceiptDialogForTransaction(
-          context,
-          id as int,
-        );
-        if (mounted) {
-          _loadTransactions();
-        }
-      },
-      borderRadius: BorderRadius.circular(18),
-      child: Ink(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: Colors.grey.shade200),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.03),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Transaction #$id',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () async {
+          await TransactionHistoryScreen.showReceiptDialogForTransaction(
+            context,
+            id as int,
+          );
+          if (mounted) {
+            _loadTransactions();
+          }
+        },
+        borderRadius: BorderRadius.circular(22),
+        child: Ink(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: palette.surface,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: palette.border),
+            boxShadow: [
+              BoxShadow(
+                color: palette.shadow,
+                blurRadius: 18,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Transaction #$id',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w900,
+                              color: palette.textPrimary,
+                            ),
                           ),
                         ),
+                        _buildTypeChip(palette, type),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      cashier,
+                      style: TextStyle(
+                        color: palette.textSecondary,
+                        fontWeight: FontWeight.w700,
                       ),
-                      _buildTypeChip(type),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        _buildMiniInfoCard(palette, 'Items', itemQty.toString()),
+                        _buildMiniInfoCard(
+                          palette,
+                          'Payment',
+                          type == 'sale' ? _paymentLabel(paymentMethod) : 'Refund',
+                        ),
+                        _buildMiniInfoCard(
+                          palette,
+                          'Time',
+                          _formatDateTime(createdAt),
+                        ),
+                        if (type == 'sale' && discountAmount > 0)
+                          _buildMiniInfoCard(
+                            palette,
+                            'Discount',
+                            'Rs. ${discountAmount.toStringAsFixed(2)}',
+                          ),
+                        if (type == 'refund' && originalSaleId != null)
+                          _buildMiniInfoCard(
+                            palette,
+                            'Original Sale',
+                            '#$originalSaleId',
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 14),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
                   Text(
-                    cashier,
+                    'Rs. ${total.toStringAsFixed(2)}',
                     style: TextStyle(
-                      color: Colors.grey.shade800,
-                      fontWeight: FontWeight.w600,
+                      color: color,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 22,
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: [
-                      _buildMiniInfoCard('Items', itemQty.toString()),
-                      _buildMiniInfoCard(
-                        'Payment',
-                        type == 'sale'
-                            ? _paymentLabel(paymentMethod)
-                            : 'Refund',
-                      ),
-                      _buildMiniInfoCard('Time', _formatDateTime(createdAt)),
-                      if (type == 'sale' && discountAmount > 0)
-                        _buildMiniInfoCard(
-                          'Discount',
-                          'Rs. ${discountAmount.toStringAsFixed(2)}',
-                        ),
-                      if (type == 'refund' && originalSaleId != null)
-                        _buildMiniInfoCard(
-                          'Original Sale',
-                          '#$originalSaleId',
-                        ),
-                    ],
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tap to view receipt',
+                    style: TextStyle(
+                      color: palette.textSecondary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(width: 14),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  'Rs. ${total.toStringAsFixed(2)}',
-                  style: TextStyle(
-                    color: type == 'refund'
-                        ? Colors.red.shade700
-                        : Colors.green.shade700,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 20,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Tap to view receipt',
-                  style: TextStyle(
-                    color: Colors.grey.shade600,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(_TxPalette palette) {
     return Container(
       padding: const EdgeInsets.all(28),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: palette.border),
       ),
       child: Center(
         child: Text(
           _searchQuery.trim().isEmpty
               ? 'No transactions found.'
               : 'No transactions match the current search.',
+          style: TextStyle(
+            color: palette.textSecondary,
+            fontWeight: FontWeight.w700,
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(_TxPalette palette) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [palette.surfaceAlt, palette.surface],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: palette.border),
+        boxShadow: [
+          BoxShadow(
+            color: palette.shadow,
+            blurRadius: 28,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: () => Navigator.of(context).maybePop(),
+            icon: const Icon(Icons.arrow_back_rounded),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Transaction History',
+                  style: TextStyle(
+                    color: palette.textPrimary,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Review sales, refunds, receipts, and cashier activity in one place.',
+                  style: TextStyle(
+                    color: palette.textSecondary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: palette.brandSoft,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: palette.brand.withOpacity(0.25)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.receipt_long_rounded, color: palette.brand, size: 18),
+                const SizedBox(width: 8),
+                Text(
+                  '${_visibleTransactions.length} visible',
+                  style: TextStyle(
+                    color: palette.brand,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final palette = _TxPalette.of(context);
     final visibleTransactions = _visibleTransactions;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FB),
-      appBar: AppBar(
-        title: const Text('Transaction History'),
-        backgroundColor: Colors.blue.shade900,
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            tooltip: 'Refresh transactions',
-            onPressed: _isRefreshing ? null : _refresh,
-            icon: _isRefreshing
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.refresh),
+      backgroundColor: palette.background,
+      body: SafeArea(
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [palette.background, palette.backgroundAlt],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
           ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
+          child: _isLoading
+              ? Center(
+                  child: CircularProgressIndicator(color: palette.brand),
+                )
+              : ListView(
+                  padding: const EdgeInsets.all(16),
                   children: [
-                    _buildSummaryCard(
-                      title: 'Transactions',
-                      value: _transactions.length.toString(),
-                      icon: Icons.receipt_long_outlined,
-                      accent: Colors.blue,
+                    _buildHeader(palette),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        _buildSummaryCard(
+                          palette: palette,
+                          title: 'Transactions',
+                          value: _transactions.length.toString(),
+                          icon: Icons.receipt_long_outlined,
+                          accent: palette.accentBlue,
+                        ),
+                        _buildSummaryCard(
+                          palette: palette,
+                          title: 'Sales',
+                          value: _saleCount.toString(),
+                          icon: Icons.point_of_sale_outlined,
+                          accent: palette.success,
+                        ),
+                        _buildSummaryCard(
+                          palette: palette,
+                          title: 'Refunds',
+                          value: _refundCount.toString(),
+                          icon: Icons.undo_outlined,
+                          accent: palette.danger,
+                        ),
+                        _buildSummaryCard(
+                          palette: palette,
+                          title: 'Net Sales',
+                          value:
+                              'Rs. ${(_salesTotal - _refundTotal).toStringAsFixed(2)}',
+                          icon: Icons.payments_outlined,
+                          accent: palette.brand,
+                        ),
+                      ],
                     ),
-                    _buildSummaryCard(
-                      title: 'Sales',
-                      value: _saleCount.toString(),
-                      icon: Icons.point_of_sale_outlined,
-                      accent: Colors.green,
+                    const SizedBox(height: 16),
+                    _buildToolbarCard(palette),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Transactions (${visibleTransactions.length})',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        color: palette.textPrimary,
+                      ),
                     ),
-                    _buildSummaryCard(
-                      title: 'Refunds',
-                      value: _refundCount.toString(),
-                      icon: Icons.undo_outlined,
-                      accent: Colors.red,
-                    ),
-                    _buildSummaryCard(
-                      title: 'Net Sales',
-                      value:
-                          'Rs. ${(_salesTotal - _refundTotal).toStringAsFixed(2)}',
-                      icon: Icons.payments_outlined,
-                      accent: Colors.deepPurple,
-                    ),
+                    const SizedBox(height: 12),
+                    if (visibleTransactions.isEmpty)
+                      _buildEmptyState(palette)
+                    else
+                      ...visibleTransactions.map(
+                        (tx) => Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _buildTransactionCard(palette, tx),
+                        ),
+                      ),
                   ],
                 ),
-                const SizedBox(height: 18),
-                _buildToolbarCard(),
-                const SizedBox(height: 18),
-                Text(
-                  'Transactions (${visibleTransactions.length})',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (visibleTransactions.isEmpty)
-                  _buildEmptyState()
-                else
-                  ...visibleTransactions.map(
-                    (tx) => Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _buildTransactionCard(tx),
-                    ),
-                  ),
-              ],
-            ),
+        ),
+      ),
     );
   }
 }
@@ -703,36 +792,14 @@ Future<String?> showTransactionReceiptDialog(
     }
   }
 
-  Widget buildInfoChip(IconData icon, String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: Colors.grey.shade700),
-          const SizedBox(width: 6),
-          Text(
-            text,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-        ],
-      ),
-    );
-  }
-
+  final palette = _TxPalette.of(context);
   final transactionType =
       (summary['transaction_type'] ?? 'sale').toString().toLowerCase();
   final isRefund = transactionType == 'refund';
   final subtotal =
       ((summary['subtotal_amount'] as num?) ?? 0).toDouble().abs();
   final discountType = (summary['discount_type'] ?? 'none').toString();
-  final discountValue =
-      ((summary['discount_value'] as num?) ?? 0).toDouble();
+  final discountValue = ((summary['discount_value'] as num?) ?? 0).toDouble();
   final discountAmount =
       ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
   final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
@@ -742,8 +809,7 @@ Future<String?> showTransactionReceiptDialog(
   final originalSaleId = summary['original_sale_id'];
   final refundReason = (summary['refund_reason'] ?? '').toString();
   final paymentMethod = (summary['payment_method'] ?? '').toString();
-  final amountTendered =
-      ((summary['amount_tendered'] as num?) ?? 0).toDouble();
+  final amountTendered = ((summary['amount_tendered'] as num?) ?? 0).toDouble();
   final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
 
   String discountLabel() {
@@ -757,206 +823,375 @@ Future<String?> showTransactionReceiptDialog(
     return '';
   }
 
-  return showDialog<String>(
+  Widget buildInfoChip(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: palette.soft,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: palette.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: palette.textSecondary),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: palette.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  return showPremiumDialog<String>(
     context: context,
-    builder: (context) {
-      return AlertDialog(
-        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Text(isRefund ? 'Refund Receipt' : 'Sale Receipt'),
-        content: SizedBox(
-          width: 620,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Food City POS',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    buildInfoChip(Icons.receipt_long, 'Transaction #$transactionId'),
-                    buildInfoChip(
-                      isRefund ? Icons.undo_outlined : Icons.point_of_sale_outlined,
-                      isRefund ? 'Refund' : 'Sale',
-                    ),
-                    buildInfoChip(Icons.person_outline, cashier),
-                    buildInfoChip(Icons.schedule_outlined, formatDateTime(createdAt)),
-                    if (!isRefund)
-                      buildInfoChip(Icons.payments_outlined, paymentLabel(paymentMethod)),
-                    if (isRefund && originalSaleId != null)
-                      buildInfoChip(Icons.link_outlined, 'Sale #$originalSaleId'),
-                  ],
-                ),
-                if (isRefund && refundReason.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    'Reason: $refundReason',
-                    style: TextStyle(
-                      color: Colors.grey.shade800,
-                      fontWeight: FontWeight.w600,
-                    ),
+    builder: (dialogContext) {
+      return Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760),
+          child: Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            child: Container(
+              decoration: BoxDecoration(
+                color: palette.surfaceAlt,
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: palette.border),
+                boxShadow: [
+                  BoxShadow(
+                    color: palette.shadow,
+                    blurRadius: 28,
+                    offset: const Offset(0, 16),
                   ),
                 ],
-                if (!isRefund && paymentMethod == 'cash') ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    'Amount Tendered: Rs. ${amountTendered.toStringAsFixed(2)}',
-                    style: TextStyle(color: Colors.grey.shade800),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Change: Rs. ${changeAmount.toStringAsFixed(2)}',
-                    style: TextStyle(color: Colors.grey.shade800),
-                  ),
-                ],
-                if (!isRefund && paymentMethod == 'card') ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    'Amount Charged: Rs. ${total.toStringAsFixed(2)}',
-                    style: TextStyle(color: Colors.grey.shade800),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                const Divider(),
-                const SizedBox(height: 8),
-                ...items.map((item) {
-                  final name = (item['product_name'] ?? 'Unknown').toString();
-                  final barcode = (item['barcode'] ?? '').toString();
-                  final qty = (item['quantity'] as num?)?.toInt() ?? 0;
-                  final unitPrice =
-                      ((item['unit_price'] as num?) ?? 0).toDouble();
-                  final baseLineTotal =
-                      ((item['base_line_total'] as num?) ?? 0).toDouble();
-                  final itemDiscount =
-                      ((item['item_discount_amount'] as num?) ?? 0).toDouble();
-                  final finalLineTotal =
-                      ((item['line_total'] as num?) ?? 0).toDouble().abs();
-
-                  final shownLineTotal = isRefund
-                      ? finalLineTotal
-                      : (baseLineTotal > 0 ? baseLineTotal : finalLineTotal);
-
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.grey.shade200),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+                    child: Row(
                       children: [
-                        Text(
-                          name,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15,
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: (isRefund ? palette.danger : palette.brand)
+                                .withOpacity(palette.isDark ? 0.18 : 0.12),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Icon(
+                            isRefund
+                                ? Icons.undo_rounded
+                                : Icons.receipt_long_rounded,
+                            color: isRefund ? palette.danger : palette.brand,
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Barcode: $barcode',
-                          style: TextStyle(
-                            color: Colors.grey[700],
-                            fontSize: 12,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            buildInfoChip(
-                              Icons.shopping_basket_outlined,
-                              'Qty: $qty',
-                            ),
-                            buildInfoChip(
-                              Icons.sell_outlined,
-                              'Unit: Rs. ${unitPrice.toStringAsFixed(2)}',
-                            ),
-                            if (!isRefund && itemDiscount > 0)
-                              buildInfoChip(
-                                Icons.discount_outlined,
-                                'Discount: Rs. ${itemDiscount.toStringAsFixed(2)}',
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isRefund ? 'Refund Receipt' : 'Sale Receipt',
+                                style: TextStyle(
+                                  color: palette.textPrimary,
+                                  fontSize: 21,
+                                  fontWeight: FontWeight.w900,
+                                ),
                               ),
-                          ],
+                              const SizedBox(height: 4),
+                              Text(
+                                'Food City POS',
+                                style: TextStyle(
+                                  color: palette.textSecondary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        const SizedBox(height: 10),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: Text(
-                            'Rs. ${shownLineTotal.toStringAsFixed(2)}',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w800,
-                              fontSize: 15,
+                        IconButton(
+                          onPressed: () => Navigator.pop(dialogContext),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              buildInfoChip(
+                                Icons.receipt_long_rounded,
+                                'Transaction #$transactionId',
+                              ),
+                              buildInfoChip(
+                                isRefund
+                                    ? Icons.undo_outlined
+                                    : Icons.point_of_sale_outlined,
+                                isRefund ? 'Refund' : 'Sale',
+                              ),
+                              buildInfoChip(Icons.person_outline_rounded, cashier),
+                              buildInfoChip(
+                                Icons.schedule_outlined,
+                                formatDateTime(createdAt),
+                              ),
+                              if (!isRefund)
+                                buildInfoChip(
+                                  Icons.payments_outlined,
+                                  paymentLabel(paymentMethod),
+                                ),
+                              if (isRefund && originalSaleId != null)
+                                buildInfoChip(
+                                  Icons.link_outlined,
+                                  'Sale #$originalSaleId',
+                                ),
+                            ],
+                          ),
+                          if (isRefund && refundReason.isNotEmpty) ...[
+                            const SizedBox(height: 14),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: palette.soft,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: palette.border),
+                              ),
+                              child: Text(
+                                'Reason: $refundReason',
+                                style: TextStyle(
+                                  color: palette.textPrimary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                             ),
+                          ],
+                          if (!isRefund && paymentMethod == 'cash') ...[
+                            const SizedBox(height: 14),
+                            Text(
+                              'Amount Tendered: Rs. ${amountTendered.toStringAsFixed(2)}',
+                              style: TextStyle(color: palette.textSecondary),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Change: Rs. ${changeAmount.toStringAsFixed(2)}',
+                              style: TextStyle(color: palette.textSecondary),
+                            ),
+                          ],
+                          if (!isRefund && paymentMethod == 'card') ...[
+                            const SizedBox(height: 14),
+                            Text(
+                              'Amount Charged: Rs. ${total.toStringAsFixed(2)}',
+                              style: TextStyle(color: palette.textSecondary),
+                            ),
+                          ],
+                          const SizedBox(height: 16),
+                          Divider(color: palette.border),
+                          const SizedBox(height: 8),
+                          ...items.map((item) {
+                            final name =
+                                (item['product_name'] ?? 'Unknown').toString();
+                            final barcode = (item['barcode'] ?? '').toString();
+                            final qty = (item['quantity'] as num?)?.toInt() ?? 0;
+                            final unitPrice =
+                                ((item['unit_price'] as num?) ?? 0).toDouble();
+                            final baseLineTotal =
+                                ((item['base_line_total'] as num?) ?? 0)
+                                    .toDouble();
+                            final itemDiscount =
+                                ((item['item_discount_amount'] as num?) ?? 0)
+                                    .toDouble();
+                            final finalLineTotal =
+                                ((item['line_total'] as num?) ?? 0)
+                                    .toDouble()
+                                    .abs();
+
+                            final shownLineTotal = isRefund
+                                ? finalLineTotal
+                                : (baseLineTotal > 0
+                                      ? baseLineTotal
+                                      : finalLineTotal);
+
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: palette.surface,
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(color: palette.border),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    name,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 15,
+                                      color: palette.textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Barcode: $barcode',
+                                    style: TextStyle(
+                                      color: palette.textSecondary,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      buildInfoChip(
+                                        Icons.shopping_basket_outlined,
+                                        'Qty: $qty',
+                                      ),
+                                      buildInfoChip(
+                                        Icons.sell_outlined,
+                                        'Unit: Rs. ${unitPrice.toStringAsFixed(2)}',
+                                      ),
+                                      if (!isRefund && itemDiscount > 0)
+                                        buildInfoChip(
+                                          Icons.discount_outlined,
+                                          'Discount: Rs. ${itemDiscount.toStringAsFixed(2)}',
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: Text(
+                                      'Rs. ${shownLineTotal.toStringAsFixed(2)}',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 15,
+                                        color: palette.textPrimary,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                          const SizedBox(height: 8),
+                          if (!isRefund) ...[
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: Text(
+                                'Subtotal: Rs. ${subtotal.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  color: palette.textPrimary,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            if (discountAmount > 0) ...[
+                              const SizedBox(height: 4),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: Text(
+                                  'Discount${discountLabel().isEmpty ? '' : ' (${discountLabel()})'}: -Rs. ${discountAmount.toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    color: palette.danger,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 6),
+                          ],
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              'Total: Rs. ${total.toStringAsFixed(2)}',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                                color: isRefund ? palette.danger : palette.success,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                    child: Row(
+                      children: [
+                        if (!isRefund)
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(dialogContext, 'refund'),
+                              child: const Text('Refund Items'),
+                            ),
+                          ),
+                        if (!isRefund) const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () => Navigator.pop(dialogContext),
+                            child: const Text('Close'),
                           ),
                         ),
                       ],
                     ),
-                  );
-                }),
-                const SizedBox(height: 8),
-                if (!isRefund) ...[
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      'Subtotal: Rs. ${subtotal.toStringAsFixed(2)}',
-                      style: const TextStyle(fontSize: 16),
-                    ),
                   ),
-                  if (discountAmount > 0) ...[
-                    const SizedBox(height: 4),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Text(
-                        'Discount${discountLabel().isEmpty ? '' : ' (${discountLabel()})'}: -Rs. ${discountAmount.toStringAsFixed(2)}',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          color: Colors.red,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 6),
                 ],
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    'Total: Rs. ${total.toStringAsFixed(2)}',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: isRefund ? Colors.red : Colors.green,
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
-        actions: [
-          if (!isRefund)
-            OutlinedButton(
-              onPressed: () => Navigator.pop(context, 'refund'),
-              child: const Text('Refund Items'),
-            ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
       );
     },
   );
+}
+
+class _TxPalette {
+  const _TxPalette({required this.isDark});
+
+  final bool isDark;
+
+  static _TxPalette of(BuildContext context) {
+    return _TxPalette(isDark: Theme.of(context).brightness == Brightness.dark);
+  }
+
+  Color get background =>
+      isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get backgroundAlt =>
+      isDark ? const Color(0xFF0B1729) : const Color(0xFFFFFFFF);
+  Color get surface =>
+      isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
+  Color get surfaceAlt =>
+      isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
+  Color get soft =>
+      isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get border =>
+      isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get textPrimary =>
+      isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get textSecondary =>
+      isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get brand => const Color(0xFF2AAA8A);
+  Color get brandSoft => brand.withOpacity(isDark ? 0.16 : 0.10);
+  Color get accentBlue => const Color(0xFF4B8DFF);
+  Color get success => const Color(0xFF1FCF9A);
+  Color get danger => const Color(0xFFFF6B7A);
+  Color get shadow => Colors.black.withOpacity(isDark ? 0.26 : 0.05);
 }
