@@ -1,3 +1,6 @@
+
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
@@ -50,6 +53,30 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
   List<Product> _products = [];
   Map<String, int> _countedQuantities = {};
+
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+  Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _pageAlt => _isDark ? const Color(0xFF0B1729) : const Color(0xFFFFFFFF);
+  Color get _surface => _isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
+  Color get _surfaceSoft => _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get _surfaceAlt => _isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
+  Color get _inputFill => _isDark ? const Color(0xFF0B1628) : const Color(0xFFF7F9FC);
+  Color get _border => _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get _borderStrong => _isDark ? const Color(0xFF31445E) : const Color(0xFFCED9E5);
+  Color get _textPrimary => _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get _textSecondary => _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get _textMuted => _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
+  Color get _brand => const Color(0xFF2AAA8A);
+  Color get _brandSoft => _brand.withOpacity(_isDark ? 0.16 : 0.10);
+  Color get _blue => const Color(0xFF4B8DFF);
+  Color get _blueSoft => _blue.withOpacity(_isDark ? 0.18 : 0.10);
+  Color get _success => const Color(0xFF1FCF9A);
+  Color get _successSoft => _success.withOpacity(_isDark ? 0.18 : 0.12);
+  Color get _warning => const Color(0xFFFFB65C);
+  Color get _warningSoft => _warning.withOpacity(_isDark ? 0.20 : 0.14);
+  Color get _danger => const Color(0xFFFF6B7A);
+  Color get _dangerSoft => _danger.withOpacity(_isDark ? 0.20 : 0.12);
+  Color get _shadowColor => Colors.black.withOpacity(_isDark ? 0.24 : 0.0);
 
   @override
   void initState() {
@@ -109,42 +136,209 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   }
 
   void _showMessage(String message, {bool isError = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: isError ? Colors.red : Colors.green,
+        backgroundColor: isError ? _danger : _surfaceSoft,
         behavior: SnackBarBehavior.floating,
       ),
     );
   }
 
-  Future<bool> _confirmAction({
+  BoxDecoration _panelDecoration({Color? color, double radius = 24}) {
+    return BoxDecoration(
+      color: color ?? _surface,
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(color: _border),
+      boxShadow: [
+        BoxShadow(
+          color: _shadowColor,
+          blurRadius: 26,
+          offset: const Offset(0, 14),
+        ),
+      ],
+    );
+  }
+
+  BoxDecoration _softDecoration({Color? color, double radius = 18}) {
+    return BoxDecoration(
+      color: color ?? _surfaceSoft,
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(color: _border),
+    );
+  }
+
+  InputDecoration _fieldDecoration({
+    required String hintText,
+    String? labelText,
+    IconData? icon,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      hintText: hintText,
+      labelText: labelText,
+      prefixIcon: icon == null ? null : Icon(icon, size: 20, color: _textMuted),
+      suffixIcon: suffixIcon,
+      filled: true,
+      fillColor: _inputFill,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: BorderSide(color: _border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: BorderSide(color: _border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(18),
+        borderSide: BorderSide(color: _brand, width: 1.4),
+      ),
+      labelStyle: TextStyle(color: _textSecondary, fontWeight: FontWeight.w600),
+      hintStyle: TextStyle(color: _textSecondary.withOpacity(0.84), fontWeight: FontWeight.w500),
+    );
+  }
+
+  Future<bool> _showDecisionDialog({
     required String title,
     required String message,
-    String confirmText = 'Confirm',
-    bool isDestructive = false,
+    required String confirmText,
+    bool destructive = false,
+    IconData icon = Icons.help_outline_rounded,
+    Color? tone,
   }) async {
-    final confirmed = await showDialog<bool>(
+    final actionTone = tone ?? (destructive ? _danger : _brand);
+
+    final result = await showGeneralDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
+      barrierLabel: title,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withOpacity(_isDark ? 0.34 : 0.22),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 500),
+                  padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+                  decoration: _panelDecoration(color: _surface),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 46,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: _border,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Container(
+                            width: 50,
+                            height: 50,
+                            decoration: BoxDecoration(
+                              color: actionTone.withOpacity(_isDark ? 0.18 : 0.12),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: actionTone.withOpacity(0.24)),
+                            ),
+                            child: Icon(icon, color: actionTone, size: 24),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: TextStyle(
+                                color: _textPrimary,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: _softDecoration(color: _surfaceSoft),
+                        child: Text(
+                          message,
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            height: 1.5,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(dialogContext, false),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _textPrimary,
+                                side: BorderSide(color: _borderStrong),
+                                minimumSize: const Size.fromHeight(52),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: const Text('Cancel'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => Navigator.pop(dialogContext, true),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: actionTone,
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                minimumSize: const Size.fromHeight(52),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: Text(confirmText),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-          FilledButton(
-            style: isDestructive
-                ? FilledButton.styleFrom(backgroundColor: Colors.red)
-                : null,
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(confirmText),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
+            child: child,
           ),
-        ],
-      ),
+        );
+      },
     );
-    return confirmed ?? false;
+
+    return result ?? false;
   }
 
   String? _validateCount(String rawValue, {bool allowZero = true}) {
@@ -203,10 +397,13 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     String? errorText;
     bool isVerifying = false;
 
-    final approver = await showDialog<_StockTakeApprovalResult?>(
+    final approver = await showGeneralDialog<_StockTakeApprovalResult?>(
       context: context,
+      barrierLabel: 'Approval required',
       barrierDismissible: !isVerifying,
-      builder: (dialogContext) {
+      barrierColor: Colors.black.withOpacity(_isDark ? 0.34 : 0.22),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
             Future<void> verify() async {
@@ -284,52 +481,150 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
               }
             }
 
-            return AlertDialog(
-              title: const Text('Approval Required'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Enter manager or full-access PIN to $actionLabel.'),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: pinController,
-                    obscureText: true,
-                    autofocus: true,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      labelText: 'Approver PIN',
-                      border: const OutlineInputBorder(),
-                      errorText: errorText,
+            return BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      constraints: const BoxConstraints(maxWidth: 480),
+                      padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+                      decoration: _panelDecoration(color: _surface),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Center(
+                            child: Container(
+                              width: 46,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                color: _border,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          Row(
+                            children: [
+                              Container(
+                                width: 50,
+                                height: 50,
+                                decoration: BoxDecoration(
+                                  color: _warningSoft,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: _warning.withOpacity(0.24)),
+                                ),
+                                child: Icon(Icons.verified_user_outlined, color: _warning, size: 24),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Approval Required',
+                                      style: TextStyle(
+                                        color: _textPrimary,
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Enter manager or full-access PIN to $actionLabel.',
+                                      style: TextStyle(
+                                        color: _textSecondary,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.4,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          TextField(
+                            controller: pinController,
+                            obscureText: true,
+                            autofocus: true,
+                            keyboardType: TextInputType.number,
+                            decoration: _fieldDecoration(
+                              hintText: 'Approver PIN',
+                              labelText: 'Approver PIN',
+                              icon: Icons.pin_outlined,
+                            ).copyWith(errorText: errorText),
+                            onSubmitted: (_) {
+                              if (!isVerifying) {
+                                verify();
+                              }
+                            },
+                          ),
+                          const SizedBox(height: 18),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: isVerifying
+                                      ? null
+                                      : () => Navigator.pop(dialogContext, null),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: _textPrimary,
+                                    side: BorderSide(color: _borderStrong),
+                                    minimumSize: const Size.fromHeight(52),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                  child: const Text('Cancel'),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: isVerifying ? null : verify,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _warning,
+                                    foregroundColor: _surfaceAlt,
+                                    elevation: 0,
+                                    minimumSize: const Size.fromHeight(52),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                  child: isVerifying
+                                      ? const SizedBox(
+                                          height: 18,
+                                          width: 18,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        )
+                                      : const Text('Approve'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                    onSubmitted: (_) {
-                      if (!isVerifying) {
-                        verify();
-                      }
-                    },
                   ),
-                ],
+                ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: isVerifying
-                      ? null
-                      : () => Navigator.pop(dialogContext, null),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: isVerifying ? null : verify,
-                  child: isVerifying
-                      ? const SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Approve'),
-                ),
-              ],
             );
           },
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
+            child: child,
+          ),
         );
       },
     );
@@ -344,7 +639,6 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   }
 
   List<Product> get _filteredProducts {
-
     final query = _searchQuery.trim().toLowerCase();
 
     return _products.where((product) {
@@ -386,35 +680,148 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   Future<void> _renameSession() async {
     if (_sessionId == null) return;
     final controller = TextEditingController(text: _sessionNameController.text);
-    final saved = await showDialog<bool>(
+
+    final saved = await showGeneralDialog<bool>(
           context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('Session Name'),
-            content: TextField(
-              controller: controller,
-              autofocus: true,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: 'Session Name',
+          barrierLabel: 'Rename session',
+          barrierDismissible: true,
+          barrierColor: Colors.black.withOpacity(_isDark ? 0.34 : 0.22),
+          transitionDuration: const Duration(milliseconds: 220),
+          pageBuilder: (dialogContext, animation, secondaryAnimation) {
+            return BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      constraints: const BoxConstraints(maxWidth: 500),
+                      padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+                      decoration: _panelDecoration(color: _surface),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Center(
+                            child: Container(
+                              width: 46,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                color: _border,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          Row(
+                            children: [
+                              Container(
+                                width: 50,
+                                height: 50,
+                                decoration: BoxDecoration(
+                                  color: _brandSoft,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: _brand.withOpacity(0.24)),
+                                ),
+                                child: Icon(Icons.edit_note_rounded, color: _brand, size: 24),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Session Name',
+                                      style: TextStyle(
+                                        color: _textPrimary,
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Rename this stock take session.',
+                                      style: TextStyle(
+                                        color: _textSecondary,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          TextField(
+                            controller: controller,
+                            autofocus: true,
+                            decoration: _fieldDecoration(
+                              hintText: 'Session Name',
+                              labelText: 'Session Name',
+                              icon: Icons.drive_file_rename_outline_rounded,
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () => Navigator.pop(dialogContext, false),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: _textPrimary,
+                                    side: BorderSide(color: _borderStrong),
+                                    minimumSize: const Size.fromHeight(52),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                  child: const Text('Cancel'),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: ElevatedButton(
+                                  onPressed: () {
+                                    if (controller.text.trim().isEmpty) {
+                                      _showMessage('Session name cannot be empty.', isError: true);
+                                      return;
+                                    }
+                                    Navigator.pop(dialogContext, true);
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _brand,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                    minimumSize: const Size.fromHeight(52),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                  ),
+                                  child: const Text('Save'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Cancel'),
+            );
+          },
+          transitionBuilder: (context, animation, secondaryAnimation, child) {
+            final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+            return FadeTransition(
+              opacity: curved,
+              child: ScaleTransition(
+                scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
+                child: child,
               ),
-              FilledButton(
-                onPressed: () {
-                  if (controller.text.trim().isEmpty) {
-                    _showMessage('Session name cannot be empty.', isError: true);
-                    return;
-                  }
-                  Navigator.pop(dialogContext, true);
-                },
-                child: const Text('Save'),
-              ),
-            ],
-          ),
+            );
+          },
         ) ??
         false;
 
@@ -463,11 +870,13 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   Future<void> _clearCount(Product product) async {
     if (_sessionId == null) return;
 
-    final confirmed = await _confirmAction(
+    final confirmed = await _showDecisionDialog(
       title: 'Clear Count?',
       message: 'Remove the counted quantity for ${product.name}?',
       confirmText: 'Clear',
-      isDestructive: true,
+      destructive: true,
+      icon: Icons.clear_rounded,
+      tone: _danger,
     );
     if (!confirmed) return;
 
@@ -518,52 +927,179 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       text: _countedQuantities[product.barcode]?.toString() ?? '',
     );
 
-    await showDialog<void>(
+    await showGeneralDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('Set Count\n${product.name}'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(
-            border: OutlineInputBorder(),
-            labelText: 'Counted Quantity',
+      barrierLabel: 'Set count',
+      barrierDismissible: true,
+      barrierColor: Colors.black.withOpacity(_isDark ? 0.34 : 0.22),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+                  decoration: _panelDecoration(color: _surface),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 46,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: _border,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Container(
+                            width: 50,
+                            height: 50,
+                            decoration: BoxDecoration(
+                              color: _blueSoft,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: _blue.withOpacity(0.24)),
+                            ),
+                            child: Icon(Icons.edit_outlined, color: _blue, size: 24),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Set Count',
+                                  style: TextStyle(
+                                    color: _textPrimary,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  product.name,
+                                  style: TextStyle(
+                                    color: _textSecondary,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+                      TextField(
+                        controller: controller,
+                        autofocus: true,
+                        keyboardType: TextInputType.number,
+                        decoration: _fieldDecoration(
+                          hintText: 'Counted Quantity',
+                          labelText: 'Counted Quantity',
+                          icon: Icons.numbers_rounded,
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () async {
+                                Navigator.pop(dialogContext);
+                                await _clearCount(product);
+                              },
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _danger,
+                                side: BorderSide(color: _danger.withOpacity(0.28)),
+                                minimumSize: const Size.fromHeight(52),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: const Text('Clear'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(dialogContext),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _textPrimary,
+                                side: BorderSide(color: _borderStrong),
+                                minimumSize: const Size.fromHeight(52),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: const Text('Cancel'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () async {
+                                final error = _validateCount(controller.text);
+                                if (error != null) {
+                                  _showMessage(error, isError: true);
+                                  return;
+                                }
+                                final qty = int.parse(controller.text.trim());
+                                final confirmed = await _showDecisionDialog(
+                                  title: 'Save Count?',
+                                  message: 'Set counted quantity for ${product.name} to $qty?',
+                                  confirmText: 'Save',
+                                  icon: Icons.done_rounded,
+                                  tone: _brand,
+                                );
+                                if (!confirmed) return;
+                                if (dialogContext.mounted) {
+                                  Navigator.pop(dialogContext);
+                                }
+                                await _saveCount(product, qty);
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _brand,
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                minimumSize: const Size.fromHeight(52),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
+                              child: const Text('Save'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
+            child: child,
           ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(dialogContext);
-              await _clearCount(product);
-            },
-            child: const Text('Clear'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final error = _validateCount(controller.text);
-              if (error != null) {
-                _showMessage(error, isError: true);
-                return;
-              }
-              final qty = int.parse(controller.text.trim());
-              final confirmed = await _confirmAction(
-                title: 'Save Count?',
-                message: 'Set counted quantity for ${product.name} to $qty?',
-                confirmText: 'Save',
-              );
-              if (!confirmed) return;
-              Navigator.pop(dialogContext);
-              await _saveCount(product, qty);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -575,27 +1111,14 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     );
     if (approval == null) return;
 
-    final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('Discard Current Draft?'),
-            content: const Text(
-              'This will remove the current stock take draft and all counted quantities in it.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                child: const Text('Discard'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
+    final confirmed = await _showDecisionDialog(
+      title: 'Discard Current Draft?',
+      message: 'This will remove the current stock take draft and all counted quantities in it.',
+      confirmText: 'Discard',
+      destructive: true,
+      icon: Icons.delete_outline_rounded,
+      tone: _danger,
+    );
 
     if (!confirmed) return;
 
@@ -616,74 +1139,96 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     await showModalBottomSheet<void>(
       context: context,
-      showDragHandle: true,
       isScrollControlled: true,
-      builder: (context) {
-        return SafeArea(
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.78,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.82,
+          decoration: BoxDecoration(
+            color: _surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+            border: Border.all(color: _border),
+          ),
+          child: SafeArea(
+            top: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Stock Take History',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                  Center(
+                    child: Container(
+                      width: 46,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: _border,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 18),
+                  Text(
+                    'Stock Take History',
+                    style: TextStyle(
+                      color: _textPrimary,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Completed stock count sessions.',
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   Expanded(
                     child: sessions.isEmpty
-                        ? const Center(
-                            child: Text('No completed stock take sessions yet.'),
+                        ? Center(
+                            child: Text(
+                              'No completed stock take sessions yet.',
+                              style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w700),
+                            ),
                           )
                         : ListView.separated(
                             itemCount: sessions.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            separatorBuilder: (_, __) => const SizedBox(height: 10),
                             itemBuilder: (context, index) {
                               final session = sessions[index];
                               return Container(
-                                padding: const EdgeInsets.all(14),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: Colors.grey.shade200),
-                                ),
+                                padding: const EdgeInsets.all(16),
+                                decoration: _softDecoration(color: _surfaceSoft),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      (session['session_name'] ?? 'Stock Take Session')
-                                          .toString(),
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
+                                      (session['session_name'] ?? 'Stock Take Session').toString(),
+                                      style: TextStyle(
+                                        color: _textPrimary,
+                                        fontWeight: FontWeight.w800,
                                         fontSize: 15,
                                       ),
                                     ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      'Started: ${_formatDateTime(session['started_at']?.toString())}',
-                                    ),
-                                    Text(
-                                      'Completed: ${_formatDateTime(session['completed_at']?.toString())}',
-                                    ),
                                     const SizedBox(height: 8),
+                                    Text(
+                                      'Started • ${_formatDateTime(session['started_at']?.toString())}',
+                                      style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w600),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Completed • ${_formatDateTime(session['completed_at']?.toString())}',
+                                      style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w600),
+                                    ),
+                                    const SizedBox(height: 10),
                                     Wrap(
                                       spacing: 8,
                                       runSpacing: 8,
                                       children: [
-                                        _buildMiniChip(
-                                          '${session['counted_items'] ?? 0} counted',
-                                          Colors.blue,
-                                        ),
-                                        _buildMiniChip(
-                                          '${session['discrepancy_items'] ?? 0} discrepancies',
-                                          Colors.orange,
-                                        ),
-                                        _buildMiniChip(
-                                          '${session['applied_items'] ?? 0} applied',
-                                          Colors.green,
-                                        ),
+                                        _buildMiniChip('${session['counted_items'] ?? 0} counted', _blue),
+                                        _buildMiniChip('${session['discrepancy_items'] ?? 0} discrepancies', _warning),
+                                        _buildMiniChip('${session['applied_items'] ?? 0} applied', _success),
                                       ],
                                     ),
                                   ],
@@ -714,41 +1259,14 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     );
     if (approval == null) return;
 
-    final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('Apply Stock Take'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Session: ${_sessionNameController.text.trim()}'),
-                const SizedBox(height: 8),
-                Text('Discrepancy items: $_discrepancyItems'),
-                const SizedBox(height: 8),
-                const Text(
-                  'This will update each counted item to the exact counted quantity using stock adjustment.',
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Uncounted items will not be changed.',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                child: const Text('Apply'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
+    final confirmed = await _showDecisionDialog(
+      title: 'Apply Stock Take',
+      message:
+          'Session: ${_sessionNameController.text.trim()}\n\nDiscrepancy items: $_discrepancyItems\n\nThis will update each counted item to the exact counted quantity using stock adjustment. Uncounted items will not be changed.',
+      confirmText: 'Apply',
+      icon: Icons.done_all_rounded,
+      tone: _brand,
+    );
 
     if (!confirmed) return;
 
@@ -783,193 +1301,669 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.10),
+        color: color.withOpacity(_isDark ? 0.18 : 0.10),
         borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.22)),
       ),
       child: Text(
         label,
         style: TextStyle(
           color: color,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w800,
           fontSize: 12,
         ),
       ),
     );
   }
 
-  Widget _buildSummaryCard({
-    required String title,
+  Widget _buildFilterPill(String label, StockTakeFilter filter) {
+    final selected = _selectedFilter == filter;
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: () {
+        setState(() {
+          _selectedFilter = filter;
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: selected ? _brandSoft : _surfaceSoft,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: selected ? _brand.withOpacity(0.26) : _border),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? _brand : _textSecondary,
+            fontWeight: FontWeight.w800,
+            fontSize: 12.5,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatTile({
+    required String label,
     required String value,
-    required IconData icon,
-    required Color accent,
+    required Color tone,
   }) {
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Row(
+      padding: const EdgeInsets.all(14),
+      decoration: _softDecoration(color: _surfaceSoft),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: accent.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(14),
+          Text(
+            label,
+            style: TextStyle(
+              color: _textSecondary,
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
             ),
-            child: Icon(icon, color: accent),
           ),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  color: Colors.grey.shade700,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              color: tone,
+              fontWeight: FontWeight.w900,
+              fontSize: 22,
+              height: 1,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildFilterChip(String label, StockTakeFilter filter) {
-    final selected = _selectedFilter == filter;
-    return FilterChip(
-      label: Text(label),
-      selected: selected,
-      onSelected: (_) {
-        setState(() {
-          _selectedFilter = filter;
-        });
-      },
-      selectedColor: Colors.blue.shade100,
-      checkmarkColor: Colors.blue.shade900,
-      labelStyle: TextStyle(
-        color: selected ? Colors.blue.shade900 : Colors.grey.shade800,
-        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-      ),
-      side: BorderSide(
-        color: selected ? Colors.blue.shade200 : Colors.grey.shade300,
-      ),
-      backgroundColor: Colors.white,
+  Widget _buildHeaderActions() {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        _headerIconButton(
+          tooltip: 'Rename session',
+          icon: Icons.edit_note_rounded,
+          onTap: _renameSession,
+        ),
+        _headerIconButton(
+          tooltip: 'History',
+          icon: Icons.history_rounded,
+          onTap: _openHistorySheet,
+        ),
+        _headerIconButton(
+          tooltip: 'Discard draft',
+          icon: Icons.delete_outline_rounded,
+          onTap: _discardDraft,
+          iconColor: _danger,
+        ),
+      ],
     );
   }
 
-  Widget _buildProductTile(Product product) {
+  Widget _headerIconButton({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onTap,
+    Color? iconColor,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Ink(
+          width: 44,
+          height: 44,
+          decoration: _softDecoration(color: _surfaceSoft, radius: 14),
+          child: Icon(icon, color: iconColor ?? _textPrimary, size: 20),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopPanel() {
+    return Container(
+      decoration: _panelDecoration(color: _surface),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 940;
+
+              final left = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 54,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [_brandSoft, _blueSoft],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: _border),
+                        ),
+                        child: Icon(Icons.fact_check_outlined, color: _brand, size: 26),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _sessionNameController.text,
+                              style: TextStyle(
+                                color: _textPrimary,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Started ${_formatDateTime(_startedAt)}',
+                              style: TextStyle(
+                                color: _textSecondary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+
+              if (compact) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    left,
+                    const SizedBox(height: 14),
+                    _headerIconButton(
+                      tooltip: 'Refresh session',
+                      icon: Icons.refresh_rounded,
+                      onTap: () => _loadSession(showLoader: false),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildHeaderActions(),
+                  ],
+                );
+              }
+
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: left),
+                  const SizedBox(width: 12),
+                  _headerIconButton(
+                    tooltip: 'Refresh session',
+                    icon: Icons.refresh_rounded,
+                    onTap: () => _loadSession(showLoader: false),
+                  ),
+                  const SizedBox(width: 10),
+                  _buildHeaderActions(),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 920;
+              final rightButton = SizedBox(
+                height: 54,
+                child: ElevatedButton.icon(
+                  onPressed: _incrementByBarcode,
+                  icon: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('Count +1'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _brand,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+              );
+
+              if (compact) {
+                return Column(
+                  children: [
+                    TextField(
+                      controller: _barcodeController,
+                      decoration: _fieldDecoration(
+                        hintText: 'Scan or enter barcode to count +1',
+                        labelText: 'Quick Count',
+                        icon: Icons.qr_code_scanner_rounded,
+                      ),
+                      onSubmitted: (_) => _incrementByBarcode(),
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(width: double.infinity, child: rightButton),
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _barcodeController,
+                      decoration: _fieldDecoration(
+                        hintText: 'Scan or enter barcode to count +1',
+                        labelText: 'Quick Count',
+                        icon: Icons.qr_code_scanner_rounded,
+                      ),
+                      onSubmitted: (_) => _incrementByBarcode(),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  rightButton,
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final spacing = 12.0;
+              final columns = constraints.maxWidth >= 1000
+                  ? 4
+                  : constraints.maxWidth >= 560
+                      ? 2
+                      : 1;
+              final itemWidth = columns == 1
+                  ? constraints.maxWidth
+                  : (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+
+              return Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: [
+                  SizedBox(
+                    width: itemWidth,
+                    child: _buildStatTile(
+                      label: 'Counted',
+                      value: _countedItems.toString(),
+                      tone: _blue,
+                    ),
+                  ),
+                  SizedBox(
+                    width: itemWidth,
+                    child: _buildStatTile(
+                      label: 'Matched',
+                      value: _matchedItems.toString(),
+                      tone: _success,
+                    ),
+                  ),
+                  SizedBox(
+                    width: itemWidth,
+                    child: _buildStatTile(
+                      label: 'Discrepancies',
+                      value: _discrepancyItems.toString(),
+                      tone: _warning,
+                    ),
+                  ),
+                  SizedBox(
+                    width: itemWidth,
+                    child: _buildStatTile(
+                      label: 'Uncounted',
+                      value: _uncountedItems.toString(),
+                      tone: _textMuted,
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildControlPanel() {
+    return Container(
+      decoration: _panelDecoration(color: _surface),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 900;
+              final applyButton = SizedBox(
+                height: 54,
+                child: ElevatedButton.icon(
+                  onPressed: _applyReconciliation,
+                  icon: _isApplying
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.done_all_rounded, size: 18),
+                  label: Text(_isApplying ? 'Applying...' : 'Apply'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _brand,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+              );
+
+              if (compact) {
+                return Column(
+                  children: [
+                    TextField(
+                      controller: _searchController,
+                      decoration: _fieldDecoration(
+                        hintText: 'Search by name, barcode, or category',
+                        labelText: 'Search Products',
+                        icon: Icons.search_rounded,
+                        suffixIcon: _searchQuery.isEmpty
+                            ? null
+                            : IconButton(
+                                onPressed: () {
+                                  _searchController.clear();
+                                  setState(() {
+                                    _searchQuery = '';
+                                  });
+                                },
+                                icon: Icon(Icons.close_rounded, color: _textMuted),
+                              ),
+                      ),
+                      onChanged: (value) {
+                        setState(() {
+                          _searchQuery = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(width: double.infinity, child: applyButton),
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: _fieldDecoration(
+                        hintText: 'Search by name, barcode, or category',
+                        labelText: 'Search Products',
+                        icon: Icons.search_rounded,
+                        suffixIcon: _searchQuery.isEmpty
+                            ? null
+                            : IconButton(
+                                onPressed: () {
+                                  _searchController.clear();
+                                  setState(() {
+                                    _searchQuery = '';
+                                  });
+                                },
+                                icon: Icon(Icons.close_rounded, color: _textMuted),
+                              ),
+                      ),
+                      onChanged: (value) {
+                        setState(() {
+                          _searchQuery = value;
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  applyButton,
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 14),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildFilterPill('All', StockTakeFilter.all),
+                const SizedBox(width: 8),
+                _buildFilterPill('Counted', StockTakeFilter.counted),
+                const SizedBox(width: 8),
+                _buildFilterPill('Discrepancies', StockTakeFilter.discrepancies),
+                const SizedBox(width: 8),
+                _buildFilterPill('Uncounted', StockTakeFilter.uncounted),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetaDot() {
+    return Container(
+      width: 4,
+      height: 4,
+      decoration: BoxDecoration(
+        color: _textMuted.withOpacity(0.75),
+        borderRadius: BorderRadius.circular(999),
+      ),
+    );
+  }
+
+  Widget _buildProductRow(Product product) {
     final countedQty = _countedQuantities[product.barcode];
     final hasCount = countedQty != null;
     final difference = hasCount ? countedQty - product.stock : null;
     final isMatch = hasCount && difference == 0;
     final isDiscrepancy = hasCount && difference != 0;
 
-    Color accent = Colors.blue;
+    Color accent = _textMuted;
     String stateLabel = 'Uncounted';
     if (isMatch) {
-      accent = Colors.green;
+      accent = _success;
       stateLabel = 'Matched';
     } else if (isDiscrepancy) {
-      accent = Colors.orange;
+      accent = _warning;
       stateLabel = 'Discrepancy';
+    } else if (hasCount) {
+      accent = _blue;
+      stateLabel = 'Counted';
     }
+
+    final diffText = difference == null
+        ? null
+        : difference == 0
+            ? 'Diff 0'
+            : difference > 0
+                ? 'Diff +$difference'
+                : 'Diff $difference';
 
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+      decoration: _panelDecoration(color: _surface, radius: 22),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 900;
+
+          final content = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      product.name,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
+              Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: accent.withOpacity(_isDark ? 0.18 : 0.10),
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: Icon(Icons.inventory_2_outlined, color: accent, size: 22),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          product.name,
+                          style: TextStyle(
+                            color: _textPrimary,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${product.barcode} • ${product.category}',
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: accent.withOpacity(_isDark ? 0.18 : 0.10),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: accent.withOpacity(0.24)),
+                    ),
+                    child: Text(
+                      stateLabel,
+                      style: TextStyle(
+                        color: accent,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${product.barcode} • ${product.category}',
-                      style: TextStyle(color: Colors.grey.shade700),
-                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _inlineMeta('System ${product.stock}', _textSecondary),
+                  _buildMetaDot(),
+                  _inlineMeta(
+                    hasCount ? 'Counted $countedQty' : 'Count not set',
+                    hasCount ? _blue : _textMuted,
+                  ),
+                  if (diffText != null) ...[
+                    _buildMetaDot(),
+                    _inlineMeta(diffText, difference == 0 ? _success : _warning),
                   ],
-                ),
+                ],
               ),
-              _buildMiniChip(stateLabel, accent),
             ],
-          ),
-          const SizedBox(height: 14),
-          Wrap(
+          );
+
+          final actions = Wrap(
             spacing: 10,
             runSpacing: 10,
             children: [
-              _buildMiniChip('System ${product.stock}', Colors.blueGrey),
-              _buildMiniChip(
-                hasCount ? 'Counted $countedQty' : 'Count not set',
-                hasCount ? Colors.blue : Colors.grey,
-              ),
-              if (difference != null)
-                _buildMiniChip(
-                  difference == 0
-                      ? 'Diff 0'
-                      : difference > 0
-                          ? 'Diff +$difference'
-                          : 'Diff $difference',
-                  difference == 0 ? Colors.green : Colors.orange,
-                ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              FilledButton.icon(
+              ElevatedButton.icon(
                 onPressed: () async {
                   final nextQty = (countedQty ?? 0) + 1;
                   await _saveCount(product, nextQty);
                 },
-                icon: const Icon(Icons.add),
+                icon: const Icon(Icons.add_rounded, size: 16),
                 label: const Text('Count +1'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _brand,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
               ),
               OutlinedButton.icon(
                 onPressed: () => _setCountDialog(product),
-                icon: const Icon(Icons.edit_outlined),
+                icon: const Icon(Icons.edit_outlined, size: 16),
                 label: const Text('Set Count'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _textPrimary,
+                  side: BorderSide(color: _borderStrong),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
               ),
               if (hasCount)
                 OutlinedButton.icon(
                   onPressed: () => _clearCount(product),
-                  icon: const Icon(Icons.clear),
+                  icon: const Icon(Icons.clear_rounded, size: 16),
                   label: const Text('Clear'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _danger,
+                    side: BorderSide(color: _danger.withOpacity(0.24)),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
                 ),
             ],
-          ),
-        ],
+          );
+
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                content,
+                const SizedBox(height: 14),
+                actions,
+              ],
+            );
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: content),
+              const SizedBox(width: 16),
+              SizedBox(
+                width: 370,
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: actions,
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _inlineMeta(String text, Color color) {
+    return Text(
+      text,
+      style: TextStyle(
+        color: color,
+        fontWeight: FontWeight.w700,
+        fontSize: 13,
       ),
     );
   }
@@ -987,228 +1981,81 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     return '$day/$month/$year  $hour:$minute';
   }
 
+  Widget _buildEmptyState() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+      decoration: _panelDecoration(color: _surface),
+      child: Column(
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: _softDecoration(color: _surfaceSoft, radius: 24),
+            child: Icon(
+              Icons.inventory_2_outlined,
+              color: _textMuted,
+              size: 30,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'No products match the current filter.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _textSecondary,
+              fontWeight: FontWeight.w700,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final visibleProducts = _filteredProducts;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FB),
+      backgroundColor: _page,
       appBar: AppBar(
+        elevation: 0,
+        backgroundColor: _page,
+        foregroundColor: _textPrimary,
         title: const Text('Stock Take'),
-        backgroundColor: Colors.blue.shade900,
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            tooltip: 'Rename session',
-            onPressed: _renameSession,
-            icon: const Icon(Icons.edit_note),
-          ),
-          IconButton(
-            tooltip: 'History',
-            onPressed: _openHistorySheet,
-            icon: const Icon(Icons.history),
-          ),
-          IconButton(
-            tooltip: 'Discard draft',
-            onPressed: _discardDraft,
-            icon: const Icon(Icons.delete_outline),
-          ),
-        ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(child: CircularProgressIndicator(color: _brand))
           : RefreshIndicator(
               onRefresh: () => _loadSession(showLoader: false),
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: Colors.grey.shade200),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    _sessionNameController.text,
-                                    style: const TextStyle(
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Started ${_formatDateTime(_startedAt)}',
-                                    style: TextStyle(color: Colors.grey.shade700),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            if (_isApplying)
-                              const SizedBox(
-                                width: 24,
-                                height: 24,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _barcodeController,
-                                decoration: InputDecoration(
-                                  hintText: 'Scan or enter barcode to count +1',
-                                  prefixIcon: const Icon(Icons.qr_code_scanner),
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  isDense: true,
-                                ),
-                                onSubmitted: (_) => _incrementByBarcode(),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            FilledButton.icon(
-                              onPressed: _incrementByBarcode,
-                              icon: const Icon(Icons.add),
-                              label: const Text('Count'),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+              color: _brand,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [_page, _pageAlt],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: [
-                      SizedBox(
-                        width: 250,
-                        child: _buildSummaryCard(
-                          title: 'Counted',
-                          value: _countedItems.toString(),
-                          icon: Icons.playlist_add_check_circle,
-                          accent: Colors.blue,
+                ),
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+                  children: [
+                    _buildTopPanel(),
+                    const SizedBox(height: 16),
+                    _buildControlPanel(),
+                    const SizedBox(height: 16),
+                    if (visibleProducts.isEmpty)
+                      _buildEmptyState()
+                    else
+                      ...visibleProducts.map(
+                        (product) => Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _buildProductRow(product),
                         ),
                       ),
-                      SizedBox(
-                        width: 250,
-                        child: _buildSummaryCard(
-                          title: 'Matched',
-                          value: _matchedItems.toString(),
-                          icon: Icons.verified,
-                          accent: Colors.green,
-                        ),
-                      ),
-                      SizedBox(
-                        width: 250,
-                        child: _buildSummaryCard(
-                          title: 'Discrepancies',
-                          value: _discrepancyItems.toString(),
-                          icon: Icons.warning_amber_rounded,
-                          accent: Colors.orange,
-                        ),
-                      ),
-                      SizedBox(
-                        width: 250,
-                        child: _buildSummaryCard(
-                          title: 'Uncounted',
-                          value: _uncountedItems.toString(),
-                          icon: Icons.inventory_2_outlined,
-                          accent: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: Colors.grey.shade200),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _searchController,
-                                decoration: InputDecoration(
-                                  hintText: 'Search by name, barcode, or category',
-                                  prefixIcon: const Icon(Icons.search),
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  isDense: true,
-                                ),
-                                onChanged: (value) {
-                                  setState(() {
-                                    _searchQuery = value;
-                                  });
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            FilledButton.icon(
-                              onPressed: _applyReconciliation,
-                              icon: const Icon(Icons.done_all),
-                              label: const Text('Apply'),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            _buildFilterChip('All', StockTakeFilter.all),
-                            _buildFilterChip('Counted', StockTakeFilter.counted),
-                            _buildFilterChip(
-                              'Discrepancies',
-                              StockTakeFilter.discrepancies,
-                            ),
-                            _buildFilterChip('Uncounted', StockTakeFilter.uncounted),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  if (visibleProducts.isEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(28),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: Colors.grey.shade200),
-                      ),
-                      child: const Center(
-                        child: Text('No products match the current filter.'),
-                      ),
-                    )
-                  else
-                    ...visibleProducts.map(
-                      (product) => Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: _buildProductTile(product),
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
     );
