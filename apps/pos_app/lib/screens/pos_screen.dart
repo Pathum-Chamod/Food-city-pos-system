@@ -895,6 +895,7 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
+  // ignore: unused_element
   String _priceModeDescription(ProductPriceType type) {
     switch (type) {
       case ProductPriceType.selling:
@@ -915,21 +916,135 @@ class _PosScreenState extends State<PosScreen> {
     if (cart.items.isNotEmpty) {
       final confirmed = await showPremiumDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Change Billing Price Category?'),
-          content: Text(
-            'Apply ${_priceTypeTitle(newType)} to all items currently in the cart?',
+        builder: (dialogContext) => Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 520),
+            padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+            decoration: _panelDecoration(color: _panelColor),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 46,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: _borderColor,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Container(
+                      width: 50,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: _priceTypeColor(newType).withOpacity(_isDark ? 0.18 : 0.12),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: _priceTypeColor(newType).withOpacity(0.24),
+                        ),
+                      ),
+                      child: Icon(
+                        newType == ProductPriceType.wholesale
+                            ? Icons.local_offer_outlined
+                            : (newType == ProductPriceType.sale
+                                ? Icons.sell_outlined
+                                : Icons.price_change_outlined),
+                        color: _priceTypeColor(newType),
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Change Billing Price Category?',
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Apply ${_priceTypeTitle(newType)} to all items currently in the cart.',
+                            style: TextStyle(
+                              color: _textSecondary,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => Navigator.pop(dialogContext, false),
+                      child: Ink(
+                        width: 42,
+                        height: 42,
+                        decoration: _softDecoration(color: _panelSoft),
+                        child: Icon(
+                          Icons.close_rounded,
+                          color: _textSecondary,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: _panelSoft,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: _borderColor),
+                  ),
+                  child: Text(
+                    'This will update the billing price used for every current line in the bill.',
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(dialogContext, false),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(dialogContext, true),
+                        child: const Text('Apply'),
+                        style: ElevatedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(52),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Apply'),
-            ),
-          ],
         ),
       );
 
@@ -948,6 +1063,7 @@ class _PosScreenState extends State<PosScreen> {
     _focusBarcodeField();
   }
 
+  // ignore: unused_element
   bool _shouldShowCartPriceTypeBadge(CartItem item) {
     switch (item.priceType) {
       case ProductPriceType.selling:
@@ -994,9 +1110,11 @@ class _PosScreenState extends State<PosScreen> {
     }).toList();
   }
 
+  // ignore: unused_element
   int get _lowStockCount =>
       _products.where((product) => product.stock > 0 && product.isLowStock).length;
 
+  // ignore: unused_element
   int get _outOfStockCount =>
       _products.where((product) => product.stock <= 0).length;
 
@@ -1591,29 +1709,180 @@ class _PosScreenState extends State<PosScreen> {
 
     final cartName = await showPremiumDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Hold Cart'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Cart Name',
-            hintText: 'Example: Customer 1 / Counter Hold',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context, controller.text.trim());
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          child: StatefulBuilder(
+            builder: (context, setLocalState) {
+              return Container(
+                constraints: const BoxConstraints(maxWidth: 520),
+                padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+                decoration: _panelDecoration(color: _panelColor),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 46,
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: _borderColor,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        Container(
+                          width: 50,
+                          height: 50,
+                          decoration: BoxDecoration(
+                            color: _brandSoft,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: _brandColor.withOpacity(0.24),
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.pause_circle_outline_rounded,
+                            color: _brandColor,
+                            size: 26,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Hold Cart',
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Save this bill and resume it later from Held Bills.',
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: () => Navigator.pop(dialogContext),
+                          child: Ink(
+                            width: 42,
+                            height: 42,
+                            decoration: _softDecoration(color: _panelSoft),
+                            child: Icon(
+                              Icons.close_rounded,
+                              color: _textSecondary,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _panelSoft,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: _borderColor),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'CART NAME',
+                            style: TextStyle(
+                              color: _textSecondary,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          TextField(
+                            controller: controller,
+                            autofocus: true,
+                            onChanged: (_) => setLocalState(() {}),
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) {
+                              Navigator.pop(
+                                dialogContext,
+                                controller.text.trim(),
+                              );
+                            },
+                            decoration: InputDecoration(
+                              hintText: 'Example: Customer 1 / Counter Hold',
+                              prefixIcon: Container(
+                                margin: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: _brandSoft,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  Icons.edit_note_rounded,
+                                  color: _brandColor,
+                                  size: 18,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(dialogContext),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.pop(
+                                dialogContext,
+                                controller.text.trim(),
+                              );
+                            },
+                            icon: const Icon(
+                              Icons.pause_circle_outline_rounded,
+                              size: 16,
+                            ),
+                            label: const Text('Hold Bill'),
+                            style: ElevatedButton.styleFrom(
+                              minimumSize: const Size.fromHeight(52),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
             },
-            child: const Text('Hold'),
           ),
-        ],
-      ),
+        );
+      },
     );
 
     controller.dispose();
@@ -1662,22 +1931,138 @@ class _PosScreenState extends State<PosScreen> {
 
     final confirmed = await showPremiumDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Replace Current Cart?'),
-        content: const Text(
-          'Resuming a held cart will replace the current cart. Hold or clear the current cart first if you want to keep it.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 520),
+            padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+            decoration: _panelDecoration(color: _panelColor),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 46,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: _borderColor,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Container(
+                      width: 50,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: _warningSoft,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: _warningColor.withOpacity(0.24),
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.swap_horiz_rounded,
+                        color: _warningColor,
+                        size: 26,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Replace Current Cart?',
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Opening a held bill will replace the current cart on the register.',
+                            style: TextStyle(
+                              color: _textSecondary,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => Navigator.pop(dialogContext, false),
+                      child: Ink(
+                        width: 42,
+                        height: 42,
+                        decoration: _softDecoration(color: _panelSoft),
+                        child: Icon(
+                          Icons.close_rounded,
+                          color: _textSecondary,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: _panelSoft,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: _borderColor),
+                  ),
+                  child: Text(
+                    'Hold or clear the current cart first if you want to keep it before resuming a held bill.',
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(dialogContext, false),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () => Navigator.pop(dialogContext, true),
+                        icon: const Icon(
+                          Icons.shopping_bag_outlined,
+                          size: 16,
+                        ),
+                        label: const Text('Continue'),
+                        style: ElevatedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(52),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
+        );
+      },
     );
 
     return confirmed ?? false;
@@ -2238,6 +2623,7 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  // ignore: unused_element
   Widget _buildMetricChip({
     required IconData icon,
     required String title,
@@ -3185,10 +3571,16 @@ class _PosScreenState extends State<PosScreen> {
                 Text(
                   cart.isRefundMode ? 'REFUND TOTAL' : 'TOTAL',
                   style: TextStyle(
-                    color: _textSecondary,
+                    color: _isDark ? const Color(0xFFF4F8FF) : _textPrimary,
                     fontWeight: FontWeight.w900,
-                    letterSpacing: 0.6,
-                    fontSize: 10,
+                    letterSpacing: 0.8,
+                    fontSize: 11.5,
+                    shadows: [
+                      Shadow(
+                        color: totalTone.withOpacity(_isDark ? 0.18 : 0.08),
+                        blurRadius: 8,
+                      ),
+                    ],
                   ),
                 ),
                 const Spacer(),
@@ -3197,14 +3589,15 @@ class _PosScreenState extends State<PosScreen> {
                   style: TextStyle(
                     color: totalTone,
                     fontWeight: FontWeight.w900,
-                    fontSize: 18,
+                    fontSize: 22,
+                    letterSpacing: 0.2,
+                    shadows: [
+                      Shadow(
+                        color: totalTone.withOpacity(_isDark ? 0.22 : 0.10),
+                        blurRadius: 10,
+                      ),
+                    ],
                   ),
-                ),
-                const SizedBox(width: 8),
-                _buildPriceTypeBadge(
-                  cart.isRefundMode
-                      ? ProductPriceType.selling
-                      : cart.selectedPriceType,
                 ),
               ],
             ),
