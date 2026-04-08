@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../services/database_helper.dart';
+import '../widgets/app_snackbar.dart';
 
 class HeldCartsScreen extends StatefulWidget {
   final String cashierName;
@@ -178,12 +179,10 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     if (!mounted) return;
 
     if (restored == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Held bill not found.'),
-          backgroundColor: _danger,
-          behavior: SnackBarBehavior.floating,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Held bill not found.',
+        backgroundColor: _danger,
       );
       return;
     }
@@ -362,12 +361,10 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
 
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text('Held bill deleted.'),
-        backgroundColor: _brand,
-        behavior: SnackBarBehavior.floating,
-      ),
+    AppSnackBar.show(
+      context,
+      message: 'Held bill deleted.',
+      backgroundColor: _brand,
     );
 
     await _loadHeldCarts();

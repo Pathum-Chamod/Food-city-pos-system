@@ -7,6 +7,7 @@ import 'package:shared/models/product.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
+import '../widgets/app_snackbar.dart';
 
 enum StockTakeFilter {
   all,
@@ -137,12 +138,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
   void _showMessage(String message, {bool isError = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? _danger : _surfaceSoft,
-        behavior: SnackBarBehavior.floating,
-      ),
+    AppSnackBar.show(
+      context,
+      message: message,
+      backgroundColor: isError ? _danger : _surfaceSoft,
     );
   }
 

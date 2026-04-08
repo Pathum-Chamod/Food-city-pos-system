@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
+import 'app_snackbar.dart';
 import 'premium_dialog.dart';
 
 class AdminDialogs {
@@ -297,7 +298,6 @@ class AdminDialogs {
   ) async {
     final TextEditingController priceController =
         TextEditingController(text: currentPrice.toStringAsFixed(2));
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
     final palette = _DialogPalette.of(context);
     String? errorText;
     bool isSaving = false;
@@ -333,11 +333,10 @@ class AdminDialogs {
               Navigator.pop(dialogContext);
               onComplete();
 
-              scaffoldMessenger.showSnackBar(
-                const SnackBar(
-                  content: Text('Price updated locally and queued for sync!'),
-                  backgroundColor: Colors.green,
-                ),
+              AppSnackBar.show(
+                context,
+                message: 'Price updated locally and queued for sync!',
+                backgroundColor: Colors.green,
               );
             }
 

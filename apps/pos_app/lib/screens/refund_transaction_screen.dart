@@ -6,6 +6,7 @@ import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
+import '../widgets/app_snackbar.dart';
 
 class RefundTransactionScreen extends StatefulWidget {
   final int originalSaleId;
@@ -69,11 +70,10 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
         _isLoading = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
-          backgroundColor: Colors.red,
-        ),
+      AppSnackBar.show(
+        context,
+        message: e.toString().replaceFirst('Exception: ', ''),
+        backgroundColor: Colors.red,
       );
     }
   }
@@ -172,22 +172,20 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
 
     final selectedItems = _selectedRefundItems;
     if (selectedItems.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Select at least one item to refund.'),
-          backgroundColor: Colors.orange,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Select at least one item to refund.',
+        backgroundColor: Colors.orange,
       );
       return;
     }
 
     final refundReason = _reasonController.text.trim();
     if (refundReason.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Refund reason is required.'),
-          backgroundColor: Colors.orange,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Refund reason is required.',
+        backgroundColor: Colors.orange,
       );
       return;
     }
@@ -200,11 +198,10 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
 
       if (openShift == null) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Open a shift before processing refunds.'),
-            backgroundColor: Colors.red,
-          ),
+        AppSnackBar.show(
+          context,
+          message: 'Open a shift before processing refunds.',
+          backgroundColor: Colors.red,
         );
         return;
       }
@@ -232,11 +229,10 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
 
     if (!approved || !mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Refund approved by manager.'),
-        backgroundColor: Colors.green,
-      ),
+    AppSnackBar.show(
+      context,
+      message: 'Refund approved by manager.',
+      backgroundColor: Colors.green,
     );
   }
 
@@ -268,11 +264,10 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     } catch (e) {
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
-          backgroundColor: Colors.red,
-        ),
+      AppSnackBar.show(
+        context,
+        message: e.toString().replaceFirst('Exception: ', ''),
+        backgroundColor: Colors.red,
       );
     } finally {
       if (mounted) {

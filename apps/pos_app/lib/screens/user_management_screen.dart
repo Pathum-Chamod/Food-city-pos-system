@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
+import '../widgets/app_snackbar.dart';
 
 class UserManagementScreen extends StatefulWidget {
   const UserManagementScreen({super.key});
@@ -110,12 +111,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
   void _showMessage(String message, {Color? backgroundColor}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: backgroundColor ?? _ui.surfaceSoft,
-        behavior: SnackBarBehavior.floating,
-      ),
+    AppSnackBar.show(
+      context,
+      message: message,
+      backgroundColor: backgroundColor ?? _ui.surfaceSoft,
     );
   }
 

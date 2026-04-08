@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../services/database_helper.dart';
+import '../widgets/app_snackbar.dart';
 
 class ShiftManagementScreen extends StatefulWidget {
   final String cashierName;
@@ -140,13 +141,10 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
 
   void _showMessage(String message, {bool isError = false}) {
     if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? _danger : _surfaceSoft,
-        behavior: SnackBarBehavior.floating,
-      ),
+    AppSnackBar.show(
+      context,
+      message: message,
+      backgroundColor: isError ? _danger : _surfaceSoft,
     );
   }
 

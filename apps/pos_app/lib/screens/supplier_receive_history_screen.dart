@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/pos_supplier.dart';
 import '../models/stock_receipt_record.dart';
 import '../services/supplier_service.dart';
+import '../widgets/app_snackbar.dart';
 
 class SupplierReceiveHistoryScreen extends StatefulWidget {
   const SupplierReceiveHistoryScreen({
@@ -69,12 +70,10 @@ class _SupplierReceiveHistoryScreenState
       setState(() {
         _isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Could not load receive history.'),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: _ui.danger,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Could not load receive history.',
+        backgroundColor: _ui.danger,
       );
     }
   }

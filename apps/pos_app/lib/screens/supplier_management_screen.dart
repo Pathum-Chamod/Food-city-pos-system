@@ -6,6 +6,7 @@ import '../models/stock_receipt_record.dart';
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 import '../services/supplier_service.dart';
+import '../widgets/app_snackbar.dart';
 import 'supplier_receive_history_screen.dart';
 
 class SupplierManagementScreen extends StatefulWidget {
@@ -108,12 +109,10 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
 
   void _showMessage(String message, {bool isError = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? _ui.danger : _ui.brand,
-        behavior: SnackBarBehavior.floating,
-      ),
+    AppSnackBar.show(
+      context,
+      message: message,
+      backgroundColor: isError ? _ui.danger : _ui.brand,
     );
   }
 

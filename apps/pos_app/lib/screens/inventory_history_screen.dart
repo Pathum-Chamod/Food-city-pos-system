@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../services/database_helper.dart';
+import '../widgets/app_snackbar.dart';
 
 enum InventoryHistoryFilter {
   all,
@@ -129,12 +130,10 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       setState(() {
         _isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Could not load inventory history.'),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: Colors.red.shade700,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Could not load inventory history.',
+        backgroundColor: Colors.red.shade700,
       );
     }
   }

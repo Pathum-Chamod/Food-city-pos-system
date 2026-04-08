@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/app_theme_provider.dart';
 import '../providers/auth_provider.dart';
+import '../widgets/app_snackbar.dart';
 import 'pos_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -137,7 +138,6 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _attemptLogin() async {
     if (_isSubmitting || _enteredPin.length != 4) return;
 
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     final auth = context.read<AuthProvider>();
 
@@ -161,16 +161,13 @@ class _LoginScreenState extends State<LoginScreen> {
     final message = auth.loginError ?? 'Login failed. Please try again.';
     final isInactive = auth.inactiveLoginAttempt;
 
-    scaffoldMessenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            isInactive ? 'Access blocked: $message' : 'Login failed: $message',
-          ),
-          backgroundColor: isInactive ? Colors.orange[700] : Colors.red,
-        ),
-      );
+    AppSnackBar.show(
+      context,
+      message: isInactive
+          ? 'Access blocked: $message'
+          : 'Login failed: $message',
+      backgroundColor: isInactive ? Colors.orange[700] : Colors.red,
+    );
 
     setState(() {
       _enteredPin = '';

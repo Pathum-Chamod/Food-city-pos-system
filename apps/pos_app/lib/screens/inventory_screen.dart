@@ -14,6 +14,7 @@ import '../services/database_helper.dart';
 import 'inventory_history_screen.dart';
 import 'stock_take_screen.dart';
 import 'supplier_receive_history_screen.dart';
+import '../widgets/app_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 
 class InventoryScreen extends StatefulWidget {
@@ -501,12 +502,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   void _showMessage(String message, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isError ? _dangerColor : _successColor,
-        behavior: SnackBarBehavior.floating,
-      ),
+    AppSnackBar.show(
+      context,
+      message: message,
+      backgroundColor: isError ? _dangerColor : _successColor,
     );
   }
 
@@ -1687,14 +1686,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final category = categoryController.text.trim();
 
                         if (name.isEmpty) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(content: Text('Enter a product name.')),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: 'Enter a product name.',
                           );
                           return;
                         }
                         if (barcode.isEmpty) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(content: Text('Enter a barcode.')),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: 'Enter a barcode.',
                           );
                           return;
                         }
@@ -1704,12 +1705,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               barcode.toLowerCase(),
                         );
                         if (barcodeExists) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'A product with this barcode already exists.',
-                              ),
-                            ),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: 'A product with this barcode already exists.',
                           );
                           return;
                         }
@@ -1719,9 +1717,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           label: 'cost price',
                         );
                         if (costError != null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text(costError)),
-                          );
+                          AppSnackBar.show(dialogContext, message: costError);
                           return;
                         }
 
@@ -1730,9 +1726,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           label: 'selling price',
                         );
                         if (sellingError != null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text(sellingError)),
-                          );
+                          AppSnackBar.show(dialogContext, message: sellingError);
                           return;
                         }
 
@@ -1742,8 +1736,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           allowZero: true,
                         );
                         if (openingStockError != null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text(openingStockError)),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: openingStockError,
                           );
                           return;
                         }
@@ -1754,9 +1749,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           allowZero: true,
                         );
                         if (minStockError != null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text(minStockError)),
-                          );
+                          AppSnackBar.show(dialogContext, message: minStockError);
                           return;
                         }
 
@@ -1767,8 +1760,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             label: 'wholesale price',
                           );
                           if (wholesaleError != null) {
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              SnackBar(content: Text(wholesaleError)),
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: wholesaleError,
                             );
                             return;
                           }
@@ -1781,9 +1775,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             label: 'sale price',
                           );
                           if (saleError != null) {
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              SnackBar(content: Text(saleError)),
-                            );
+                            AppSnackBar.show(dialogContext, message: saleError);
                             return;
                           }
                         }
@@ -1791,12 +1783,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final sellingPrice =
                             double.parse(sellingPriceController.text.trim());
                         if (sellingPrice <= 0) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Selling price must be greater than 0.',
-                              ),
-                            ),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: 'Selling price must be greater than 0.',
                           );
                           return;
                         }
@@ -1813,12 +1802,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final minStock = int.parse(minStockController.text.trim());
 
                         if (saleEnabled && (salePrice == null || salePrice <= 0)) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(
-                              content: Text(
+                          AppSnackBar.show(
+                            dialogContext,
+                            message:
                                 'Enter a valid sale price before activating sale mode.',
-                              ),
-                            ),
                           );
                           return;
                         }
@@ -2166,8 +2153,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final category = categoryController.text.trim();
 
                         if (name.isEmpty) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(content: Text('Enter a product name.')),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: 'Enter a product name.',
                           );
                           return;
                         }
@@ -2177,9 +2165,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           label: 'cost price',
                         );
                         if (costError != null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text(costError)),
-                          );
+                          AppSnackBar.show(dialogContext, message: costError);
                           return;
                         }
 
@@ -2188,9 +2174,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           label: 'selling price',
                         );
                         if (sellingError != null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text(sellingError)),
-                          );
+                          AppSnackBar.show(dialogContext, message: sellingError);
                           return;
                         }
 
@@ -2200,9 +2184,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           allowZero: true,
                         );
                         if (minStockError != null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text(minStockError)),
-                          );
+                          AppSnackBar.show(dialogContext, message: minStockError);
                           return;
                         }
 
@@ -2213,8 +2195,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             label: 'wholesale price',
                           );
                           if (wholesaleError != null) {
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              SnackBar(content: Text(wholesaleError)),
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: wholesaleError,
                             );
                             return;
                           }
@@ -2227,9 +2210,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             label: 'sale price',
                           );
                           if (saleError != null) {
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              SnackBar(content: Text(saleError)),
-                            );
+                            AppSnackBar.show(dialogContext, message: saleError);
                             return;
                           }
                         }
@@ -2237,12 +2218,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final sellingPrice =
                             double.parse(sellingPriceController.text.trim());
                         if (sellingPrice <= 0) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Selling price must be greater than 0.',
-                              ),
-                            ),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: 'Selling price must be greater than 0.',
                           );
                           return;
                         }
@@ -2257,12 +2235,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final minStock = int.parse(minStockController.text.trim());
 
                         if (saleEnabled && (salePrice == null || salePrice <= 0)) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(
-                              content: Text(
+                          AppSnackBar.show(
+                            dialogContext,
+                            message:
                                 'Enter a valid sale price before activating sale mode.',
-                              ),
-                            ),
                           );
                           return;
                         }
@@ -2297,8 +2273,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             minStock == product.minStockLevel;
 
                         if (noChanges) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(content: Text('No changes detected.')),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: 'No changes detected.',
                           );
                           Navigator.pop(dialogContext, null);
                           return;
@@ -2461,10 +2438,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
               previewRows = [];
             });
             if (!dialogContext.mounted) return;
-            ScaffoldMessenger.of(dialogContext).showSnackBar(
-              SnackBar(
-                content: Text(e.toString().replaceFirst('Exception: ', '')),
-              ),
+            AppSnackBar.show(
+              dialogContext,
+              message: e.toString().replaceFirst('Exception: ', ''),
             );
           }
         }
@@ -2769,12 +2745,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                 isImporting = false;
                               });
                               if (!dialogContext.mounted) return;
-                              ScaffoldMessenger.of(dialogContext).showSnackBar(
-                                SnackBar(
-                                  content: Text(
+                              AppSnackBar.show(
+                                dialogContext,
+                                message:
                                     e.toString().replaceFirst('Exception: ', ''),
-                                  ),
-                                ),
                               );
                             }
                           },
@@ -3062,10 +3036,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     child: ElevatedButton.icon(
                       onPressed: () async {
                         if (selectedSupplierId == null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(
-                              content: Text('Select a mapped supplier first.'),
-                            ),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: 'Select a mapped supplier first.',
                           );
                           return;
                         }
@@ -3075,9 +3048,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           label: 'quantity',
                         );
                         if (qtyError != null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text(qtyError)),
-                          );
+                          AppSnackBar.show(dialogContext, message: qtyError);
                           return;
                         }
 
@@ -3088,9 +3059,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             label: 'unit cost',
                           );
                           if (costError != null) {
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              SnackBar(content: Text(costError)),
-                            );
+                            AppSnackBar.show(dialogContext, message: costError);
                             return;
                           }
                         }
@@ -3100,12 +3069,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         );
                         final selectedMapping = mappingBySupplierId[selectedSupplierId];
                         if (selectedMapping == null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(
-                              content: Text(
+                          AppSnackBar.show(
+                            dialogContext,
+                            message:
                                 'This supplier is not linked to the selected product.',
-                              ),
-                            ),
                           );
                           return;
                         }
@@ -3643,9 +3610,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           allowZero: adjustmentType == 'set',
                         );
                         if (qtyError != null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text(qtyError)),
-                          );
+                          AppSnackBar.show(dialogContext, message: qtyError);
                           return;
                         }
 
@@ -3665,12 +3630,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         }
 
                         if (resultingStock < 0) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Resulting stock cannot be negative.',
-                              ),
-                            ),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: 'Resulting stock cannot be negative.',
                           );
                           return;
                         }
@@ -4019,20 +3981,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           label: 'price',
                         );
                         if (priceError != null) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text(priceError)),
-                          );
+                          AppSnackBar.show(dialogContext, message: priceError);
                           return;
                         }
 
                         final newPrice = double.parse(valueController.text.trim());
                         if (priceType == 'sale' && saleEnabled && newPrice <= 0) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Active sale price must be greater than 0.',
-                              ),
-                            ),
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: 'Active sale price must be greater than 0.',
                           );
                           return;
                         }

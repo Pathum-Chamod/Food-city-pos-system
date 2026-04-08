@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/database_helper.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
+import '../widgets/app_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 import 'refund_transaction_screen.dart';
 
@@ -23,11 +24,10 @@ class TransactionHistoryScreen extends StatefulWidget {
     if (!context.mounted) return;
 
     if (summary == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Transaction not found.'),
-          backgroundColor: Colors.red,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Transaction not found.',
+        backgroundColor: Colors.red,
       );
       return;
     }
@@ -81,11 +81,10 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     if (!printer.isConnected) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Receipt printer is not selected. Open Hardware Setup first.'),
-            backgroundColor: Colors.orange,
-          ),
+        AppSnackBar.show(
+          context,
+          message: 'Receipt printer is not selected. Open Hardware Setup first.',
+          backgroundColor: Colors.orange,
         );
       }
       return false;
@@ -97,11 +96,10 @@ class TransactionHistoryScreen extends StatefulWidget {
     if (!context.mounted) return false;
 
     if (summary == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Transaction not found.'),
-          backgroundColor: Colors.red,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Transaction not found.',
+        backgroundColor: Colors.red,
       );
       return false;
     }
@@ -145,14 +143,10 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     if (!context.mounted) return response.isSuccess;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(response.message),
-        backgroundColor: response.isSuccess ? Colors.green : Colors.orange,
-        duration: response.isSuccess
-            ? const Duration(seconds: 1)
-            : const Duration(seconds: 4),
-      ),
+    AppSnackBar.show(
+      context,
+      message: response.message,
+      backgroundColor: response.isSuccess ? Colors.green : Colors.orange,
     );
 
     return response.isSuccess;
@@ -168,11 +162,10 @@ class TransactionHistoryScreen extends StatefulWidget {
     if (!context.mounted) return false;
 
     if (summary == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Transaction not found.'),
-          backgroundColor: Colors.red,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Transaction not found.',
+        backgroundColor: Colors.red,
       );
       return false;
     }
@@ -216,11 +209,10 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     if (!context.mounted) return response.isSuccess;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(response.message),
-        backgroundColor: response.isSuccess ? Colors.green : Colors.orange,
-      ),
+    AppSnackBar.show(
+      context,
+      message: response.message,
+      backgroundColor: response.isSuccess ? Colors.green : Colors.orange,
     );
 
     return response.isSuccess;

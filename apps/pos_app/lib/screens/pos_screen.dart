@@ -18,6 +18,7 @@ import '../services/receipt_printer_service.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
 import '../widgets/premium_dialog.dart';
+import '../widgets/app_snackbar.dart';
 import 'cart_discount_dialog.dart';
 import 'cashier_summary_screen.dart';
 import 'checkout_payment_dialog.dart';
@@ -1065,11 +1066,10 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   void _showInfoMessage(String message, {Color? backgroundColor}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: backgroundColor ?? _panelSoft,
-      ),
+    AppSnackBar.show(
+      context,
+      message: message,
+      backgroundColor: backgroundColor ?? _panelSoft,
     );
   }
 
