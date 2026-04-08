@@ -354,6 +354,93 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+  String _formatCurrency(double value) => 'Rs. ${value.toStringAsFixed(2)}';
+
+  String _saleMetricValue(Product product) {
+    final salePrice = product.salePrice;
+    if (salePrice != null && salePrice > 0) {
+      return _formatCurrency(salePrice);
+    }
+    return 'Not set';
+  }
+
+  Color _saleMetricAccent(Product product) {
+    final salePrice = product.salePrice;
+    if (product.saleEnabled && salePrice != null && salePrice > 0) {
+      return _warningColor;
+    }
+    return _textSecondary;
+  }
+
+  Widget _buildProductDetailMetrics(Product product) {
+    final metrics = [
+      (
+        title: 'Stock',
+        value: '${product.stock}',
+        icon: Icons.layers_outlined,
+        accent: _accentBlue,
+      ),
+      (
+        title: 'Selling',
+        value: _formatCurrency(product.sellingPrice),
+        icon: Icons.sell_outlined,
+        accent: _brandColor,
+      ),
+      (
+        title: 'Wholesale',
+        value: _formatCurrency(product.wholesalePrice),
+        icon: Icons.local_offer_outlined,
+        accent: const Color(0xFF8B5CF6),
+      ),
+      (
+        title: 'Sale',
+        value: _saleMetricValue(product),
+        icon: Icons.discount_outlined,
+        accent: _saleMetricAccent(product),
+      ),
+      (
+        title: 'Cost',
+        value: _formatCurrency(product.costPrice),
+        icon: Icons.payments_outlined,
+        accent: _warningColor,
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxWidth = constraints.maxWidth;
+        final columns = maxWidth >= 880
+            ? 5
+            : maxWidth >= 680
+                ? 3
+                : maxWidth >= 460
+                    ? 2
+                    : 1;
+        final spacing = 10.0;
+        final tileWidth =
+            ((maxWidth - (spacing * (columns - 1))) / columns).clamp(0.0, 220.0);
+
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: metrics
+              .map(
+                (metric) => SizedBox(
+                  width: tileWidth,
+                  child: _buildPopupMetricCard(
+                    title: metric.title,
+                    value: metric.value,
+                    icon: metric.icon,
+                    accent: metric.accent,
+                  ),
+                ),
+              )
+              .toList(),
+        );
+      },
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3810,10 +3897,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 _buildStatusChip(product),
-                const SizedBox(width: 8),
                 if (product.wholesalePrice > 0 &&
                     product.wholesalePrice != product.sellingPrice)
                   _buildPriceAvailabilityChip(
@@ -3821,40 +3909,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     Colors.deepPurple,
                   ),
                 if (product.hasSalePrice)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: _buildPriceAvailabilityChip(
-                      'Sale active',
-                      _warningColor,
-                    ),
+                  _buildPriceAvailabilityChip(
+                    'Sale active',
+                    _warningColor,
                   ),
               ],
             ),
             const SizedBox(height: 14),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _buildPopupMetricCard(
-                  title: 'Stock',
-                  value: '${product.stock}',
-                  icon: Icons.layers_outlined,
-                  accent: _accentBlue,
-                ),
-                _buildPopupMetricCard(
-                  title: 'Selling',
-                  value: 'Rs. ${product.sellingPrice.toStringAsFixed(2)}',
-                  icon: Icons.sell_outlined,
-                  accent: _brandColor,
-                ),
-                _buildPopupMetricCard(
-                  title: 'Cost',
-                  value: 'Rs. ${product.costPrice.toStringAsFixed(2)}',
-                  icon: Icons.payments_outlined,
-                  accent: _warningColor,
-                ),
-              ],
-            ),
+            _buildProductDetailMetrics(product),
             const SizedBox(height: 16),
             Wrap(
               spacing: 10,
@@ -4680,7 +4742,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       runSpacing: 10,
                       children: [
                         SizedBox(
-                          width: 128,
+                          width: 112,
                           child: statPill(
                             label: 'Stock',
                             value: product.stock.toString(),
@@ -4691,19 +4753,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           width: 150,
                           child: statPill(
                             label: 'Selling',
-                            value: 'Rs. ${product.sellingPrice.toStringAsFixed(2)}',
+                            value: _formatCurrency(product.sellingPrice),
                             accent: _brandColor,
                           ),
                         ),
-                        if (product.costPrice > 0)
-                          SizedBox(
-                            width: 145,
-                            child: statPill(
-                              label: 'Cost',
-                              value: 'Rs. ${product.costPrice.toStringAsFixed(2)}',
-                              accent: _textPrimary,
-                            ),
-                          ),
                       ],
                     ),
                     const SizedBox(height: 10),
