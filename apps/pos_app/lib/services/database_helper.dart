@@ -3839,16 +3839,17 @@ class DatabaseHelper {
       '''
       SELECT
         si.barcode,
-        si.product_name,
+        COALESCE(MAX(p.name), MAX(si.product_name)) AS product_name,
         COALESCE(SUM(si.quantity), 0) AS quantity_sold,
         COALESCE(SUM(ABS(si.base_line_total)), 0) AS gross_sales_amount,
         COALESCE(SUM(ABS(si.item_discount_amount)), 0) AS discount_amount,
         COALESCE(SUM(ABS(si.line_total)), 0) AS net_sales_amount
       FROM sales s
       INNER JOIN sale_items si ON si.sale_id = s.id
+      LEFT JOIN products p ON p.barcode = si.barcode
       WHERE ${conditions.join(' AND ')}
-      GROUP BY si.barcode, si.product_name
-      ORDER BY quantity_sold DESC, net_sales_amount DESC, si.product_name ASC
+      GROUP BY si.barcode
+      ORDER BY quantity_sold DESC, net_sales_amount DESC, product_name ASC
       LIMIT ?
       ''',
       [...args, limit],
@@ -5951,7 +5952,7 @@ class DatabaseHelper {
       '''
       SELECT
         si.barcode,
-        si.product_name,
+        COALESCE(MAX(p.name), MAX(si.product_name)) AS product_name,
         COALESCE(
           SUM(CASE WHEN s.transaction_type = 'sale' THEN si.quantity ELSE 0 END),
           0
@@ -5988,9 +5989,10 @@ class DatabaseHelper {
         ) AS net_cost_amount
       FROM sales s
       INNER JOIN sale_items si ON si.sale_id = s.id
+      LEFT JOIN products p ON p.barcode = si.barcode
       WHERE ${conditions.join(' AND ')}
-      GROUP BY si.barcode, si.product_name
-      ORDER BY net_sales_after_refunds DESC, quantity_sold DESC, si.product_name ASC
+      GROUP BY si.barcode
+      ORDER BY net_sales_after_refunds DESC, quantity_sold DESC, product_name ASC
       LIMIT ?
       ''',
       [...args, limit],
