@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
@@ -29,7 +30,14 @@ import 'transaction_history_screen.dart';
 import 'user_management_screen.dart';
 
 class PosScreen extends StatefulWidget {
-  const PosScreen({super.key});
+  const PosScreen({
+    super.key,
+    this.showWelcomeAnimation = false,
+    this.welcomeUserName,
+  });
+
+  final bool showWelcomeAnimation;
+  final String? welcomeUserName;
 
   @override
   State<PosScreen> createState() => _PosScreenState();
@@ -40,8 +48,12 @@ class _PosScreenState extends State<PosScreen> {
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
   bool _isRefreshingProducts = false;
+  bool _showWelcomeOverlay = false;
+  bool _renderWelcomeOverlay = false;
   Timer? _productRefreshTimer;
   Timer? _barcodeInputTimer;
+  Timer? _welcomeOverlayTimer;
+  Timer? _welcomeOverlayCleanupTimer;
 
   final ScrollController _cartScrollController = ScrollController();
   int _lastCartItemCount = 0;
@@ -102,12 +114,16 @@ class _PosScreenState extends State<PosScreen> {
         _loadShiftSummary();
       }
     });
+
+    _scheduleWelcomeOverlay();
   }
 
   @override
   void dispose() {
     _productRefreshTimer?.cancel();
     _barcodeInputTimer?.cancel();
+    _welcomeOverlayTimer?.cancel();
+    _welcomeOverlayCleanupTimer?.cancel();
     _barcodeController.dispose();
     _searchController.dispose();
     _cartScrollController.dispose();
@@ -115,6 +131,179 @@ class _PosScreenState extends State<PosScreen> {
     _searchFocusNode.dispose();
     _keyboardListenerFocusNode.dispose();
     super.dispose();
+  }
+
+  void _scheduleWelcomeOverlay() {
+    final name = widget.welcomeUserName?.trim();
+    if (!widget.showWelcomeAnimation &&
+        (name == null || name.isEmpty)) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      setState(() {
+        _renderWelcomeOverlay = true;
+      });
+
+      Future<void>.delayed(const Duration(milliseconds: 30), () {
+        if (!mounted) return;
+        setState(() {
+          _showWelcomeOverlay = true;
+        });
+      });
+
+      _welcomeOverlayTimer = Timer(const Duration(milliseconds: 2300), () {
+        if (!mounted) return;
+        setState(() {
+          _showWelcomeOverlay = false;
+        });
+
+        _welcomeOverlayCleanupTimer = Timer(
+          const Duration(milliseconds: 420),
+          () {
+            if (!mounted) return;
+            setState(() {
+              _renderWelcomeOverlay = false;
+            });
+          },
+        );
+      });
+    });
+  }
+
+  String _resolveWelcomeName(AuthProvider auth) {
+    final explicit = widget.welcomeUserName?.trim();
+    if (explicit != null && explicit.isNotEmpty) {
+      return explicit;
+    }
+
+    final authName = auth.currentUser?.name.trim();
+    if (authName != null && authName.isNotEmpty) {
+      return authName;
+    }
+
+    return 'Cashier';
+  }
+
+  Widget _buildWelcomeOverlay(AuthProvider auth) {
+    final userName = _resolveWelcomeName(auth);
+
+    return IgnorePointer(
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.only(top: 18),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: AnimatedSlide(
+              duration: const Duration(milliseconds: 480),
+              curve: Curves.easeOutCubic,
+              offset: _showWelcomeOverlay
+                  ? Offset.zero
+                  : const Offset(0, -0.18),
+              child: AnimatedScale(
+                duration: const Duration(milliseconds: 480),
+                curve: Curves.easeOutBack,
+                scale: _showWelcomeOverlay ? 1 : 0.94,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 360),
+                  curve: Curves.easeOut,
+                  opacity: _showWelcomeOverlay ? 1 : 0,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(28),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                      child: Container(
+                        constraints: const BoxConstraints(maxWidth: 420),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 22,
+                          vertical: 18,
+                        ),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              _brandColor.withOpacity(_isDark ? 0.18 : 0.14),
+                              _accentBlue.withOpacity(_isDark ? 0.14 : 0.12),
+                            ],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(28),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(
+                              _isDark ? 0.14 : 0.52,
+                            ),
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(
+                                _isDark ? 0.26 : 0.08,
+                              ),
+                              blurRadius: 28,
+                              offset: const Offset(0, 18),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 52,
+                              height: 52,
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(
+                                  _isDark ? 0.10 : 0.72,
+                                ),
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              child: Icon(
+                                Icons.waving_hand_rounded,
+                                color: _brandColor,
+                                size: 26,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Flexible(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Welcome, $userName',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: _textPrimary,
+                                      fontSize: 21,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: 0.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Your register is ready for this shift.',
+                                    style: TextStyle(
+                                      color: _textSecondary,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _scrollCartToLatest({bool animated = true}) {
@@ -3745,37 +3934,42 @@ class _PosScreenState extends State<PosScreen> {
         onKey: _handleGlobalKeyboardEvent,
         child: Scaffold(
           body: SafeArea(
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [_screenBackground, _screenBackgroundAlt],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  children: [
-                    _buildTopHeader(auth, cart),
-                    const SizedBox(height: 14),
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _buildCatalogPanel(cart),
-                          ),
-                          const SizedBox(width: 14),
-                          SizedBox(
-                            width: 430,
-                            child: _buildCartPanel(cart),
-                          ),
-                        ],
-                      ),
+            child: Stack(
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [_screenBackground, _screenBackgroundAlt],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                  ],
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      children: [
+                        _buildTopHeader(auth, cart),
+                        const SizedBox(height: 14),
+                        Expanded(
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: _buildCatalogPanel(cart),
+                              ),
+                              const SizedBox(width: 14),
+                              SizedBox(
+                                width: 430,
+                                child: _buildCartPanel(cart),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+                if (_renderWelcomeOverlay) _buildWelcomeOverlay(auth),
+              ],
             ),
           ),
         ),
