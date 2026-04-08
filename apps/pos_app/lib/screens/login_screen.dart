@@ -1,8 +1,11 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../providers/auth_provider.dart';
 import '../providers/app_theme_provider.dart';
+import '../providers/auth_provider.dart';
 import 'pos_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -14,7 +17,10 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   static const Color _brandColor = Color(0xFF2AAA8A);
+  static const Color _accentColor = Color(0xFF7C9BFF);
+  static const Color _warningColor = Color(0xFFF4A340);
 
+  final FocusNode _keyboardFocusNode = FocusNode(debugLabel: 'login_screen');
   String _enteredPin = '';
   bool _isSubmitting = false;
 
@@ -24,45 +30,52 @@ class _LoginScreenState extends State<LoginScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<AuthProvider>().clearLoginState();
+      _focusKeyboard();
     });
+  }
+
+  @override
+  void dispose() {
+    _keyboardFocusNode.dispose();
+    super.dispose();
   }
 
   bool get _isDarkMode => context.read<AppThemeProvider>().isDarkMode;
 
-  Color get _pageBackground => _isDarkMode
-      ? const Color(0xFF071427)
-      : const Color(0xFFF4F7FB);
+  Color get _pageBackground =>
+      _isDarkMode ? const Color(0xFF09121E) : const Color(0xFFF5F7FB);
 
-  Color get _surfaceColor => _isDarkMode
-      ? const Color(0xFF0E213F)
-      : const Color(0xFFFFFFFF);
+  Color get _cardColor =>
+      _isDarkMode ? const Color(0xFF101C2C) : const Color(0xFFFFFFFF);
 
-  Color get _surfaceSoft => _isDarkMode
-      ? const Color(0xFF142B4D)
-      : const Color(0xFFF7FAFD);
+  Color get _surfaceSoft =>
+      _isDarkMode ? const Color(0xFF162436) : const Color(0xFFF4F7FB);
 
-  Color get _panelColor => _isDarkMode
-      ? const Color(0xFF102645)
-      : const Color(0xFFFFFFFF);
-
-  Color get _cardBorder => _isDarkMode
+  Color get _borderColor => _isDarkMode
       ? Colors.white.withOpacity(0.08)
-      : const Color(0xFFD9E4F0);
+      : const Color(0xFFD9E2EC);
 
-  Color get _mutedText => _isDarkMode
-      ? const Color(0xFF93A7C2)
-      : const Color(0xFF61758F);
+  Color get _primaryText =>
+      _isDarkMode ? const Color(0xFFF3F7FB) : const Color(0xFF1B2838);
 
-  Color get _strongText => _isDarkMode
-      ? const Color(0xFFF2F7FC)
-      : const Color(0xFF18263A);
+  Color get _secondaryText =>
+      _isDarkMode ? const Color(0xFFA3B3C8) : const Color(0xFF66788F);
+
+  Color get _hintText =>
+      _isDarkMode ? const Color(0xFF7F93AD) : const Color(0xFF8393A8);
+
+  void _focusKeyboard() {
+    if (!_keyboardFocusNode.hasFocus) {
+      _keyboardFocusNode.requestFocus();
+    }
+  }
 
   void _clearPinAndState() {
-    final auth = context.read<AuthProvider>();
-    auth.clearLoginState();
+    context.read<AuthProvider>().clearLoginState();
     setState(() {
       _enteredPin = '';
     });
+    _focusKeyboard();
   }
 
   void _onKeyPress(String value) {
@@ -90,6 +103,37 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || _isSubmitting) {
+      return KeyEventResult.ignored;
+    }
+
+    final label = event.logicalKey.keyLabel;
+    if (RegExp(r'^\d$').hasMatch(label)) {
+      _onKeyPress(label);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.backspace ||
+        event.logicalKey == LogicalKeyboardKey.delete) {
+      _onKeyPress('DEL');
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      _clearPinAndState();
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _attemptLogin();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
   Future<void> _attemptLogin() async {
     if (_isSubmitting || _enteredPin.length != 4) return;
 
@@ -110,9 +154,7 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     if (success) {
-      navigator.pushReplacement(
-        MaterialPageRoute(builder: (_) => const PosScreen()),
-      );
+      navigator.pushReplacement(_buildPosRoute(auth.currentUser?.name));
       return;
     }
 
@@ -123,28 +165,72 @@ class _LoginScreenState extends State<LoginScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(isInactive ? '⛔ $message' : '❌ $message'),
+          content: Text(
+            isInactive ? 'Access blocked: $message' : 'Login failed: $message',
+          ),
           backgroundColor: isInactive ? Colors.orange[700] : Colors.red,
-          behavior: SnackBarBehavior.floating,
         ),
       );
 
     setState(() {
       _enteredPin = '';
     });
+
+    _focusKeyboard();
+  }
+
+  Route<void> _buildPosRoute(String? userName) {
+    return PageRouteBuilder<void>(
+      transitionDuration: const Duration(milliseconds: 720),
+      reverseTransitionDuration: const Duration(milliseconds: 360),
+      pageBuilder: (_, animation, secondaryAnimation) => PosScreen(
+        showWelcomeAnimation: true,
+        welcomeUserName: userName,
+      ),
+      transitionsBuilder: (_, animation, secondaryAnimation, child) {
+        final fade = CurvedAnimation(
+          parent: animation,
+          curve: const Interval(0.0, 0.78, curve: Curves.easeOut),
+        );
+        final slide = Tween<Offset>(
+          begin: const Offset(0, 0.045),
+          end: Offset.zero,
+        ).animate(
+          CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+        );
+        final scale = Tween<double>(
+          begin: 0.985,
+          end: 1,
+        ).animate(
+          CurvedAnimation(parent: animation, curve: Curves.easeOutQuart),
+        );
+
+        return FadeTransition(
+          opacity: fade,
+          child: SlideTransition(
+            position: slide,
+            child: ScaleTransition(
+              scale: scale,
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _buildThemeToggle() {
     return Container(
       decoration: BoxDecoration(
-        color: _surfaceColor,
+        color: _cardColor.withOpacity(_isDarkMode ? 0.88 : 0.94),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _cardBorder),
+        border: Border.all(color: _borderColor),
       ),
       child: IconButton(
         tooltip: _isDarkMode ? 'Switch to light mode' : 'Switch to dark mode',
         onPressed: () {
           context.read<AppThemeProvider>().toggleTheme();
+          _focusKeyboard();
         },
         icon: Icon(
           _isDarkMode ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
@@ -154,150 +240,28 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildBrandPanel() {
+  Widget _buildMetaChip(IconData icon, String label, {bool isDense = false}) {
     return Container(
-      padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(
-        color: _surfaceColor,
-        borderRadius: BorderRadius.circular(30),
-        border: Border.all(color: _cardBorder),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(_isDarkMode ? 0.28 : 0.05),
-            blurRadius: 32,
-            offset: const Offset(0, 16),
-          ),
-        ],
+      padding: EdgeInsets.symmetric(
+        horizontal: isDense ? 10 : 12,
+        vertical: isDense ? 8 : 10,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 72,
-            height: 72,
-            decoration: BoxDecoration(
-              color: _brandColor.withOpacity(_isDarkMode ? 0.16 : 0.12),
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                color: _brandColor.withOpacity(0.22),
-              ),
-            ),
-            child: const Icon(
-              Icons.storefront_rounded,
-              color: _brandColor,
-              size: 34,
-            ),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'FOOD CITY POS',
-            style: TextStyle(
-              fontSize: 34,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.3,
-              color: _strongText,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'Premium cashier workspace with fast PIN login, polished checkout flow, and a clean modern design system.',
-            style: TextStyle(
-              fontSize: 15,
-              height: 1.5,
-              color: _mutedText,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 24),
-          _buildFeaturePill(Icons.qr_code_scanner_rounded, 'Fast barcode-ready selling'),
-          const SizedBox(height: 12),
-          _buildFeaturePill(Icons.receipt_long_rounded, 'Smooth checkout and receipt flow'),
-          const SizedBox(height: 12),
-          _buildFeaturePill(Icons.dark_mode_rounded, 'Premium light and dark UI'),
-          const Spacer(),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: _surfaceSoft,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: _cardBorder),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: _brandColor.withOpacity(0.14),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Icon(
-                    Icons.lock_outline_rounded,
-                    color: _brandColor,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Secure employee access',
-                        style: TextStyle(
-                          color: _strongText,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 14,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Use your 4-digit PIN to enter the register.',
-                        style: TextStyle(
-                          color: _mutedText,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFeaturePill(IconData icon, String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         color: _surfaceSoft,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _cardBorder),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _borderColor),
       ),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: _brandColor.withOpacity(0.14),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: _brandColor, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              text,
-              style: TextStyle(
-                color: _strongText,
-                fontWeight: FontWeight.w700,
-                fontSize: 14,
-              ),
+          Icon(icon, size: 16, color: _brandColor),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              color: _primaryText,
+              fontSize: isDense ? 12.5 : 13.5,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],
@@ -305,76 +269,56 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildPinDots() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(4, (index) {
-        final isFilled = index < _enteredPin.length;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          margin: const EdgeInsets.symmetric(horizontal: 8),
-          width: isFilled ? 22 : 18,
-          height: isFilled ? 22 : 18,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isFilled ? _brandColor : Colors.transparent,
-            border: Border.all(
-              color: isFilled ? _brandColor : _cardBorder,
-              width: 2,
-            ),
-            boxShadow: isFilled
-                ? [
-                    BoxShadow(
-                      color: _brandColor.withOpacity(0.25),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
-                    ),
-                  ]
-                : null,
-          ),
-        );
-      }),
-    );
-  }
+  Widget _buildStatusCard(AuthProvider auth, {bool isDense = false}) {
+    late final IconData icon;
+    late final String message;
+    late final Color tone;
+    late final Color background;
+    late final Color border;
 
-  Widget _buildStatusCard(AuthProvider auth) {
-    if (auth.loginError == null) {
-      return const SizedBox(height: 14);
+    if (_isSubmitting) {
+      icon = Icons.hourglass_top_rounded;
+      message = 'Checking your PIN...';
+      tone = _accentColor;
+      background = tone.withOpacity(_isDarkMode ? 0.16 : 0.10);
+      border = tone.withOpacity(0.22);
+    } else if (auth.loginError != null) {
+      final isInactive = auth.inactiveLoginAttempt;
+      icon = isInactive
+          ? Icons.lock_person_rounded
+          : Icons.error_outline_rounded;
+      message = auth.loginError!;
+      tone = isInactive ? _warningColor : Colors.red.shade400;
+      background = tone.withOpacity(_isDarkMode ? 0.16 : 0.10);
+      border = tone.withOpacity(0.22);
+    } else {
+      icon = Icons.verified_user_rounded;
+      message = 'Enter 4 digits. Sign in will submit automatically.';
+      tone = _brandColor;
+      background = tone.withOpacity(_isDarkMode ? 0.14 : 0.10);
+      border = tone.withOpacity(0.20);
     }
-
-    final isInactive = auth.inactiveLoginAttempt;
-    final backgroundColor = isInactive
-        ? Colors.orange.withOpacity(_isDarkMode ? 0.14 : 0.10)
-        : Colors.red.withOpacity(_isDarkMode ? 0.14 : 0.08);
-    final borderColor = isInactive
-        ? Colors.orange.withOpacity(0.30)
-        : Colors.red.withOpacity(0.24);
-    final iconColor = isInactive ? Colors.orange.shade700 : Colors.red.shade700;
 
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(top: 14),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: EdgeInsets.all(isDense ? 12 : 14),
       decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: borderColor),
+        color: background,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: border),
       ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            isInactive ? Icons.lock_person_rounded : Icons.error_outline_rounded,
-            color: iconColor,
-            size: 20,
-          ),
+          Icon(icon, color: tone, size: 20),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              auth.loginError!,
+              message,
               style: TextStyle(
-                color: iconColor,
+                color: tone,
+                fontSize: isDense ? 13 : 14,
                 fontWeight: FontWeight.w700,
+                height: 1.4,
               ),
             ),
           ),
@@ -383,47 +327,134 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildKey(String value) {
-    final isAction = value == 'CLEAR' || value == 'DEL';
-    final Color buttonColor = isAction
-        ? (_isDarkMode ? const Color(0xFF14284B) : const Color(0xFFF5F7FB))
-        : _surfaceSoft;
+  Widget _buildPinSlot(int index, {bool isDense = false}) {
+    final isFilled = index < _enteredPin.length;
 
-    final Color foreground = isAction
-        ? (_isDarkMode ? Colors.white : const Color(0xFF24364F))
-        : _strongText;
+    return Expanded(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        height: isDense ? 56 : 66,
+        margin: EdgeInsets.only(right: index == 3 ? 0 : (isDense ? 8 : 10)),
+        decoration: BoxDecoration(
+          color: isFilled ? _brandColor.withOpacity(0.12) : _surfaceSoft,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: isFilled ? _brandColor : _borderColor,
+            width: isFilled ? 1.4 : 1,
+          ),
+        ),
+        child: Center(
+          child: Icon(
+            isFilled ? Icons.circle_rounded : Icons.circle_outlined,
+            size: isDense ? 12 : 14,
+            color: isFilled ? _brandColor : _hintText,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPinPanel({bool isDense = false}) {
+    return Container(
+      padding: EdgeInsets.all(isDense ? 14 : 18),
+      decoration: BoxDecoration(
+        color: _surfaceSoft,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: _borderColor),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Text(
+                'Employee PIN',
+                style: TextStyle(
+                  color: _primaryText,
+                  fontSize: isDense ? 14 : 15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${_enteredPin.length}/4',
+                style: TextStyle(
+                  color: _secondaryText,
+                  fontSize: isDense ? 13 : 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: isDense ? 12 : 16),
+          Row(
+            children: List.generate(
+              4,
+              (index) => _buildPinSlot(index, isDense: isDense),
+            ),
+          ),
+          if (_isSubmitting) ...[
+            SizedBox(height: isDense ? 10 : 14),
+            LinearProgressIndicator(
+              minHeight: isDense ? 5 : 6,
+              borderRadius: BorderRadius.circular(999),
+              backgroundColor: _cardColor,
+              valueColor: const AlwaysStoppedAnimation<Color>(_brandColor),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKey(String value, {bool isDense = false}) {
+    final isAction = value == 'CLEAR' || value == 'DEL';
 
     return Padding(
-      padding: const EdgeInsets.all(6),
+      padding: EdgeInsets.all(isDense ? 3.5 : 5),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: _isSubmitting ? null : () => _onKeyPress(value),
+          borderRadius: BorderRadius.circular(isDense ? 16 : 20),
+          onTap: _isSubmitting
+              ? null
+              : () {
+                  _focusKeyboard();
+                  _onKeyPress(value);
+                },
           child: Ink(
             decoration: BoxDecoration(
-              color: buttonColor,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: _cardBorder),
+              color: isAction ? _surfaceSoft : _cardColor,
+              borderRadius: BorderRadius.circular(isDense ? 16 : 20),
+              border: Border.all(
+                color: isAction ? _borderColor : _brandColor.withOpacity(0.20),
+              ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(_isDarkMode ? 0.14 : 0.03),
-                  blurRadius: 12,
-                  offset: const Offset(0, 8),
+                  color: Colors.black.withOpacity(_isDarkMode ? 0.18 : 0.04),
+                  blurRadius: isDense ? 8 : 12,
+                  offset: Offset(0, isDense ? 5 : 8),
                 ),
               ],
             ),
             child: Center(
               child: value == 'CLEAR'
-                  ? Icon(Icons.refresh_rounded, size: 24, color: foreground)
+                  ? Icon(
+                      Icons.refresh_rounded,
+                      color: _primaryText,
+                      size: isDense ? 20 : 24,
+                    )
                   : value == 'DEL'
-                      ? Icon(Icons.backspace_outlined, size: 24, color: foreground)
+                      ? Icon(
+                          Icons.backspace_rounded,
+                          color: _primaryText,
+                          size: isDense ? 20 : 24,
+                        )
                       : Text(
                           value,
                           style: TextStyle(
-                            fontSize: 24,
+                            color: _primaryText,
+                            fontSize: isDense ? 20 : 24,
                             fontWeight: FontWeight.w800,
-                            color: foreground,
                           ),
                         ),
             ),
@@ -433,102 +464,138 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildLoginPanel(AuthProvider auth) {
+  Widget _buildLoginCard(AuthProvider auth, bool isCompact, bool isDense) {
     return Container(
-      padding: const EdgeInsets.all(28),
+      padding: EdgeInsets.fromLTRB(
+        isCompact ? (isDense ? 18 : 22) : (isDense ? 22 : 30),
+        isCompact ? (isDense ? 20 : 24) : (isDense ? 22 : 30),
+        isCompact ? (isDense ? 18 : 22) : (isDense ? 22 : 30),
+        isDense ? 16 : 22,
+      ),
       decoration: BoxDecoration(
-        color: _panelColor,
-        borderRadius: BorderRadius.circular(30),
-        border: Border.all(color: _cardBorder),
+        color: _cardColor,
+        borderRadius: BorderRadius.circular(isDense ? 28 : 32),
+        border: Border.all(color: _borderColor),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(_isDarkMode ? 0.28 : 0.06),
-            blurRadius: 32,
-            offset: const Offset(0, 16),
+            color: Colors.black.withOpacity(_isDarkMode ? 0.24 : 0.06),
+            blurRadius: isDense ? 22 : 30,
+            offset: Offset(0, isDense ? 12 : 18),
           ),
         ],
       ),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Row(
+          Container(
+            width: isDense ? 58 : 68,
+            height: isDense ? 58 : 68,
+            decoration: BoxDecoration(
+              color: _brandColor.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(isDense ? 18 : 22),
+              border: Border.all(color: _brandColor.withOpacity(0.20)),
+            ),
+            child: Icon(
+              Icons.storefront_rounded,
+              color: _brandColor,
+              size: isDense ? 28 : 32,
+            ),
+          ),
+          SizedBox(height: isDense ? 14 : 18),
+          Text(
+            'FOOD CITY POS',
+            style: TextStyle(
+              color: _brandColor,
+              fontSize: isDense ? 12 : 13,
+              fontWeight: FontWeight.w900,
+              letterSpacing: isDense ? 0.9 : 1.1,
+            ),
+          ),
+          SizedBox(height: isDense ? 8 : 10),
+          Text(
+            'Welcome back',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _primaryText,
+              fontSize: isCompact
+                  ? (isDense ? 24 : 28)
+                  : (isDense ? 28 : 32),
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          SizedBox(height: isDense ? 6 : 8),
+          Text(
+            'Use your 4-digit PIN to access the register.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _secondaryText,
+              fontSize: isDense ? 13 : 14,
+              height: 1.5,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          SizedBox(height: isDense ? 14 : 18),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: isDense ? 8 : 10,
+            runSpacing: isDense ? 8 : 10,
             children: [
-              Container(
-                width: 54,
-                height: 54,
-                decoration: BoxDecoration(
-                  color: _brandColor.withOpacity(0.14),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: const Icon(
-                  Icons.lock_person_rounded,
-                  color: _brandColor,
-                  size: 28,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Employee Login',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w900,
-                        color: _strongText,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _isSubmitting
-                          ? 'Checking PIN...'
-                          : 'Enter your 4-digit PIN to access the register.',
-                      style: TextStyle(
-                        color: _mutedText,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
+              _buildMetaChip(Icons.pin_rounded, 'Secure PIN', isDense: isDense),
+              _buildMetaChip(
+                Icons.keyboard_rounded,
+                'Numpad Ready',
+                isDense: isDense,
               ),
             ],
           ),
-          _buildStatusCard(auth),
-          const SizedBox(height: 24),
-          Center(child: _buildPinDots()),
-          const SizedBox(height: 24),
-          AbsorbPointer(
-            absorbing: _isSubmitting,
-            child: GridView.count(
-              shrinkWrap: true,
-              crossAxisCount: 3,
-              childAspectRatio: 1.22,
-              physics: const NeverScrollableScrollPhysics(),
-              children: const [
-                '1', '2', '3',
-                '4', '5', '6',
-                '7', '8', '9',
-                'CLEAR', '0', 'DEL',
-              ].map(_buildKey).toList(),
+          SizedBox(height: isDense ? 14 : 20),
+          _buildStatusCard(auth, isDense: isDense),
+          SizedBox(height: isDense ? 14 : 18),
+          _buildPinPanel(isDense: isDense),
+          SizedBox(height: isDense ? 12 : 18),
+          GridView.count(
+            shrinkWrap: true,
+            crossAxisCount: 3,
+            crossAxisSpacing: isDense ? 2 : 0,
+            mainAxisSpacing: isDense ? 2 : 0,
+            childAspectRatio: isDense ? 1.34 : 1.16,
+            physics: const NeverScrollableScrollPhysics(),
+            children: const [
+              '1',
+              '2',
+              '3',
+              '4',
+              '5',
+              '6',
+              '7',
+              '8',
+              '9',
+              'CLEAR',
+              '0',
+              'DEL',
+            ].map((value) => _buildKey(value, isDense: isDense)).toList(),
+          ),
+          SizedBox(height: isDense ? 8 : 12),
+          Text(
+            'Enter submits, Backspace deletes, Esc resets.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _hintText,
+              fontSize: isDense ? 12.5 : 13,
+              height: 1.4,
+              fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: TextButton.icon(
-              onPressed: _isSubmitting ? null : _clearPinAndState,
-              icon: const Icon(Icons.restart_alt_rounded),
-              label: const Text('Reset PIN Entry'),
-              style: TextButton.styleFrom(
-                foregroundColor: _brandColor,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
+          SizedBox(height: isDense ? 2 : 6),
+          TextButton.icon(
+            onPressed: _isSubmitting ? null : _clearPinAndState,
+            icon: const Icon(Icons.restart_alt_rounded),
+            label: const Text('Reset PIN Entry'),
+            style: TextButton.styleFrom(
+              foregroundColor: _brandColor,
+              visualDensity:
+                  isDense ? VisualDensity.compact : VisualDensity.standard,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
           ),
         ],
@@ -536,76 +603,145 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  Widget _buildBackgroundOrb({
+    required double size,
+    required List<Color> colors,
+    double blur = 12,
+  }) {
+    return ImageFiltered(
+      imageFilter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(colors: colors),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Consumer<AuthProvider>(
-      builder: (context, auth, _) {
-        context.watch<AppThemeProvider>();
-        return Scaffold(
-          backgroundColor: _pageBackground,
-          body: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: _isDarkMode
-                    ? const [Color(0xFF071427), Color(0xFF0A1C33), Color(0xFF0D2340)]
-                    : const [Color(0xFFF5F7FB), Color(0xFFF2F8FB), Color(0xFFF8FBFC)],
-              ),
-            ),
-            child: SafeArea(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final isWide = constraints.maxWidth >= 980;
+    final auth = context.watch<AuthProvider>();
+    context.watch<AppThemeProvider>();
 
-                  return SingleChildScrollView(
-                    padding: const EdgeInsets.all(20),
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minHeight: constraints.maxHeight - 40,
+    return Scaffold(
+      backgroundColor: _pageBackground,
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: _focusKeyboard,
+        child: Focus(
+          autofocus: true,
+          focusNode: _keyboardFocusNode,
+          onKeyEvent: _handleKeyEvent,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: _isDarkMode
+                          ? const [
+                              Color(0xFF08111C),
+                              Color(0xFF0B1624),
+                              Color(0xFF0D1929),
+                            ]
+                          : const [
+                              Color(0xFFF7F9FC),
+                              Color(0xFFF3F7FB),
+                              Color(0xFFEEF3F8),
+                            ],
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: -80,
+                right: -50,
+                child: _buildBackgroundOrb(
+                  size: 220,
+                  colors: [
+                    _brandColor.withOpacity(0.24),
+                    _brandColor.withOpacity(0.02),
+                  ],
+                ),
+              ),
+              Positioned(
+                bottom: -90,
+                left: -40,
+                child: _buildBackgroundOrb(
+                  size: 240,
+                  colors: [
+                    _accentColor.withOpacity(0.18),
+                    _accentColor.withOpacity(0.02),
+                  ],
+                ),
+              ),
+              SafeArea(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isCompact = constraints.maxWidth < 480;
+                    final isDense = constraints.maxHeight < 860;
+                    final cardWidth =
+                        (isCompact
+                                ? constraints.maxWidth - (isDense ? 32 : 40)
+                                : 520.0)
+                            .clamp(320.0, 520.0)
+                            .toDouble();
+
+                    return Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        isCompact ? 16 : 20,
+                        isDense ? 10 : 16,
+                        isCompact ? 16 : 20,
+                        isDense ? 8 : 12,
                       ),
                       child: Column(
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              _buildThemeToggle(),
-                            ],
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: _buildThemeToggle(),
                           ),
-                          const SizedBox(height: 16),
-                          Center(
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 1260),
-                              child: isWide
-                                  ? SizedBox(
-                                      height: 720,
-                                      child: Row(
-                                        children: [
-                                          Expanded(flex: 11, child: _buildBrandPanel()),
-                                          const SizedBox(width: 22),
-                                          Expanded(flex: 9, child: _buildLoginPanel(auth)),
-                                        ],
-                                      ),
-                                    )
-                                  : Column(
-                                      children: [
-                                        _buildBrandPanel(),
-                                        const SizedBox(height: 18),
-                                        _buildLoginPanel(auth),
-                                      ],
-                                    ),
+                          SizedBox(height: isDense ? 10 : 16),
+                          Expanded(
+                            child: Center(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.center,
+                                child: SizedBox(
+                                  width: cardWidth,
+                                  child: _buildLoginCard(
+                                    auth,
+                                    isCompact,
+                                    isDense,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          SizedBox(height: isDense ? 8 : 12),
+                          Text(
+                            'Food City POS | Secure shift access',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: _hintText,
+                              fontSize: isDense ? 12.5 : 13,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
-            ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
