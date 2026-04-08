@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -29,11 +30,14 @@ class InventoryHistoryScreen extends StatefulWidget {
 
 class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   final TextEditingController _searchController = TextEditingController();
+  static final Map<String, List<Map<String, dynamic>>> _historyCache = {};
 
   List<Map<String, dynamic>> _movements = [];
   bool _isLoading = true;
   bool _isRefreshing = false;
   InventoryHistoryFilter _selectedFilter = InventoryHistoryFilter.all;
+  DateTime? _selectedDate;
+  Timer? _searchDebounce;
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _brand => const Color(0xFF2AAA8A);
@@ -55,11 +59,17 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     if (widget.initialBarcode != null && widget.initialBarcode!.trim().isNotEmpty) {
       _searchController.text = widget.initialBarcode!.trim();
     }
-    _loadHistory(showLoader: true);
+    final cached = _historyCache[_cacheKey];
+    if (cached != null) {
+      _movements = cached.map((row) => Map<String, dynamic>.from(row)).toList();
+      _isLoading = false;
+    }
+    _loadHistory(showLoader: cached == null);
   }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -99,10 +109,12 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
 
     try {
       final movements = await DatabaseHelper.instance.getInventoryMovements(
-        limit: 500,
+        limit: 200,
         barcode: widget.initialBarcode,
         actionTypes: _selectedActionTypes,
         searchQuery: widget.initialBarcode == null ? _searchController.text.trim() : '',
+        onDate: _selectedDate,
+        hydrateSuppliers: false,
       );
 
       if (!mounted) return;
@@ -111,6 +123,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         _movements = movements;
         _isLoading = false;
       });
+      _historyCache[_cacheKey] = movements.map((row) => Map<String, dynamic>.from(row)).toList();
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -124,6 +137,69 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         ),
       );
     }
+  }
+
+  String get _cacheKey => [
+        widget.initialBarcode?.trim() ?? '',
+        _selectedFilter.name,
+        _searchController.text.trim(),
+        _selectedDate == null ? '' : _formatDateLabel(_selectedDate!),
+      ].join('|');
+
+  void _handleSearchChanged(String _) {
+    setState(() {});
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 260), () {
+      if (!mounted) return;
+      _loadHistory(showLoader: false);
+    });
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final initialDate = _selectedDate != null && !_selectedDate!.isAfter(today) ? _selectedDate! : today;
+
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(now.year - 2, 1, 1),
+      lastDate: today,
+      selectableDayPredicate: (day) {
+        final normalized = DateTime(day.year, day.month, day.day);
+        return !normalized.isAfter(today);
+      },
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: Theme.of(context).colorScheme.copyWith(
+            primary: _brand,
+            onPrimary: Colors.white,
+            surface: _panel,
+            onSurface: _textPrimary,
+          ),
+          dialogTheme: DialogThemeData(
+            backgroundColor: _panel,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          ),
+        ),
+        child: child!,
+      ),
+    );
+
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      _selectedDate = DateTime(picked.year, picked.month, picked.day);
+    });
+    await _loadHistory(showLoader: false);
+  }
+
+  Future<void> _clearDate() async {
+    if (_selectedDate == null) return;
+    setState(() {
+      _selectedDate = null;
+    });
+    await _loadHistory(showLoader: false);
   }
 
   Future<void> _refresh() async {
@@ -211,6 +287,12 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   }
 
   Future<void> _openMovementDetails(Map<String, dynamic> movement) async {
+    final hydratedMovement = await DatabaseHelper.instance.hydrateInventoryMovementSupplierData(
+      Map<String, dynamic>.from(movement),
+    );
+
+    if (!mounted) return;
+
     await _showPremiumDialog<void>(
       child: Container(
         width: 760,
@@ -250,12 +332,12 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                     width: 50,
                     height: 50,
                     decoration: BoxDecoration(
-                      color: _badgeColor((movement['action_type'] ?? '').toString()).$2,
+                      color: _badgeColor((hydratedMovement['action_type'] ?? '').toString()).$2,
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Icon(
-                      _badgeColor((movement['action_type'] ?? '').toString()).$3,
-                      color: _badgeColor((movement['action_type'] ?? '').toString()).$1,
+                      _badgeColor((hydratedMovement['action_type'] ?? '').toString()).$3,
+                      color: _badgeColor((hydratedMovement['action_type'] ?? '').toString()).$1,
                     ),
                   ),
                   const SizedBox(width: 14),
@@ -264,7 +346,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _movementTitle((movement['action_type'] ?? '').toString()),
+                          _movementTitle((hydratedMovement['action_type'] ?? '').toString()),
                           style: TextStyle(
                             color: _textPrimary,
                             fontSize: 26,
@@ -273,7 +355,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          (movement['product_name'] ?? 'Unknown product').toString(),
+                          (hydratedMovement['product_name'] ?? 'Unknown product').toString(),
                           style: TextStyle(
                             color: _textSecondary,
                             fontSize: 14,
@@ -296,7 +378,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                 child: Wrap(
                   spacing: 14,
                   runSpacing: 14,
-                  children: _movementRows(movement)
+                  children: _movementRows(hydratedMovement)
                       .map(
                         (row) => Container(
                           width: 340,
@@ -453,6 +535,45 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         });
         await _loadHistory(showLoader: false);
       },
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    );
+  }
+
+  Widget _buildDateChip() {
+    final selected = _selectedDate != null;
+    return ActionChip(
+      avatar: Icon(
+        Icons.calendar_month_rounded,
+        size: 18,
+        color: selected ? _brand : _textPrimary,
+      ),
+      label: Text(selected ? _formatDateLabel(_selectedDate!) : 'Pick Date'),
+      onPressed: _pickDate,
+      backgroundColor: selected ? _brand.withOpacity(_isDark ? 0.18 : 0.12) : _inputFill,
+      side: BorderSide(color: selected ? _brand : _border),
+      labelStyle: TextStyle(
+        color: selected ? _brand : _textSecondary,
+        fontWeight: FontWeight.w800,
+        fontSize: 12,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    );
+  }
+
+  Widget _buildClearDateChip() {
+    return ActionChip(
+      avatar: Icon(Icons.close_rounded, size: 16, color: _textPrimary),
+      label: const Text('Clear Date'),
+      onPressed: _clearDate,
+      backgroundColor: _inputFill,
+      side: BorderSide(color: _border),
+      labelStyle: TextStyle(
+        color: _textSecondary,
+        fontWeight: FontWeight.w800,
+        fontSize: 12,
+      ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     );
@@ -693,6 +814,10 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}  $hour:$minute $meridiem';
   }
 
+  String _formatDateLabel(DateTime value) {
+    return '${value.year}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final totalMovements = _movements.length;
@@ -878,6 +1003,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                             ? null
                                             : IconButton(
                                                 onPressed: () async {
+                                                  _searchDebounce?.cancel();
                                                   _searchController.clear();
                                                   setState(() {});
                                                   await _loadHistory(showLoader: false);
@@ -885,17 +1011,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                                 icon: const Icon(Icons.close_rounded),
                                               ),
                                       ),
-                                      onChanged: (_) => setState(() {}),
-                                      onSubmitted: (_) => _loadHistory(showLoader: false),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  SizedBox(
-                                    height: 52,
-                                    child: ElevatedButton.icon(
-                                      onPressed: () => _loadHistory(showLoader: false),
-                                      icon: const Icon(Icons.search_rounded, size: 18),
-                                      label: const Text('Apply Search'),
+                                      onChanged: _handleSearchChanged,
                                     ),
                                   ),
                                 ],
@@ -914,6 +1030,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                 _buildFilterChip(label: 'Refunds', filter: InventoryHistoryFilter.refunds),
                                 _buildFilterChip(label: 'Price Changes', filter: InventoryHistoryFilter.priceChanges),
                                 _buildFilterChip(label: 'Min Stock', filter: InventoryHistoryFilter.minStock),
+                                _buildDateChip(),
+                                if (_selectedDate != null) _buildClearDateChip(),
                               ],
                             ),
                             const SizedBox(height: 14),
@@ -931,8 +1049,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                   Expanded(
                                     child: Text(
                                       widget.initialBarcode == null
-                                          ? 'Showing ${_movements.length} history records for the current search and filter.'
-                                          : 'Showing ${_movements.length} records for barcode ${widget.initialBarcode}.',
+                                          ? 'Showing ${_movements.length} history records${_selectedDate != null ? ' for ${_formatDateLabel(_selectedDate!)}' : ''}. Limited to the latest 200 matches.'
+                                          : 'Showing ${_movements.length} records for barcode ${widget.initialBarcode}${_selectedDate != null ? ' on ${_formatDateLabel(_selectedDate!)}' : ''}. Limited to the latest 200 matches.',
                                       style: TextStyle(
                                         color: _textSecondary,
                                         fontWeight: FontWeight.w700,

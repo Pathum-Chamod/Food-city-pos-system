@@ -4430,12 +4430,14 @@ class DatabaseHelper {
 
 
   Future<List<Map<String, dynamic>>> getInventoryMovements({
-    int limit = 50,
-    String? barcode,
-    List<String>? actionTypes,
-    String searchQuery = '',
-  }) async {
-    final db = await database;
+      int limit = 50,
+      String? barcode,
+      List<String>? actionTypes,
+      String searchQuery = '',
+      DateTime? onDate,
+      bool hydrateSuppliers = true,
+    }) async {
+      final db = await database;
 
     final clauses = <String>[];
     final args = <Object?>[];
@@ -4451,16 +4453,25 @@ class DatabaseHelper {
       args.addAll(actionTypes);
     }
 
-    final trimmedSearch = searchQuery.trim();
-    if (trimmedSearch.isNotEmpty) {
-      clauses.add("(product_name LIKE ? OR barcode LIKE ? OR COALESCE(reason, '') LIKE ? OR COALESCE(supplier_name, '') LIKE ?)");
-      final pattern = '%$trimmedSearch%';
-      args
-        ..add(pattern)
-        ..add(pattern)
-        ..add(pattern)
-        ..add(pattern);
-    }
+      final trimmedSearch = searchQuery.trim();
+      if (trimmedSearch.isNotEmpty) {
+        clauses.add("(product_name LIKE ? OR barcode LIKE ? OR COALESCE(reason, '') LIKE ? OR COALESCE(supplier_name, '') LIKE ?)");
+        final pattern = '%$trimmedSearch%';
+        args
+          ..add(pattern)
+          ..add(pattern)
+          ..add(pattern)
+          ..add(pattern);
+      }
+
+      if (onDate != null) {
+        final start = DateTime(onDate.year, onDate.month, onDate.day);
+        final end = start.add(const Duration(days: 1));
+        clauses.add('created_at >= ? AND created_at < ?');
+        args
+          ..add(start.toIso8601String())
+          ..add(end.toIso8601String());
+      }
 
     final rows = await db.query(
       'inventory_movements',
@@ -4472,21 +4483,36 @@ class DatabaseHelper {
 
     final movements = rows.map((row) => Map<String, dynamic>.from(row)).toList();
 
-    for (final movement in movements) {
+      if (hydrateSuppliers) {
+        for (final movement in movements) {
+          await hydrateInventoryMovementSupplierData(movement, db: db);
+        }
+      }
+  
+      return movements;
+    }
+
+    Future<Map<String, dynamic>> hydrateInventoryMovementSupplierData(
+      Map<String, dynamic> movement, {
+      Database? db,
+    }) async {
       final actionType = (movement['action_type'] ?? '').toString();
       final existingSupplier = (movement['supplier_name'] ?? '').toString().trim();
       if (actionType != 'stock_receive' || existingSupplier.isNotEmpty) {
-        continue;
+        return movement;
       }
 
+      final targetDb = db ?? await database;
       final movementBarcode = (movement['barcode'] ?? '').toString().trim();
       final quantity = _parseInt(movement['quantity_change']).abs();
       final createdAt = (movement['created_at'] ?? '').toString();
-      if (movementBarcode.isEmpty || quantity <= 0) continue;
+      if (movementBarcode.isEmpty || quantity <= 0) {
+        return movement;
+      }
 
       List<Map<String, dynamic>> receiptRows = [];
       try {
-        final raw = await db.rawQuery(
+        final raw = await targetDb.rawQuery(
           """
           SELECT supplier_id, supplier_name, cost, reference_note, created_at
           FROM stock_receipts
@@ -4500,7 +4526,7 @@ class DatabaseHelper {
         );
         receiptRows = raw.map((row) => Map<String, dynamic>.from(row)).toList();
       } catch (_) {
-        final raw = await db.query(
+        final raw = await targetDb.query(
           'stock_receipts',
           columns: ['supplier_id', 'supplier_name', 'cost', 'reference_note', 'created_at'],
           where: 'barcode = ? AND quantity = ? AND COALESCE(is_reversed, 0) = 0',
@@ -4511,7 +4537,9 @@ class DatabaseHelper {
         receiptRows = raw.map((row) => Map<String, dynamic>.from(row)).toList();
       }
 
-      if (receiptRows.isEmpty) continue;
+      if (receiptRows.isEmpty) {
+        return movement;
+      }
 
       final receipt = receiptRows.first;
       movement['supplier_id'] = receipt['supplier_id'];
@@ -4523,10 +4551,9 @@ class DatabaseHelper {
           movement['reason'] = note;
         }
       }
-    }
 
-    return movements;
-  }
+      return movement;
+    }
 
   Future<bool> receiveStockLocal(
     String barcode,
