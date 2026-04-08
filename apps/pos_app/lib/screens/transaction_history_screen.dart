@@ -130,11 +130,13 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       final payment = (tx['payment_method'] ?? '').toString().toLowerCase();
       final type = (tx['transaction_type'] ?? '').toString().toLowerCase();
       final refundReason = (tx['refund_reason'] ?? '').toString().toLowerCase();
+      final createdAt = (tx['created_at'] ?? '').toString();
       return id.contains(q) ||
           cashier.contains(q) ||
           payment.contains(q) ||
           type.contains(q) ||
-          refundReason.contains(q);
+          refundReason.contains(q) ||
+          _matchesDateSearch(createdAt, q);
     }).toList();
   }
 
@@ -190,6 +192,56 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     } catch (_) {
       return raw;
     }
+  }
+
+  bool _matchesDateSearch(String raw, String query) {
+    if (raw.isEmpty || query.isEmpty) return false;
+
+    DateTime? dt;
+    try {
+      dt = DateTime.parse(raw).toLocal();
+    } catch (_) {
+      return false;
+    }
+
+    final normalizedQuery = query.trim().toLowerCase();
+    final digitsOnly = normalizedQuery.replaceAll(RegExp(r'[^0-9]'), '');
+    final yyyy = dt.year.toString().padLeft(4, '0');
+    final mm = dt.month.toString().padLeft(2, '0');
+    final dd = dt.day.toString().padLeft(2, '0');
+
+    final searchableForms = <String>{
+      '$yyyy-$mm-$dd',
+      '$yyyy/$mm/$dd',
+      '$dd-$mm-$yyyy',
+      '$dd/$mm/$yyyy',
+      '$yyyy$mm$dd',
+      '$dd$mm$yyyy',
+      '$mm$dd$yyyy',
+      '$yyyy${dt.month}${dt.day}',
+      '${dt.month}${dt.day}$yyyy',
+      '${dt.day}$mm$yyyy',
+      '${dt.month}$dd$yyyy',
+      '${_formatDateTime(raw).toLowerCase()}',
+    };
+
+    if (searchableForms.any((value) => value.contains(normalizedQuery))) {
+      return true;
+    }
+
+    if (digitsOnly.isEmpty) return false;
+
+    final digitForms = <String>{
+      '$yyyy$mm$dd',
+      '$dd$mm$yyyy',
+      '$mm$dd$yyyy',
+      '$yyyy${dt.month}${dt.day}',
+      '${dt.month}${dt.day}$yyyy',
+      '${dt.day}$mm$yyyy',
+      '${dt.month}$dd$yyyy',
+    };
+
+    return digitForms.any((value) => value.contains(digitsOnly));
   }
 
   String _paymentLabel(String? method) {
@@ -720,14 +772,6 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                           value: _refundCount.toString(),
                           icon: Icons.undo_outlined,
                           accent: palette.danger,
-                        ),
-                        _buildSummaryCard(
-                          palette: palette,
-                          title: 'Net Sales',
-                          value:
-                              'Rs. ${(_salesTotal - _refundTotal).toStringAsFixed(2)}',
-                          icon: Icons.payments_outlined,
-                          accent: palette.brand,
                         ),
                       ],
                     ),

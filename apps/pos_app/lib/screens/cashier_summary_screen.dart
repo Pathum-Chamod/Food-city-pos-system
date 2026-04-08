@@ -33,13 +33,13 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
 
-  Color get _page => _isDark ? const Color(0xFF071426) : const Color(0xFFF5F7FB);
-  Color get _surface => _isDark ? const Color(0xFF0F223D) : Colors.white;
-  Color get _surfaceSoft => _isDark ? const Color(0xFF132A49) : const Color(0xFFF8FAFC);
-  Color get _border => _isDark ? const Color(0xFF1E3A5F) : const Color(0xFFE3EAF3);
-  Color get _textPrimary => _isDark ? const Color(0xFFF3F7FD) : const Color(0xFF162033);
-  Color get _textSecondary => _isDark ? const Color(0xFF9FB2CC) : const Color(0xFF667085);
-  Color get _shadow => _isDark ? Colors.black.withOpacity(0.18) : const Color(0x140F172A);
+  Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _surface => _isDark ? const Color(0xFF0F1C31) : Colors.white;
+  Color get _surfaceSoft => _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get _border => _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get _textPrimary => _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get _textSecondary => _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get _shadow => Colors.black.withOpacity(_isDark ? 0.24 : 0.05);
 
   @override
   void initState() {
@@ -170,6 +170,41 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
     }
 
     return '${_formatDate(start)} → ${_formatDate(end)}';
+  }
+
+  List<Widget> _withMetaDividers(List<Widget> items) {
+    final widgets = <Widget>[];
+    for (var i = 0; i < items.length; i++) {
+      if (i > 0) {
+        widgets.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Text(
+              '•',
+              style: TextStyle(
+                color: _textSecondary.withOpacity(0.72),
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+                height: 1.0,
+              ),
+            ),
+          ),
+        );
+      }
+      widgets.add(items[i]);
+    }
+    return widgets;
+  }
+
+  Widget _buildMetaText(String label) {
+    return Text(
+      label,
+      style: TextStyle(
+        color: _textSecondary,
+        fontWeight: FontWeight.w700,
+        fontSize: 12,
+      ),
+    );
   }
 
   Widget _buildShell({required Widget child, EdgeInsetsGeometry? padding}) {
@@ -372,23 +407,19 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
     return Container(
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        gradient: _isDark
-            ? const LinearGradient(
-                colors: [Color(0xFF0D203A), Color(0xFF163459)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              )
-            : const LinearGradient(
-                colors: [Color(0xFFF7FFFC), Color(0xFFF0FBF7)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: _isDark
+              ? const [Color(0xFF0F1C31), Color(0xFF14243C), Color(0xFF0B1729)]
+              : const [Color(0xFFFFFFFF), Color(0xFFF5FBF9), Color(0xFFF7FAFF)],
+        ),
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: _brand.withOpacity(_isDark ? 0.20 : 0.16)),
+        border: Border.all(color: _border),
         boxShadow: [
           BoxShadow(
-            color: _brand.withOpacity(_isDark ? 0.10 : 0.08),
-            blurRadius: 30,
+            color: _shadow,
+            blurRadius: _isDark ? 32 : 24,
             offset: const Offset(0, 14),
           ),
         ],
@@ -430,90 +461,18 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
                 ),
                 const SizedBox(height: 10),
                 Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 0,
                   runSpacing: 6,
-                  children: [
-                    _buildInlineStat(
-                      icon: Icons.receipt_long_rounded,
-                      label: 'Transactions',
-                      value: transactions.toString(),
-                      accent: _info,
-                    ),
-                    _buildMetaDot(),
-                    _buildInlineStat(
-                      icon: Icons.shopping_bag_rounded,
-                      label: 'Items sold',
-                      value: itemsSold.toString(),
-                      accent: _brand,
-                    ),
-                    _buildMetaDot(),
-                    _buildInlineStat(
-                      icon: Icons.undo_rounded,
-                      label: 'Refunds',
-                      value: _formatCompactMoney(refunds),
-                      accent: _danger,
-                    ),
-                    _buildMetaDot(),
-                    _buildInlineStat(
-                      icon: Icons.schedule_rounded,
-                      label: 'Range',
-                      value: _formatRangeText(),
-                      accent: _brand,
-                    ),
-                  ],
+                  children: _withMetaDividers([
+                    _buildMetaText('$transactions Transaction${transactions == 1 ? '' : 's'}'),
+                    _buildMetaText('$itemsSold Item${itemsSold == 1 ? '' : 's'} sold'),
+                    _buildMetaText('Refunds ${_formatMoney(refunds)}'),
+                  ]),
                 ),
               ],
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildInlineStat({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color accent,
-  }) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 14, color: accent),
-        const SizedBox(width: 6),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: _textSecondary,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            Text(
-              value,
-              style: TextStyle(
-                color: _textPrimary,
-                fontSize: 13,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildMetaDot() {
-    return Text(
-      '•',
-      style: TextStyle(
-        color: _textSecondary,
-        fontSize: 12,
-        fontWeight: FontWeight.w800,
       ),
     );
   }
@@ -612,6 +571,7 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
             value: _formatMoney(avgSale),
             icon: Icons.insights_rounded,
             accent: _warning,
+            note: 'Net sales after refunds divided by completed bills',
           ),
           _buildMetricTile(
             label: 'Cash Sales',
@@ -837,7 +797,14 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
         scrolledUnderElevation: 0,
         backgroundColor: _page,
         foregroundColor: _textPrimary,
-        title: const Text('Cashier Summary'),
+        title: Text(
+          'Cashier Summary',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            color: _textPrimary,
+          ),
+        ),
       ),
       body: !_hasLoadedOnce && _isLoading
           ? _buildLoadingState()

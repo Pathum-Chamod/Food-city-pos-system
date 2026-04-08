@@ -21,7 +21,6 @@ import 'cart_discount_dialog.dart';
 import 'cashier_summary_screen.dart';
 import 'checkout_payment_dialog.dart';
 import 'held_carts_screen.dart';
-import 'inventory_screen.dart';
 import 'login_screen.dart';
 import 'sales_report_screen.dart';
 import 'supplier_management_screen.dart';
@@ -2357,14 +2356,6 @@ class _PosScreenState extends State<PosScreen> {
       case 'hardware_setup':
         await _showHardwareSetupDialog();
         break;
-      case 'inventory':
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => const InventoryScreen(),
-          ),
-        );
-        break;
       case 'supplier_ops':
         await _openSupplierOperations();
         break;
@@ -2413,14 +2404,10 @@ class _PosScreenState extends State<PosScreen> {
         return Icons.bar_chart_rounded;
       case 'hardware_setup':
         return Icons.usb_rounded;
-      case 'inventory':
-        return Icons.inventory_2_outlined;
       case 'supplier_ops':
         return Icons.local_shipping_outlined;
       case 'transaction_history':
         return Icons.receipt_long_outlined;
-      case 'refresh_products':
-        return Icons.sync_rounded;
       case 'user_management':
         return Icons.manage_accounts_outlined;
       case 'sales_report':
@@ -2720,12 +2707,8 @@ class _PosScreenState extends State<PosScreen> {
             icon: Icons.widgets_outlined,
             items: [
               const MapEntry('cashier_summary', 'Cashier Summary'),
-              const MapEntry('inventory', 'Inventory'),
-              const MapEntry('supplier_ops', 'Supplier Operations'),
               const MapEntry('transaction_history', 'Transaction History'),
               const MapEntry('hardware_setup', 'Hardware Setup'),
-              const MapEntry('refresh_products', 'Refresh Products'),
-              const MapEntry('held_carts', 'Held Carts'),
             ],
             onSelected: (value) => _handleHeaderMenuAction(value, cart),
           ),
@@ -2736,6 +2719,7 @@ class _PosScreenState extends State<PosScreen> {
               icon: Icons.admin_panel_settings_outlined,
               items: [
                 const MapEntry('user_management', 'User Management'),
+                const MapEntry('supplier_ops', 'Supplier Operations'),
                 const MapEntry('sales_report', 'Store Sales Report'),
                 if (PosFeatureFlags.enableShiftManagement)
                   const MapEntry('shift_management', 'Shift Management'),
