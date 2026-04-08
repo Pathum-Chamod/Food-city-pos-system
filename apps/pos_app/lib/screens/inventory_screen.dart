@@ -1110,7 +1110,301 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Future<Product?> _pickProduct({
     required String title,
   }) async {
-    return showModalBottomSheet<Product>(
+    IconData pickerIcon = Icons.inventory_2_outlined;
+    String pickerSubtitle = 'Choose an inventory item to continue.';
+    String hintTitle = 'Search active products';
+    String hintMessage =
+        'Find an item quickly by product name, barcode, or category and continue in one tap.';
+
+    if (title.toLowerCase().contains('receive')) {
+      pickerIcon = Icons.inventory_2_rounded;
+      pickerSubtitle = 'Pick the item that is receiving new stock.';
+      hintTitle = 'Receive against an existing item';
+      hintMessage =
+          'Select the product first, then we will capture supplier, quantity, and unit cost details.';
+    } else if (title.toLowerCase().contains('adjust')) {
+      pickerIcon = Icons.tune_rounded;
+      pickerSubtitle = 'Choose the item whose stock needs correction.';
+      hintTitle = 'Adjust live stock safely';
+      hintMessage =
+          'Open a product from the list to add, remove, or set the exact stock quantity.';
+    } else if (title.toLowerCase().contains('price')) {
+      pickerIcon = Icons.sell_rounded;
+      pickerSubtitle = 'Choose the item whose pricing should be updated.';
+      hintTitle = 'Update product pricing';
+      hintMessage =
+          'Select a product to edit selling, wholesale, sale, or cost price from the next step.';
+    }
+
+    final showPrice = title.toLowerCase().contains('price');
+    final showStockMeta = !showPrice;
+    final showStockStatusChip = !showPrice;
+    String localQuery = '';
+
+    return _showInventoryPopup<Product>(
+      icon: pickerIcon,
+      title: title,
+      subtitle: pickerSubtitle,
+      maxWidth: 760,
+      maxHeightFactor: 0.86,
+      bodyBuilder: (dialogContext, setPopupState) {
+        return StatefulBuilder(
+          builder: (context, setInnerState) {
+            final normalizedQuery = localQuery.trim().toLowerCase();
+            final visibleProducts = _products.where((product) {
+              if (!product.isActive) return false;
+              if (normalizedQuery.isEmpty) return true;
+              return product.name.toLowerCase().contains(normalizedQuery) ||
+                  product.barcode.toLowerCase().contains(normalizedQuery) ||
+                  product.category.toLowerCase().contains(normalizedQuery);
+            }).toList()
+              ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+            void updateQuery(String value) {
+              setPopupState(() {
+                localQuery = value;
+              });
+              setInnerState(() {});
+            }
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildPopupHintCard(
+                  icon: pickerIcon,
+                  title: hintTitle,
+                  message: hintMessage,
+                ),
+                const SizedBox(height: 18),
+                TextField(
+                  autofocus: true,
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'Search by name, barcode, or category',
+                    hintStyle: TextStyle(color: _textSecondary),
+                    prefixIcon: Icon(Icons.search_rounded, color: _mutedIcon),
+                    suffixIcon: localQuery.isEmpty
+                        ? null
+                        : IconButton(
+                            onPressed: () => updateQuery(''),
+                            icon: Icon(Icons.close_rounded, color: _mutedIcon),
+                          ),
+                    filled: true,
+                    fillColor: _inputFill,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      borderSide: BorderSide(color: _borderColor),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      borderSide: BorderSide(color: _borderColor),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      borderSide: BorderSide(color: _brandColor, width: 1.4),
+                    ),
+                  ),
+                  onChanged: updateQuery,
+                ),
+                const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: Text(
+                    '${visibleProducts.length} product${visibleProducts.length == 1 ? '' : 's'} available',
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: visibleProducts.isEmpty
+                      ? Container(
+                          width: double.infinity,
+                          decoration: _softDecoration(color: _panelSoft, radius: 22),
+                          padding: const EdgeInsets.all(28),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.search_off_rounded,
+                                size: 42,
+                                color: _mutedIcon,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                'No matching products found.',
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 16,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Try a different product name, barcode, or category.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: visibleProducts.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final product = visibleProducts[index];
+                            final stockAccent = product.isOutOfStock
+                                ? _dangerColor
+                                : product.isLowStock
+                                    ? _warningColor
+                                    : _brandColor;
+
+                            return Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(20),
+                                onTap: () => Navigator.pop(dialogContext, product),
+                                child: Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: _panelSoft,
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(color: _borderColor),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              product.name,
+                                              style: TextStyle(
+                                                color: _textPrimary,
+                                                fontWeight: FontWeight.w900,
+                                                fontSize: 15,
+                                                height: 1.15,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 6),
+                                            Wrap(
+                                              spacing: 6,
+                                              runSpacing: 4,
+                                              children: [
+                                                Text(
+                                                  product.barcode,
+                                                  style: TextStyle(
+                                                    color: _textSecondary,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                                if (showStockMeta)
+                                                  Text(
+                                                    '|',
+                                                    style: TextStyle(
+                                                      color: _textSecondary,
+                                                      fontWeight: FontWeight.w700,
+                                                    ),
+                                                  ),
+                                                Text(
+                                                  product.category,
+                                                  style: TextStyle(
+                                                    color: _textSecondary,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '•',
+                                                  style: TextStyle(
+                                                    color: _textSecondary,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                                if (showStockMeta)
+                                                  Text(
+                                                    'Stock ${product.stock}',
+                                                    style: TextStyle(
+                                                      color: stockAccent,
+                                                      fontWeight: FontWeight.w700,
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      if (showPrice || showStockStatusChip)
+                                        Column(
+                                          crossAxisAlignment: CrossAxisAlignment.end,
+                                          children: [
+                                            if (showPrice)
+                                              Text(
+                                                _formatCurrency(product.sellingPrice),
+                                                style: TextStyle(
+                                                  color: _brandColor,
+                                                  fontWeight: FontWeight.w900,
+                                                  fontSize: 14,
+                                                ),
+                                              ),
+                                            if (showPrice && showStockStatusChip)
+                                              const SizedBox(height: 8),
+                                            if (showStockStatusChip)
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                  horizontal: 10,
+                                                  vertical: 5,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: stockAccent.withOpacity(
+                                                    _isDark ? 0.16 : 0.10,
+                                                  ),
+                                                  borderRadius: BorderRadius.circular(999),
+                                                  border: Border.all(
+                                                    color: stockAccent.withOpacity(0.22),
+                                                  ),
+                                                ),
+                                                child: Text(
+                                                  product.isOutOfStock
+                                                      ? 'Out of stock'
+                                                      : product.isLowStock
+                                                          ? 'Low stock'
+                                                          : 'In stock',
+                                                  style: TextStyle(
+                                                    color: stockAccent,
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: 11.5,
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    /* return showModalBottomSheet<Product>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -1208,7 +1502,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           },
         );
       },
-    );
+    ); */
   }
 
 
