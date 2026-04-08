@@ -3744,6 +3744,26 @@ class DatabaseHelper {
       args,
     )).first;
 
+    final costRow = (await db.rawQuery(
+      '''
+      SELECT
+        COALESCE(
+          SUM(
+            CASE
+              WHEN s.transaction_type = 'sale' THEN (si.cost_price_snapshot * si.quantity)
+              ELSE -(si.cost_price_snapshot * si.quantity)
+            END
+          ),
+          0
+        ) AS net_cost_amount
+      FROM sales s
+      INNER JOIN sale_items si ON si.sale_id = s.id
+      WHERE s.transaction_type IN ('sale', 'refund')
+        AND $whereBase
+      ''',
+      args,
+    )).first;
+
     final grossSales = ((saleRow['gross_sales'] as num?) ?? 0).toDouble();
     final totalDiscounts =
         ((saleRow['total_discounts'] as num?) ?? 0).toDouble();
@@ -3755,6 +3775,13 @@ class DatabaseHelper {
     final refundCount = (refundRow['refund_count'] as num?)?.toInt() ?? 0;
     final itemsSold = (itemRow['items_sold'] as num?)?.toInt() ?? 0;
     final itemLineCount = (itemRow['item_line_count'] as num?)?.toInt() ?? 0;
+    final netCostAmount =
+        ((costRow['net_cost_amount'] as num?) ?? 0).toDouble();
+    final netAfterRefunds = netSales - refundTotal;
+    final estimatedProfit = _roundMoney(netAfterRefunds - netCostAmount);
+    final marginPercent = netAfterRefunds <= 0
+        ? 0.0
+        : _roundMoney((estimatedProfit / netAfterRefunds) * 100);
 
     return {
       'start': startTime.toIso8601String(),
@@ -3767,11 +3794,14 @@ class DatabaseHelper {
       'total_discounts': _roundMoney(totalDiscounts),
       'net_sales': _roundMoney(netSales),
       'refund_total': _roundMoney(refundTotal),
-      'net_after_refunds': _roundMoney(netSales - refundTotal),
+      'net_after_refunds': _roundMoney(netAfterRefunds),
       'cash_sales': _roundMoney(cashSales),
       'card_sales': _roundMoney(cardSales),
       'items_sold': itemsSold,
       'item_line_count': itemLineCount,
+      'net_cost_amount': _roundMoney(netCostAmount),
+      'estimated_profit': estimatedProfit,
+      'margin_percent': marginPercent,
       'average_sale_value': saleCount <= 0
           ? 0.0
           : _roundMoney(netSales / saleCount),
