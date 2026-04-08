@@ -24,10 +24,12 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
   static const Color _info = Color(0xFF4F8CFF);
 
   bool _isLoading = true;
+  bool _hasLoadedOnce = false;
   SummaryRange _selectedRange = SummaryRange.today;
   DateTime? _selectedDate;
   Map<String, dynamic>? _summary;
   List<Map<String, dynamic>> _topItems = [];
+  int _contentVersion = 0;
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
 
@@ -105,6 +107,8 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
       _summary = summary;
       _topItems = topItems;
       _isLoading = false;
+      _hasLoadedOnce = true;
+      _contentVersion += 1;
     });
   }
 
@@ -193,6 +197,7 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
       label: Text(label),
       selected: selected,
       onSelected: (_) {
+        if (_selectedRange == value) return;
         setState(() {
           _selectedRange = value;
           if (value != SummaryRange.specificDate) {
@@ -812,6 +817,18 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
   @override
   Widget build(BuildContext context) {
     final summary = _summary;
+    final content = ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _buildHeaderCard(),
+        const SizedBox(height: 16),
+        _buildNetSalesHero(summary),
+        const SizedBox(height: 16),
+        _buildMetricsGrid(summary),
+        const SizedBox(height: 16),
+        _buildTopSellingCard(),
+      ],
+    );
 
     return Scaffold(
       backgroundColor: _page,
@@ -822,23 +839,16 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
         foregroundColor: _textPrimary,
         title: const Text('Cashier Summary'),
       ),
-      body: _isLoading
+      body: !_hasLoadedOnce && _isLoading
           ? _buildLoadingState()
-          : RefreshIndicator(
-              onRefresh: _loadSummary,
-              color: _brand,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  _buildHeaderCard(),
-                  const SizedBox(height: 16),
-                  _buildNetSalesHero(summary),
-                  const SizedBox(height: 16),
-                  _buildMetricsGrid(summary),
-                  const SizedBox(height: 16),
-                  _buildTopSellingCard(),
-                ],
-              ),
+          : Stack(
+              children: [
+                RefreshIndicator(
+                  onRefresh: _loadSummary,
+                  color: _brand,
+                  child: content,
+                ),
+              ],
             ),
     );
   }

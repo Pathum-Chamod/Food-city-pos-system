@@ -22,6 +22,7 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   static const Color _danger = Color(0xFFFF6B7A);
 
   bool _isLoading = true;
+  bool _hasLoadedOnce = false;
   SalesReportRange _selectedRange = SalesReportRange.today;
   DateTime? _selectedDate;
   // Custom date range
@@ -37,6 +38,7 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   List<Map<String, dynamic>> _slowMovers = [];
   int? _hoveredBarIndex;
   final ScrollController _trendChartScrollController = ScrollController();
+  int _contentVersion = 0;
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
@@ -158,6 +160,8 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
       _productPerformance = productPerformance;
       _slowMovers = slowMovers;
       _isLoading = false;
+      _hasLoadedOnce = true;
+      _contentVersion += 1;
     });
   }
 
@@ -736,6 +740,7 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
       label: Text(label),
       selected: selected,
       onSelected: (_) {
+        if (_selectedRange == value) return;
         setState(() {
           _selectedRange = value;
           if (value != SalesReportRange.specificDate) {
@@ -2447,11 +2452,15 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           const SizedBox(width: 8),
         ],
       ),
-      body: _isLoading
+      body: !_hasLoadedOnce && _isLoading
           ? _buildLoadingState()
-          : RefreshIndicator(
-              onRefresh: _loadReport,
-              child: _buildDashboardBody(summary),
+          : Stack(
+              children: [
+                RefreshIndicator(
+                  onRefresh: _loadReport,
+                  child: _buildDashboardBody(summary),
+                ),
+              ],
             ),
     );
   }
