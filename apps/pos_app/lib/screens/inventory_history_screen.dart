@@ -1,3 +1,4 @@
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -34,6 +35,20 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   bool _isRefreshing = false;
   InventoryHistoryFilter _selectedFilter = InventoryHistoryFilter.all;
 
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+  Color get _brand => const Color(0xFF2AAA8A);
+  Color get _screenBg => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _screenBgAlt => _isDark ? const Color(0xFF0B1729) : const Color(0xFFFFFFFF);
+  Color get _panel => _isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
+  Color get _panelSoft => _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get _panelAlt => _isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
+  Color get _border => _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get _textPrimary => _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get _textSecondary => _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get _muted => _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
+  Color get _inputFill => _isDark ? const Color(0xFF0B1628) : const Color(0xFFF7F9FC);
+  Color get _shadow => Colors.black.withOpacity(_isDark ? 0.26 : 0.06);
+
   @override
   void initState() {
     super.initState();
@@ -54,11 +69,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       case InventoryHistoryFilter.receives:
         return ['stock_receive'];
       case InventoryHistoryFilter.adjustments:
-        return [
-          'stock_adjust_add',
-          'stock_adjust_remove',
-          'stock_adjust_set',
-        ];
+        return ['stock_adjust_add', 'stock_adjust_remove', 'stock_adjust_set'];
       case InventoryHistoryFilter.counts:
         return ['stock_take_reconcile'];
       case InventoryHistoryFilter.sales:
@@ -106,9 +117,10 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         _isLoading = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Could not load inventory history.'),
+        SnackBar(
+          content: const Text('Could not load inventory history.'),
           behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red.shade700,
         ),
       );
     }
@@ -131,63 +143,168 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     }
   }
 
-  Future<void> _openMovementDetails(Map<String, dynamic> movement) async {
-    await showModalBottomSheet<void>(
+  Future<T?> _showPremiumDialog<T>({
+    required Widget child,
+    bool barrierDismissible = true,
+  }) {
+    return showGeneralDialog<T>(
       context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (context) {
-        final rows = <MapEntry<String, String>>[
-          MapEntry('Action', _movementTitle((movement['action_type'] ?? '').toString())),
-          MapEntry('Product', (movement['product_name'] ?? 'Unknown product').toString()),
-          MapEntry('Barcode', (movement['barcode'] ?? '-').toString()),
-          MapEntry('When', _formatDateTime(movement['created_at']?.toString())),
-          if ((movement['performed_by'] ?? '').toString().trim().isNotEmpty)
-            MapEntry('User', movement['performed_by'].toString()),
-          if (movement['stock_before'] != null || movement['stock_after'] != null)
-            MapEntry(
-              'Stock',
-              '${movement['stock_before'] ?? '-'} → ${movement['stock_after'] ?? '-'}',
-            ),
-          if (movement['quantity_change'] != null)
-            MapEntry('Quantity Change', movement['quantity_change'].toString()),
-          if (movement['old_price'] != null || movement['new_price'] != null)
-            MapEntry(
-              'Price',
-              'Rs. ${_asDouble(movement['old_price']).toStringAsFixed(2)} → Rs. ${_asDouble(movement['new_price']).toStringAsFixed(2)}',
-            ),
-          if ((movement['reason'] ?? '').toString().trim().isNotEmpty)
-            MapEntry('Reason', movement['reason'].toString()),
-        ];
-
-        return SafeArea(
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.72,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      barrierDismissible: barrierDismissible,
+      barrierLabel: 'Close',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 240),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return Material(
+              color: Colors.transparent,
+              child: Stack(
                 children: [
-                  const Text(
-                    'Activity Details',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: barrierDismissible ? () => Navigator.of(context).maybePop() : null,
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween(begin: 0, end: 1),
+                        duration: const Duration(milliseconds: 240),
+                        builder: (context, value, _) {
+                          return BackdropFilter(
+                            filter: ImageFilter.blur(
+                              sigmaX: 16 * value,
+                              sigmaY: 16 * value,
+                            ),
+                            child: Container(
+                              color: Colors.black.withOpacity(_isDark ? 0.42 * value : 0.22 * value),
+                            ),
+                          );
+                        },
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 14),
+                  Center(
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0.94, end: 1),
+                      duration: const Duration(milliseconds: 240),
+                      curve: Curves.easeOutCubic,
+                      builder: (context, value, childWidget) {
+                        return Transform.scale(
+                          scale: value,
+                          child: Opacity(
+                            opacity: ((value - 0.94) / 0.06).clamp(0, 1),
+                            child: childWidget,
+                          ),
+                        );
+                      },
+                      child: child,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return FadeTransition(opacity: animation, child: child);
+      },
+    );
+  }
+
+  Future<void> _openMovementDetails(Map<String, dynamic> movement) async {
+    await _showPremiumDialog<void>(
+      child: Container(
+        width: 760,
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.82,
+          maxWidth: MediaQuery.of(context).size.width * 0.92,
+        ),
+        decoration: BoxDecoration(
+          color: _panel,
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: _border),
+          boxShadow: [
+            BoxShadow(
+              color: _shadow,
+              blurRadius: 30,
+              offset: const Offset(0, 16),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 14),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: _muted.withOpacity(0.55),
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
+              child: Row(
+                children: [
+                  Container(
+                    width: 50,
+                    height: 50,
+                    decoration: BoxDecoration(
+                      color: _badgeColor((movement['action_type'] ?? '').toString()).$2,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(
+                      _badgeColor((movement['action_type'] ?? '').toString()).$3,
+                      color: _badgeColor((movement['action_type'] ?? '').toString()).$1,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
                   Expanded(
-                    child: ListView.separated(
-                      itemCount: rows.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
-                      itemBuilder: (context, index) {
-                        final row = rows[index];
-                        return Container(
-                          padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _movementTitle((movement['action_type'] ?? '').toString()),
+                          style: TextStyle(
+                            color: _textPrimary,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          (movement['product_name'] ?? 'Unknown product').toString(),
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(22, 0, 22, 22),
+                child: Wrap(
+                  spacing: 14,
+                  runSpacing: 14,
+                  children: _movementRows(movement)
+                      .map(
+                        (row) => Container(
+                          width: 340,
+                          padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: Colors.grey.shade50,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(color: Colors.grey.shade200),
+                            color: _panelSoft,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: _border),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -195,32 +312,59 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                               Text(
                                 row.key,
                                 style: TextStyle(
-                                  color: Colors.grey.shade700,
+                                  color: _textSecondary,
                                   fontSize: 12,
-                                  fontWeight: FontWeight.w600,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
-                              const SizedBox(height: 4),
+                              const SizedBox(height: 6),
                               Text(
                                 row.value,
-                                style: const TextStyle(
+                                style: TextStyle(
+                                  color: _textPrimary,
                                   fontSize: 15,
-                                  fontWeight: FontWeight.w600,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.35,
                                 ),
                               ),
                             ],
                           ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
+                        ),
+                      )
+                      .toList(),
+                ),
               ),
             ),
-          ),
-        );
-      },
+          ],
+        ),
+      ),
     );
+  }
+
+  List<MapEntry<String, String>> _movementRows(Map<String, dynamic> movement) {
+    return <MapEntry<String, String>>[
+      MapEntry('Action', _movementTitle((movement['action_type'] ?? '').toString())),
+      MapEntry('Product', (movement['product_name'] ?? 'Unknown product').toString()),
+      MapEntry('Barcode', (movement['barcode'] ?? '-').toString()),
+      MapEntry('When', _formatDateTime(movement['created_at']?.toString())),
+      if ((movement['performed_by'] ?? '').toString().trim().isNotEmpty)
+        MapEntry('User', movement['performed_by'].toString()),
+      if ((movement['supplier_name'] ?? '').toString().trim().isNotEmpty)
+        MapEntry('Supplier', movement['supplier_name'].toString()),
+      if (movement['supplier_cost'] != null)
+        MapEntry('Supplier Cost', 'Rs. ${_asDouble(movement['supplier_cost']).toStringAsFixed(2)}'),
+      if (movement['stock_before'] != null || movement['stock_after'] != null)
+        MapEntry('Stock', '${movement['stock_before'] ?? '-'} → ${movement['stock_after'] ?? '-'}'),
+      if (movement['quantity_change'] != null)
+        MapEntry('Quantity Change', movement['quantity_change'].toString()),
+      if (movement['old_price'] != null || movement['new_price'] != null)
+        MapEntry(
+          'Price',
+          'Rs. ${_asDouble(movement['old_price']).toStringAsFixed(2)} → Rs. ${_asDouble(movement['new_price']).toStringAsFixed(2)}',
+        ),
+      if ((movement['reason'] ?? '').toString().trim().isNotEmpty)
+        MapEntry('Reason', movement['reason'].toString()),
+    ];
   }
 
   Widget _buildSummaryCard({
@@ -232,25 +376,25 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.grey.shade200),
+        color: _panel,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: _border),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: _shadow,
+            blurRadius: 18,
+            offset: const Offset(0, 10),
           ),
         ],
       ),
       child: Row(
         children: [
           Container(
-            width: 42,
-            height: 42,
+            width: 46,
+            height: 46,
             decoration: BoxDecoration(
-              color: accent.withOpacity(0.10),
-              borderRadius: BorderRadius.circular(12),
+              color: accent.withOpacity(_isDark ? 0.18 : 0.12),
+              borderRadius: BorderRadius.circular(14),
             ),
             child: Icon(icon, color: accent),
           ),
@@ -260,18 +404,20 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
                   title,
                   style: TextStyle(
-                    color: Colors.grey.shade700,
-                    fontWeight: FontWeight.w600,
+                    color: _textSecondary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 22,
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
               ],
@@ -290,13 +436,16 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return ChoiceChip(
       label: Text(label),
       selected: selected,
-      selectedColor: Colors.blue.shade100,
+      showCheckmark: false,
+      selectedColor: _brand.withOpacity(_isDark ? 0.18 : 0.12),
+      backgroundColor: _inputFill,
       side: BorderSide(
-        color: selected ? Colors.blue.shade200 : Colors.grey.shade300,
+        color: selected ? _brand : _border,
       ),
       labelStyle: TextStyle(
-        color: selected ? Colors.blue.shade800 : Colors.grey.shade800,
-        fontWeight: FontWeight.w600,
+        color: selected ? _brand : _textSecondary,
+        fontWeight: FontWeight.w800,
+        fontSize: 12,
       ),
       onSelected: (_) async {
         setState(() {
@@ -304,43 +453,54 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         });
         await _loadHistory(showLoader: false);
       },
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     );
   }
 
+  (Color, Color, IconData) _badgeColor(String actionType) {
+    if (actionType.contains('product_create')) {
+      return (const Color(0xFF7C8EA7), const Color(0xFF7C8EA7).withOpacity(_isDark ? 0.18 : 0.12), Icons.inventory_2_outlined);
+    }
+    if (actionType.contains('receive')) {
+      return (const Color(0xFF1FCF9A), const Color(0xFF1FCF9A).withOpacity(_isDark ? 0.18 : 0.12), Icons.inventory_2_rounded);
+    }
+    if (actionType.contains('adjust')) {
+      return (const Color(0xFFFFB65C), const Color(0xFFFFB65C).withOpacity(_isDark ? 0.18 : 0.12), Icons.tune_rounded);
+    }
+    if (actionType.contains('price')) {
+      return (const Color(0xFF8B5CF6), const Color(0xFF8B5CF6).withOpacity(_isDark ? 0.18 : 0.12), Icons.sell_rounded);
+    }
+    if (actionType.contains('stock_take')) {
+      return (const Color(0xFF17B8A6), const Color(0xFF17B8A6).withOpacity(_isDark ? 0.18 : 0.12), Icons.playlist_add_check_circle_rounded);
+    }
+    if (actionType.contains('refund')) {
+      return (const Color(0xFFFF6B7A), const Color(0xFFFF6B7A).withOpacity(_isDark ? 0.18 : 0.12), Icons.undo_rounded);
+    }
+    if (actionType.contains('min_stock')) {
+      return (const Color(0xFFE8A23D), const Color(0xFFE8A23D).withOpacity(_isDark ? 0.18 : 0.12), Icons.warning_amber_rounded);
+    }
+    if (actionType.contains('sale')) {
+      return (const Color(0xFF4B8DFF), const Color(0xFF4B8DFF).withOpacity(_isDark ? 0.18 : 0.12), Icons.point_of_sale_rounded);
+    }
+    return (const Color(0xFF4B8DFF), const Color(0xFF4B8DFF).withOpacity(_isDark ? 0.18 : 0.12), Icons.history_rounded);
+  }
 
   Widget _buildActionBadge(String actionType) {
-    Color accent = Colors.blue;
-    String label = _movementTitle(actionType);
-
-    if (actionType.contains('product_create')) {
-      accent = Colors.blueGrey;
-    } else if (actionType.contains('receive')) {
-      accent = Colors.green;
-    } else if (actionType.contains('adjust')) {
-      accent = Colors.orange;
-    } else if (actionType.contains('price')) {
-      accent = Colors.purple;
-    } else if (actionType.contains('stock_take')) {
-      accent = Colors.teal;
-    } else if (actionType.contains('refund')) {
-      accent = Colors.red;
-    } else if (actionType.contains('min_stock')) {
-      accent = Colors.amber.shade800;
-    }
-
+    final badge = _badgeColor(actionType);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: accent.withOpacity(0.10),
+        color: badge.$2,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: accent.withOpacity(0.20)),
+        border: Border.all(color: badge.$1.withOpacity(0.28)),
       ),
       child: Text(
-        label,
+        _movementTitle(actionType),
         style: TextStyle(
-          color: accent,
+          color: badge.$1,
           fontSize: 10,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w800,
         ),
       ),
     );
@@ -351,36 +511,10 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     final quantityChange = (movement['quantity_change'] as num?)?.toInt();
     final oldPrice = movement['old_price'] as num?;
     final newPrice = movement['new_price'] as num?;
+    final badge = _badgeColor(actionType);
 
     String subtitle = _movementSubtitle(movement);
     String trailing = _formatDateTime(movement['created_at']?.toString());
-    Color accent = Colors.blue;
-    IconData icon = Icons.history;
-
-    if (actionType.contains('product_create')) {
-      accent = Colors.blueGrey;
-    } else if (actionType.contains('receive')) {
-      accent = Colors.green;
-      icon = Icons.inventory_2;
-    } else if (actionType.contains('adjust')) {
-      accent = Colors.orange;
-      icon = Icons.tune;
-    } else if (actionType.contains('price')) {
-      accent = Colors.purple;
-      icon = Icons.sell;
-    } else if (actionType.contains('stock_take')) {
-      accent = Colors.teal;
-      icon = Icons.playlist_add_check_circle;
-    } else if (actionType.contains('sale')) {
-      accent = Colors.blue;
-      icon = Icons.point_of_sale;
-    } else if (actionType.contains('refund')) {
-      accent = Colors.red;
-      icon = Icons.undo;
-    } else if (actionType.contains('min_stock')) {
-      accent = Colors.amber.shade800;
-      icon = Icons.warning_amber_rounded;
-    }
 
     if (quantityChange != null) {
       final sign = quantityChange > 0 ? '+' : '';
@@ -391,25 +525,25 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
 
     return InkWell(
       onTap: () => _openMovementDetails(movement),
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(14),
+      borderRadius: BorderRadius.circular(18),
+      child: Ink(
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.grey.shade200),
+          color: _panel,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _border),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 38,
-              height: 38,
+              width: 42,
+              height: 42,
               decoration: BoxDecoration(
-                color: accent.withOpacity(0.10),
-                borderRadius: BorderRadius.circular(12),
+                color: badge.$2,
+                borderRadius: BorderRadius.circular(13),
               ),
-              child: Icon(icon, color: accent, size: 20),
+              child: Icon(badge.$3, color: badge.$1, size: 20),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -421,7 +555,11 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                       Expanded(
                         child: Text(
                           (movement['product_name'] ?? 'Unknown product').toString(),
-                          style: const TextStyle(fontWeight: FontWeight.w700),
+                          style: TextStyle(
+                            color: _textPrimary,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                          ),
                         ),
                       ),
                       _buildActionBadge(actionType),
@@ -429,32 +567,38 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    _movementTitle(actionType),
+                    (movement['barcode'] ?? '-').toString(),
                     style: TextStyle(
-                      color: Colors.grey.shade700,
-                      fontWeight: FontWeight.w600,
+                      color: _textSecondary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 8),
                   Text(
                     subtitle,
                     style: TextStyle(
-                      color: Colors.grey.shade700,
+                      color: _textSecondary,
                       fontSize: 13,
+                      height: 1.35,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            Text(
-              trailing,
-              style: TextStyle(
-                color: Colors.grey.shade700,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
+            const SizedBox(width: 10),
+            SizedBox(
+              width: 156,
+              child: Text(
+                trailing,
+                style: TextStyle(
+                  color: _textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+                textAlign: TextAlign.right,
               ),
-              textAlign: TextAlign.right,
             ),
           ],
         ),
@@ -526,7 +670,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       pieces.add(performedBy);
     }
 
-    return pieces.join(' • ');
+    return pieces.isEmpty ? 'Tap to view full details.' : pieces.join(' • ');
   }
 
   double _asDouble(dynamic value) {
@@ -562,191 +706,316 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     }).length;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F8FB),
-      appBar: AppBar(
-        title: Text(
-          widget.initialBarcode == null ? 'Inventory History' : 'Product History',
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            onPressed: _isRefreshing ? null : _refresh,
-            icon: const Icon(Icons.refresh),
+      backgroundColor: _screenBg,
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [_screenBg, _screenBgAlt],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _refresh,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  if (widget.initialBarcode != null) ...[
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: Colors.grey.shade200),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.qr_code_2),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'Filtered to barcode: ${widget.initialBarcode}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                  Row(
+        ),
+        child: SafeArea(
+          child: _isLoading
+              ? Center(
+                  child: CircularProgressIndicator(color: _brand),
+                )
+              : RefreshIndicator(
+                  color: _brand,
+                  onRefresh: _refresh,
+                  child: ListView(
+                    padding: const EdgeInsets.all(14),
                     children: [
-                      Expanded(
-                        child: _buildSummaryCard(
-                          title: 'Total Records',
-                          value: totalMovements.toString(),
-                          accent: Colors.blue,
-                          icon: Icons.history,
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [_panelAlt, _panel],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: _border),
+                          boxShadow: [
+                            BoxShadow(
+                              color: _shadow,
+                              blurRadius: 24,
+                              offset: const Offset(0, 12),
+                            ),
+                          ],
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildSummaryCard(
-                          title: 'Stock Records',
-                          value: stockMovements.toString(),
-                          accent: Colors.green,
-                          icon: Icons.inventory,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildSummaryCard(
-                          title: 'Price Records',
-                          value: priceMovements.toString(),
-                          accent: Colors.purple,
-                          icon: Icons.sell,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  if (widget.initialBarcode == null)
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: Colors.grey.shade200),
-                      ),
-                      child: Column(
-                        children: [
-                          TextField(
-                            controller: _searchController,
-                            decoration: InputDecoration(
-                              hintText: 'Search by product, barcode, or reason',
-                              prefixIcon: const Icon(Icons.search),
-                              suffixIcon: _searchController.text.trim().isEmpty
-                                  ? null
-                                  : IconButton(
-                                      onPressed: () async {
-                                        _searchController.clear();
-                                        setState(() {});
-                                        await _loadHistory(showLoader: false);
-                                      },
-                                      icon: const Icon(Icons.close),
+                        child: Row(
+                          children: [
+                            IconButton(
+                              onPressed: () => Navigator.pop(context),
+                              icon: const Icon(Icons.arrow_back_rounded),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    widget.initialBarcode == null
+                                        ? 'Inventory History Workspace'
+                                        : 'Product History Workspace',
+                                    style: TextStyle(
+                                      color: _textPrimary,
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w900,
                                     ),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    widget.initialBarcode == null
+                                        ? 'Review stock movements, price changes, counts, sales, and refunds in one place.'
+                                        : 'Focused activity history for the selected product barcode.',
+                                    style: TextStyle(
+                                      color: _textSecondary,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              isDense: true,
                             ),
-                            onChanged: (_) => setState(() {}),
-                            onSubmitted: (_) => _loadHistory(showLoader: false),
+                            const SizedBox(width: 12),
+                            if (widget.initialBarcode != null)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                                decoration: BoxDecoration(
+                                  color: _brand.withOpacity(_isDark ? 0.18 : 0.12),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(color: _brand.withOpacity(0.28)),
+                                ),
+                                child: Text(
+                                  widget.initialBarcode!,
+                                  style: TextStyle(
+                                    color: _brand,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            const SizedBox(width: 10),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: _panelSoft,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: _border),
+                              ),
+                              child: IconButton(
+                                tooltip: 'Refresh history',
+                                onPressed: _isRefreshing ? null : _refresh,
+                                icon: _isRefreshing
+                                    ? SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: _brand,
+                                        ),
+                                      )
+                                    : Icon(Icons.refresh_rounded, color: _brand),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildSummaryCard(
+                              title: 'Total Records',
+                              value: totalMovements.toString(),
+                              accent: const Color(0xFF4B8DFF),
+                              icon: Icons.history_rounded,
+                            ),
                           ),
-                          const SizedBox(height: 12),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: FilledButton.icon(
-                              onPressed: () => _loadHistory(showLoader: false),
-                              icon: const Icon(Icons.search),
-                              label: const Text('Apply Search'),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildSummaryCard(
+                              title: 'Stock Records',
+                              value: stockMovements.toString(),
+                              accent: const Color(0xFF1FCF9A),
+                              icon: Icons.inventory_2_rounded,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildSummaryCard(
+                              title: 'Price Records',
+                              value: priceMovements.toString(),
+                              accent: const Color(0xFF8B5CF6),
+                              icon: Icons.sell_rounded,
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  const SizedBox(height: 16),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _buildFilterChip(label: 'All', filter: InventoryHistoryFilter.all),
-                      _buildFilterChip(label: 'Receives', filter: InventoryHistoryFilter.receives),
-                      _buildFilterChip(label: 'Adjustments', filter: InventoryHistoryFilter.adjustments),
-                      _buildFilterChip(label: 'Counts', filter: InventoryHistoryFilter.counts),
-                      _buildFilterChip(label: 'Sales', filter: InventoryHistoryFilter.sales),
-                      _buildFilterChip(label: 'Refunds', filter: InventoryHistoryFilter.refunds),
-                      _buildFilterChip(label: 'Price Changes', filter: InventoryHistoryFilter.priceChanges),
-                      _buildFilterChip(label: 'Min Stock', filter: InventoryHistoryFilter.minStock),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: _panel,
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(color: _border),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (widget.initialBarcode == null) ...[
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _searchController,
+                                      style: TextStyle(color: _textPrimary),
+                                      decoration: InputDecoration(
+                                        hintText: 'Search by product, barcode, or reason',
+                                        prefixIcon: const Icon(Icons.search_rounded),
+                                        suffixIcon: _searchController.text.trim().isEmpty
+                                            ? null
+                                            : IconButton(
+                                                onPressed: () async {
+                                                  _searchController.clear();
+                                                  setState(() {});
+                                                  await _loadHistory(showLoader: false);
+                                                },
+                                                icon: const Icon(Icons.close_rounded),
+                                              ),
+                                      ),
+                                      onChanged: (_) => setState(() {}),
+                                      onSubmitted: (_) => _loadHistory(showLoader: false),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  SizedBox(
+                                    height: 52,
+                                    child: ElevatedButton.icon(
+                                      onPressed: () => _loadHistory(showLoader: false),
+                                      icon: const Icon(Icons.search_rounded, size: 18),
+                                      label: const Text('Apply Search'),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
+                            ],
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                _buildFilterChip(label: 'All', filter: InventoryHistoryFilter.all),
+                                _buildFilterChip(label: 'Receives', filter: InventoryHistoryFilter.receives),
+                                _buildFilterChip(label: 'Adjustments', filter: InventoryHistoryFilter.adjustments),
+                                _buildFilterChip(label: 'Counts', filter: InventoryHistoryFilter.counts),
+                                _buildFilterChip(label: 'Sales', filter: InventoryHistoryFilter.sales),
+                                _buildFilterChip(label: 'Refunds', filter: InventoryHistoryFilter.refunds),
+                                _buildFilterChip(label: 'Price Changes', filter: InventoryHistoryFilter.priceChanges),
+                                _buildFilterChip(label: 'Min Stock', filter: InventoryHistoryFilter.minStock),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                              decoration: BoxDecoration(
+                                color: _panelSoft,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: _border),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.info_outline_rounded, color: _textSecondary, size: 18),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      widget.initialBarcode == null
+                                          ? 'Showing ${_movements.length} history records for the current search and filter.'
+                                          : 'Showing ${_movements.length} records for barcode ${widget.initialBarcode}.',
+                                      style: TextStyle(
+                                        color: _textSecondary,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: _panel,
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(color: _border),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  'History Records',
+                                  style: TextStyle(
+                                    color: _textPrimary,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const Spacer(),
+                                Text(
+                                  '${_movements.length} shown',
+                                  style: TextStyle(
+                                    color: _textSecondary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            if (_movements.isEmpty)
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(28),
+                                decoration: BoxDecoration(
+                                  color: _panelSoft,
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: _border),
+                                ),
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.history_toggle_off_rounded, color: _muted, size: 36),
+                                    const SizedBox(height: 10),
+                                    Text(
+                                      'No inventory history records match the current search or filter.',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: _textSecondary,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            else
+                              ..._movements.map(
+                                (movement) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: _buildMovementTile(movement),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.grey.shade200),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.info_outline, color: Colors.grey.shade700, size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            widget.initialBarcode == null
-                                ? 'Showing ${_movements.length} history records for the current filters.'
-                                : 'Showing ${_movements.length} records for barcode ${widget.initialBarcode}.',
-                            style: TextStyle(
-                              color: Colors.grey.shade800,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  if (_movements.isEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(28),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: Colors.grey.shade200),
-                      ),
-                      child: const Center(
-                        child: Text('No inventory history records match the current search or filter.'),
-                      ),
-                    )
-                  else
-                    ..._movements.map(
-                      (movement) => Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _buildMovementTile(movement),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+                ),
+        ),
+      ),
     );
   }
 }

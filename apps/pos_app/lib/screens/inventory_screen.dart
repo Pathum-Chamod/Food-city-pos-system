@@ -2752,6 +2752,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           unitCost: unitCost,
                           performedBy: changedBy,
                           reason: noteController.text.trim(),
+                          supplierId: supplier.id,
+                          supplierName: supplier.name,
                         );
 
                         if (!success) {
@@ -3053,17 +3055,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     if (!mounted) return null;
 
-    return _showInventoryPopup<PosSupplier>(
-      icon: Icons.link_outlined,
-      title: 'Select Supplier',
-      subtitle: '${product.name} • Choose the supplier you want to link to this product.',
-      maxWidth: 760,
-      maxHeightFactor: 0.82,
-      bodyBuilder: (dialogContext, setPopupState) {
+    return showModalBottomSheet<PosSupplier>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
         String localQuery = '';
-
         return StatefulBuilder(
-          builder: (context, setLocalState) {
+          builder: (context, setModalState) {
             final visibleSuppliers = suppliers.where((supplier) {
               if (localQuery.trim().isEmpty) return true;
               final q = localQuery.trim().toLowerCase();
@@ -3072,167 +3071,76 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   supplier.id.toString().contains(q);
             }).toList();
 
-            return SizedBox(
-              width: double.infinity,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    autofocus: true,
-                    decoration: InputDecoration(
-                      hintText: 'Search supplier by name or phone',
-                      prefixIcon: const Icon(Icons.search_rounded),
-                    ),
-                    onChanged: (value) {
-                      setLocalState(() {
-                        localQuery = value;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
+            return SafeArea(
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.72,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildPriceAvailabilityChip(
-                        '${visibleSuppliers.length} suppliers',
-                        _brandColor,
-                      ),
-                      if (localQuery.trim().isNotEmpty) ...[
-                        const SizedBox(width: 8),
-                        _buildPriceAvailabilityChip(
-                          'Filter: "${localQuery.trim()}"',
-                          _accentBlue,
+                      Text(
+                        'Select Supplier • ${product.name}',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
                         ),
-                      ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        autofocus: true,
+                        decoration: InputDecoration(
+                          hintText: 'Search supplier by name or phone',
+                          prefixIcon: const Icon(Icons.search),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          isDense: true,
+                        ),
+                        onChanged: (value) {
+                          setModalState(() {
+                            localQuery = value;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: visibleSuppliers.isEmpty
+                            ? const Center(
+                                child: Text('No matching suppliers found.'),
+                              )
+                            : ListView.separated(
+                                itemCount: visibleSuppliers.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 8),
+                                itemBuilder: (context, index) {
+                                  final supplier = visibleSuppliers[index];
+                                  return ListTile(
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      side: BorderSide(
+                                        color: Colors.grey.shade300,
+                                      ),
+                                    ),
+                                    title: Text(
+                                      supplier.name,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      supplier.phone.trim().isEmpty
+                                          ? 'Phone not available'
+                                          : 'Phone: ${supplier.phone.trim()}',
+                                    ),
+                                    onTap: () => Navigator.pop(context, supplier),
+                                  );
+                                },
+                              ),
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 14),
-                  Expanded(
-                    child: visibleSuppliers.isEmpty
-                        ? Container(
-                            width: double.infinity,
-                            decoration: _softDecoration(color: _panelSoft, radius: 20),
-                            child: Center(
-                              child: Padding(
-                                padding: const EdgeInsets.all(24),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 60,
-                                      height: 60,
-                                      decoration: BoxDecoration(
-                                        color: _panelAlt,
-                                        shape: BoxShape.circle,
-                                        border: Border.all(color: _borderColor),
-                                      ),
-                                      child: Icon(
-                                        Icons.search_off_rounded,
-                                        color: _textSecondary,
-                                        size: 28,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 14),
-                                    Text(
-                                      'No matching suppliers found',
-                                      style: TextStyle(
-                                        color: _textPrimary,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      'Try another search term or clear the current filter.',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        color: _textSecondary,
-                                        fontWeight: FontWeight.w600,
-                                        height: 1.4,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          )
-                        : ListView.separated(
-                            itemCount: visibleSuppliers.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 10),
-                            itemBuilder: (context, index) {
-                              final supplier = visibleSuppliers[index];
-                              final phone = supplier.phone.trim();
-                              return Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(18),
-                                  onTap: () => Navigator.pop(dialogContext, supplier),
-                                  child: Ink(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: _softDecoration(color: _panelSoft, radius: 18),
-                                    child: Row(
-                                      children: [
-                                        Container(
-                                          width: 44,
-                                          height: 44,
-                                          decoration: BoxDecoration(
-                                            color: _brandSoft,
-                                            borderRadius: BorderRadius.circular(14),
-                                          ),
-                                          child: Icon(
-                                            Icons.local_shipping_outlined,
-                                            color: _brandColor,
-                                            size: 22,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 14),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                supplier.name,
-                                                style: TextStyle(
-                                                  color: _textPrimary,
-                                                  fontWeight: FontWeight.w800,
-                                                  fontSize: 16,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                phone.isEmpty
-                                                    ? 'Phone not available'
-                                                    : 'Phone • $phone',
-                                                style: TextStyle(
-                                                  color: _textSecondary,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                          decoration: BoxDecoration(
-                                            color: _panelAlt,
-                                            borderRadius: BorderRadius.circular(12),
-                                            border: Border.all(color: _borderColor),
-                                          ),
-                                          child: Icon(
-                                            Icons.arrow_forward_rounded,
-                                            color: _textSecondary,
-                                            size: 18,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                  ),
-                ],
+                ),
               ),
             );
           },
