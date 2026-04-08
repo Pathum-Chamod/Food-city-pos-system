@@ -13,6 +13,7 @@ import '../providers/cart_provider.dart';
 import '../providers/app_theme_provider.dart';
 import '../services/card_terminal_service.dart';
 import '../services/database_helper.dart';
+import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
@@ -710,6 +711,44 @@ class _PosScreenState extends State<PosScreen> {
           );
         }
 
+        Future<void> saveTestPdf(StateSetter setState) async {
+          setState(() {
+            isBusy = true;
+          });
+
+          final response = await ReceiptPdfService.instance.saveReceiptPdf(
+            transactionId: 0,
+            cashierName: 'Hardware Test',
+            paymentMethod: 'cash',
+            items: const [
+              {
+                'name': 'Printer Test Item',
+                'qty': 1,
+                'unitPrice': 0.0,
+                'lineTotal': 0.0,
+              },
+            ],
+            subtotal: 0.0,
+            discountAmount: 0.0,
+            total: 0.0,
+            storeName: 'FOOD CITY',
+            storeAddress: 'Windows PDF Test',
+            storePhone: '',
+            footerNote: 'If you can read this, PDF receipt export works.',
+          );
+
+          if (!context.mounted) return;
+
+          setState(() {
+            isBusy = false;
+          });
+
+          _showInfoMessage(
+            response.message,
+            backgroundColor: response.isSuccess ? _successColor : _dangerColor,
+          );
+        }
+
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
@@ -895,10 +934,30 @@ class _PosScreenState extends State<PosScreen> {
                       if (printer.isConnected)
                         Align(
                           alignment: Alignment.centerLeft,
+                          child: Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: isBusy ? null : () => runTestPrint(setState),
+                                icon: const Icon(Icons.print),
+                                label: const Text('Print Test Slip'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: isBusy ? null : () => saveTestPdf(setState),
+                                icon: const Icon(Icons.picture_as_pdf_outlined),
+                                label: const Text('Save Test PDF'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (!printer.isConnected)
+                        Align(
+                          alignment: Alignment.centerLeft,
                           child: OutlinedButton.icon(
-                            onPressed: isBusy ? null : () => runTestPrint(setState),
-                            icon: const Icon(Icons.print),
-                            label: const Text('Print Test Slip'),
+                            onPressed: isBusy ? null : () => saveTestPdf(setState),
+                            icon: const Icon(Icons.picture_as_pdf_outlined),
+                            label: const Text('Save Test PDF'),
                           ),
                         ),
                       if (isBusy) ...[
@@ -1469,23 +1528,9 @@ class _PosScreenState extends State<PosScreen> {
     final discountAmount = cart.discountAmount;
     final displayTotal = cart.cartTotal;
     final itemsMap = cart.getCartItemsAsMap();
-    final receiptItems = itemsMap.map((item) {
-      final product = Map<String, dynamic>.from(item['product'] as Map);
-      return {
-        'name': (product['name'] ?? 'Item').toString(),
-        'qty': ((item['quantity'] as num?) ?? 0).toInt(),
-        'unitPrice': ((item['unit_price_used'] as num?) ?? 0).toDouble(),
-        'lineTotal': ((item['line_total'] as num?) ?? 0).toDouble(),
-      };
-    }).toList();
-
     String? paymentMethod;
     double? amountTendered;
     double? changeAmount;
-    String? approvalCode;
-    String? authCode;
-    String? cardLast4;
-    String? cardType;
 
     if (!isRefund) {
       final paymentResult = await showCheckoutPaymentDialog(
@@ -1502,10 +1547,6 @@ class _PosScreenState extends State<PosScreen> {
       paymentMethod = paymentResult['payment_method']?.toString();
       amountTendered = (paymentResult['amount_tendered'] as num?)?.toDouble();
       changeAmount = (paymentResult['change_amount'] as num?)?.toDouble();
-      approvalCode = paymentResult['approval_code']?.toString();
-      authCode = paymentResult['auth_code']?.toString();
-      cardLast4 = paymentResult['card_last4']?.toString();
-      cardType = paymentResult['card_type']?.toString();
     }
 
     setState(() {
@@ -1545,29 +1586,7 @@ class _PosScreenState extends State<PosScreen> {
 
       final printer = ReceiptPrinterService.instance;
       if (printer.isConnected) {
-        final printResponse = await printer.printReceipt(
-          transactionId: saleId,
-          cashierName: cashierName,
-          paymentMethod: paymentMethod ?? 'cash',
-          items: receiptItems,
-          subtotal: subtotal,
-          discountAmount: discountAmount,
-          total: displayTotal,
-          amountTendered: amountTendered,
-          changeAmount: changeAmount,
-          isRefund: isRefund,
-          approvalCode: approvalCode,
-          authCode: authCode,
-          cardLast4: cardLast4,
-          cardType: cardType,
-        );
-
-        if (!printResponse.isSuccess) {
-          _showInfoMessage(
-            printResponse.message,
-            backgroundColor: _warningColor,
-          );
-        }
+        await TransactionHistoryScreen.printReceiptForTransaction(context, saleId);
       }
 
       final action = await _showTransactionSuccessFlow(

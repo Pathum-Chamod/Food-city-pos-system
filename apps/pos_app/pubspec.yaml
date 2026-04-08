@@ -43,6 +43,7 @@ dependencies:
   connectivity_plus: ^7.0.0
   http: ^1.6.0
   file_picker: ^10.3.9
+  pdf: ^3.11.3
   csv: ^6.0.0
   shared_preferences: ^2.5.5
   flutter_libserialport: ^0.6.0
