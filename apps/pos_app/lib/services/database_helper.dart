@@ -36,7 +36,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 19,
+        version: 20,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -351,6 +351,8 @@ class DatabaseHelper {
         reference_id INTEGER,
         reference_type TEXT,
         performed_by TEXT,
+        supplier_id INTEGER,
+        supplier_name TEXT,
         created_at TEXT NOT NULL
       )
     ''');
@@ -895,6 +897,11 @@ class DatabaseHelper {
       );
     }
 
+    if (oldVersion < 20) {
+      await _addColumnIfMissing(db, 'inventory_movements', 'supplier_id', 'INTEGER');
+      await _addColumnIfMissing(db, 'inventory_movements', 'supplier_name', 'TEXT');
+    }
+
 
     if (oldVersion < 17) {
       await _createUserTables(db);
@@ -1199,6 +1206,8 @@ class DatabaseHelper {
     int? referenceId,
     String? referenceType,
     String? performedBy,
+    int? supplierId,
+    String? supplierName,
     String? createdAt,
   }) async {
     await executor.insert('inventory_movements', {
@@ -1215,6 +1224,8 @@ class DatabaseHelper {
       'reference_id': referenceId,
       'reference_type': referenceType,
       'performed_by': performedBy,
+      'supplier_id': supplierId,
+      'supplier_name': supplierName,
       'created_at': createdAt ?? DateTime.now().toIso8601String(),
     });
   }
@@ -4142,7 +4153,7 @@ class DatabaseHelper {
       orderBy: 'name COLLATE NOCASE ASC',
     );
 
-    return rows.map((row) => PosSupplier.fromMap(row)).toList();
+    return rows.map((row) => PosSupplier.fromMap(Map<String, dynamic>.from(row))).toList();
   }
 
   Future<List<PosSupplier>> getMappedSuppliersForProduct(String barcode) async {
@@ -4268,7 +4279,7 @@ class DatabaseHelper {
       limit: limit,
     );
 
-    return rows.map((row) => SupplierProductMapping.fromMap(row)).toList();
+    return rows.map((row) => SupplierProductMapping.fromMap(Map<String, dynamic>.from(row))).toList();
   }
 
   Future<List<SupplierProductMapping>> getMappingsForProduct(String barcode) async {
@@ -4279,7 +4290,7 @@ class DatabaseHelper {
       whereArgs: [barcode],
       orderBy: 'is_preferred DESC, supplier_name COLLATE NOCASE ASC',
     );
-    return rows.map((row) => SupplierProductMapping.fromMap(row)).toList();
+    return rows.map((row) => SupplierProductMapping.fromMap(Map<String, dynamic>.from(row))).toList();
   }
 
   Future<SupplierProductMapping?> getPreferredSupplierMapping(String barcode) async {
@@ -4293,7 +4304,7 @@ class DatabaseHelper {
     );
 
     if (rows.isEmpty) return null;
-    return SupplierProductMapping.fromMap(rows.first);
+    return SupplierProductMapping.fromMap(Map<String, dynamic>.from(rows.first));
   }
 
   Future<Map<String, dynamic>> getSupplierProductMappingSummary({int? supplierId}) async {
@@ -4355,7 +4366,7 @@ class DatabaseHelper {
       limit: limit,
     );
 
-    return rows.map((row) => StockReceiptRecord.fromMap(row)).toList();
+    return rows.map((row) => StockReceiptRecord.fromMap(Map<String, dynamic>.from(row))).toList();
   }
 
   Future<Map<String, dynamic>> getStockReceiptSummary({int? supplierId}) async {
@@ -4411,9 +4422,10 @@ class DatabaseHelper {
 
     final trimmedSearch = searchQuery.trim();
     if (trimmedSearch.isNotEmpty) {
-      clauses.add('(product_name LIKE ? OR barcode LIKE ? OR COALESCE(reason, \'\') LIKE ?)');
+      clauses.add("(product_name LIKE ? OR barcode LIKE ? OR COALESCE(reason, '') LIKE ? OR COALESCE(supplier_name, '') LIKE ?)");
       final pattern = '%$trimmedSearch%';
       args
+        ..add(pattern)
         ..add(pattern)
         ..add(pattern)
         ..add(pattern);
@@ -4427,7 +4439,62 @@ class DatabaseHelper {
       limit: limit,
     );
 
-    return rows.map((row) => Map<String, dynamic>.from(row)).toList();
+    final movements = rows.map((row) => Map<String, dynamic>.from(row)).toList();
+
+    for (final movement in movements) {
+      final actionType = (movement['action_type'] ?? '').toString();
+      final existingSupplier = (movement['supplier_name'] ?? '').toString().trim();
+      if (actionType != 'stock_receive' || existingSupplier.isNotEmpty) {
+        continue;
+      }
+
+      final movementBarcode = (movement['barcode'] ?? '').toString().trim();
+      final quantity = _parseInt(movement['quantity_change']).abs();
+      final createdAt = (movement['created_at'] ?? '').toString();
+      if (movementBarcode.isEmpty || quantity <= 0) continue;
+
+      List<Map<String, dynamic>> receiptRows = [];
+      try {
+        final raw = await db.rawQuery(
+          """
+          SELECT supplier_id, supplier_name, cost, reference_note, created_at
+          FROM stock_receipts
+          WHERE barcode = ?
+            AND quantity = ?
+            AND COALESCE(is_reversed, 0) = 0
+          ORDER BY ABS(julianday(created_at) - julianday(?)) ASC, id DESC
+          LIMIT 1
+          """,
+          [movementBarcode, quantity, createdAt],
+        );
+        receiptRows = raw.map((row) => Map<String, dynamic>.from(row)).toList();
+      } catch (_) {
+        final raw = await db.query(
+          'stock_receipts',
+          columns: ['supplier_id', 'supplier_name', 'cost', 'reference_note', 'created_at'],
+          where: 'barcode = ? AND quantity = ? AND COALESCE(is_reversed, 0) = 0',
+          whereArgs: [movementBarcode, quantity],
+          orderBy: 'created_at DESC, id DESC',
+          limit: 1,
+        );
+        receiptRows = raw.map((row) => Map<String, dynamic>.from(row)).toList();
+      }
+
+      if (receiptRows.isEmpty) continue;
+
+      final receipt = receiptRows.first;
+      movement['supplier_id'] = receipt['supplier_id'];
+      movement['supplier_name'] = (receipt['supplier_name'] ?? '').toString();
+      movement['supplier_cost'] = receipt['cost'];
+      if ((movement['reason'] ?? '').toString().trim().isEmpty) {
+        final note = (receipt['reference_note'] ?? '').toString().trim();
+        if (note.isNotEmpty) {
+          movement['reason'] = note;
+        }
+      }
+    }
+
+    return movements;
   }
 
   Future<bool> receiveStockLocal(
@@ -4436,6 +4503,8 @@ class DatabaseHelper {
     double? unitCost,
     String? performedBy,
     String? reason,
+    int? supplierId,
+    String? supplierName,
   }) async {
     if (barcode.trim().isEmpty || quantity <= 0) return false;
 
@@ -4488,6 +4557,8 @@ class DatabaseHelper {
           stockAfter: stockAfter,
           reason: reason,
           performedBy: performedBy,
+          supplierId: supplierId,
+          supplierName: supplierName?.trim().isEmpty == true ? null : supplierName?.trim(),
           createdAt: now,
         );
 
@@ -4497,6 +4568,8 @@ class DatabaseHelper {
           'unit_cost': unitCost,
           'reason': reason,
           'performed_by': performedBy,
+          'supplier_id': supplierId,
+          'supplier_name': supplierName,
           'updated_at': now,
           'branch': 'Hikkaduwa',
           'vendor': 'Alfasoft',
