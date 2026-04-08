@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../services/database_helper.dart';
+import '../services/receipt_pdf_service.dart';
+import '../services/receipt_printer_service.dart';
 import '../widgets/premium_dialog.dart';
 import 'refund_transaction_screen.dart';
 
@@ -57,6 +59,171 @@ class TransactionHistoryScreen extends StatefulWidget {
         await showReceiptDialogForTransaction(context, refundSaleId);
       }
     }
+
+    if (!context.mounted) return;
+
+    if (action == 'reprint') {
+      await printReceiptForTransaction(context, saleId);
+    }
+
+    if (!context.mounted) return;
+
+    if (action == 'pdf') {
+      await saveReceiptPdfForTransaction(context, saleId);
+    }
+  }
+
+  static Future<bool> printReceiptForTransaction(
+    BuildContext context,
+    int saleId,
+  ) async {
+    final printer = ReceiptPrinterService.instance;
+
+    if (!printer.isConnected) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Receipt printer is not selected. Open Hardware Setup first.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return false;
+    }
+
+    final summary = await DatabaseHelper.instance.getTransactionSummary(saleId);
+    final items = await DatabaseHelper.instance.getTransactionItems(saleId);
+
+    if (!context.mounted) return false;
+
+    if (summary == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Transaction not found.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return false;
+    }
+
+    final paymentMethod = (summary['payment_method'] ?? 'cash').toString();
+    final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
+    final subtotal =
+        ((summary['subtotal_amount'] as num?) ?? 0).toDouble().abs();
+    final discountAmount =
+        ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
+    final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
+    final amountTendered =
+        ((summary['amount_tendered'] as num?) ?? 0).toDouble();
+    final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
+    final isRefund =
+        (summary['transaction_type'] ?? 'sale').toString().toLowerCase() ==
+        'refund';
+
+    final receiptItems = items.map((item) {
+      final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
+      return {
+        'name': (item['product_name'] ?? 'Item').toString(),
+        'qty': ((item['quantity'] as num?) ?? 0).toInt(),
+        'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
+        'lineTotal': finalLineTotal,
+      };
+    }).toList();
+
+    final response = await printer.printReceipt(
+      transactionId: saleId,
+      cashierName: cashierName,
+      paymentMethod: paymentMethod,
+      items: receiptItems,
+      subtotal: subtotal,
+      discountAmount: discountAmount,
+      total: total,
+      amountTendered: paymentMethod.toLowerCase() == 'cash' ? amountTendered : null,
+      changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
+      isRefund: isRefund,
+    );
+
+    if (!context.mounted) return response.isSuccess;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(response.message),
+        backgroundColor: response.isSuccess ? Colors.green : Colors.orange,
+        duration: response.isSuccess
+            ? const Duration(seconds: 1)
+            : const Duration(seconds: 4),
+      ),
+    );
+
+    return response.isSuccess;
+  }
+
+  static Future<bool> saveReceiptPdfForTransaction(
+    BuildContext context,
+    int saleId,
+  ) async {
+    final summary = await DatabaseHelper.instance.getTransactionSummary(saleId);
+    final items = await DatabaseHelper.instance.getTransactionItems(saleId);
+
+    if (!context.mounted) return false;
+
+    if (summary == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Transaction not found.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return false;
+    }
+
+    final paymentMethod = (summary['payment_method'] ?? 'cash').toString();
+    final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
+    final subtotal =
+        ((summary['subtotal_amount'] as num?) ?? 0).toDouble().abs();
+    final discountAmount =
+        ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
+    final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
+    final amountTendered =
+        ((summary['amount_tendered'] as num?) ?? 0).toDouble();
+    final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
+    final isRefund =
+        (summary['transaction_type'] ?? 'sale').toString().toLowerCase() ==
+        'refund';
+
+    final receiptItems = items.map((item) {
+      final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
+      return {
+        'name': (item['product_name'] ?? 'Item').toString(),
+        'qty': ((item['quantity'] as num?) ?? 0).toInt(),
+        'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
+        'lineTotal': finalLineTotal,
+      };
+    }).toList();
+
+    final response = await ReceiptPdfService.instance.saveReceiptPdf(
+      transactionId: saleId,
+      cashierName: cashierName,
+      paymentMethod: paymentMethod,
+      items: receiptItems,
+      subtotal: subtotal,
+      discountAmount: discountAmount,
+      total: total,
+      amountTendered: paymentMethod.toLowerCase() == 'cash' ? amountTendered : null,
+      changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
+      isRefund: isRefund,
+    );
+
+    if (!context.mounted) return response.isSuccess;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(response.message),
+        backgroundColor: response.isSuccess ? Colors.green : Colors.orange,
+      ),
+    );
+
+    return response.isSuccess;
   }
 }
 
@@ -1180,6 +1347,22 @@ Future<String?> showTransactionReceiptDialog(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
                     child: Row(
                       children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => Navigator.pop(dialogContext, 'pdf'),
+                            icon: const Icon(Icons.picture_as_pdf_outlined),
+                            label: const Text('Save PDF'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => Navigator.pop(dialogContext, 'reprint'),
+                            icon: const Icon(Icons.print_outlined),
+                            label: const Text('Reprint'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
                         if (!isRefund)
                           Expanded(
                             child: OutlinedButton(
