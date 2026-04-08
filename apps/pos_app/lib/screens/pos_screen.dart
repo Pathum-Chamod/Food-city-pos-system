@@ -1387,14 +1387,49 @@ class _PosScreenState extends State<PosScreen> {
     await _runProtectedManagerAction(() async {
       final result = await showCartDiscountDialog(
         context,
-        subtotal: cart.subtotal,
+        subtotal: cart.discountedSubtotal,
         currentDiscountType: cart.discountType,
         currentDiscountValue: cart.discountValue,
+        title: 'Apply Cart Discount',
+        amountLabel: 'Discountable Total',
+        totalLabel: 'Cart Total',
       );
 
       if (!mounted || result == null) return;
 
       cart.setDiscount(
+        discountType: (result['discount_type'] ?? 'none').toString(),
+        discountValue: ((result['discount_value'] as num?) ?? 0).toDouble(),
+      );
+
+      _focusBarcodeField();
+    });
+  }
+
+  Future<void> _applyItemDiscount(CartProvider cart, CartItem item) async {
+    if (cart.isRefundMode) {
+      _showInfoMessage(
+        'Discounts are not available in refund mode.',
+        backgroundColor: _warningColor,
+      );
+      return;
+    }
+
+    await _runProtectedManagerAction(() async {
+      final result = await showCartDiscountDialog(
+        context,
+        subtotal: item.baseTotal,
+        currentDiscountType: item.discountType,
+        currentDiscountValue: item.discountValue,
+        title: 'Apply Item Discount',
+        amountLabel: 'Item Total',
+        totalLabel: 'Line Total',
+      );
+
+      if (!mounted || result == null) return;
+
+      cart.setItemDiscount(
+        item,
         discountType: (result['discount_type'] ?? 'none').toString(),
         discountValue: ((result['discount_value'] as num?) ?? 0).toDouble(),
       );
@@ -2278,13 +2313,29 @@ class _PosScreenState extends State<PosScreen> {
           (latestProduct ?? Product.fromMap(resolvedProductMap)).resolvePrice(
             ProductPriceTypeX.fromDb(priceTypeUsed),
           );
+      final baseLineTotal =
+          (item['base_line_total'] as num?)?.toDouble() ??
+          (resolvedUnitPrice * safeQuantity);
+      final itemDiscountType =
+          (item['item_discount_type'] ?? 'none').toString();
+      final itemDiscountValue =
+          ((item['item_discount_value'] as num?) ?? 0).toDouble();
+      final itemDiscountAmount =
+          ((item['item_discount_amount'] as num?) ?? 0).toDouble();
+      final resolvedLineTotal =
+          (item['line_total'] as num?)?.toDouble() ??
+          (baseLineTotal - itemDiscountAmount);
 
       return {
         'product': resolvedProductMap,
         'quantity': safeQuantity,
         'unit_price_used': resolvedUnitPrice,
         'price_type_used': priceTypeUsed,
-        'line_total': resolvedUnitPrice * safeQuantity,
+        'base_line_total': baseLineTotal,
+        'item_discount_type': itemDiscountType,
+        'item_discount_value': itemDiscountValue,
+        'item_discount_amount': itemDiscountAmount,
+        'line_total': resolvedLineTotal < 0 ? 0.0 : resolvedLineTotal,
       };
     }).toList();
   }
@@ -3583,6 +3634,19 @@ class _PosScreenState extends State<PosScreen> {
               ),
               const SizedBox(width: 6),
               IconButton(
+                tooltip: item.discountAmount > 0
+                    ? 'Edit item discount'
+                    : 'Discount this item',
+                onPressed: () => _applyItemDiscount(cart, item),
+                icon: Icon(
+                  Icons.discount_outlined,
+                  color: item.discountAmount > 0 ? _warningColor : _textSecondary,
+                  size: 16,
+                ),
+                constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+                padding: EdgeInsets.zero,
+              ),
+              IconButton(
                 tooltip: 'Remove item',
                 onPressed: () {
                   cart.removeItem(item.product.barcode);
@@ -3607,6 +3671,19 @@ class _PosScreenState extends State<PosScreen> {
               fontSize: 10.5,
             ),
           ),
+          if (item.discountAmount > 0) ...[
+            const SizedBox(height: 3),
+            Text(
+              item.discountType == 'percent'
+                  ? 'Discount: ${item.discountValue.toStringAsFixed(item.discountValue % 1 == 0 ? 0 : 2)}% (-Rs. ${item.discountAmount.toStringAsFixed(2)})'
+                  : 'Discount: Rs. ${item.discountValue.toStringAsFixed(2)} (-Rs. ${item.discountAmount.toStringAsFixed(2)})',
+              style: TextStyle(
+                color: _dangerColor,
+                fontWeight: FontWeight.w700,
+                fontSize: 9.8,
+              ),
+            ),
+          ],
           const SizedBox(height: 7),
           Row(
             children: [
@@ -3673,16 +3750,48 @@ class _PosScreenState extends State<PosScreen> {
                 ),
               ),
               const SizedBox(width: 6),
-              Text(
-                'Rs. ${item.total.toStringAsFixed(2)}',
-                style: TextStyle(
-                  color: _textPrimary,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 12.5,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (item.discountAmount > 0)
+                    Text(
+                      'Rs. ${item.baseTotal.toStringAsFixed(2)}',
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 10,
+                        decoration: TextDecoration.lineThrough,
+                      ),
+                    ),
+                  Text(
+                    'Rs. ${item.total.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      color: _textPrimary,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12.5,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
+          if (item.discountAmount > 0) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () {
+                  cart.clearItemDiscount(item);
+                  _focusBarcodeField();
+                },
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(0, 28),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                ),
+                child: const Text('Clear Item Discount'),
+              ),
+            ),
+          ],
         ],
       ),
     );

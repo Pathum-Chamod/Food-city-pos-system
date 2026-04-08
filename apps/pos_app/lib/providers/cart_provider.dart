@@ -6,15 +6,41 @@ class CartItem {
   int quantity;
   double unitPrice;
   ProductPriceType priceType;
+  String discountType;
+  double discountValue;
 
   CartItem({
     required this.product,
     required this.unitPrice,
     required this.priceType,
     this.quantity = 1,
+    this.discountType = 'none',
+    this.discountValue = 0.0,
   });
 
-  double get total => unitPrice * quantity;
+  double get baseTotal => unitPrice * quantity;
+
+  double get discountAmount {
+    if (baseTotal <= 0) return 0.0;
+
+    if (discountType == 'fixed') {
+      final safeValue = discountValue < 0 ? 0.0 : discountValue;
+      return safeValue > baseTotal ? baseTotal : safeValue;
+    }
+
+    if (discountType == 'percent') {
+      final safeValue = discountValue < 0 ? 0.0 : discountValue;
+      final capped = safeValue > 100 ? 100.0 : safeValue;
+      return baseTotal * (capped / 100);
+    }
+
+    return 0.0;
+  }
+
+  double get total {
+    final netTotal = baseTotal - discountAmount;
+    return netTotal < 0 ? 0 : netTotal;
+  }
 }
 
 class CartProvider with ChangeNotifier {
@@ -33,28 +59,42 @@ class CartProvider with ChangeNotifier {
   ProductPriceType get selectedPriceType => _selectedPriceType;
 
   double get subtotal {
-    return _items.fold(0.0, (sum, item) => sum + item.total);
+    return _items.fold(0.0, (sum, item) => sum + item.baseTotal);
   }
 
-  double get discountAmount {
-    if (_isRefundMode || subtotal <= 0) return 0.0;
+  double get itemDiscountAmount {
+    if (_isRefundMode) return 0.0;
+    return _items.fold(0.0, (sum, item) => sum + item.discountAmount);
+  }
+
+  double get discountedSubtotal {
+    final total = subtotal - itemDiscountAmount;
+    return total < 0 ? 0 : total;
+  }
+
+  double get cartLevelDiscountAmount {
+    if (_isRefundMode || discountedSubtotal <= 0) return 0.0;
 
     if (_discountType == 'fixed') {
       final safeValue = _discountValue < 0 ? 0.0 : _discountValue;
-      return safeValue > subtotal ? subtotal : safeValue;
+      return safeValue > discountedSubtotal ? discountedSubtotal : safeValue;
     }
 
     if (_discountType == 'percent') {
       final safeValue = _discountValue < 0 ? 0.0 : _discountValue;
       final capped = safeValue > 100 ? 100.0 : safeValue;
-      return subtotal * (capped / 100);
+      return discountedSubtotal * (capped / 100);
     }
 
     return 0.0;
   }
 
+  double get discountAmount {
+    return itemDiscountAmount + cartLevelDiscountAmount;
+  }
+
   double get cartTotal {
-    final total = subtotal - discountAmount;
+    final total = discountedSubtotal - cartLevelDiscountAmount;
     return total < 0 ? 0 : total;
   }
 
@@ -93,6 +133,30 @@ class CartProvider with ChangeNotifier {
 
     _discountType = _normalizeDiscountType(discountType);
     _discountValue = discountValue < 0 ? 0.0 : discountValue;
+    notifyListeners();
+  }
+
+  void setItemDiscount(
+    CartItem target, {
+    required String discountType,
+    required double discountValue,
+  }) {
+    if (_isRefundMode) return;
+
+    final index = _items.indexOf(target);
+    if (index == -1) return;
+
+    _items[index].discountType = _normalizeDiscountType(discountType);
+    _items[index].discountValue = discountValue < 0 ? 0.0 : discountValue;
+    notifyListeners();
+  }
+
+  void clearItemDiscount(CartItem target) {
+    final index = _items.indexOf(target);
+    if (index == -1) return;
+
+    _items[index].discountType = 'none';
+    _items[index].discountValue = 0.0;
     notifyListeners();
   }
 
@@ -221,6 +285,14 @@ class CartProvider with ChangeNotifier {
           quantity: quantity,
           unitPrice: unitPriceUsed,
           priceType: itemPriceType,
+          discountType: isRefundMode
+              ? 'none'
+              : _normalizeDiscountType(
+                  item['item_discount_type']?.toString() ?? 'none',
+                ),
+          discountValue: isRefundMode
+              ? 0.0
+              : ((item['item_discount_value'] as num?) ?? 0).toDouble(),
         ),
       );
     }
@@ -236,6 +308,10 @@ class CartProvider with ChangeNotifier {
             'quantity': item.quantity,
             'unit_price_used': item.unitPrice,
             'price_type_used': item.priceType.dbValue,
+            'base_line_total': item.baseTotal,
+            'item_discount_type': item.discountType,
+            'item_discount_value': item.discountValue,
+            'item_discount_amount': item.discountAmount,
             'line_total': item.total,
           },
         )

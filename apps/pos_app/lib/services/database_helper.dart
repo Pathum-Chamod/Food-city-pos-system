@@ -1780,22 +1780,79 @@ class DatabaseHelper {
         final resolvedSubtotal = _roundMoney(
           isRefund ? totalAmount.abs() : subtotalAmount.abs(),
         );
-
         final resolvedDiscountType = isRefund
             ? 'none'
             : _normalizeDiscountType(discountType);
         final resolvedDiscountValue = isRefund ? 0.0 : discountValue;
-        final resolvedDiscountAmount = isRefund
+        final preliminaryLineInputs = <Map<String, dynamic>>[];
+        double explicitItemDiscountTotal = 0.0;
+
+        for (final item in cartItems) {
+          final productMap = Map<String, dynamic>.from(item['product'] as Map);
+          final barcode = productMap['barcode']?.toString() ?? '';
+          final productName =
+              productMap['name']?.toString() ?? 'Unknown product';
+          final unitPrice = _resolveCartItemUnitPrice(item);
+          final priceTypeUsed = _resolveCartItemPriceType(item);
+          final costPriceSnapshot = _parseDouble(productMap['cost_price']);
+          final quantity = (item['quantity'] as num).toInt();
+          final computedBaseLineTotal = _roundMoney(unitPrice * quantity);
+          final baseLineTotal = _roundMoney(
+            ((item['base_line_total'] as num?) ?? computedBaseLineTotal)
+                .toDouble(),
+          );
+          final providedItemDiscount = ((item['item_discount_amount'] as num?) ?? 0)
+              .toDouble();
+          final providedLineTotal =
+              ((item['line_total'] as num?) ?? (baseLineTotal - providedItemDiscount))
+                  .toDouble();
+
+          final safeItemDiscount = providedItemDiscount < 0
+              ? 0.0
+              : (providedItemDiscount > baseLineTotal
+                    ? baseLineTotal
+                    : _roundMoney(providedItemDiscount));
+          final netLineTotal = _roundMoney(
+            providedLineTotal < 0
+                ? 0.0
+                : (providedLineTotal > baseLineTotal
+                      ? baseLineTotal
+                      : providedLineTotal),
+          );
+
+          explicitItemDiscountTotal = _roundMoney(
+            explicitItemDiscountTotal + safeItemDiscount,
+          );
+
+          preliminaryLineInputs.add({
+            'barcode': barcode,
+            'product_name': productName,
+            'unit_price': unitPrice,
+            'price_category_used': priceTypeUsed,
+            'cost_price_snapshot': costPriceSnapshot,
+            'quantity': quantity,
+            'base_line_total': baseLineTotal,
+            'explicit_item_discount_amount': safeItemDiscount,
+            'net_line_total_before_cart_discount': netLineTotal,
+          });
+        }
+
+        final fallbackDiscountAmount = isRefund
             ? 0.0
             : _calculateDiscountAmount(
-                subtotal: resolvedSubtotal,
+                subtotal: _roundMoney(resolvedSubtotal - explicitItemDiscountTotal),
                 discountType: resolvedDiscountType,
                 discountValue: resolvedDiscountValue,
               );
-
+        final resolvedDiscountAmount = isRefund
+            ? 0.0
+            : _roundMoney(
+                (discountAmount ?? (explicitItemDiscountTotal + fallbackDiscountAmount))
+                    .abs(),
+              );
         final resolvedFinalTotal = isRefund
             ? resolvedSubtotal
-            : _roundMoney(resolvedSubtotal - resolvedDiscountAmount);
+            : _roundMoney(totalAmount.abs());
 
         final signedTotal = isRefund ? -resolvedFinalTotal : resolvedFinalTotal;
         final signedSubtotal = isRefund ? -resolvedSubtotal : resolvedSubtotal;
@@ -1882,48 +1939,68 @@ class DatabaseHelper {
         });
 
         final saleItemInputs = <Map<String, dynamic>>[];
-        double remainingDiscountToAllocate = resolvedDiscountAmount;
+        double remainingCartDiscountToAllocate = _roundMoney(
+          resolvedDiscountAmount - explicitItemDiscountTotal,
+        );
+        if (remainingCartDiscountToAllocate < 0) {
+          remainingCartDiscountToAllocate = 0.0;
+        }
 
-        for (int i = 0; i < cartItems.length; i++) {
-          final item = cartItems[i];
-          final productMap = Map<String, dynamic>.from(item['product'] as Map);
-          final barcode = productMap['barcode']?.toString() ?? '';
-          final productName =
-              productMap['name']?.toString() ?? 'Unknown product';
-          final unitPrice = _resolveCartItemUnitPrice(item);
-          final priceTypeUsed = _resolveCartItemPriceType(item);
-          final costPriceSnapshot = _parseDouble(productMap['cost_price']);
-          final quantity = (item['quantity'] as num).toInt();
+        for (int i = 0; i < preliminaryLineInputs.length; i++) {
+          final item = preliminaryLineInputs[i];
+          final barcode = item['barcode'] as String;
+          final productName = item['product_name'] as String;
+          final unitPrice = item['unit_price'] as double;
+          final priceTypeUsed = (item['price_category_used'] ?? 'selling').toString();
+          final costPriceSnapshot =
+              (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
+          final quantity = item['quantity'] as int;
+          final baseLineTotal = item['base_line_total'] as double;
+          final explicitItemDiscount =
+              (item['explicit_item_discount_amount'] as num).toDouble();
+          final netLineTotalBeforeCartDiscount =
+              (item['net_line_total_before_cart_discount'] as num).toDouble();
 
-          final baseLineTotal = _roundMoney(unitPrice * quantity);
+          double cartLevelItemDiscount = 0.0;
 
-          double itemDiscount = 0.0;
-
-          if (!isRefund && resolvedDiscountAmount > 0) {
-            if (i == cartItems.length - 1) {
-              itemDiscount = remainingDiscountToAllocate;
+          if (!isRefund && remainingCartDiscountToAllocate > 0) {
+            if (i == preliminaryLineInputs.length - 1) {
+              cartLevelItemDiscount = remainingCartDiscountToAllocate;
             } else {
-              final share = resolvedSubtotal <= 0
+              final totalNetBeforeCartDiscount = _roundMoney(
+                preliminaryLineInputs.fold<double>(
+                  0.0,
+                  (sum, current) =>
+                      sum +
+                      ((current['net_line_total_before_cart_discount'] as num?) ?? 0)
+                          .toDouble(),
+                ),
+              );
+              final share = totalNetBeforeCartDiscount <= 0
                   ? 0.0
-                  : resolvedDiscountAmount * (baseLineTotal / resolvedSubtotal);
-              itemDiscount = _roundMoney(share);
+                  : remainingCartDiscountToAllocate *
+                      (netLineTotalBeforeCartDiscount / totalNetBeforeCartDiscount);
+              cartLevelItemDiscount = _roundMoney(share);
 
-              if (itemDiscount > remainingDiscountToAllocate) {
-                itemDiscount = remainingDiscountToAllocate;
+              if (cartLevelItemDiscount > remainingCartDiscountToAllocate) {
+                cartLevelItemDiscount = remainingCartDiscountToAllocate;
               }
             }
           }
 
-          itemDiscount = itemDiscount > baseLineTotal
-              ? baseLineTotal
-              : itemDiscount;
-          remainingDiscountToAllocate = _roundMoney(
-            remainingDiscountToAllocate - itemDiscount,
+          final itemDiscount = _roundMoney(
+            explicitItemDiscount + cartLevelItemDiscount,
+          );
+          final maxDiscount = baseLineTotal;
+          final safeItemDiscount =
+              itemDiscount > maxDiscount ? maxDiscount : itemDiscount;
+          remainingCartDiscountToAllocate = _roundMoney(
+            remainingCartDiscountToAllocate - cartLevelItemDiscount,
           );
 
           final finalLineTotal = isRefund
               ? -baseLineTotal
-              : _roundMoney(baseLineTotal - itemDiscount);
+              : _roundMoney(baseLineTotal - safeItemDiscount);
 
           saleItemInputs.add({
             'barcode': barcode,
@@ -1933,7 +2010,7 @@ class DatabaseHelper {
             'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': baseLineTotal,
-            'item_discount_amount': isRefund ? 0.0 : itemDiscount,
+            'item_discount_amount': isRefund ? 0.0 : safeItemDiscount,
             'line_total': finalLineTotal,
           });
         }
