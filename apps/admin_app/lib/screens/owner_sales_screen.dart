@@ -262,9 +262,12 @@ class _OwnerSalesScreenState extends State<OwnerSalesScreen> {
                       )
                     : Column(
                         children: topProducts
+                            .asMap()
+                            .entries
                             .map(
-                              (product) => _TopProductTile(
-                                row: product,
+                              (entry) => _TopProductTile(
+                                rank: entry.key + 1,
+                                row: entry.value,
                                 formatMoney: _formatMoney,
                               ),
                             )
@@ -283,9 +286,12 @@ class _OwnerSalesScreenState extends State<OwnerSalesScreen> {
                       )
                     : Column(
                         children: slowMovers
+                            .asMap()
+                            .entries
                             .map(
-                              (item) => _SlowMoverTile(
-                                row: item,
+                              (entry) => _SlowMoverTile(
+                                rank: entry.key + 1,
+                                row: entry.value,
                                 formatMoney: _formatMoney,
                               ),
                             )
@@ -1588,10 +1594,12 @@ class _CashierTile extends StatelessWidget {
 
 class _TopProductTile extends StatelessWidget {
   const _TopProductTile({
+    required this.rank,
     required this.row,
     required this.formatMoney,
   });
 
+  final int rank;
   final Map<String, dynamic> row;
   final String Function(num value) formatMoney;
 
@@ -1600,9 +1608,9 @@ class _TopProductTile extends StatelessWidget {
     final sales = ((row['net_sales_after_refunds'] ?? row['net_sales']) as num?)?.toDouble() ?? 0.0;
     final soldQty = ((row['sold_quantity'] ?? row['quantity_sold']) as num?)?.toInt() ?? 0;
     final refundedQty = (row['refunded_quantity'] as num?)?.toInt() ?? 0;
-    final qty = ((row['net_quantity_sold'] ?? row['quantity_sold']) as num?)?.toInt() ?? 0;
     final profit = ((row['estimated_profit'] ?? row['gross_profit']) as num?)?.toDouble() ?? 0.0;
     final margin = (row['margin_percent'] as num?)?.toDouble() ?? 0.0;
+    final productName = (row['product_name'] ?? 'Unknown').toString();
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -1613,43 +1621,137 @@ class _TopProductTile extends StatelessWidget {
         border: Border.all(color: const Color(0xFFE3E9F3)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const CircleAvatar(
-            backgroundColor: Color(0xFFE7F0FF),
-            child: Icon(Icons.star_outline, color: Color(0xFF0F3D91)),
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEAF1FF),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              '$rank',
+              style: const TextStyle(
+                color: Color(0xFF0F52BA),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  (row['product_name'] ?? 'Unknown').toString(),
-                  style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF172433)),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        productName,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF172433),
+                          fontSize: 15,
+                          height: 1.25,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          formatMoney(sales),
+                          style: const TextStyle(
+                            color: Color(0xFF147A5A),
+                            fontWeight: FontWeight.w900,
+                            fontSize: 17,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          'Net Sales',
+                          style: TextStyle(
+                            color: Color(0xFF667085),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 4,
+                  children: [
+                    _TopProductInlineStat(
+                      label: 'Sold',
+                      value: '$soldQty',
+                      valueColor: const Color(0xFF172433),
+                    ),
+                    if (refundedQty > 0)
+                      _TopProductInlineStat(
+                        label: 'Refunded',
+                        value: '$refundedQty',
+                        valueColor: const Color(0xFFD92D20),
+                      ),
+                    _TopProductInlineStat(
+                      label: 'Margin',
+                      value: '${margin.toStringAsFixed(1)}%',
+                      valueColor: const Color(0xFF0F52BA),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
                 Text(
-                  refundedQty > 0
-                      ? 'Sold $soldQty • Refunded $refundedQty • Margin ${margin.toStringAsFixed(1)}%'
-                      : 'Sold $qty • Margin ${margin.toStringAsFixed(1)}%',
-                  style: const TextStyle(color: Color(0xFF667085), fontWeight: FontWeight.w600),
+                  'Profit ${formatMoney(profit)}',
+                  style: const TextStyle(
+                    color: Color(0xFF667085),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
           ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                formatMoney(sales),
-                style: const TextStyle(color: Color(0xFF147A5A), fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Profit ${formatMoney(profit)}',
-                style: const TextStyle(color: Color(0xFF667085), fontWeight: FontWeight.w600),
-              ),
-            ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TopProductInlineStat extends StatelessWidget {
+  const _TopProductInlineStat({
+    required this.label,
+    required this.value,
+    required this.valueColor,
+  });
+
+  final String label;
+  final String value;
+  final Color valueColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return RichText(
+      text: TextSpan(
+        style: const TextStyle(
+          color: Color(0xFF667085),
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+        children: [
+          TextSpan(text: '$label '),
+          TextSpan(
+            text: value,
+            style: TextStyle(
+              color: valueColor,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ],
       ),
@@ -1690,10 +1792,12 @@ class _TagPill extends StatelessWidget {
 
 class _SlowMoverTile extends StatelessWidget {
   const _SlowMoverTile({
+    required this.rank,
     required this.row,
     required this.formatMoney,
   });
 
+  final int rank;
   final Map<String, dynamic> row;
   final String Function(num value) formatMoney;
 
@@ -1702,6 +1806,7 @@ class _SlowMoverTile extends StatelessWidget {
     final sold = (row['quantity_sold'] as num?)?.toInt() ?? 0;
     final stock = (row['stock'] as num?)?.toInt() ?? 0;
     final stockValue = (row['stock_value'] as num?)?.toDouble() ?? 0.0;
+    final productName = (row['product_name'] ?? 'Unknown').toString();
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -1712,31 +1817,87 @@ class _SlowMoverTile extends StatelessWidget {
         border: Border.all(color: const Color(0xFFE3E9F3)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const CircleAvatar(
-            backgroundColor: Color(0xFFFFF4D6),
-            child: Icon(Icons.inventory_outlined, color: Color(0xFFF79009)),
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF2DD),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              '$rank',
+              style: const TextStyle(
+                color: Color(0xFFB54708),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  (row['product_name'] ?? 'Unknown').toString(),
-                  style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF172433)),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        productName,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF172433),
+                          fontSize: 15,
+                          height: 1.25,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          formatMoney(stockValue),
+                          style: const TextStyle(
+                            color: Color(0xFFB54708),
+                            fontWeight: FontWeight.w900,
+                            fontSize: 17,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          'Stock Value',
+                          style: TextStyle(
+                            color: Color(0xFF667085),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Sold $sold • Stock $stock',
-                  style: const TextStyle(color: Color(0xFF667085), fontWeight: FontWeight.w600),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 4,
+                  children: [
+                    _TopProductInlineStat(
+                      label: 'Sold',
+                      value: '$sold',
+                      valueColor: const Color(0xFF172433),
+                    ),
+                    _TopProductInlineStat(
+                      label: 'Stock',
+                      value: '$stock',
+                      valueColor: const Color(0xFFB54708),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ),
-          Text(
-            formatMoney(stockValue),
-            style: const TextStyle(color: Color(0xFF9C5A00), fontWeight: FontWeight.w800),
           ),
         ],
       ),
