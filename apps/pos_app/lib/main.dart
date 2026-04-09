@@ -6,6 +6,7 @@ import 'providers/cart_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/app_theme_provider.dart';
 import 'screens/login_screen.dart';
+import 'widgets/app_snackbar.dart';
 
 void main() async {
   // Ensure Flutter bindings are initialized before calling native code
@@ -112,6 +113,7 @@ class PosApp extends StatelessWidget {
     return MaterialApp(
       title: 'Food City POS',
       debugShowCheckedModeBanner: false,
+      navigatorKey: AppSnackBar.navigatorKey,
       theme: _buildBaseTheme(Brightness.light),
       darkTheme: _buildBaseTheme(Brightness.dark),
       themeMode: appTheme.themeMode,

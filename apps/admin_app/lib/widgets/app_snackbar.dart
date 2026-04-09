@@ -29,7 +29,6 @@ class AppSnackBar {
     final bg =
         backgroundColor ??
         (isDark ? const Color(0xFF14243C) : const Color(0xFF14263B));
-    final fg = Colors.white;
 
     late final OverlayEntry entry;
     entry = OverlayEntry(
@@ -49,7 +48,7 @@ class AppSnackBar {
                 child: Material(
                   color: Colors.transparent,
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 680),
+                    constraints: const BoxConstraints(maxWidth: 640),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16,
@@ -68,12 +67,12 @@ class AppSnackBar {
                       ),
                       child: Text(
                         message,
-                        style: TextStyle(
-                          color: fg,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
                           fontWeight: FontWeight.w700,
                           fontSize: 14,
                         ),
-                        textAlign: TextAlign.center,
                       ),
                     ),
                   ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/admin_provider.dart';
+import '../widgets/app_snackbar.dart';
 
 class UsersActivityScreen extends StatefulWidget {
   const UsersActivityScreen({super.key});
@@ -52,14 +53,11 @@ class _UsersActivityScreenState extends State<UsersActivityScreen> {
 
   void _showSnack(String message, {bool isError = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: isError ? const Color(0xFFD92D20) : const Color(0xFF147A5A),
-        ),
-      );
+    AppSnackBar.show(
+      context,
+      message: message,
+      backgroundColor: isError ? const Color(0xFFD92D20) : const Color(0xFF147A5A),
+    );
   }
 
   String _formatDateTime(String raw) {
@@ -1002,11 +1000,10 @@ class _UserEditorSheetState extends State<_UserEditorSheet> {
     if (!mounted) return;
     setState(() => _isSaving = false);
     if (message != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: const Color(0xFFD92D20),
-        ),
+      AppSnackBar.show(
+        context,
+        message: message,
+        backgroundColor: const Color(0xFFD92D20),
       );
       return;
     }
@@ -1147,11 +1144,10 @@ class _PinResetSheetState extends State<_PinResetSheet> {
     if (!mounted) return;
     setState(() => _isSaving = false);
     if (message != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: const Color(0xFFD92D20),
-        ),
+      AppSnackBar.show(
+        context,
+        message: message,
+        backgroundColor: const Color(0xFFD92D20),
       );
       return;
     }

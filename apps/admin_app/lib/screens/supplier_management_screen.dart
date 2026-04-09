@@ -4,6 +4,7 @@ import 'package:shared/shared.dart';
 
 import '../models/supplier.dart';
 import '../providers/admin_provider.dart';
+import '../widgets/app_snackbar.dart';
 
 class SupplierManagementScreen extends StatefulWidget {
   const SupplierManagementScreen({super.key, required this.supplier});
@@ -182,11 +183,10 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                     ? null
                     : () async {
                         if (selectedBarcode == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Please select a product.'),
-                              backgroundColor: Colors.red,
-                            ),
+                          AppSnackBar.show(
+                            context,
+                            message: 'Please select a product.',
+                            backgroundColor: Colors.red,
                           );
                           return;
                         }
@@ -197,21 +197,19 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                             double.tryParse(costController.text.trim()) ?? -1;
 
                         if (qty <= 0) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Quantity must be greater than 0.'),
-                              backgroundColor: Colors.red,
-                            ),
+                          AppSnackBar.show(
+                            context,
+                            message: 'Quantity must be greater than 0.',
+                            backgroundColor: Colors.red,
                           );
                           return;
                         }
 
                         if (cost < 0) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Please enter a valid cost.'),
-                              backgroundColor: Colors.red,
-                            ),
+                          AppSnackBar.show(
+                            context,
+                            message: 'Please enter a valid cost.',
+                            backgroundColor: Colors.red,
                           );
                           return;
                         }
@@ -231,21 +229,19 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
 
                         if (success && dialogContext.mounted) {
                           Navigator.pop(dialogContext);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Stock added successfully!'),
-                              backgroundColor: Colors.green,
-                            ),
+                          AppSnackBar.show(
+                            context,
+                            message: 'Stock added successfully!',
+                            backgroundColor: Colors.green,
                           );
                         } else {
                           setDialogState(() {
                             isSubmitting = false;
                           });
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Failed to add stock.'),
-                              backgroundColor: Colors.red,
-                            ),
+                          AppSnackBar.show(
+                            context,
+                            message: 'Failed to add stock.',
+                            backgroundColor: Colors.red,
                           );
                         }
                       },

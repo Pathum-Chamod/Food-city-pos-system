@@ -5,6 +5,7 @@ import 'package:shared/shared.dart';
 import '../models/stock_adjustment_request.dart';
 import '../providers/admin_provider.dart';
 import '../services/stock_take_session_service.dart';
+import '../widgets/app_snackbar.dart';
 import 'stock_take_history_screen.dart';
 
 class StockTakeScreen extends StatefulWidget {
@@ -86,11 +87,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
           ..addAll(draft.countedQuantities);
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Restored draft: ${draft.sessionName}'),
-          backgroundColor: Colors.green,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Restored draft: ${draft.sessionName}',
+        backgroundColor: Colors.green,
       );
     } else {
       await _sessionService.clearDraft();
@@ -101,9 +101,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     if (_countedQuantities.isEmpty) {
       await _sessionService.clearDraft();
       if (showMessage && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No counts to save yet.')),
-        );
+        AppSnackBar.show(context, message: 'No counts to save yet.');
       }
       return;
     }
@@ -119,11 +117,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     await _sessionService.saveDraft(draft);
 
     if (showMessage && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Stock take draft saved.'),
-          backgroundColor: Colors.green,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Stock take draft saved.',
+        backgroundColor: Colors.green,
       );
     }
   }
@@ -173,11 +170,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     }
 
     if (matchedProduct == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Barcode not found.'),
-          backgroundColor: Colors.red,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'Barcode not found.',
+        backgroundColor: Colors.red,
       );
       _barcodeController.clear();
       return;
@@ -194,12 +190,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     _barcodeController.clear();
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Counted 1 x ${matchedProduct.name}'),
-        duration: const Duration(milliseconds: 900),
-      ),
-    );
+    AppSnackBar.show(context, message: 'Counted 1 x ${matchedProduct.name}');
   }
 
   Future<void> _showSetCountDialog(Product product) async {
@@ -241,11 +232,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
             onPressed: () {
               final qty = int.tryParse(controller.text.trim());
               if (qty == null || qty < 0) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Enter a valid quantity.'),
-                    backgroundColor: Colors.red,
-                  ),
+                AppSnackBar.show(
+                  context,
+                  message: 'Enter a valid quantity.',
+                  backgroundColor: Colors.red,
                 );
                 return;
               }
@@ -321,9 +311,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         .toList();
 
     if (discrepancies.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No discrepancies to apply.')),
-      );
+      AppSnackBar.show(context, message: 'No discrepancies to apply.');
       return;
     }
 
@@ -443,11 +431,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         ? 'Stock take applied for $successCount items.'
         : 'Applied $successCount items. Failed: ${failedProducts.length}';
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: failedProducts.isEmpty ? Colors.green : Colors.orange,
-      ),
+    AppSnackBar.show(
+      context,
+      message: message,
+      backgroundColor: failedProducts.isEmpty ? Colors.green : Colors.orange,
     );
   }
 

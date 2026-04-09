@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/admin_provider.dart';
+import '../widgets/app_snackbar.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -30,18 +31,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     setState(() => _isUpdatingBiometrics = false);
 
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            message ??
-                (value
-                    ? 'Biometric unlock is now enabled.'
-                    : 'Biometric unlock has been turned off.'),
-          ),
-        ),
-      );
+    AppSnackBar.show(
+      context,
+      message:
+          message ??
+          (value
+              ? 'Biometric unlock is now enabled.'
+              : 'Biometric unlock has been turned off.'),
+    );
   }
 
   Future<void> _handleBackupExport() async {
@@ -50,15 +47,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     setState(() => _isExporting = false);
 
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            message ?? 'Backup file created and opened in the share sheet.',
-          ),
-        ),
-      );
+    AppSnackBar.show(
+      context,
+      message: message ?? 'Backup file created and opened in the share sheet.',
+    );
   }
 
   Future<void> _handleLogout() async {
@@ -93,11 +85,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _isLoggingOut = false);
 
     Navigator.of(context).popUntil((route) => route.isFirst);
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(content: Text('Logged out successfully.')),
-      );
+    AppSnackBar.show(context, message: 'Logged out successfully.');
   }
 
   @override

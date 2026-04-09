@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/admin_provider.dart';
+import '../widgets/app_snackbar.dart';
 
 class BusinessInfoScreen extends StatefulWidget {
   const BusinessInfoScreen({super.key});
@@ -39,8 +40,9 @@ class _BusinessInfoScreenState extends State<BusinessInfoScreen> {
           builder: (context, setSheetState) {
             Future<void> submit() async {
               if (storeNameController.text.trim().isEmpty) {
-                ScaffoldMessenger.of(this.context).showSnackBar(
-                  const SnackBar(content: Text('Store name is required.')),
+                AppSnackBar.show(
+                  this.context,
+                  message: 'Store name is required.',
                 );
                 return;
               }
@@ -61,13 +63,12 @@ class _BusinessInfoScreenState extends State<BusinessInfoScreen> {
 
               if (message == null) {
                 Navigator.pop(sheetContext);
-                ScaffoldMessenger.of(this.context).showSnackBar(
-                  const SnackBar(content: Text('Business info updated.')),
+                AppSnackBar.show(
+                  this.context,
+                  message: 'Business info updated.',
                 );
               } else {
-                ScaffoldMessenger.of(this.context).showSnackBar(
-                  SnackBar(content: Text(message)),
-                );
+                AppSnackBar.show(this.context, message: message);
               }
             }
 

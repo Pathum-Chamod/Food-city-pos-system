@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
 import '../providers/admin_provider.dart';
+import '../widgets/app_snackbar.dart';
 import 'inventory_history_screen.dart';
 
 class OwnerAlertsScreen extends StatefulWidget {
@@ -243,13 +244,10 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
                       : () async {
                           final value = int.tryParse(controller.text.trim());
                           if (value == null || value < 0) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Enter a valid minimum stock level.',
-                                ),
-                                backgroundColor: Colors.red,
-                              ),
+                            AppSnackBar.show(
+                              context,
+                              message: 'Enter a valid minimum stock level.',
+                              backgroundColor: Colors.red,
                             );
                             return;
                           }
@@ -267,21 +265,19 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
 
                           if (success) {
                             Navigator.pop(dialogContext);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Minimum stock updated.'),
-                                backgroundColor: Colors.green,
-                              ),
+                            AppSnackBar.show(
+                              context,
+                              message: 'Minimum stock updated.',
+                              backgroundColor: Colors.green,
                             );
                           } else {
                             setDialogState(() {
                               isSaving = false;
                             });
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Failed to update minimum stock.'),
-                                backgroundColor: Colors.red,
-                              ),
+                            AppSnackBar.show(
+                              context,
+                              message: 'Failed to update minimum stock.',
+                              backgroundColor: Colors.red,
                             );
                           }
                         },

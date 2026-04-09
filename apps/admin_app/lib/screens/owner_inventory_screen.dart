@@ -4,6 +4,7 @@ import 'package:shared/shared.dart';
 
 import '../models/inventory_history_item.dart';
 import '../providers/admin_provider.dart';
+import '../widgets/app_snackbar.dart';
 import 'inventory_history_screen.dart';
 
 class OwnerInventoryScreen extends StatefulWidget {
@@ -436,11 +437,10 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
       onSave: (rawValue) async {
         final value = double.tryParse(rawValue.trim());
         if (value == null || value <= 0) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Enter a valid ${title.toLowerCase()}.'),
-              backgroundColor: Colors.red,
-            ),
+          AppSnackBar.show(
+            context,
+            message: 'Enter a valid ${title.toLowerCase()}.',
+            backgroundColor: Colors.red,
           );
           return false;
         }
@@ -454,20 +454,18 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
         if (!context.mounted) return false;
 
         if (updated) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('$title updated.'),
-              backgroundColor: Colors.green,
-            ),
+          AppSnackBar.show(
+            context,
+            message: '$title updated.',
+            backgroundColor: Colors.green,
           );
           return true;
         }
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to update ${title.toLowerCase()}.'),
-            backgroundColor: Colors.red,
-          ),
+        AppSnackBar.show(
+          context,
+          message: 'Failed to update ${title.toLowerCase()}.',
+          backgroundColor: Colors.red,
         );
         return false;
       },
@@ -493,11 +491,10 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
       onSave: (rawValue) async {
         final value = int.tryParse(rawValue.trim());
         if (value == null || value < 0) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Enter a valid minimum stock level.'),
-              backgroundColor: Colors.red,
-            ),
+          AppSnackBar.show(
+            context,
+            message: 'Enter a valid minimum stock level.',
+            backgroundColor: Colors.red,
           );
           return false;
         }
@@ -510,20 +507,18 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
         if (!context.mounted) return false;
 
         if (updated) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Minimum stock level updated.'),
-              backgroundColor: Colors.green,
-            ),
+          AppSnackBar.show(
+            context,
+            message: 'Minimum stock level updated.',
+            backgroundColor: Colors.green,
           );
           return true;
         }
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to update minimum stock level.'),
-            backgroundColor: Colors.red,
-          ),
+        AppSnackBar.show(
+          context,
+          message: 'Failed to update minimum stock level.',
+          backgroundColor: Colors.red,
         );
         return false;
       },

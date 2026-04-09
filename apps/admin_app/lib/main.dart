@@ -6,6 +6,7 @@ import 'screens/admin_login_screen.dart';
 import 'screens/owner_shell.dart';
 import 'screens/owner_welcome_screen.dart';
 import 'screens/owner_biometric_unlock_screen.dart';
+import 'widgets/app_snackbar.dart';
 
 void main() {
   runApp(
@@ -26,6 +27,7 @@ class AdminApp extends StatelessWidget {
     return MaterialApp(
       title: 'Store Admin',
       debugShowCheckedModeBanner: false,
+      navigatorKey: AppSnackBar.navigatorKey,
       theme: ThemeData(
         useMaterial3: true,
         colorSchemeSeed: Colors.blue,

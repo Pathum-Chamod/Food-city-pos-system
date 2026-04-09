@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/admin_provider.dart';
+import '../widgets/app_snackbar.dart';
 
 class OwnerBiometricUnlockScreen extends StatefulWidget {
   const OwnerBiometricUnlockScreen({super.key});
@@ -43,11 +44,7 @@ class _OwnerBiometricUnlockScreenState
     final message = await provider.unlockWithBiometrics();
     if (!mounted || message == null) return;
 
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(content: Text(message)),
-      );
+    AppSnackBar.show(context, message: message);
   }
 
   @override

@@ -4,6 +4,7 @@ import 'package:shared/shared.dart';
 
 import '../models/stock_adjustment_request.dart';
 import '../providers/admin_provider.dart';
+import '../widgets/app_snackbar.dart';
 import 'inventory_history_screen.dart';
 import 'stock_take_screen.dart';
 import 'supplier_management_screen.dart';
@@ -68,11 +69,10 @@ class _AdminHomeState extends State<AdminHome> {
                     .updateProductPrice(barcode, newPrice);
                 if (success && dialogContext.mounted) {
                   Navigator.pop(dialogContext);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Price updated in Cloud!'),
-                      backgroundColor: Colors.green,
-                    ),
+                  AppSnackBar.show(
+                    context,
+                    message: 'Price updated in Cloud!',
+                    backgroundColor: Colors.green,
                   );
                 }
               }
@@ -350,43 +350,37 @@ class _AdminHomeState extends State<AdminHome> {
                   final reason = reasonController.text.trim();
 
                   if (qty < 0) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Please enter a valid quantity.'),
-                        backgroundColor: Colors.red,
-                      ),
+                    AppSnackBar.show(
+                      context,
+                      message: 'Please enter a valid quantity.',
+                      backgroundColor: Colors.red,
                     );
                     return;
                   }
 
                   if (adjustmentType != 'set_exact' && qty == 0) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Quantity must be greater than 0.'),
-                        backgroundColor: Colors.red,
-                      ),
+                    AppSnackBar.show(
+                      context,
+                      message: 'Quantity must be greater than 0.',
+                      backgroundColor: Colors.red,
                     );
                     return;
                   }
 
                   if (adjustmentType == 'decrease' && qty > product.stock) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Cannot reduce more than current stock.'),
-                        backgroundColor: Colors.red,
-                      ),
+                    AppSnackBar.show(
+                      context,
+                      message: 'Cannot reduce more than current stock.',
+                      backgroundColor: Colors.red,
                     );
                     return;
                   }
 
                   if (reason.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Please enter a reason for this adjustment.',
-                        ),
-                        backgroundColor: Colors.red,
-                      ),
+                    AppSnackBar.show(
+                      context,
+                      message: 'Please enter a reason for this adjustment.',
+                      backgroundColor: Colors.red,
                     );
                     return;
                   }
@@ -452,20 +446,16 @@ class _AdminHomeState extends State<AdminHome> {
                                         ? 'Stock decreased successfully.'
                                         : 'Exact stock updated successfully.';
 
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(message),
-                                    backgroundColor: Colors.green,
-                                  ),
+                                AppSnackBar.show(
+                                  context,
+                                  message: message,
+                                  backgroundColor: Colors.green,
                                 );
                               } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Failed to save stock adjustment.',
-                                    ),
-                                    backgroundColor: Colors.red,
-                                  ),
+                                AppSnackBar.show(
+                                  context,
+                                  message: 'Failed to save stock adjustment.',
+                                  backgroundColor: Colors.red,
                                 );
                               }
                             },
@@ -630,11 +620,10 @@ class _AdminHomeState extends State<AdminHome> {
                     ? null
                     : () async {
                         if (selectedBarcode == null) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Please select a product.'),
-                              backgroundColor: Colors.red,
-                            ),
+                          AppSnackBar.show(
+                            context,
+                            message: 'Please select a product.',
+                            backgroundColor: Colors.red,
                           );
                           return;
                         }
@@ -645,21 +634,19 @@ class _AdminHomeState extends State<AdminHome> {
                             double.tryParse(costController.text.trim()) ?? -1;
 
                         if (qty <= 0) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Quantity must be greater than 0.'),
-                              backgroundColor: Colors.red,
-                            ),
+                          AppSnackBar.show(
+                            context,
+                            message: 'Quantity must be greater than 0.',
+                            backgroundColor: Colors.red,
                           );
                           return;
                         }
 
                         if (cost < 0) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Please enter a valid cost.'),
-                              backgroundColor: Colors.red,
-                            ),
+                          AppSnackBar.show(
+                            context,
+                            message: 'Please enter a valid cost.',
+                            backgroundColor: Colors.red,
                           );
                           return;
                         }
@@ -681,21 +668,19 @@ class _AdminHomeState extends State<AdminHome> {
 
                         if (success && dialogContext.mounted) {
                           Navigator.pop(dialogContext);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Stock added successfully!'),
-                              backgroundColor: Colors.green,
-                            ),
+                          AppSnackBar.show(
+                            context,
+                            message: 'Stock added successfully!',
+                            backgroundColor: Colors.green,
                           );
                         } else {
                           setDialogState(() {
                             isSubmitting = false;
                           });
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Failed to add stock.'),
-                              backgroundColor: Colors.red,
-                            ),
+                          AppSnackBar.show(
+                            context,
+                            message: 'Failed to add stock.',
+                            backgroundColor: Colors.red,
                           );
                         }
                       },
@@ -724,11 +709,10 @@ class _AdminHomeState extends State<AdminHome> {
     final suppliers = context.read<AdminProvider>().suppliers;
 
     if (suppliers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No suppliers available.'),
-          backgroundColor: Colors.red,
-        ),
+      AppSnackBar.show(
+        context,
+        message: 'No suppliers available.',
+        backgroundColor: Colors.red,
       );
       return;
     }
