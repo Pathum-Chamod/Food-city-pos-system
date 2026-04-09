@@ -368,7 +368,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                         ),
                         const SizedBox(height: 14),
                         DropdownButtonFormField<String>(
-                          value: role,
+                          initialValue: role,
                           items: const [
                             DropdownMenuItem(value: 'manager', child: Text('Manager')),
                             DropdownMenuItem(value: 'cashier', child: Text('Cashier')),
@@ -1275,7 +1275,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           return SizedBox(
             width: width,
             child: DropdownButtonFormField<String>(
-              value: _userRoleFilter,
+              initialValue: _userRoleFilter,
               decoration: _fieldDecoration(
                 hintText: 'All Roles',
                 labelText: 'Role',
@@ -1300,7 +1300,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           return SizedBox(
             width: width,
             child: DropdownButtonFormField<String>(
-              value: _userStatusFilter,
+              initialValue: _userStatusFilter,
               decoration: _fieldDecoration(
                 hintText: 'All Status',
                 labelText: 'Status',
@@ -1471,7 +1471,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               return SizedBox(
                 width: width,
                 child: DropdownButtonFormField<String>(
-                  value: _logFilter,
+                  initialValue: _logFilter,
                   decoration: _fieldDecoration(
                     hintText: 'All Activity',
                     labelText: 'History Type',

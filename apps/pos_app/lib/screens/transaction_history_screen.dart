@@ -381,7 +381,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       '${dt.month}${dt.day}$yyyy',
       '${dt.day}$mm$yyyy',
       '${dt.month}$dd$yyyy',
-      '${_formatDateTime(raw).toLowerCase()}',
+      (_formatDateTime(raw).toLowerCase()),
     };
 
     if (searchableForms.any((value) => value.contains(normalizedQuery))) {

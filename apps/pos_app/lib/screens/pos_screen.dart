@@ -484,21 +484,21 @@ class _PosScreenState extends State<PosScreen> {
         ),
       ),
       switchTheme: SwitchThemeData(
-        thumbColor: MaterialStateProperty.resolveWith((states) {
-          if (states.contains(MaterialState.selected)) {
+        thumbColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
             return Colors.white;
           }
           return _textSecondary;
         }),
-        trackColor: MaterialStateProperty.resolveWith((states) {
-          if (states.contains(MaterialState.selected)) {
+        trackColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
             return _dangerColor;
           }
           return _borderColor;
         }),
       ),
       scrollbarTheme: ScrollbarThemeData(
-        thumbColor: MaterialStatePropertyAll(_borderColor),
+        thumbColor: WidgetStatePropertyAll(_borderColor),
         radius: const Radius.circular(999),
       ),
     );
@@ -1282,10 +1282,10 @@ class _PosScreenState extends State<PosScreen> {
                     Expanded(
                       child: ElevatedButton(
                         onPressed: () => Navigator.pop(dialogContext, true),
-                        child: const Text('Apply'),
                         style: ElevatedButton.styleFrom(
                           minimumSize: const Size.fromHeight(52),
                         ),
+                        child: const Text('Apply'),
                       ),
                     ),
                   ],

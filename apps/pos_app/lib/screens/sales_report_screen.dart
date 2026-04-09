@@ -1351,8 +1351,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                                                 onEnter: (_) => setState(() => _hoveredBarIndex = i),
                                                 onExit: (_) {
                                                   setState(() {
-                                                    if (_hoveredBarIndex == i)
+                                                    if (_hoveredBarIndex == i) {
                                                       _hoveredBarIndex = null;
+                                                    }
                                                   });
                                                 },
                                                 child: GestureDetector(
