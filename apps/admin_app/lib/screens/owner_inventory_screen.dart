@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/inventory_history_item.dart';
 import '../providers/admin_provider.dart';
@@ -132,6 +133,7 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
     final saleController = TextEditingController(
       text: (product.salePrice ?? 0).toStringAsFixed(2),
     );
+    final supplierInfo = await provider.fetchProductSupplierContact(product.barcode);
 
     await showModalBottomSheet<void>(
       context: context,
@@ -140,6 +142,9 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
       backgroundColor: Colors.white,
       builder: (sheetContext) {
         final threshold = product.minStockLevel > 0 ? product.minStockLevel : 10;
+        final supplierName = (supplierInfo['supplier_name'] ?? '').toString().trim();
+        final supplierPhone = (supplierInfo['supplier_phone'] ?? '').toString().trim();
+        final hasSupplierInfo = supplierName.isNotEmpty || supplierPhone.isNotEmpty;
         final statusColor = product.stock <= 0
             ? const Color(0xFFD92D20)
             : product.stock <= threshold
@@ -179,6 +184,16 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
                     fontWeight: FontWeight.w500,
                   ),
                 ),
+                if (supplierName.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Supplier: $supplierName',
+                    style: const TextStyle(
+                      color: Color(0xFF667085),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 14),
                 Wrap(
                   spacing: 8,
@@ -408,12 +423,185 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
                     }
                   },
                 ),
+                if (hasSupplierInfo)
+                  _ActionTile(
+                    icon: Icons.local_shipping_outlined,
+                    color: const Color(0xFF0F3D91),
+                    title: 'View Supplier Info',
+                    subtitle: 'See supplier name and telephone number',
+                    onTap: () => _showSupplierInfoSheet(
+                      context,
+                      supplierName: supplierName,
+                      supplierPhone: supplierPhone,
+                    ),
+                  ),
               ],
             ),
           ),
         );
       },
     );
+  }
+
+  Future<void> _showSupplierInfoSheet(
+    BuildContext context, {
+    required String supplierName,
+    required String supplierPhone,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return Container(
+          margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: const Color(0xFFE7ECF3)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: const Color(0xFFE7F0FF),
+                    child: const Icon(
+                      Icons.local_shipping_outlined,
+                      color: Color(0xFF0F3D91),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Supplier Info',
+                          style: TextStyle(
+                            color: Color(0xFF172433),
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'Relevant supplier for this product.',
+                          style: TextStyle(
+                            color: Color(0xFF667085),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFD),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFFE7ECF3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Supplier Name',
+                      style: TextStyle(
+                        color: Color(0xFF667085),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      supplierName.isEmpty ? 'Not available' : supplierName,
+                      style: const TextStyle(
+                        color: Color(0xFF172433),
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Telephone Number',
+                      style: TextStyle(
+                        color: Color(0xFF667085),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    if (supplierPhone.isNotEmpty)
+                      InkWell(
+                        onTap: () => _callSupplier(context, supplierPhone),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Ink(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE7F0FF),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.call_rounded, color: Color(0xFF0F3D91), size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  supplierPhone,
+                                  style: const TextStyle(
+                                    color: Color(0xFF0F3D91),
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              const Text(
+                                'Call',
+                                style: TextStyle(
+                                  color: Color(0xFF0F3D91),
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      const Text(
+                        'Not available',
+                        style: TextStyle(
+                          color: Color(0xFF172433),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _callSupplier(BuildContext context, String phone) async {
+    final uri = Uri(scheme: 'tel', path: phone);
+    final opened = await launchUrl(uri);
+    if (!opened && context.mounted) {
+      AppSnackBar.show(
+        context,
+        message: 'Unable to open the phone dialer.',
+        backgroundColor: Colors.red,
+      );
+    }
   }
 
   Future<bool> _showPriceEditor({
@@ -743,25 +931,42 @@ class _HeaderCard extends StatelessWidget {
         ),
         borderRadius: BorderRadius.circular(22),
       ),
-      child: const Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(Icons.inventory_2_outlined, color: Colors.white, size: 30),
-          SizedBox(height: 12),
-          Text(
-            'Inventory',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: Color(0x1FFFFFFF),
+              borderRadius: BorderRadius.all(Radius.circular(16)),
+            ),
+            child: Padding(
+              padding: EdgeInsets.all(14),
+              child: Icon(Icons.inventory_2_outlined, color: Colors.white, size: 28),
             ),
           ),
-          SizedBox(height: 4),
-          Text(
-            'Quick product check for the owner.',
-            style: TextStyle(
-              color: Colors.white70,
-              fontWeight: FontWeight.w500,
+          SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Inventory',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Quick product check for the owner.',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

@@ -34,6 +34,7 @@ class AdminProvider with ChangeNotifier {
   List<dynamic> _cashierBreakdown = [];
 
   List<Supplier> _suppliers = [];
+  final Map<String, Map<String, dynamic>> _productSupplierContacts = {};
 
   bool _isOwnerShellLoading = false;
   Map<String, dynamic> _ownerDashboardSummary = {};
@@ -70,6 +71,8 @@ class AdminProvider with ChangeNotifier {
   double get todayTotalSales => _todayTotalSales;
   List<dynamic> get cashierBreakdown => _cashierBreakdown;
   List<Supplier> get suppliers => _suppliers;
+  Map<String, dynamic> supplierContactForBarcode(String barcode) =>
+      Map<String, dynamic>.from(_productSupplierContacts[barcode] ?? const <String, dynamic>{});
 
   bool get isOwnerShellLoading => _isOwnerShellLoading;
   Map<String, dynamic> get ownerDashboardSummary => _ownerDashboardSummary;
@@ -492,6 +495,7 @@ class AdminProvider with ChangeNotifier {
 
   Future<void> fetchProducts() async {
     _isLoading = true;
+    _productSupplierContacts.clear();
     notifyListeners();
 
     try {
@@ -558,6 +562,45 @@ class AdminProvider with ChangeNotifier {
     _ownerSalesTrend = [];
     _ownerTopProducts = [];
     notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> fetchProductSupplierContact(String barcode) async {
+    final normalized = barcode.trim();
+    if (normalized.isEmpty) return const {};
+
+    final cached = _productSupplierContacts[normalized];
+    if (cached != null && cached.isNotEmpty) {
+      return Map<String, dynamic>.from(cached);
+    }
+
+    try {
+      final response = await http.get(
+        Uri.parse('$apiUrl?action=get_product_supplier_contact&barcode=$normalized'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['status'] == 'success') {
+          final contact = Map<String, dynamic>.from(
+            (data['contact'] as Map?) ?? const <String, dynamic>{},
+          );
+          final hasVisibleDetails =
+              (contact['supplier_name'] ?? '').toString().trim().isNotEmpty ||
+              (contact['supplier_phone'] ?? '').toString().trim().isNotEmpty;
+          if (hasVisibleDetails) {
+            _productSupplierContacts[normalized] = contact;
+          } else {
+            _productSupplierContacts.remove(normalized);
+          }
+          return Map<String, dynamic>.from(contact);
+        }
+      }
+    } catch (e) {
+      debugPrint('Product supplier contact fetch error: $e');
+    }
+
+    _productSupplierContacts.remove(normalized);
+    return const {};
   }
 
   Future<void> _syncDashboardTopProductsFromSalesReport() async {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/admin_provider.dart';
 import '../widgets/app_snackbar.dart';
@@ -101,9 +102,6 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
                 ...filteredUrgent.map(
                   (alert) => _AlertCard(
                     alert: alert,
-                    onOpenHistory: () => _openAlertTarget(context, provider, alert),
-                    onUpdateMinStock: () =>
-                        _showMinStockDialog(context, provider, alert),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -114,9 +112,6 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
                 ...filteredAttention.map(
                   (alert) => _AlertCard(
                     alert: alert,
-                    onOpenHistory: () => _openAlertTarget(context, provider, alert),
-                    onUpdateMinStock: () =>
-                        _showMinStockDialog(context, provider, alert),
                   ),
                 ),
               ],
@@ -521,13 +516,9 @@ class _SectionTitle extends StatelessWidget {
 class _AlertCard extends StatelessWidget {
   const _AlertCard({
     required this.alert,
-    required this.onOpenHistory,
-    required this.onUpdateMinStock,
   });
 
   final Map<String, dynamic> alert;
-  final VoidCallback onOpenHistory;
-  final VoidCallback onUpdateMinStock;
 
   Color get _accent {
     switch ((alert['severity'] ?? '').toString()) {
@@ -570,7 +561,9 @@ class _AlertCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final title = (alert['title'] ?? '').toString();
     final subtitle = (alert['subtitle'] ?? '').toString();
-    final hasTarget = (alert['barcode'] ?? '').toString().isNotEmpty;
+    final supplierName = (alert['supplier_name'] ?? '').toString().trim();
+    final supplierPhone = (alert['supplier_phone'] ?? '').toString().trim();
+    final hasSupplierDetails = supplierName.isNotEmpty || supplierPhone.isNotEmpty;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -640,53 +633,197 @@ class _AlertCard extends StatelessWidget {
                               fontWeight: FontWeight.w500,
                             ),
                           ),
+                          if (hasSupplierDetails) ...[
+                            const SizedBox(height: 10),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: OutlinedButton.icon(
+                                onPressed: () => _showSupplierInfoSheet(
+                                  context,
+                                  supplierName: supplierName,
+                                  supplierPhone: supplierPhone,
+                                ),
+                                icon: const Icon(Icons.local_shipping_outlined, size: 18),
+                                label: const Text('View Supplier Info'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: _accent,
+                                  side: BorderSide(color: _accent.withOpacity(0.25)),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
                   ],
                 ),
-                if (hasTarget) ...[
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onOpenHistory,
-                          icon: const Icon(Icons.history),
-                          label: const Text('History'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFF182B6B),
-                            side: const BorderSide(color: Color(0xFFD6DEEB)),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: onUpdateMinStock,
-                          icon: const Icon(Icons.tune, size: 18),
-                          label: const Text('Min Stock'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: _accent,
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Future<void> _callSupplier(BuildContext context, String phone) async {
+    final uri = Uri(scheme: 'tel', path: phone);
+    final opened = await launchUrl(uri);
+    if (!opened && context.mounted) {
+      AppSnackBar.show(
+        context,
+        message: 'Unable to open the phone dialer.',
+        backgroundColor: Colors.red,
+      );
+    }
+  }
+
+  Future<void> _showSupplierInfoSheet(
+    BuildContext context, {
+    required String supplierName,
+    required String supplierPhone,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return Container(
+          margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: const Color(0xFFE7ECF3)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: _accent.withOpacity(0.12),
+                    child: Icon(Icons.local_shipping_outlined, color: _accent),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Supplier Info',
+                          style: TextStyle(
+                            color: Color(0xFF172433),
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'Relevant supplier for this alert item.',
+                          style: TextStyle(
+                            color: Color(0xFF667085),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFD),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFFE7ECF3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Supplier Name',
+                      style: TextStyle(
+                        color: Color(0xFF667085),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      supplierName.isEmpty ? 'Not available' : supplierName,
+                      style: const TextStyle(
+                        color: Color(0xFF172433),
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Phone Number',
+                      style: TextStyle(
+                        color: Color(0xFF667085),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    if (supplierPhone.isNotEmpty)
+                      InkWell(
+                        onTap: () => _callSupplier(context, supplierPhone),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Ink(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: _accent.withOpacity(0.10),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.call_rounded, color: _accent, size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  supplierPhone,
+                                  style: TextStyle(
+                                    color: _accent,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                'Call',
+                                style: TextStyle(
+                                  color: _accent,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      const Text(
+                        'Not available',
+                        style: TextStyle(
+                          color: Color(0xFF172433),
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -508,6 +508,8 @@ def update_stock_receive(
     stock_before = parse_int(row["stock"], 0)
     stock_after = stock_before + quantity
 
+    supplier_id = parse_int(supplier_id, 0)
+
     cursor.execute(
         f"""
         INSERT INTO stock_receipts (
@@ -519,9 +521,16 @@ def update_stock_receive(
         )
         VALUES (?, ?, ?, ?, {now_sql()})
         """,
-        (barcode, quantity, parse_int(supplier_id, 0), cost),
+        (barcode, quantity, supplier_id, cost),
     )
     receipt_id = cursor.lastrowid
+
+    if supplier_id > 0:
+        _upsert_supplier_product_mapping(
+            cursor,
+            barcode=barcode,
+            supplier_id=supplier_id,
+        )
 
     if cost > 0:
         cursor.execute(
@@ -1215,6 +1224,10 @@ def _build_owner_alerts(cursor):
     low_stock = sorted(low_stock, key=lambda item: item["stock"])
 
     for product in out_of_stock[:6]:
+        supplier_contact = _latest_supplier_contact_for_barcode(
+            cursor,
+            str(product["barcode"]),
+        )
         alerts.append(
             {
                 "type": "out_of_stock",
@@ -1222,6 +1235,7 @@ def _build_owner_alerts(cursor):
                 "title": f"{product['name']} is out of stock",
                 "subtitle": f"Barcode {product['barcode']} • stock 0",
                 "barcode": product["barcode"],
+                **supplier_contact,
             }
         )
 
@@ -1239,6 +1253,10 @@ def _build_owner_alerts(cursor):
             best_seller_risk.append((seller, product))
 
     for seller, product in best_seller_risk[:4]:
+        supplier_contact = _latest_supplier_contact_for_barcode(
+            cursor,
+            str(product["barcode"]),
+        )
         alerts.append(
             {
                 "type": "best_seller_low_stock",
@@ -1246,6 +1264,7 @@ def _build_owner_alerts(cursor):
                 "title": f"Best seller low in stock: {product['name']}",
                 "subtitle": f"Sold {seller['quantity_sold']} recently • stock {product['stock']}",
                 "barcode": product["barcode"],
+                **supplier_contact,
             }
         )
 
@@ -1253,6 +1272,10 @@ def _build_owner_alerts(cursor):
     for product in low_stock[:6]:
         if product["barcode"] in already_added:
             continue
+        supplier_contact = _latest_supplier_contact_for_barcode(
+            cursor,
+            str(product["barcode"]),
+        )
         alerts.append(
             {
                 "type": "low_stock",
@@ -1260,6 +1283,7 @@ def _build_owner_alerts(cursor):
                 "title": f"{product['name']} is low in stock",
                 "subtitle": f"Barcode {product['barcode']} • stock {product['stock']}",
                 "barcode": product["barcode"],
+                **supplier_contact,
             }
         )
 
@@ -1298,6 +1322,140 @@ def _build_owner_alerts(cursor):
         )
 
     return alerts
+
+
+def _latest_supplier_contact_for_barcode(cursor, barcode):
+    if not barcode:
+        return {}
+
+    mapped = cursor.execute(
+        """
+        SELECT m.supplier_id AS id, s.name, s.phone
+        FROM supplier_product_mappings m
+        LEFT JOIN suppliers s ON s.id = m.supplier_id
+        WHERE m.barcode = ?
+          AND m.supplier_id > 0
+        LIMIT 1
+        """,
+        (barcode,),
+    ).fetchone()
+
+    if mapped:
+        mapped_name = str(mapped["name"] or "").strip()
+        mapped_phone = str(mapped["phone"] or "").strip()
+        if mapped_name or mapped_phone:
+            return {
+                "supplier_id": parse_int(mapped["id"], 0),
+                "supplier_name": mapped_name,
+                "supplier_phone": mapped_phone,
+            }
+
+    row = cursor.execute(
+        """
+        SELECT s.id, s.name, s.phone
+        FROM stock_receipts sr
+        JOIN suppliers s ON s.id = sr.supplier_id
+        WHERE sr.barcode = ?
+          AND sr.supplier_id IS NOT NULL
+          AND sr.supplier_id > 0
+        ORDER BY datetime(sr.created_at) DESC, sr.id DESC
+        LIMIT 1
+        """,
+        (barcode,),
+    ).fetchone()
+
+    if row:
+        row_name = str(row["name"] or "").strip()
+        row_phone = str(row["phone"] or "").strip()
+        if row_name or row_phone:
+            return {
+                "supplier_id": parse_int(row["id"], 0),
+                "supplier_name": row_name,
+                "supplier_phone": row_phone,
+            }
+
+    if os.path.exists(POS_DB_PATH):
+        pos_conn = None
+        try:
+            pos_conn = get_pos_db()
+            pos_cursor = pos_conn.cursor()
+
+            mapped = pos_cursor.execute(
+                """
+                SELECT m.supplier_id AS id, COALESCE(NULLIF(TRIM(s.name), ''), m.supplier_name) AS name, s.phone
+                FROM supplier_product_mappings m
+                LEFT JOIN suppliers s ON s.id = m.supplier_id
+                WHERE m.barcode = ?
+                  AND m.supplier_id > 0
+                ORDER BY m.is_preferred DESC, m.id ASC
+                LIMIT 1
+                """,
+                (barcode,),
+            ).fetchone()
+
+            if mapped:
+                mapped_name = str(mapped["name"] or "").strip()
+                mapped_phone = str(mapped["phone"] or "").strip()
+                if mapped_name or mapped_phone:
+                    return {
+                        "supplier_id": parse_int(mapped["id"], 0),
+                        "supplier_name": mapped_name,
+                        "supplier_phone": mapped_phone,
+                    }
+
+            row = pos_cursor.execute(
+                """
+                SELECT sr.supplier_id AS id, COALESCE(NULLIF(TRIM(s.name), ''), sr.supplier_name) AS name, s.phone
+                FROM stock_receipts sr
+                LEFT JOIN suppliers s ON s.id = sr.supplier_id
+                WHERE sr.barcode = ?
+                  AND sr.supplier_id IS NOT NULL
+                  AND sr.supplier_id > 0
+                ORDER BY datetime(sr.created_at) DESC, sr.id DESC
+                LIMIT 1
+                """,
+                (barcode,),
+            ).fetchone()
+
+            if row:
+                row_name = str(row["name"] or "").strip()
+                row_phone = str(row["phone"] or "").strip()
+                if row_name or row_phone:
+                    return {
+                        "supplier_id": parse_int(row["id"], 0),
+                        "supplier_name": row_name,
+                        "supplier_phone": row_phone,
+                    }
+        except Exception as exc:
+            print(f"Supplier contact lookup failed for {barcode}: {exc}")
+        finally:
+            if pos_conn is not None:
+                try:
+                    pos_conn.close()
+                except Exception:
+                    pass
+
+    return {}
+
+
+def _upsert_supplier_product_mapping(cursor, barcode, supplier_id):
+    if not barcode or parse_int(supplier_id, 0) <= 0:
+        return
+
+    cursor.execute(
+        f"""
+        INSERT INTO supplier_product_mappings (
+            barcode,
+            supplier_id,
+            updated_at
+        )
+        VALUES (?, ?, {now_sql()})
+        ON CONFLICT(barcode) DO UPDATE SET
+            supplier_id = excluded.supplier_id,
+            updated_at = excluded.updated_at
+        """,
+        (barcode, parse_int(supplier_id, 0)),
+    )
 
 
 def _safe_iso_date(raw_value):
@@ -2592,6 +2750,16 @@ def init_db():
 
     c.execute(
         """
+        CREATE TABLE IF NOT EXISTS supplier_product_mappings (
+            barcode TEXT PRIMARY KEY,
+            supplier_id INTEGER NOT NULL,
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS inventory_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             barcode TEXT NOT NULL,
@@ -2604,6 +2772,39 @@ def init_db():
         )
         """
     )
+
+    latest_supplier_rows = c.execute(
+        """
+        SELECT sr.barcode, sr.supplier_id
+        FROM stock_receipts sr
+        JOIN (
+            SELECT barcode, MAX(id) AS latest_id
+            FROM stock_receipts
+            WHERE supplier_id IS NOT NULL AND supplier_id > 0
+            GROUP BY barcode
+        ) latest ON latest.latest_id = sr.id
+        WHERE sr.barcode IS NOT NULL
+          AND sr.barcode != ''
+          AND sr.supplier_id IS NOT NULL
+          AND sr.supplier_id > 0
+        """
+    ).fetchall()
+
+    for row in latest_supplier_rows:
+        c.execute(
+            f"""
+            INSERT INTO supplier_product_mappings (
+                barcode,
+                supplier_id,
+                updated_at
+            )
+            VALUES (?, ?, {now_sql()})
+            ON CONFLICT(barcode) DO UPDATE SET
+                supplier_id = excluded.supplier_id,
+                updated_at = excluded.updated_at
+            """,
+            (str(row["barcode"]), parse_int(row["supplier_id"], 0)),
+        )
 
     if c.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
         products = [
@@ -2900,6 +3101,23 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers()
                 self.wfile.write(
                     json.dumps({"status": "success", "history": result}).encode()
+                )
+
+        elif action == "get_product_supplier_contact":
+            barcode = params.get("barcode", [""])[0].strip()
+
+            if not barcode:
+                self._set_headers(400)
+                self.wfile.write(
+                    json.dumps(
+                        {"status": "error", "message": "barcode is required"}
+                    ).encode()
+                )
+            else:
+                contact = _latest_supplier_contact_for_barcode(c, barcode)
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps({"status": "success", "contact": contact}).encode()
                 )
 
         else:
