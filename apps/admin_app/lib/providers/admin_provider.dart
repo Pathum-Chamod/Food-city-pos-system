@@ -43,6 +43,7 @@ class AdminProvider with ChangeNotifier {
 
   bool _isOwnerSalesLoading = false;
   Map<String, dynamic> _ownerSalesReport = {};
+  List<Map<String, dynamic>> _ownerSalesHourlyTrend = [];
 
   bool _isOwnerUsersLoading = false;
   Map<String, dynamic> _ownerUsersSummary = {};
@@ -78,6 +79,7 @@ class AdminProvider with ChangeNotifier {
 
   bool get isOwnerSalesLoading => _isOwnerSalesLoading;
   Map<String, dynamic> get ownerSalesReport => _ownerSalesReport;
+  List<Map<String, dynamic>> get ownerSalesHourlyTrend => _ownerSalesHourlyTrend;
   Map<String, dynamic> get ownerSalesSummary => Map<String, dynamic>.from((_ownerSalesReport['summary'] as Map?) ?? <String, dynamic>{});
   List<Map<String, dynamic>> get ownerSalesTrendReport => ((_ownerSalesReport['trend'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
   List<Map<String, dynamic>> get ownerSalesCashiers => ((_ownerSalesReport['cashier_summary'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
@@ -472,6 +474,7 @@ class AdminProvider with ChangeNotifier {
       await fetchProducts();
       await fetchDashboardStats();
       await fetchOwnerDashboard();
+      await _syncDashboardTopProductsFromSalesReport();
       await fetchOwnerAlerts();
     } finally {
       _isOwnerShellLoading = false;
@@ -483,6 +486,7 @@ class AdminProvider with ChangeNotifier {
     await fetchProducts();
     await fetchDashboardStats();
     await fetchOwnerDashboard();
+    await _syncDashboardTopProductsFromSalesReport();
     await fetchOwnerAlerts();
   }
 
@@ -556,6 +560,53 @@ class AdminProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> _syncDashboardTopProductsFromSalesReport() async {
+    try {
+      final uri = Uri.parse(apiUrl).replace(
+        queryParameters: const {
+          'action': 'get_owner_sales_report',
+          'range': 'today',
+        },
+      );
+      final response = await http.get(uri);
+
+      if (response.statusCode != 200) return;
+
+      final data = json.decode(response.body);
+      if (data['status'] != 'success') return;
+
+      final rows = ((data['top_products'] as List?) ?? [])
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
+
+      _ownerTopProducts = rows.map(_mapSalesReportProductToDashboardRow).toList();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Dashboard top products sync error: $e');
+    }
+  }
+
+  Map<String, dynamic> _mapSalesReportProductToDashboardRow(
+    Map<String, dynamic> row,
+  ) {
+    final totalSales =
+        ((row['net_sales_after_refunds'] ?? row['net_sales']) as num?)
+            ?.toDouble() ??
+        0.0;
+    final quantitySold =
+        ((row['net_quantity_sold'] ??
+                    row['sold_quantity'] ??
+                    row['quantity_sold']) as num?)
+                ?.toInt() ??
+            0;
+
+    return {
+      ...row,
+      'total_sales': totalSales,
+      'quantity_sold': quantitySold,
+    };
+  }
+
   Future<void> fetchOwnerAlerts() async {
     try {
       final response = await http.get(
@@ -621,7 +672,13 @@ class AdminProvider with ChangeNotifier {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['status'] == 'success') {
-          _ownerSalesReport = Map<String, dynamic>.from(data as Map);
+          final payload = Map<String, dynamic>.from(data as Map);
+          _ownerSalesReport = payload;
+          _ownerSalesHourlyTrend = await _resolveOwnerSalesHourlyTrend(
+            payload: payload,
+            range: range,
+            specificDate: specificDate,
+          );
           _isOwnerSalesLoading = false;
           notifyListeners();
           return;
@@ -636,8 +693,215 @@ class AdminProvider with ChangeNotifier {
       specificDate: specificDate,
       dateRange: dateRange,
     );
+    _ownerSalesHourlyTrend = const [];
     _isOwnerSalesLoading = false;
     notifyListeners();
+  }
+
+  bool _usesHourlyTrend(String range) => range == 'today' || range == 'specific';
+
+  Future<List<Map<String, dynamic>>> _resolveOwnerSalesHourlyTrend({
+    required Map<String, dynamic> payload,
+    required String range,
+    DateTime? specificDate,
+  }) async {
+    if (!_usesHourlyTrend(range)) return const [];
+
+    final embedded = _extractHourlyTrendRows(payload);
+    if (embedded.isNotEmpty) {
+      return embedded;
+    }
+
+    final targetDay = specificDate ?? DateTime.now();
+    return _fetchOwnerHourlyTrendForDay(targetDay);
+  }
+
+  List<Map<String, dynamic>> _extractHourlyTrendRows(
+    Map<String, dynamic> payload,
+  ) {
+    const possibleKeys = [
+      'hourly_trend',
+      'trend_hourly',
+      'hourly_sales',
+      'sales_by_hour',
+      'hour_breakdown',
+      'hourly',
+    ];
+
+    for (final key in possibleKeys) {
+      final raw = payload[key];
+      if (raw is List) {
+        final rows = raw
+            .map((item) => Map<String, dynamic>.from(item as Map))
+            .toList();
+        final normalized = _normalizeHourlyTrendRows(rows);
+        if (normalized.isNotEmpty) {
+          return normalized;
+        }
+      }
+    }
+
+    final trend = payload['trend'];
+    if (trend is List) {
+      final rows = trend
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
+      return _normalizeHourlyTrendRows(rows);
+    }
+
+    return const [];
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchOwnerHourlyTrendForDay(
+    DateTime day,
+  ) async {
+    final formattedDay = _formatDateOnly(day);
+    final attempts = <Map<String, String>>[
+      {
+        'action': 'get_owner_sales_report',
+        'range': 'today',
+        'granularity': 'hourly',
+      },
+      {
+        'action': 'get_owner_sales_report',
+        'range': 'specific',
+        'date': formattedDay,
+        'granularity': 'hourly',
+      },
+      {
+        'action': 'get_owner_sales_report',
+        'range': 'specific',
+        'date': formattedDay,
+        'view': 'hourly',
+      },
+      {
+        'action': 'get_owner_sales_report',
+        'range': 'specific',
+        'date': formattedDay,
+        'breakdown': 'hourly',
+      },
+    ];
+
+    for (final query in attempts) {
+      try {
+        final uri = Uri.parse(apiUrl).replace(queryParameters: query);
+        final response = await http.get(uri);
+        if (response.statusCode != 200) continue;
+
+        final data = json.decode(response.body);
+        if (data['status'] != 'success') continue;
+
+        final payload = Map<String, dynamic>.from(data as Map);
+        final rows = _extractHourlyTrendRows(payload);
+        if (rows.isNotEmpty) {
+          return rows;
+        }
+      } catch (e) {
+        debugPrint('Owner hourly trend fetch warning: $e');
+      }
+    }
+
+    return const [];
+  }
+
+  List<Map<String, dynamic>> _normalizeHourlyTrendRows(
+    List<Map<String, dynamic>> rows,
+  ) {
+    if (rows.isEmpty) return const [];
+
+    final normalized = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final hour = _extractHourFromTrendRow(row);
+      if (hour == null) continue;
+
+      normalized.add({
+        ...row,
+        'hour': hour,
+        'net_after_refunds':
+            ((row['net_after_refunds'] ?? row['net_sales'] ?? row['sales']) as num?)
+                ?.toDouble() ??
+            0.0,
+        'transaction_count':
+            ((row['transaction_count'] ?? row['transactions']) as num?)
+                ?.toInt() ??
+            0,
+      });
+    }
+
+    normalized.sort(
+      (a, b) => ((a['hour'] as num?)?.toInt() ?? 0).compareTo(
+        (b['hour'] as num?)?.toInt() ?? 0,
+      ),
+    );
+    return normalized;
+  }
+
+  int? _extractHourFromTrendRow(Map<String, dynamic> row) {
+    final directValue = row['hour'] ?? row['sales_hour'] ?? row['hour_of_day'];
+    if (directValue is num) {
+      final hour = directValue.toInt();
+      return hour >= 0 && hour <= 23 ? hour : null;
+    }
+
+    if (directValue is String) {
+      final parsed = int.tryParse(directValue.trim());
+      if (parsed != null && parsed >= 0 && parsed <= 23) {
+        return parsed;
+      }
+    }
+
+    final textCandidates = [
+      row['label'],
+      row['time_label'],
+      row['hour_label'],
+      row['bucket'],
+    ];
+
+    for (final candidate in textCandidates) {
+      final parsed = _parseHourLabel(candidate?.toString() ?? '');
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+
+    return null;
+  }
+
+  int? _parseHourLabel(String raw) {
+    final input = raw.trim().toLowerCase();
+    if (input.isEmpty) return null;
+
+    final twentyFourHour = RegExp(r'^(\d{1,2})[:.]?\d{0,2}$').firstMatch(input);
+    if (twentyFourHour != null) {
+      final hour = int.tryParse(twentyFourHour.group(1)!);
+      if (hour != null && hour >= 0 && hour <= 23) {
+        return hour;
+      }
+    }
+
+    final meridiem = RegExp(r'^(\d{1,2})(?::\d{2})?\s*([ap]m)$').firstMatch(input);
+    if (meridiem != null) {
+      final baseHour = int.tryParse(meridiem.group(1)!);
+      if (baseHour == null || baseHour < 1 || baseHour > 12) return null;
+      final suffix = meridiem.group(2);
+      if (suffix == 'am') {
+        return baseHour == 12 ? 0 : baseHour;
+      }
+      return baseHour == 12 ? 12 : baseHour + 12;
+    }
+
+    final compactMeridiem = RegExp(r'^(\d{1,2})([ap])$').firstMatch(input);
+    if (compactMeridiem != null) {
+      final baseHour = int.tryParse(compactMeridiem.group(1)!);
+      if (baseHour == null || baseHour < 1 || baseHour > 12) return null;
+      final suffix = compactMeridiem.group(2);
+      if (suffix == 'a') {
+        return baseHour == 12 ? 0 : baseHour;
+      }
+      return baseHour == 12 ? 12 : baseHour + 12;
+    }
+
+    return null;
   }
 
   Map<String, dynamic> _buildFallbackOwnerSalesReport({

@@ -17,6 +17,9 @@ class _OwnerSalesScreenState extends State<OwnerSalesScreen> {
   DateTime? _specificDate;
   DateTimeRange? _customRange;
 
+  bool get _showHourlyView =>
+      _selectedRange == 'today' || _selectedRange == 'specific';
+
   @override
   void initState() {
     super.initState();
@@ -96,7 +99,9 @@ class _OwnerSalesScreenState extends State<OwnerSalesScreen> {
     final provider = context.watch<AdminProvider>();
     final report = provider.ownerSalesReport;
     final summary = provider.ownerSalesSummary;
-    final trend = provider.ownerSalesTrendReport;
+    final trend = _showHourlyView
+        ? provider.ownerSalesHourlyTrend
+        : provider.ownerSalesTrendReport;
     final cashiers = provider.ownerSalesCashiers;
     final topProducts = provider.ownerSalesTopProducts;
     final slowMovers = provider.ownerSalesSlowMovers;
@@ -187,15 +192,22 @@ class _OwnerSalesScreenState extends State<OwnerSalesScreen> {
                 title: 'Sales Trend',
                 subtitle: '${itemsSold < 0 ? 0 : itemsSold} items sold • margin ${marginPercent.toStringAsFixed(1)}%',
                 child: trend.isEmpty
-                    ? const _EmptyBlock(
-                        icon: Icons.bar_chart_rounded,
-                        title: 'No sales in this period',
-                        subtitle: 'Choose another range or wait for POS sales to sync.',
+                    ? _EmptyBlock(
+                        icon: _showHourlyView
+                            ? Icons.schedule_rounded
+                            : Icons.bar_chart_rounded,
+                        title: _showHourlyView
+                            ? 'No hourly sales yet'
+                            : 'No sales in this period',
+                        subtitle: _showHourlyView
+                            ? 'Hourly sales will appear once this day has synced transaction timing.'
+                            : 'Choose another range or wait for POS sales to sync.',
                       )
                     : _OwnerTrendChart(
                         points: trend,
                         formatMoney: _formatMoney,
                         formatCompactMoney: _formatCompactMoney,
+                        isHourlyView: _showHourlyView,
                       ),
               ),
               const SizedBox(height: 16),
@@ -541,129 +553,463 @@ class _OwnerTrendChart extends StatelessWidget {
     required this.points,
     required this.formatMoney,
     required this.formatCompactMoney,
+    required this.isHourlyView,
   });
 
   final List<Map<String, dynamic>> points;
   final String Function(num value) formatMoney;
   final String Function(num value) formatCompactMoney;
+  final bool isHourlyView;
+
+  double _valueFor(Map<String, dynamic> row) {
+    return ((row['net_after_refunds'] ?? row['net_sales']) as num?)
+            ?.toDouble() ??
+        0.0;
+  }
+
+  int _hourFor(Map<String, dynamic> row) {
+    final raw = row['hour'];
+    if (raw is num) {
+      return raw.toInt().clamp(0, 23);
+    }
+    return 0;
+  }
+
+  String _formatHourLong(int hour) {
+    final suffix = hour >= 12 ? 'PM' : 'AM';
+    final display = hour % 12 == 0 ? 12 : hour % 12;
+    return '$display:00 $suffix';
+  }
+
+  String _formatHourShort(int hour) {
+    if (hour == 0) return '12a';
+    if (hour < 12) return '${hour}a';
+    if (hour == 12) return '12p';
+    return '${hour - 12}p';
+  }
+
+  String _formatDailyLabel(Map<String, dynamic> row) {
+    final raw = (row['label'] ?? row['sales_date'] ?? '').toString().trim();
+    if (raw.isEmpty) return '—';
+
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return raw;
+
+    final day = parsed.day.toString().padLeft(2, '0');
+    final month = parsed.month.toString().padLeft(2, '0');
+    return '$day/$month';
+  }
+
+  bool _shouldShowDailyLabel(int index, int total) {
+    if (total <= 8) return true;
+    if (total <= 14) return index.isEven || index == total - 1;
+    return index % 5 == 0 || index == total - 1;
+  }
+
+  bool _hasHourlySales(Map<String, dynamic> row) {
+    final saleCount = (row['sale_count'] as num?)?.toInt() ?? 0;
+    final itemsSold = (row['items_sold'] as num?)?.toInt() ?? 0;
+    return saleCount > 0 || itemsSold > 0 || _valueFor(row) > 0;
+  }
+
+  bool _shouldShowHourlyLabel(int index, int total) {
+    if (total <= 8) return true;
+    if (total <= 12) return index.isEven || index == total - 1;
+    return index % 3 == 0 || index == total - 1;
+  }
+
+  List<Map<String, dynamic>> _activeHourlyPoints() {
+    if (points.isEmpty) return const [];
+
+    final rows = points
+        .map(
+          (row) => {
+            ...Map<String, dynamic>.from(row),
+            'hour': _hourFor(row),
+            'net_after_refunds': _valueFor(row),
+          },
+        )
+        .where(_hasHourlySales)
+        .toList();
+
+    rows.sort(
+      (a, b) => _hourFor(a).compareTo(_hourFor(b)),
+    );
+    return rows;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final maxValue = points.fold<double>(
+    final activePoints = isHourlyView ? _activeHourlyPoints() : points;
+    final hasVisibleData = isHourlyView
+        ? activePoints.isNotEmpty
+        : activePoints.any((point) => _valueFor(point) > 0);
+
+    if (!hasVisibleData) {
+      return _EmptyBlock(
+        icon: isHourlyView ? Icons.schedule_rounded : Icons.bar_chart_rounded,
+        title: isHourlyView ? 'No hourly sales yet' : 'No sales in this period',
+        subtitle: isHourlyView
+            ? 'Active sales hours will appear once this day has sales.'
+            : 'Choose another range or wait for POS sales to sync.',
+      );
+    }
+
+    final maxValue = activePoints.fold<double>(
       0,
-      (max, point) => math.max(max, (point['net_after_refunds'] as num?)?.toDouble() ?? (point['net_sales'] as num?)?.toDouble() ?? 0.0),
+      (max, point) => math.max(max, _valueFor(point)),
     );
+    final withSales = activePoints.where((point) => _valueFor(point) > 0).toList();
     final safeMax = maxValue <= 0 ? 1.0 : maxValue;
     final ticks = <double>[safeMax, safeMax * 0.66, safeMax * 0.33, 0];
+    final peakPoint = withSales.isEmpty
+        ? null
+        : withSales.reduce((a, b) => _valueFor(a) >= _valueFor(b) ? a : b);
+    final activeHours = withSales.length;
+    final averageActiveHour = activeHours == 0
+        ? 0.0
+        : withSales.fold<double>(0.0, (sum, point) => sum + _valueFor(point)) /
+            activeHours;
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFD),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE3E9F3)),
-      ),
-      child: SizedBox(
-        height: 190,
+    Widget insightPill({
+      required IconData icon,
+      required String label,
+      required String value,
+      required Color tone,
+    }) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: tone.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: tone.withOpacity(0.16)),
+        ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            SizedBox(
-              width: 50,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: ticks
-                    .map(
-                      (value) => Text(
-                        formatCompactMoney(value),
-                        style: const TextStyle(
-                          fontSize: 10,
-                          color: Color(0xFF6B7482),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    )
-                    .toList(),
-              ),
-            ),
+            Icon(icon, size: 15, color: tone),
             const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                children: [
-                  Expanded(
-                    child: Stack(
-                      children: [
-                        Column(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: List.generate(
-                            4,
-                            (_) => Container(
-                              height: 1,
-                              color: const Color(0xFFDDE5F0),
-                            ),
-                          ),
-                        ),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            for (final point in points) ...[
-                              Expanded(
-                                child: Tooltip(
-                                  message:
-                                      '${(point['label'] ?? '').toString()}\n${formatMoney((point['net_after_refunds'] as num?)?.toDouble() ?? (point['net_sales'] as num?)?.toDouble() ?? 0.0)}',
-                                  child: Align(
-                                    alignment: Alignment.bottomCenter,
-                                    child: FractionallySizedBox(
-                                      heightFactor: ((((point['net_after_refunds'] as num?)?.toDouble() ?? (point['net_sales'] as num?)?.toDouble() ?? 0.0)) / safeMax)
-                                          .clamp(0.0, 1.0),
-                                      widthFactor: 0.58,
-                                      alignment: Alignment.bottomCenter,
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF2F6FE4),
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              if (point != points.last) const SizedBox(width: 6),
-                            ],
-                          ],
-                        ),
-                      ],
-                    ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Color(0xFF6B7482),
+                    fontWeight: FontWeight.w700,
                   ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    height: 18,
-                    child: Row(
-                      children: [
-                        for (final point in points) ...[
-                          Expanded(
-                            child: Text(
-                              (point['label'] ?? '').toString(),
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF6B7482),
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          if (point != points.last) const SizedBox(width: 6),
-                        ],
-                      ],
-                    ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF172433),
+                    fontWeight: FontWeight.w800,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ],
         ),
-      ),
+      );
+    }
+
+    final chartHeight = isHourlyView ? 208.0 : 186.0;
+    var showInsightSummary = false;
+    final showChartHeader = isHourlyView || activePoints.length > 7;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (showInsightSummary) ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              insightPill(
+                icon: Icons.schedule_rounded,
+                label: 'Peak hour',
+                value: peakPoint == null
+                    ? '—'
+                    : _formatHourLong(_hourFor(peakPoint)),
+                tone: const Color(0xFF0F3D91),
+              ),
+              insightPill(
+                icon: Icons.bolt_rounded,
+                label: 'Peak sales',
+                value: peakPoint == null
+                    ? '—'
+                    : formatCompactMoney(_valueFor(peakPoint)),
+                tone: const Color(0xFF147A5A),
+              ),
+              insightPill(
+                icon: Icons.timelapse_rounded,
+                label: 'Active hours',
+                value: '$activeHours',
+                tone: const Color(0xFFF79009),
+              ),
+              insightPill(
+                icon: Icons.auto_graph_rounded,
+                label: 'Avg active hour',
+                value: formatCompactMoney(averageActiveHour),
+                tone: const Color(0xFF7A1CAC),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFD),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFE3E9F3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (showChartHeader) ...[
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE7F0FF),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        isHourlyView ? 'Hourly view' : 'Daily view',
+                        style: TextStyle(
+                          color: Color(0xFF0F3D91),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      isHourlyView
+                          ? 'Sales hours only'
+                          : 'Swipe for full range',
+                      style: const TextStyle(
+                        color: Color(0xFF98A2B3),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+              ],
+              SizedBox(
+                height: chartHeight + 30,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(
+                      width: 52,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: ticks
+                            .map(
+                              (value) => Text(
+                                formatCompactMoney(value),
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  color: Color(0xFF6B7482),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final availableWidth = constraints.maxWidth;
+                          final visibleDailyBars = math.max(
+                            1,
+                            math.min(7, activePoints.length),
+                          );
+                          final slotWidth = isHourlyView
+                              ? 24.0
+                              : math.max(availableWidth / visibleDailyBars, 34.0);
+                          final barWidth = isHourlyView
+                              ? 14.0
+                              : math.max(
+                                  12.0,
+                                  math.min(18.0, slotWidth * 0.42),
+                                );
+                          final plotWidth = isHourlyView
+                              ? math.max(activePoints.length * slotWidth, availableWidth)
+                              : activePoints.length <= 7
+                                  ? availableWidth
+                                  : math.max(activePoints.length * slotWidth, availableWidth);
+
+                          return SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: SizedBox(
+                              width: plotWidth,
+                              child: Column(
+                                children: [
+                                  Expanded(
+                                    child: Stack(
+                                      children: [
+                                        Positioned.fill(
+                                          child: Column(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: List.generate(
+                                              4,
+                                              (_) => Container(
+                                                height: 1,
+                                                color: const Color(0xFFDDE5F0),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                        Positioned.fill(
+                                          child: Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.end,
+                                            children: [
+                                              for (final point in activePoints)
+                                                SizedBox(
+                                                  width: slotWidth,
+                                                  child: Tooltip(
+                                                    message:
+                                                        '${isHourlyView ? _formatHourLong(_hourFor(point)) : _formatDailyLabel(point)}\n${formatMoney(_valueFor(point))}',
+                                                    child: Align(
+                                                      alignment:
+                                                          Alignment.bottomCenter,
+                                                      child: Container(
+                                                        width: barWidth,
+                                                        height: math.max(
+                                                          6,
+                                                          (_valueFor(point) /
+                                                                  safeMax) *
+                                                              (chartHeight - 6),
+                                                        ),
+                                                        decoration: BoxDecoration(
+                                                          gradient:
+                                                              LinearGradient(
+                                                            begin:
+                                                                Alignment.topCenter,
+                                                            end: Alignment
+                                                                .bottomCenter,
+                                                            colors: _valueFor(point) >
+                                                                    0
+                                                                ? const [
+                                                                    Color(
+                                                                      0xFF5D94F7,
+                                                                    ),
+                                                                    Color(
+                                                                      0xFF2F6FE4,
+                                                                    ),
+                                                                  ]
+                                                                : const [
+                                                                    Color(
+                                                                      0xFFD9E3F1,
+                                                                    ),
+                                                                    Color(
+                                                                      0xFFC9D5E6,
+                                                                    ),
+                                                                  ],
+                                                          ),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                            999,
+                                                          ),
+                                                          boxShadow:
+                                                              _valueFor(point) >
+                                                                      0
+                                                                  ? const [
+                                                                      BoxShadow(
+                                                                        color: Color(
+                                                                          0x332F6FE4,
+                                                                        ),
+                                                                        blurRadius: 10,
+                                                                        offset: Offset(
+                                                                          0,
+                                                                          6,
+                                                                        ),
+                                                                      ),
+                                                                    ]
+                                                                  : null,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  SizedBox(
+                                    height: 20,
+                                    child: Row(
+                                      children: [
+                                        for (var index = 0;
+                                            index < activePoints.length;
+                                            index++)
+                                          SizedBox(
+                                            width: slotWidth,
+                                            child: Text(
+                                              isHourlyView
+                                                  ? (_shouldShowHourlyLabel(
+                                                          index,
+                                                          activePoints.length,
+                                                        )
+                                                      ? _formatHourShort(
+                                                          _hourFor(
+                                                            activePoints[index],
+                                                          ),
+                                                        )
+                                                      : '')
+                                                  : (_shouldShowDailyLabel(
+                                                          index,
+                                                          activePoints.length,
+                                                        )
+                                                      ? _formatDailyLabel(
+                                                          activePoints[index],
+                                                        )
+                                                      : ''),
+                                              textAlign: TextAlign.center,
+                                              style: const TextStyle(
+                                                fontSize: 11,
+                                                color: Color(0xFF6B7482),
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -697,73 +1043,208 @@ class _PaymentReductionCard extends StatelessWidget {
     final refundPct = grossSales > 0 ? (refunds / grossSales) * 100.0 : 0.0;
     final discountPct = grossSales > 0 ? (discounts / grossSales) * 100.0 : 0.0;
 
+    final hasReductions = refunds > 0.009 || discounts > 0.009;
+
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 150,
-              height: 150,
-              child: CustomPaint(
-                painter: _DonutPainter(
-                  values: [cashSales, cardSales],
-                  colors: const [Color(0xFF2F6FE4), Color(0xFF12B76A)],
-                ),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text(
-                        'Payments',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFF6B7482),
-                          fontWeight: FontWeight.w600,
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFFF8FBFF), Color(0xFFF4F7FC)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: const Color(0xFFE3EAF4)),
+          ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 320;
+
+              final summaryChart = Center(
+                child: SizedBox(
+                  width: compact ? 168 : 186,
+                  height: compact ? 168 : 186,
+                  child: CustomPaint(
+                    painter: _DonutPainter(
+                      values: [cashSales, cardSales],
+                      colors: const [Color(0xFF2F6FE4), Color(0xFF12B76A)],
+                    ),
+                    child: Center(
+                      child: Container(
+                        width: compact ? 100 : 112,
+                        height: compact ? 100 : 112,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF0F3D91).withOpacity(0.06),
+                              blurRadius: 18,
+                              offset: const Offset(0, 10),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              'Collected',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF6B7482),
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  formatMoney(paymentTotal),
+                                  style: TextStyle(
+                                    fontSize: compact ? 16 : 18,
+                                    fontWeight: FontWeight.w900,
+                                    color: Color(0xFF172433),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            formatMoney(paymentTotal),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF172433),
-                            ),
+                    ),
+                  ),
+                ),
+              );
+
+              final summaryDetails = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Payment Split',
+                          style: TextStyle(
+                            color: Color(0xFF172433),
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
                       ),
+                      if (!paymentDataComplete)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF4D6),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: const Color(0xFFF7D58D)),
+                          ),
+                          child: const Text(
+                            'Needs sync',
+                            style: TextStyle(
+                              color: Color(0xFF9C5A00),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                children: [
-                  _MetricRow(label: 'Cash Sales', value: formatMoney(cashSales), percent: cashPct, color: const Color(0xFF2F6FE4)),
+                  const SizedBox(height: 6),
+                  Text(
+                    hasReductions
+                        ? 'Collected payments with reduction highlights below.'
+                        : 'Cash and card share for the selected period.',
+                    style: const TextStyle(
+                      color: Color(0xFF667085),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  _PaymentLegendTile(
+                    label: 'Cash Sales',
+                    value: formatMoney(cashSales),
+                    percent: cashPct,
+                    color: const Color(0xFF2F6FE4),
+                  ),
                   const SizedBox(height: 10),
-                  _MetricRow(label: 'Card Sales', value: formatMoney(cardSales), percent: cardPct, color: const Color(0xFF12B76A)),
-                  const SizedBox(height: 10),
-                  _MetricRow(label: 'Refunds', value: formatMoney(refunds), percent: refundPct, color: const Color(0xFFD92D20)),
-                  const SizedBox(height: 10),
-                  _MetricRow(label: 'Discounts', value: formatMoney(discounts), percent: discountPct, color: const Color(0xFFF79009)),
+                  _PaymentLegendTile(
+                    label: 'Card Sales',
+                    value: formatMoney(cardSales),
+                    percent: cardPct,
+                    color: const Color(0xFF12B76A),
+                  ),
+                  if (hasReductions || !paymentDataComplete) ...[
+                    const SizedBox(height: 14),
+                    if (hasReductions)
+                      Column(
+                        children: [
+                          if (refunds > 0)
+                            _PaymentInlineTile(
+                              label: 'Refunds',
+                              value: formatMoney(refunds),
+                              color: const Color(0xFFD92D20),
+                              background: const Color(0xFFFEE4E2),
+                            ),
+                          if (refunds > 0 && discounts > 0) const SizedBox(height: 8),
+                          if (discounts > 0)
+                            _PaymentInlineTile(
+                              label: 'Discounts',
+                              value: formatMoney(discounts),
+                              color: const Color(0xFFF79009),
+                              background: const Color(0xFFFFF4D6),
+                            ),
+                        ],
+                      ),
+                    if (!paymentDataComplete && legacyUntypedPaymentSales > 0) ...[
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: _TagPill(
+                          label: 'Legacy cash-assumed ${formatMoney(legacyUntypedPaymentSales)}',
+                          color: const Color(0xFF667085),
+                          background: const Color(0xFFF2F4F7),
+                        ),
+                      ),
+                    ],
+                  ],
                 ],
-              ),
-            ),
-          ],
+              );
+
+              if (compact) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    summaryChart,
+                    const SizedBox(height: 14),
+                    summaryDetails,
+                  ],
+                );
+              }
+
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 190, child: summaryChart),
+                  const SizedBox(width: 16),
+                  Expanded(child: summaryDetails),
+                ],
+              );
+            },
+          ),
         ),
       ],
     );
   }
 }
 
-class _MetricRow extends StatelessWidget {
-  const _MetricRow({
+class _PaymentLegendTile extends StatelessWidget {
+  const _PaymentLegendTile({
     required this.label,
     required this.value,
     required this.percent,
@@ -777,40 +1258,163 @@ class _MetricRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                '$label • $value',
-                style: const TextStyle(
-                  color: Color(0xFF475467),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE3E9F3)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(999),
             ),
-            Text(
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Color(0xFF475467),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: Color(0xFF172433),
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF6F8FC),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
               '${percent.toStringAsFixed(1)}%',
               style: TextStyle(
                 color: color,
-                fontWeight: FontWeight.w800,
+                fontWeight: FontWeight.w900,
               ),
             ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: LinearProgressIndicator(
-            value: (percent / 100).clamp(0.0, 1.0),
-            minHeight: 9,
-            backgroundColor: const Color(0xFFE6ECF3),
-            valueColor: AlwaysStoppedAnimation<Color>(color),
           ),
-        ),
-      ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PaymentInlineTile extends StatelessWidget {
+  const _PaymentInlineTile({
+    required this.label,
+    required this.value,
+    required this.color,
+    required this.background,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+  final Color background;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        children: [
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                color: Color(0xFF172433),
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CashierMetaTile extends StatelessWidget {
+  const _CashierMetaTile({
+    required this.label,
+    required this.value,
+    required this.valueColor,
+    required this.background,
+  });
+
+  final String label;
+  final String value;
+  final Color valueColor;
+  final Color background;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF667085),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: valueColor,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -834,6 +1438,8 @@ class _CashierTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final displayName = name.replaceFirst(RegExp(r'\s+\('), '\n(');
+
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
@@ -842,56 +1448,136 @@ class _CashierTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFFE3E9F3)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const CircleAvatar(
-            backgroundColor: Color(0xFFE7F0FF),
-            child: Icon(Icons.person_outline, color: Color(0xFF0F3D91)),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF172433),
-                  ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF1FF),
+                  borderRadius: BorderRadius.circular(15),
                 ),
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
+                child: const Icon(
+                  Icons.person_outline_rounded,
+                  color: Color(0xFF0F52BA),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _TagPill(
-                      label: '$transactions sales',
-                      color: const Color(0xFF667085),
-                      background: const Color(0xFFF2F4F7),
-                    ),
-                    if (refundCount > 0)
-                      _TagPill(
-                        label: '$refundCount refunds',
-                        color: const Color(0xFFD92D20),
-                        background: const Color(0xFFFEE4E2),
+                    Text(
+                      displayName,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF172433),
+                        fontSize: 15,
                       ),
-                    _TagPill(
-                      label: 'Avg ${formatMoney(averageSale)}',
-                      color: const Color(0xFF9C5A00),
-                      background: const Color(0xFFFFF4D6),
                     ),
                   ],
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  const Text(
+                    'Net Sales',
+                    style: TextStyle(
+                      color: Color(0xFF667085),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    formatMoney(totalSales),
+                    style: const TextStyle(
+                      color: Color(0xFF147A5A),
+                      fontWeight: FontWeight.w900,
+                      fontSize: 21,
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Text(
-            formatMoney(totalSales),
-            style: const TextStyle(
-              color: Color(0xFF147A5A),
-              fontWeight: FontWeight.w800,
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE7ECF3)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const Text(
+                        'Sales',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Color(0xFF667085),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '$transactions transactions',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFF172433),
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  width: 1,
+                  height: 34,
+                  color: const Color(0xFFE7ECF3),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const Text(
+                        'Avg Sale',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Color(0xFF667085),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        formatMoney(averageSale),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFF9C5A00),
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -1120,15 +1806,17 @@ class _DonutPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final total = values.fold<double>(0, (sum, item) => sum + item);
     final rect = Offset.zero & size;
-    final strokeWidth = math.min(size.width, size.height) * 0.22;
+    final strokeWidth = math.min(size.width, size.height) * 0.16;
+    final arcRect = rect.deflate(strokeWidth / 2);
 
     final basePaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
       ..color = const Color(0xFFE7ECF3);
 
     canvas.drawArc(
-      rect.deflate(strokeWidth / 2),
+      arcRect,
       -math.pi / 2,
       math.pi * 2,
       false,
@@ -1138,24 +1826,25 @@ class _DonutPainter extends CustomPainter {
     if (total <= 0) return;
 
     double startAngle = -math.pi / 2;
+    final gap = values.where((value) => value > 0).length > 1 ? 0.05 : 0.0;
     for (var i = 0; i < values.length; i++) {
       final value = values[i];
       if (value <= 0) continue;
-      final sweep = (value / total) * math.pi * 2;
+      final sweep = math.max(0.0, (value / total) * math.pi * 2 - gap);
       final paint = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = strokeWidth
-        ..strokeCap = StrokeCap.butt
+        ..strokeCap = StrokeCap.round
         ..color = colors[i % colors.length];
 
       canvas.drawArc(
-        rect.deflate(strokeWidth / 2),
+        arcRect,
         startAngle,
         sweep,
         false,
         paint,
       );
-      startAngle += sweep;
+      startAngle += sweep + gap;
     }
   }
 

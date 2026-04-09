@@ -1369,11 +1369,36 @@ def _sales_rows_between_values(cursor, start_sql_value, end_sql_value):
     ).fetchall()
 
 
+def _extract_sale_hour(created_at_value):
+    raw = str(created_at_value or "").strip()
+    if len(raw) >= 13:
+        try:
+            hour = int(raw[11:13])
+            if 0 <= hour <= 23:
+                return hour
+        except Exception:
+            pass
+
+    try:
+        normalized = raw.replace("Z", "+00:00")
+        hour = datetime.fromisoformat(normalized).hour
+        if 0 <= hour <= 23:
+            return hour
+    except Exception:
+        pass
+
+    return 0
+
+
 def _build_owner_sales_report(cursor, params):
     window = _resolve_sales_report_window(params)
     rows = _sales_rows_between_values(cursor, window["start_sql"], window["end_sql"])
     products = fetch_products(cursor)
     product_by_barcode = {str(p.get("barcode") or ""): p for p in products}
+    hourly_requested = any(
+        str(params.get(key, [""])[0] or "").strip().lower() == "hourly"
+        for key in ("granularity", "view", "breakdown")
+    )
 
     gross_sales = 0.0
     sales_net = 0.0
@@ -1391,6 +1416,8 @@ def _build_owner_sales_report(cursor, params):
     day_buckets = {}
 
     span_days = (window["end_date"] - window["start_date"]).days + 1
+    include_hourly_trend = span_days == 1 or hourly_requested
+    hour_buckets = {}
 
     for row in rows:
         transaction_type = str(row["transaction_type"] or "sale").strip().lower()
@@ -1400,6 +1427,7 @@ def _build_owner_sales_report(cursor, params):
         payment_method = str(row["payment_method"] or "").strip().lower()
         created_at = str(row["created_at"] or "")
         sale_day = created_at[:10]
+        sale_hour = _extract_sale_hour(created_at)
         cashier_name = str(row["cashier_name"] or "Unknown")
         items = _safe_json_loads(row["items"])
 
@@ -1416,6 +1444,23 @@ def _build_owner_sales_report(cursor, params):
                 "gross_profit": 0.0,
                 "sale_count": 0,
                 "refund_count": 0,
+                "items_sold": 0,
+            },
+        )
+        hour_bucket = hour_buckets.setdefault(
+            sale_hour,
+            {
+                "hour": sale_hour,
+                "label": f"{sale_hour:02d}:00",
+                "gross_sales": 0.0,
+                "discounts": 0.0,
+                "net_sales": 0.0,
+                "refund_total": 0.0,
+                "net_after_refunds": 0.0,
+                "gross_profit": 0.0,
+                "sale_count": 0,
+                "refund_count": 0,
+                "transaction_count": 0,
                 "items_sold": 0,
             },
         )
@@ -1442,6 +1487,9 @@ def _build_owner_sales_report(cursor, params):
             refunds += total_amount
             day_bucket["refund_count"] += 1
             day_bucket["refund_total"] += total_amount
+            hour_bucket["refund_count"] += 1
+            hour_bucket["transaction_count"] += 1
+            hour_bucket["refund_total"] += total_amount
             cashier_bucket["refund_count"] += 1
             cashier_bucket["transaction_count"] += 1
             cashier_bucket["refund_total"] += total_amount
@@ -1455,6 +1503,11 @@ def _build_owner_sales_report(cursor, params):
             day_bucket["gross_sales"] += effective_subtotal
             day_bucket["discounts"] += discount_amount
             day_bucket["net_sales"] += total_amount
+            hour_bucket["sale_count"] += 1
+            hour_bucket["transaction_count"] += 1
+            hour_bucket["gross_sales"] += effective_subtotal
+            hour_bucket["discounts"] += discount_amount
+            hour_bucket["net_sales"] += total_amount
             cashier_bucket["sale_count"] += 1
             cashier_bucket["transaction_count"] += 1
             cashier_bucket["gross_sales"] += effective_subtotal
@@ -1507,6 +1560,7 @@ def _build_owner_sales_report(cursor, params):
                 cost_total = unit_cost * quantity
                 items_sold += quantity
                 day_bucket["items_sold"] += quantity
+                hour_bucket["items_sold"] += quantity
                 cashier_bucket["items_sold"] += quantity
                 bucket["quantity_sold"] += quantity
                 bucket["sales_amount"] += amount
@@ -1518,13 +1572,16 @@ def _build_owner_sales_report(cursor, params):
         if transaction_type == "refund":
             gross_profit -= row_profit
             day_bucket["gross_profit"] -= row_profit
+            hour_bucket["gross_profit"] -= row_profit
             cashier_bucket["gross_profit"] -= row_profit
         else:
             gross_profit += row_profit
             day_bucket["gross_profit"] += row_profit
+            hour_bucket["gross_profit"] += row_profit
             cashier_bucket["gross_profit"] += row_profit
 
         day_bucket["net_after_refunds"] = day_bucket["net_sales"] - day_bucket["refund_total"]
+        hour_bucket["net_after_refunds"] = hour_bucket["net_sales"] - hour_bucket["refund_total"]
         cashier_bucket["net_after_refunds"] = cashier_bucket["net_sales"] - cashier_bucket["refund_total"]
 
     average_sale = (sales_net / sale_count) if sale_count > 0 else 0.0
@@ -1554,6 +1611,37 @@ def _build_owner_sales_report(cursor, params):
         if existing["sale_count"] or existing["refund_count"]:
             days_with_sales += 1
         trend.append(existing)
+
+    hourly_trend = []
+    if include_hourly_trend:
+        for hour in range(24):
+            existing = hour_buckets.get(
+                hour,
+                {
+                    "hour": hour,
+                    "label": f"{hour:02d}:00",
+                    "gross_sales": 0.0,
+                    "discounts": 0.0,
+                    "net_sales": 0.0,
+                    "refund_total": 0.0,
+                    "net_after_refunds": 0.0,
+                    "gross_profit": 0.0,
+                    "sale_count": 0,
+                    "refund_count": 0,
+                    "transaction_count": 0,
+                    "items_sold": 0,
+                },
+            )
+            for k in [
+                "gross_sales",
+                "discounts",
+                "net_sales",
+                "refund_total",
+                "net_after_refunds",
+                "gross_profit",
+            ]:
+                existing[k] = round(parse_float(existing[k], 0.0), 2)
+            hourly_trend.append(existing)
 
     cashier_summary = sorted(by_cashier.values(), key=lambda item: (item["net_after_refunds"], item["sale_count"]), reverse=True)
     for row in cashier_summary:
@@ -1618,6 +1706,7 @@ def _build_owner_sales_report(cursor, params):
             "margin_percent": round(margin_percent, 1),
         },
         "trend": trend,
+        "hourly_trend": hourly_trend,
         "cashier_summary": cashier_summary,
         "top_products": top_products,
         "slow_movers": slow_movers,
