@@ -1,0 +1,443 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../providers/admin_provider.dart';
+import '../widgets/app_snackbar.dart';
+
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  bool _isExporting = false;
+  bool _isUpdatingBiometrics = false;
+
+  Future<void> _handleBiometricToggle(bool value) async {
+    setState(() => _isUpdatingBiometrics = true);
+
+    final provider = context.read<AdminProvider>();
+    String? message;
+
+    if (value) {
+      message = await provider.enableBiometricUnlock();
+    } else {
+      await provider.disableBiometricUnlock();
+    }
+
+    if (!mounted) return;
+    setState(() => _isUpdatingBiometrics = false);
+
+    AppSnackBar.show(
+      context,
+      message:
+          message ??
+          (value
+              ? 'Biometric unlock is now enabled.'
+              : 'Biometric unlock has been turned off.'),
+    );
+  }
+
+  Future<void> _handleBackupExport() async {
+    setState(() => _isExporting = true);
+    final message = await context.read<AdminProvider>().exportDataBackup();
+    if (!mounted) return;
+    setState(() => _isExporting = false);
+
+    AppSnackBar.show(
+      context,
+      message: message ?? 'Backup file created and opened in the share sheet.',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = context.watch<AdminProvider>();
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4F7FB),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+          children: [
+            _SettingsHeroCard(
+              ownerName: provider.currentOwnerName,
+              ownerRole: provider.currentOwnerRole,
+            ),
+            const SizedBox(height: 16),
+            const _SettingsSectionHeader(
+              title: 'App Actions',
+              subtitle: 'Manage security and system-level controls.',
+            ),
+            const SizedBox(height: 10),
+            if (false) Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF222B45), Color(0xFF3F4C6B)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(22),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.14),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Icon(
+                      Icons.settings_outlined,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Settings',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${provider.currentOwnerName} • ${provider.currentOwnerRole.isEmpty ? 'Owner Access' : provider.currentOwnerRole.toUpperCase()}',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (false) const SizedBox(height: 16),
+            if (false) const Text(
+              'App Actions',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF172433),
+              ),
+            ),
+            if (false) const SizedBox(height: 10),
+            _SwitchSettingsTile(
+              icon: Icons.fingerprint_rounded,
+              color: const Color(0xFF173E96),
+              title: 'Fingerprint / Biometrics',
+              subtitle: provider.biometricSettingsSubtitle,
+              value: provider.biometricEnabled,
+              isBusy: _isUpdatingBiometrics || provider.isBiometricBusy,
+              onChanged: _handleBiometricToggle,
+            ),
+            _SettingsTile(
+              icon: Icons.backup_outlined,
+              color: const Color(0xFF9C5A00),
+              title: 'Data Backup',
+              subtitle: 'Export a JSON backup snapshot through the device share sheet.',
+              trailing: _isExporting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right),
+              onTap: _isExporting ? null : _handleBackupExport,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsHeroCard extends StatelessWidget {
+  const _SettingsHeroCard({
+    required this.ownerName,
+    required this.ownerRole,
+  });
+
+  final String ownerName;
+  final String ownerRole;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeOwnerName = ownerName.trim().isEmpty ? 'Admin User' : ownerName;
+    final roleLabel = ownerRole.trim().isEmpty
+        ? 'Owner Access'
+        : ownerRole.toUpperCase();
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF1F2A4D), Color(0xFF364B7A)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0x2FFFFFFF)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x1C162544),
+            blurRadius: 20,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Icon(
+              Icons.settings_outlined,
+              color: Colors.white,
+              size: 28,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Settings',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                    height: 1.06,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '$safeOwnerName - $roleLabel',
+                  style: const TextStyle(
+                    color: Color(0xD9FFFFFF),
+                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsSectionHeader extends StatelessWidget {
+  const _SettingsSectionHeader({
+    required this.title,
+    required this.subtitle,
+  });
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 19,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.1,
+            color: Color(0xFF172433),
+          ),
+        ),
+        const SizedBox(height: 5),
+        Text(
+          subtitle,
+          style: const TextStyle(
+            color: Color(0xFF667085),
+            fontWeight: FontWeight.w600,
+            height: 1.3,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SettingsTile extends StatelessWidget {
+  const _SettingsTile({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE6EBF3)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 22,
+                  backgroundColor: color.withOpacity(0.12),
+                  child: Icon(icon, color: color),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF172433),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: const TextStyle(
+                          color: Color(0xFF667085),
+                          fontWeight: FontWeight.w500,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconTheme(
+                  data: const IconThemeData(color: Color(0xFF98A2B3)),
+                  child: trailing ?? const Icon(Icons.chevron_right),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+class _SwitchSettingsTile extends StatelessWidget {
+  const _SwitchSettingsTile({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+    required this.isBusy,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final bool isBusy;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE6EBF3)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: color.withOpacity(0.12),
+              child: Icon(icon, color: color),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF172433),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: Color(0xFF667085),
+                      fontWeight: FontWeight.w500,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (isBusy)
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              Switch.adaptive(
+                value: value,
+                onChanged: onChanged,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
