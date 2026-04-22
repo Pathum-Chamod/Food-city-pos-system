@@ -13,7 +13,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _isExporting = false;
-  bool _isLoggingOut = false;
   bool _isUpdatingBiometrics = false;
 
   Future<void> _handleBiometricToggle(bool value) async {
@@ -53,52 +52,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _handleLogout() async {
-    final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (context) {
-            return AlertDialog(
-              title: const Text('Log out?'),
-              content: const Text(
-                'You will return to the admin login screen.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Log Out'),
-                ),
-              ],
-            );
-          },
-        ) ??
-        false;
-
-    if (!confirmed || !mounted) return;
-
-    setState(() => _isLoggingOut = true);
-    await context.read<AdminProvider>().logout();
-    if (!mounted) return;
-    setState(() => _isLoggingOut = false);
-
-    Navigator.of(context).popUntil((route) => route.isFirst);
-    AppSnackBar.show(context, message: 'Logged out successfully.');
-  }
-
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AdminProvider>();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      backgroundColor: const Color(0xFFF4F7FB),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
           children: [
-            Container(
+            _SettingsHeroCard(
+              ownerName: provider.currentOwnerName,
+              ownerRole: provider.currentOwnerRole,
+            ),
+            const SizedBox(height: 16),
+            const _SettingsSectionHeader(
+              title: 'App Actions',
+              subtitle: 'Manage security and system-level controls.',
+            ),
+            const SizedBox(height: 10),
+            if (false) Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
@@ -150,8 +124,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
-            const SizedBox(height: 16),
-            const Text(
+            if (false) const SizedBox(height: 16),
+            if (false) const Text(
               'App Actions',
               style: TextStyle(
                 fontSize: 17,
@@ -159,7 +133,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 color: Color(0xFF172433),
               ),
             ),
-            const SizedBox(height: 10),
+            if (false) const SizedBox(height: 10),
             _SwitchSettingsTile(
               icon: Icons.fingerprint_rounded,
               color: const Color(0xFF173E96),
@@ -183,23 +157,128 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   : const Icon(Icons.chevron_right),
               onTap: _isExporting ? null : _handleBackupExport,
             ),
-            _SettingsTile(
-              icon: Icons.logout_outlined,
-              color: const Color(0xFFB42318),
-              title: 'Logout',
-              subtitle: 'End the current admin session and return to the login screen.',
-              trailing: _isLoggingOut
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.chevron_right),
-              onTap: _isLoggingOut ? null : _handleLogout,
-            ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _SettingsHeroCard extends StatelessWidget {
+  const _SettingsHeroCard({
+    required this.ownerName,
+    required this.ownerRole,
+  });
+
+  final String ownerName;
+  final String ownerRole;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeOwnerName = ownerName.trim().isEmpty ? 'Admin User' : ownerName;
+    final roleLabel = ownerRole.trim().isEmpty
+        ? 'Owner Access'
+        : ownerRole.toUpperCase();
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF1F2A4D), Color(0xFF364B7A)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0x2FFFFFFF)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x1C162544),
+            blurRadius: 20,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const Icon(
+              Icons.settings_outlined,
+              color: Colors.white,
+              size: 28,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Settings',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                    height: 1.06,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '$safeOwnerName - $roleLabel',
+                  style: const TextStyle(
+                    color: Color(0xD9FFFFFF),
+                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsSectionHeader extends StatelessWidget {
+  const _SettingsSectionHeader({
+    required this.title,
+    required this.subtitle,
+  });
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 19,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.1,
+            color: Color(0xFF172433),
+          ),
+        ),
+        const SizedBox(height: 5),
+        Text(
+          subtitle,
+          style: const TextStyle(
+            color: Color(0xFF667085),
+            fontWeight: FontWeight.w600,
+            height: 1.3,
+          ),
+        ),
+      ],
     );
   }
 }

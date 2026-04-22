@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
-import 'admin_home.dart';
+import '../providers/admin_provider.dart';
+import '../widgets/app_snackbar.dart';
 import 'business_info_screen.dart';
 import 'users_activity_screen.dart';
 import 'settings_screen.dart';
@@ -26,7 +28,6 @@ class OwnerMoreScreen extends StatelessWidget {
             color: const Color(0xFF0F3D91),
             title: 'Business Info',
             subtitle: 'Store details, contact info, and business settings.',
-            status: 'Available',
             enabled: true,
             onTap: () {
               Navigator.push(
@@ -42,7 +43,6 @@ class OwnerMoreScreen extends StatelessWidget {
             color: const Color(0xFF147A5A),
             title: 'Users & Activity',
             subtitle: 'Owner users, activity logs, and permission controls.',
-            status: 'Available',
             enabled: true,
             onTap: () {
               Navigator.push(
@@ -57,8 +57,7 @@ class OwnerMoreScreen extends StatelessWidget {
             icon: Icons.settings_outlined,
             color: const Color(0xFF7A1CAC),
             title: 'Settings',
-            subtitle: 'Logout and data backup export for the owner app.',
-            status: 'Available',
+            subtitle: 'Biometrics and data backup controls for the owner app.',
             enabled: true,
             onTap: () {
               Navigator.push(
@@ -69,74 +68,41 @@ class OwnerMoreScreen extends StatelessWidget {
               );
             },
           ),
-          const SizedBox(height: 18),
-          const _SectionTitle(
-            title: 'Advanced Tools',
-            subtitle: 'Older operational tools kept outside the main owner flow.',
-          ),
-          const SizedBox(height: 10),
-          Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF7ED),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: const Color(0xFFFBD7A3)),
-            ),
-            child: const Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                CircleAvatar(
-                  radius: 18,
-                  backgroundColor: Color(0xFFFFEDD5),
-                  child: Icon(
-                    Icons.info_outline,
-                    color: Color(0xFFB45309),
-                    size: 20,
-                  ),
-                ),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Advanced tools are separated on purpose',
-                        style: TextStyle(
-                          color: Color(0xFF9A3412),
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      SizedBox(height: 4),
-                      Text(
-                        'Stock take, supplier workspace, and older admin actions stay here so the main owner app remains clean and focused.',
-                        style: TextStyle(
-                          color: Color(0xFF9A3412),
-                          fontWeight: FontWeight.w500,
-                          height: 1.35,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
           _FeatureTile(
-            icon: Icons.build_outlined,
-            color: const Color(0xFF7A1CAC),
-            title: 'Open Previous Admin Workspace',
-            subtitle:
-                'Access stock take, supplier workspace, and the old operational admin screen.',
-            status: 'Available',
+            icon: Icons.logout_outlined,
+            color: const Color(0xFFB42318),
+            title: 'Logout',
+            subtitle: 'End this admin session and return to the login screen.',
             enabled: true,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const AdminHome(),
-                ),
-              );
+            onTap: () async {
+              final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (dialogContext) {
+                      return AlertDialog(
+                        title: const Text('Log out?'),
+                        content: const Text(
+                          'You will return to the admin login screen.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(dialogContext, false),
+                            child: const Text('Cancel'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(dialogContext, true),
+                            child: const Text('Log Out'),
+                          ),
+                        ],
+                      );
+                    },
+                  ) ??
+                  false;
+
+              if (!confirmed || !context.mounted) return;
+              await context.read<AdminProvider>().logout();
+              if (!context.mounted) return;
+              Navigator.of(context).popUntil((route) => route.isFirst);
+              AppSnackBar.show(context, message: 'Logged out successfully.');
             },
           ),
         ],
@@ -244,7 +210,6 @@ class _FeatureTile extends StatelessWidget {
     required this.color,
     required this.title,
     required this.subtitle,
-    required this.status,
     required this.enabled,
     this.onTap,
   });
@@ -253,7 +218,6 @@ class _FeatureTile extends StatelessWidget {
   final Color color;
   final String title;
   final String subtitle;
-  final String status;
   final bool enabled;
   final VoidCallback? onTap;
 
@@ -285,23 +249,12 @@ class _FeatureTile extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              title,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFF172433),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          _StatusChip(
-                            label: status,
-                            enabled: enabled,
-                          ),
-                        ],
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF172433),
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
@@ -328,41 +281,5 @@ class _FeatureTile extends StatelessWidget {
     );
 
     return enabled ? tile : Opacity(opacity: 0.82, child: tile);
-  }
-}
-
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({
-    required this.label,
-    required this.enabled,
-  });
-
-  final String label;
-  final bool enabled;
-
-  @override
-  Widget build(BuildContext context) {
-    final background = enabled
-        ? const Color(0xFFE8FFF2)
-        : const Color(0xFFF2F4F7);
-    final foreground = enabled
-        ? const Color(0xFF147A5A)
-        : const Color(0xFF667085);
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: foreground,
-          fontSize: 11,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-    );
   }
 }

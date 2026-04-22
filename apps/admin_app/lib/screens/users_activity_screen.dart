@@ -303,47 +303,14 @@ class _UsersActivityScreenState extends State<UsersActivityScreen> {
     final isLoading = provider.isOwnerUsersLoading;
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: const Color(0xFF172433),
-        elevation: 0,
-        titleSpacing: 0,
-        title: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Users & Activity',
-              style: TextStyle(fontWeight: FontWeight.w800),
-            ),
-            SizedBox(height: 2),
-            Text(
-              'Owner visibility into staff access and activity.',
-              style: TextStyle(
-                fontSize: 12,
-                color: Color(0xFF667085),
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-      ),
       backgroundColor: const Color(0xFFF4F7FB),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openCreateUserSheet,
-        backgroundColor: const Color(0xFF0F3D91),
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.person_add_alt_1_rounded),
-        label: const Text(
-          'Add User',
-          style: TextStyle(fontWeight: FontWeight.w700),
-        ),
-      ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 90),
-          children: [
-            const _HeroCard(),
+      body: SafeArea(
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+            children: [
+              _HeroCard(onAddUser: _openCreateUserSheet),
             const SizedBox(height: 16),
             _SectionCard(
               title: 'Users',
@@ -448,7 +415,8 @@ class _UsersActivityScreenState extends State<UsersActivityScreen> {
                 ],
               ),
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -456,55 +424,79 @@ class _UsersActivityScreenState extends State<UsersActivityScreen> {
 }
 
 class _HeroCard extends StatelessWidget {
-  const _HeroCard();
+  const _HeroCard({
+    required this.onAddUser,
+  });
+
+  final VoidCallback onAddUser;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [Color(0xFF147A5A), Color(0xFF2FA36B)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 54,
-            height: 54,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.14),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Icon(Icons.manage_accounts_outlined, color: Colors.white, size: 28),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0x2FFFFFFF)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x1A145C3E),
+            blurRadius: 20,
+            offset: Offset(0, 10),
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Users & Activity',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w800,
-                  ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 2),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(16),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Track account access, roles, and recent activity.',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.82),
-                    fontWeight: FontWeight.w500,
-                    height: 1.35,
-                  ),
+                child: const Icon(
+                  Icons.manage_accounts_outlined,
+                  color: Colors.white,
+                  size: 28,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Users & Activity',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                        height: 1.06,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Track account access, roles, and recent activity.',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.88),
+                        fontWeight: FontWeight.w600,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -615,39 +607,70 @@ class _ActivityFilterBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget chip(String value, String label) {
-      final selected = value == selectedFilter;
-      return InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: () => onChanged(value),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: selected ? const Color(0xFF0F3D91) : Colors.white,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: selected ? const Color(0xFF0F3D91) : const Color(0xFFD8E0EA),
-            ),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: selected ? Colors.white : const Color(0xFF475467),
-              fontWeight: FontWeight.w700,
+    Widget filterButton(String value, String label) {
+      final selected = value == selectedFilter ||
+          (value == 'approvals' && selectedFilter == 'pin_changes');
+      return Expanded(
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => onChanged(value),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              curve: Curves.easeOut,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected ? const Color(0xFF0F3D91) : Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: selected
+                      ? const Color(0xFF0F3D91)
+                      : const Color(0xFFD0D9E5),
+                ),
+                boxShadow: selected
+                    ? const [
+                        BoxShadow(
+                          color: Color(0x26103D91),
+                          blurRadius: 8,
+                          offset: Offset(0, 3),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? Colors.white : const Color(0xFF475467),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
             ),
           ),
         ),
       );
     }
 
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
+    return Column(
       children: [
-        chip('all', 'All'),
-        chip('logins', 'Logins'),
-        chip('user_changes', 'User Changes'),
-        chip('pin_changes', 'PIN Changes'),
+        Row(
+          children: [
+            filterButton('all', 'All'),
+            const SizedBox(width: 8),
+            filterButton('logins', 'Logins'),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            filterButton('user_changes', 'User Changes'),
+            const SizedBox(width: 8),
+            filterButton('approvals', 'Approvals'),
+          ],
+        ),
       ],
     );
   }
