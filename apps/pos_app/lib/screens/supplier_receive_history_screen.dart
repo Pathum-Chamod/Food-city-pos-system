@@ -109,6 +109,16 @@ class _SupplierReceiveHistoryScreenState
 
   String _formatCurrency(num value) => 'Rs. ${value.toStringAsFixed(2)}';
 
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
 
   List<StockReceiptRecord> get _filteredReceipts {
     final rawQuery = _searchController.text.trim().toLowerCase();
@@ -146,6 +156,28 @@ class _SupplierReceiveHistoryScreenState
     }).toList();
   }
 
+  Map<String, dynamic> get _visibleSummary {
+    if (_searchController.text.trim().isEmpty) {
+      return _summary;
+    }
+
+    final filtered = _filteredReceipts;
+    final totalUnits = filtered.fold<double>(
+      0.0,
+      (sum, receipt) => sum + receipt.quantity,
+    );
+    final totalCost = filtered.fold<double>(
+      0.0,
+      (sum, receipt) => sum + (receipt.cost * receipt.quantity),
+    );
+
+    return {
+      'receipt_count': filtered.length,
+      'total_units': totalUnits,
+      'total_cost': totalCost,
+    };
+  }
+
   InputDecoration _fieldDecoration({
     required String hintText,
     String? labelText,
@@ -181,6 +213,7 @@ class _SupplierReceiveHistoryScreenState
 
   Widget _buildHeader() {
     final ui = _ui;
+    final visibleSummary = _visibleSummary;
     final title = widget.supplier == null
         ? 'Receive History Workspace'
         : '${widget.supplier!.name} Receive History';
@@ -289,7 +322,7 @@ class _SupplierReceiveHistoryScreenState
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Receipts',
-                      value: (((_summary['receipt_count'] as num?) ?? 0).toInt()).toString(),
+                      value: (((visibleSummary['receipt_count'] as num?) ?? 0).toInt()).toString(),
                       subtitle: 'Logged receive entries',
                       icon: Icons.receipt_long_outlined,
                       color: ui.blue,
@@ -299,7 +332,7 @@ class _SupplierReceiveHistoryScreenState
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Units Received',
-                      value: (((_summary['total_units'] as num?) ?? 0).toInt()).toString(),
+                      value: _formatQuantity((visibleSummary['total_units'] as num?) ?? 0),
                       subtitle: 'Total stock units added',
                       icon: Icons.inventory_2_outlined,
                       color: ui.success,
@@ -309,7 +342,7 @@ class _SupplierReceiveHistoryScreenState
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Supplier Spend',
-                      value: _formatCurrency(((_summary['total_cost'] as num?) ?? 0).toDouble()),
+                      value: _formatCurrency(((visibleSummary['total_cost'] as num?) ?? 0).toDouble()),
                       subtitle: 'Recorded receiving cost',
                       icon: Icons.payments_outlined,
                       color: ui.purple,
@@ -606,7 +639,7 @@ class _SupplierReceiveHistoryScreenState
                   border: Border.all(color: ui.success.withOpacity(0.22)),
                 ),
                 child: Text(
-                  '+${receipt.quantity}',
+                  '+${_formatQuantity(receipt.quantity)}',
                   style: TextStyle(
                     color: ui.success,
                     fontWeight: FontWeight.w800,
@@ -649,7 +682,7 @@ class _SupplierReceiveHistoryScreenState
             children: [
               _buildInlineMeta(
                 icon: Icons.add_box_outlined,
-                text: '+${receipt.quantity} received',
+                text: '+${_formatQuantity(receipt.quantity)} received',
                 color: ui.success,
               ),
               _buildMetaDivider(),

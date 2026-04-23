@@ -9,6 +9,13 @@ class OwnerDashboardScreen extends StatelessWidget {
   const OwnerDashboardScreen({super.key});
 
   String _formatMoney(num value) => 'Rs. ${value.toStringAsFixed(2)}';
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
 
   String _formatCompactMoney(num value) {
     if (value.abs() >= 1000000) {
@@ -578,10 +585,18 @@ class _ProductPreviewTile extends StatelessWidget {
   final Map<String, dynamic> product;
   final String Function(num value) formatMoney;
 
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
   @override
   Widget build(BuildContext context) {
     final productName = (product['product_name'] ?? 'Unknown item').toString();
-    final quantity = (product['quantity_sold'] as num?)?.toInt() ?? 0;
+    final quantity = (product['quantity_sold'] as num?)?.toDouble() ?? 0.0;
     final totalSales = (product['total_sales'] as num?)?.toDouble() ?? 0.0;
 
     return Container(
@@ -624,7 +639,7 @@ class _ProductPreviewTile extends StatelessWidget {
               ),
               const SizedBox(height: 3),
               Text(
-                '$quantity sold',
+                '${_formatQuantity(quantity)} sold',
                 style: const TextStyle(
                   color: Color(0xFF6B7482),
                   fontWeight: FontWeight.w600,

@@ -18,6 +18,14 @@ class _StockTakeHistoryScreenState extends State<StockTakeHistoryScreen> {
   bool _isLoading = true;
   List<StockTakeHistoryEntry> _entries = <StockTakeHistoryEntry>[];
 
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
   @override
   void initState() {
     super.initState();
@@ -126,7 +134,8 @@ class _StockTakeHistoryScreenState extends State<StockTakeHistoryScreen> {
                           itemBuilder: (context, index) {
                             final line = entry.lines[index];
                             final diff = line.difference;
-                            final diffText = diff > 0 ? '+$diff' : diff.toString();
+                            final diffText =
+                                diff > 0 ? '+${_formatQuantity(diff)}' : _formatQuantity(diff);
 
                             return ListTile(
                               title: Text(

@@ -99,6 +99,14 @@ class _OwnerSalesScreenState extends State<OwnerSalesScreen> {
     return '$prefix${amount.toStringAsFixed(0)}';
   }
 
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
   String _formatDateLong(DateTime date) =>
       '${date.day} ${_monthShort(date.month)} ${date.year}';
 
@@ -2417,6 +2425,14 @@ class _TopProductTile extends StatelessWidget {
   final Map<String, dynamic> row;
   final String Function(num value) formatMoney;
 
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
   @override
   Widget build(BuildContext context) {
     final sales =
@@ -2424,8 +2440,8 @@ class _TopProductTile extends StatelessWidget {
                 ?.toDouble() ??
             0.0;
     final soldQty =
-        ((row['sold_quantity'] ?? row['quantity_sold']) as num?)?.toInt() ?? 0;
-    final refundedQty = (row['refunded_quantity'] as num?)?.toInt() ?? 0;
+        ((row['sold_quantity'] ?? row['quantity_sold']) as num?)?.toDouble() ?? 0.0;
+    final refundedQty = (row['refunded_quantity'] as num?)?.toDouble() ?? 0.0;
     final profit =
         ((row['estimated_profit'] ?? row['gross_profit']) as num?)
                 ?.toDouble() ??
@@ -2509,13 +2525,13 @@ class _TopProductTile extends StatelessWidget {
             runSpacing: 8,
             children: [
               _TagPill(
-                label: 'Sold $soldQty',
+                label: 'Sold ${_formatQuantity(soldQty)}',
                 color: const Color(0xFF172433),
                 background: Colors.white,
               ),
               if (refundedQty > 0)
                 _TagPill(
-                  label: 'Refunded $refundedQty',
+                  label: 'Refunded ${_formatQuantity(refundedQty)}',
                   color: _SalesPalette.danger,
                   background: const Color(0xFFFEE4E2),
                 ),
@@ -2552,10 +2568,18 @@ class _SlowMoverTile extends StatelessWidget {
   final Map<String, dynamic> row;
   final String Function(num value) formatMoney;
 
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
   @override
   Widget build(BuildContext context) {
-    final sold = (row['quantity_sold'] as num?)?.toInt() ?? 0;
-    final stock = (row['stock'] as num?)?.toInt() ?? 0;
+    final sold = (row['quantity_sold'] as num?)?.toDouble() ?? 0.0;
+    final stock = (row['stock'] as num?)?.toDouble() ?? 0.0;
     final stockValue = (row['stock_value'] as num?)?.toDouble() ?? 0.0;
     final productName = (row['product_name'] ?? 'Unknown').toString();
 
@@ -2640,12 +2664,12 @@ class _SlowMoverTile extends StatelessWidget {
             runSpacing: 8,
             children: [
               _TagPill(
-                label: 'Sold $sold',
+                label: 'Sold ${_formatQuantity(sold)}',
                 color: const Color(0xFF172433),
                 background: Colors.white,
               ),
               _TagPill(
-                label: 'Stock $stock',
+                label: 'Stock ${_formatQuantity(stock)}',
                 color: _SalesPalette.warning,
                 background: const Color(0xFFFFF8EB),
               ),

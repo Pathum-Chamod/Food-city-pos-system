@@ -45,11 +45,37 @@ class PosScreen extends StatefulWidget {
   State<PosScreen> createState() => _PosScreenState();
 }
 
+class _DecimalQuantityInputFormatter extends TextInputFormatter {
+  _DecimalQuantityInputFormatter({this.maxDecimals = 3});
+
+  final int maxDecimals;
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final text = newValue.text;
+    if (text.isEmpty) {
+      return newValue;
+    }
+
+    final decimalPattern = RegExp('^\\d*(?:\\.\\d{0,$maxDecimals})?\$');
+    if (!decimalPattern.hasMatch(text)) {
+      return oldValue;
+    }
+
+    return newValue;
+  }
+}
+
 class _PosScreenState extends State<PosScreen> {
+  static const double _quantityEpsilon = 0.000001;
   List<Product> _products = [];
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
   bool _isRefreshingProducts = false;
+  int _activeModalCount = 0;
   bool _showWelcomeOverlay = false;
   bool _renderWelcomeOverlay = false;
   Timer? _productRefreshTimer;
@@ -549,9 +575,9 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   void _focusBarcodeField() {
-    if (!mounted) return;
+    if (!mounted || _activeModalCount > 0) return;
     Future.delayed(const Duration(milliseconds: 50), () {
-      if (!mounted) return;
+      if (!mounted || _activeModalCount > 0) return;
       _barcodeFocusNode.requestFocus();
     });
   }
@@ -1030,7 +1056,7 @@ class _PosScreenState extends State<PosScreen> {
     bool showSuccessMessage = false,
     bool silentOnFailure = false,
   }) async {
-    if (_isRefreshingProducts) return false;
+    if (_isRefreshingProducts || _activeModalCount > 0) return false;
 
     setState(() {
       _isRefreshingProducts = true;
@@ -1092,14 +1118,65 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  int _getCurrentStock(String barcode, {int fallback = 0}) {
+  double _getCurrentStock(String barcode, {double fallback = 0.0}) {
     return _getCurrentProduct(barcode)?.stock ?? fallback;
   }
 
-  int _getQuantityInCart(CartProvider cart, String barcode) {
+  double _getQuantityInCart(CartProvider cart, String barcode) {
     return cart.items
         .where((item) => item.product.barcode == barcode)
-        .fold<int>(0, (sum, item) => sum + item.quantity);
+        .fold<double>(0.0, (sum, item) => sum + item.quantity);
+  }
+
+  double _sanitizeQuantity(num value) {
+    final quantity = value.toDouble();
+    return quantity.abs() < _quantityEpsilon ? 0.0 : quantity;
+  }
+
+  bool _quantityExceeds(num requested, num available) {
+    return requested.toDouble() - available.toDouble() > _quantityEpsilon;
+  }
+
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final sanitized = _sanitizeQuantity(value);
+    return sanitized.toStringAsFixed(maxDecimals).replaceFirst(
+      RegExp(r'\.?0+$'),
+      '',
+    );
+  }
+
+  String _formatQuantityWithUnit(
+    num value,
+    String unitLabel, {
+    int maxDecimals = 3,
+  }) {
+    return '${_formatQuantity(value, maxDecimals: maxDecimals)} $unitLabel';
+  }
+
+  String _formatStockText(Product product, num quantity) {
+    if (product.isWeighted) {
+      return _formatQuantityWithUnit(quantity, product.unitLabel);
+    }
+    return _formatQuantity(quantity);
+  }
+
+  String _formatCartBadgeText(Product product, num quantity) {
+    final label = product.isWeighted
+        ? _formatQuantityWithUnit(quantity, product.unitLabel)
+        : _formatQuantity(quantity);
+    return '$label in cart';
+  }
+
+  String _formatStockTextWithCartUnit(Product product, num quantity) {
+    if (product.isWeighted) {
+      return _formatQuantityWithUnit(quantity, product.unitLabel);
+    }
+    return '${_formatQuantity(quantity)} pcs';
+  }
+
+  String _formatPriceCaption(Product product, double unitPrice) {
+    final suffix = product.isWeighted ? 'per ${product.unitLabel}' : 'each';
+    return 'Rs. ${unitPrice.toStringAsFixed(2)} $suffix';
   }
 
   double _getDisplayPrice(Product product, CartProvider cart) {
@@ -1366,7 +1443,7 @@ class _PosScreenState extends State<PosScreen> {
   int get _outOfStockCount =>
       _products.where((product) => product.stock <= 0).length;
 
-  void _handleBarcodeSubmit(CartProvider cart) {
+  Future<void> _handleBarcodeSubmit(CartProvider cart) async {
     final barcode = _barcodeController.text.trim();
 
     if (barcode.isEmpty) {
@@ -1386,12 +1463,425 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    _handleProductTap(product, cart);
+    await _handleProductTap(product, cart);
     _barcodeController.clear();
     _focusBarcodeField();
   }
 
-  void _handleProductTap(Product product, CartProvider cart) {
+  Future<double?> _promptWeightedQuantity({
+    required Product product,
+    required String title,
+    required String confirmLabel,
+    required double initialQuantity,
+    required double unitPrice,
+    double? maxQuantity,
+  }) async {
+    final boundedInitial = maxQuantity != null && maxQuantity > 0
+        ? (initialQuantity > maxQuantity ? maxQuantity : initialQuantity)
+        : initialQuantity;
+    final controller = TextEditingController(
+      text: _formatQuantity(
+        boundedInitial <= _quantityEpsilon ? 1.0 : boundedInitial,
+      ),
+    );
+    String? quantityError;
+    _activeModalCount += 1;
+
+    try {
+      final result = await showPremiumDialog<double>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, setLocalState) {
+            String? validateQuantity(String raw) {
+              final parsed = double.tryParse(raw.trim());
+              if (parsed == null || parsed <= 0) {
+                return 'Enter a valid quantity.';
+              }
+              if (maxQuantity != null && _quantityExceeds(parsed, maxQuantity)) {
+                return 'Only ${_formatStockText(product, maxQuantity)} available.';
+              }
+              return null;
+            }
+
+            void submit() {
+              final error = validateQuantity(controller.text);
+              if (error != null) {
+                setLocalState(() {
+                  quantityError = error;
+                });
+                return;
+              }
+
+              Navigator.of(
+                dialogContext,
+              ).pop(_sanitizeQuantity(double.parse(controller.text.trim())));
+            }
+
+            return Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              child: AnimatedPadding(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(dialogContext).viewInsets.bottom,
+                ),
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 440),
+                  padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
+                  decoration: _panelDecoration(color: _panelColor),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: _brandSoft,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Icon(
+                                Icons.scale_rounded,
+                                color: _brandColor,
+                                size: 22,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    title,
+                                    style: TextStyle(
+                                      color: _textPrimary,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    product.name,
+                                    style: TextStyle(
+                                      color: _textSecondary,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 18),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: _panelSoft,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: _borderColor),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _formatPriceCaption(
+                                  product,
+                                  unitPrice,
+                                ),
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              if (maxQuantity != null) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Available: ${_formatStockText(product, maxQuantity)}',
+                                  style: TextStyle(
+                                    color: _textSecondary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        TextField(
+                          controller: controller,
+                          autofocus: true,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          inputFormatters: [
+                            _DecimalQuantityInputFormatter(maxDecimals: 3),
+                          ],
+                          decoration: InputDecoration(
+                            labelText: 'Quantity (${product.unitLabel})',
+                            hintText: 'Enter ${product.unitLabel} amount',
+                            errorText: quantityError,
+                          ),
+                          onChanged: (_) {
+                            if (quantityError == null) return;
+                            setLocalState(() {
+                              quantityError = null;
+                            });
+                          },
+                          onSubmitted: (_) => submit(),
+                        ),
+                        const SizedBox(height: 18),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => Navigator.of(dialogContext).pop(),
+                                child: const Text('Cancel'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: submit,
+                                icon: const Icon(Icons.check_rounded, size: 16),
+                                label: Text(confirmLabel),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+
+      return result == null ? null : _sanitizeQuantity(result);
+    } finally {
+      Future<void>.delayed(
+        const Duration(milliseconds: 300),
+        () {
+          _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+          controller.dispose();
+        },
+      );
+    }
+  }
+
+  Future<double?> _promptUnitQuantity({
+    required Product product,
+    required String title,
+    required String confirmLabel,
+    required double initialQuantity,
+    required double unitPrice,
+    double? maxQuantity,
+  }) async {
+    final boundedInitial = maxQuantity != null && maxQuantity > 0
+        ? (initialQuantity > maxQuantity ? maxQuantity : initialQuantity)
+        : initialQuantity;
+    final safeInitial = boundedInitial <= _quantityEpsilon
+        ? 1.0
+        : boundedInitial.floorToDouble();
+    final controller = TextEditingController(
+      text: _formatQuantity(safeInitial, maxDecimals: 0),
+    );
+    String? quantityError;
+    _activeModalCount += 1;
+
+    try {
+      final result = await showPremiumDialog<double>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, setLocalState) {
+            String? validateQuantity(String raw) {
+              final parsed = int.tryParse(raw.trim());
+              if (parsed == null || parsed <= 0) {
+                return 'Enter a valid quantity.';
+              }
+              if (maxQuantity != null && _quantityExceeds(parsed, maxQuantity)) {
+                return 'Only ${_formatStockTextWithCartUnit(product, maxQuantity)} available.';
+              }
+              return null;
+            }
+
+            void submit() {
+              final error = validateQuantity(controller.text);
+              if (error != null) {
+                setLocalState(() {
+                  quantityError = error;
+                });
+                return;
+              }
+
+              Navigator.of(
+                dialogContext,
+              ).pop(_sanitizeQuantity(double.parse(controller.text.trim())));
+            }
+
+            return Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              child: AnimatedPadding(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(dialogContext).viewInsets.bottom,
+                ),
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 440),
+                  padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
+                  decoration: _panelDecoration(color: _panelColor),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: _brandSoft,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Icon(
+                                Icons.edit_note_rounded,
+                                color: _brandColor,
+                                size: 22,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    title,
+                                    style: TextStyle(
+                                      color: _textPrimary,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    product.name,
+                                    style: TextStyle(
+                                      color: _textSecondary,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 18),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: _panelSoft,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: _borderColor),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _formatPriceCaption(
+                                  product,
+                                  unitPrice,
+                                ),
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              if (maxQuantity != null) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Available: ${_formatStockTextWithCartUnit(product, maxQuantity)}',
+                                  style: TextStyle(
+                                    color: _textSecondary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        TextField(
+                          controller: controller,
+                          autofocus: true,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
+                          decoration: InputDecoration(
+                            labelText: 'Quantity (pcs)',
+                            hintText: 'Enter piece count',
+                            errorText: quantityError,
+                          ),
+                          onChanged: (_) {
+                            if (quantityError == null) return;
+                            setLocalState(() {
+                              quantityError = null;
+                            });
+                          },
+                          onSubmitted: (_) => submit(),
+                        ),
+                        const SizedBox(height: 18),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => Navigator.of(dialogContext).pop(),
+                                child: const Text('Cancel'),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: submit,
+                                icon: const Icon(Icons.check_rounded, size: 16),
+                                label: Text(confirmLabel),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+
+      return result == null ? null : _sanitizeQuantity(result);
+    } finally {
+      Future<void>.delayed(
+        const Duration(milliseconds: 300),
+        () {
+          _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+          controller.dispose();
+        },
+      );
+    }
+  }
+
+  Future<void> _handleProductTap(Product product, CartProvider cart) async {
     if (!cart.isRefundMode && product.stock <= 0) {
       _showInfoMessage(
         'This item is out of stock.',
@@ -1401,8 +1891,49 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     final currentQtyInCart = _getQuantityInCart(cart, product.barcode);
+    var quantityToAdd = 1.0;
 
-    if (!cart.isRefundMode && currentQtyInCart >= product.stock) {
+    if (product.isWeighted) {
+      final remainingStock = cart.isRefundMode
+          ? null
+          : _sanitizeQuantity(product.stock - currentQtyInCart);
+
+      if (!cart.isRefundMode &&
+          remainingStock != null &&
+          remainingStock <= _quantityEpsilon) {
+        _showInfoMessage(
+          'Cannot add more than available stock for ${product.name}.',
+          backgroundColor: _dangerColor,
+        );
+        return;
+      }
+
+      final defaultQuantity =
+          remainingStock != null &&
+              remainingStock > _quantityEpsilon &&
+              remainingStock < 1
+          ? remainingStock
+          : 1.0;
+
+      final enteredQuantity = await _promptWeightedQuantity(
+        product: product,
+        title: 'Enter ${product.unitLabel} quantity',
+        confirmLabel: 'Add to cart',
+        initialQuantity: defaultQuantity,
+        unitPrice: product.resolvePrice(cart.selectedPriceType),
+        maxQuantity: remainingStock,
+      );
+
+      if (enteredQuantity == null) {
+        _focusBarcodeField();
+        return;
+      }
+
+      quantityToAdd = enteredQuantity;
+    }
+
+    if (!cart.isRefundMode &&
+        _quantityExceeds(currentQtyInCart + quantityToAdd, product.stock)) {
       _showInfoMessage(
         'Cannot add more than available stock for ${product.name}.',
         backgroundColor: _dangerColor,
@@ -1410,7 +1941,7 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    cart.addToCart(product);
+    cart.addToCart(product, quantity: quantityToAdd);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _scrollCartToLatest();
@@ -2319,8 +2850,8 @@ class _PosScreenState extends State<PosScreen> {
       final item = Map<String, dynamic>.from(raw);
       final productMap = Map<String, dynamic>.from(item['product'] as Map);
       final barcode = productMap['barcode']?.toString() ?? '';
-      final quantity = (item['quantity'] as num?)?.toInt() ?? 1;
-      final safeQuantity = quantity <= 0 ? 1 : quantity;
+      final quantity = (item['quantity'] as num?)?.toDouble() ?? 1.0;
+      final safeQuantity = quantity <= _quantityEpsilon ? 1.0 : quantity;
 
       final latestProduct = _getCurrentProduct(barcode);
       final resolvedProductMap = latestProduct?.toMap() ?? productMap;
@@ -2733,13 +3264,15 @@ class _PosScreenState extends State<PosScreen> {
           ),
           const SizedBox(width: 10),
           SizedBox(
-            height: 50,
+            height: 42,
             child: ElevatedButton.icon(
               onPressed: () => _handleBarcodeSubmit(cart),
               icon: const Icon(Icons.add_shopping_cart_rounded, size: 18),
               label: const Text('Add to Cart'),
               style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                minimumSize: const Size(0, 42),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 backgroundColor: _brandColor,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
@@ -3158,7 +3691,8 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Widget _buildProductCard(Product product, CartProvider cart) {
-    final isOutOfStock = product.stock <= 0 && !cart.isRefundMode;
+    final isOutOfStock =
+        _sanitizeQuantity(product.stock) <= _quantityEpsilon && !cart.isRefundMode;
     final isLowStock = !isOutOfStock && product.isLowStock;
     final cartQty = _getQuantityInCart(cart, product.barcode);
     final displayPrice = _getDisplayPrice(product, cart);
@@ -3241,7 +3775,7 @@ class _PosScreenState extends State<PosScreen> {
                         border: Border.all(color: _brandColor.withOpacity(0.25)),
                       ),
                       child: Text(
-                        '$cartQty in cart',
+                        _formatCartBadgeText(product, cartQty),
                         style: TextStyle(
                           color: _brandColor,
                           fontSize: 10,
@@ -3265,7 +3799,9 @@ class _PosScreenState extends State<PosScreen> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Rs. ${displayPrice.toStringAsFixed(2)}',
+                product.isWeighted
+                    ? 'Rs. ${displayPrice.toStringAsFixed(2)} / ${product.unitLabel}'
+                    : 'Rs. ${displayPrice.toStringAsFixed(2)}',
                 style: TextStyle(
                   color: isOutOfStock ? _textSecondary : _brandColor,
                   fontSize: 16,
@@ -3317,8 +3853,8 @@ class _PosScreenState extends State<PosScreen> {
                         isOutOfStock
                             ? 'Out of stock'
                             : (isLowStock
-                                ? 'Low stock • ${product.stock}'
-                                : 'Stock • ${product.stock}'),
+                                ? 'Low stock - ${_formatStockText(product, product.stock)}'
+                                : 'Stock - ${_formatStockText(product, product.stock)}'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -3668,7 +4204,7 @@ class _PosScreenState extends State<PosScreen> {
               IconButton(
                 tooltip: 'Remove item',
                 onPressed: () {
-                  cart.removeItem(item.product.barcode);
+                  cart.removeItem(item);
                   _focusBarcodeField();
                 },
                 icon: Icon(
@@ -3683,7 +4219,7 @@ class _PosScreenState extends State<PosScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Rs. ${item.unitPrice.toStringAsFixed(2)} each',
+            _formatPriceCaption(item.product, item.unitPrice),
             style: TextStyle(
               color: _textSecondary,
               fontWeight: FontWeight.w700,
@@ -3706,59 +4242,150 @@ class _PosScreenState extends State<PosScreen> {
           const SizedBox(height: 7),
           Row(
             children: [
-              Container(
-                decoration: BoxDecoration(
-                  color: _inputFill,
-                  borderRadius: BorderRadius.circular(11),
-                  border: Border.all(color: _borderColor),
-                ),
-                child: Row(
-                  children: [
-                    IconButton(
-                      onPressed: () {
-                        cart.decreaseQuantity(item.product.barcode);
-                        _focusBarcodeField();
-                      },
-                      icon: const Icon(Icons.remove_rounded, size: 14),
-                      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
-                      padding: EdgeInsets.zero,
-                    ),
-                    SizedBox(
-                      width: 18,
-                      child: Text(
-                        '${item.quantity}',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: _textPrimary,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 11.5,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () {
-                        if (!cart.isRefundMode && item.quantity >= currentStock) {
-                          _showInfoMessage(
-                            'Cannot exceed available stock for ${item.product.name}.',
-                            backgroundColor: _dangerColor,
-                          );
-                          return;
-                        }
+              if (item.product.isWeighted)
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final otherQtyInCart = _sanitizeQuantity(
+                      _getQuantityInCart(cart, item.product.barcode) - item.quantity,
+                    );
+                    final maxQuantity = cart.isRefundMode
+                        ? null
+                        : _sanitizeQuantity(currentStock - otherQtyInCart);
 
-                        cart.increaseQuantity(item.product.barcode);
-                        _focusBarcodeField();
-                      },
-                      icon: const Icon(Icons.add_rounded, size: 14),
-                      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
-                      padding: EdgeInsets.zero,
+                    if (!cart.isRefundMode &&
+                        maxQuantity != null &&
+                        maxQuantity <= _quantityEpsilon) {
+                      _showInfoMessage(
+                        'No stock is available to increase ${item.product.name}.',
+                        backgroundColor: _dangerColor,
+                      );
+                      return;
+                    }
+
+                    final updatedQuantity = await _promptWeightedQuantity(
+                      product: item.product,
+                      title: 'Edit ${item.product.unitLabel} quantity',
+                      confirmLabel: 'Update',
+                      initialQuantity: item.quantity,
+                      unitPrice: item.unitPrice,
+                      maxQuantity: maxQuantity,
+                    );
+
+                    if (updatedQuantity == null) {
+                      _focusBarcodeField();
+                      return;
+                    }
+
+                    cart.updateQuantity(item, updatedQuantity);
+                    _focusBarcodeField();
+                  },
+                  icon: const Icon(Icons.scale_rounded, size: 14),
+                  label: Text(
+                    _formatQuantityWithUnit(item.quantity, item.product.unitLabel),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 34),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
                     ),
-                  ],
+                    foregroundColor: _textPrimary,
+                    backgroundColor: _inputFill,
+                    side: BorderSide(color: _borderColor),
+                  ),
+                )
+              else
+                GestureDetector(
+                  onTap: () async {
+                    final otherQtyInCart = _sanitizeQuantity(
+                      _getQuantityInCart(cart, item.product.barcode) - item.quantity,
+                    );
+                    final maxQuantity = cart.isRefundMode
+                        ? null
+                        : _sanitizeQuantity(currentStock - otherQtyInCart);
+
+                    if (!cart.isRefundMode &&
+                        maxQuantity != null &&
+                        maxQuantity <= _quantityEpsilon) {
+                      _showInfoMessage(
+                        'No stock is available to increase ${item.product.name}.',
+                        backgroundColor: _dangerColor,
+                      );
+                      return;
+                    }
+
+                    final updatedQuantity = await _promptUnitQuantity(
+                      product: item.product,
+                      title: 'Edit quantity',
+                      confirmLabel: 'Update',
+                      initialQuantity: item.quantity,
+                      unitPrice: item.unitPrice,
+                      maxQuantity: maxQuantity,
+                    );
+
+                    if (updatedQuantity == null) {
+                      _focusBarcodeField();
+                      return;
+                    }
+
+                    cart.updateQuantity(item, updatedQuantity);
+                    _focusBarcodeField();
+                  },
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: _inputFill,
+                      borderRadius: BorderRadius.circular(11),
+                      border: Border.all(color: _borderColor),
+                    ),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          onPressed: () {
+                            cart.decreaseQuantity(item);
+                            _focusBarcodeField();
+                          },
+                          icon: const Icon(Icons.remove_rounded, size: 14),
+                          constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+                          padding: EdgeInsets.zero,
+                        ),
+                        SizedBox(
+                          width: 24,
+                          child: Text(
+                            _formatQuantity(item.quantity),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 11.5,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () {
+                            if (!cart.isRefundMode &&
+                                _quantityExceeds(item.quantity + 1.0, currentStock)) {
+                              _showInfoMessage(
+                                'Cannot exceed available stock for ${item.product.name}.',
+                                backgroundColor: _dangerColor,
+                              );
+                              return;
+                            }
+
+                            cart.increaseQuantity(item);
+                            _focusBarcodeField();
+                          },
+                          icon: const Icon(Icons.add_rounded, size: 14),
+                          constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+                          padding: EdgeInsets.zero,
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Stock: $currentStock',
+                  'Stock: ${_formatStockTextWithCartUnit(item.product, currentStock)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -4101,3 +4728,4 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 }
+

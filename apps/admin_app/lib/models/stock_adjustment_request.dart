@@ -1,7 +1,7 @@
 class StockAdjustmentRequest {
   final String barcode;
   final String adjustmentType;
-  final int quantity;
+  final num quantity;
   final String reason;
 
   const StockAdjustmentRequest({

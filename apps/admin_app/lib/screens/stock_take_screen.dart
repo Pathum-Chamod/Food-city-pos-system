@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
@@ -23,7 +24,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   );
 
   final StockTakeSessionService _sessionService = StockTakeSessionService();
-  final Map<String, int> _countedQuantities = <String, int>{};
+  static const double _quantityEpsilon = 0.000001;
+  final Map<String, double> _countedQuantities = <String, double>{};
 
   String _filter = 'all';
   bool _isApplying = false;
@@ -111,7 +113,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
           ? 'Stock Take Session'
           : _sessionNameController.text.trim(),
       startedAtIso: _sessionStartedAt,
-      countedQuantities: Map<String, int>.from(_countedQuantities),
+      countedQuantities: Map<String, double>.from(_countedQuantities),
     );
 
     await _sessionService.saveDraft(draft);
@@ -133,13 +135,39 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     _saveDraft(showMessage: false);
   }
 
+  bool _isWeighted(Product product) =>
+      product.quantityType == ProductQuantityType.weight;
+
+  double? _parseQuantity(String raw, {required bool weighted}) {
+    final value = double.tryParse(raw.trim());
+    if (value == null || value < 0) return null;
+    if (!weighted && (value - value.roundToDouble()).abs() > _quantityEpsilon) {
+      return null;
+    }
+    return value;
+  }
+
+  bool _quantitiesEqual(num a, num b) =>
+      (a.toDouble() - b.toDouble()).abs() < _quantityEpsilon;
+
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < _quantityEpsilon) {
+      return quantity.round().toString();
+    }
+    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _formatProductQuantity(Product product, num value) =>
+      '${_formatQuantity(value)} ${product.unitLabel}';
+
   List<Product> _getFilteredProducts(List<Product> products) {
     final query = _searchController.text.trim().toLowerCase();
 
     return products.where((product) {
       final countedQty = _countedQuantities[product.barcode];
       final hasCount = countedQty != null;
-      final hasDiscrepancy = hasCount && countedQty != product.stock;
+      final hasDiscrepancy = hasCount && !_quantitiesEqual(countedQty, product.stock);
 
       final matchesQuery =
           query.isEmpty ||
@@ -179,11 +207,17 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       return;
     }
 
+    if (_isWeighted(matchedProduct)) {
+      _barcodeController.clear();
+      _showSetCountDialog(matchedProduct);
+      return;
+    }
+
     setState(() {
       _countedQuantities.update(
         matchedProduct!.barcode,
-        (value) => value + 1,
-        ifAbsent: () => 1,
+        (value) => value + 1.0,
+        ifAbsent: () => 1.0,
       );
     });
     _saveDraftSilently();
@@ -206,7 +240,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         title: Text('Set Count\n${product.name}'),
         content: TextField(
           controller: controller,
-          keyboardType: TextInputType.number,
+          keyboardType: TextInputType.numberWithOptions(decimal: _isWeighted(product)),
+          inputFormatters: _isWeighted(product)
+              ? <TextInputFormatter>[
+                  FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,3}$')),
+                ]
+              : <TextInputFormatter>[FilteringTextInputFormatter.digitsOnly],
           autofocus: true,
           decoration: const InputDecoration(
             border: OutlineInputBorder(),
@@ -230,7 +269,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
           ),
           ElevatedButton(
             onPressed: () {
-              final qty = int.tryParse(controller.text.trim());
+              final qty = _parseQuantity(
+                controller.text,
+                weighted: _isWeighted(product),
+              );
               if (qty == null || qty < 0) {
                 AppSnackBar.show(
                   context,
@@ -307,7 +349,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     final discrepancies = products
         .where((product) => _countedQuantities.containsKey(product.barcode))
-        .where((product) => _countedQuantities[product.barcode] != product.stock)
+        .where((product) => !_quantitiesEqual(_countedQuantities[product.barcode]!, product.stock))
         .toList();
 
     if (discrepancies.isEmpty) {
@@ -450,8 +492,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     setState(() {
       _countedQuantities.update(
         product.barcode,
-        (value) => value + 1,
-        ifAbsent: () => 1,
+        (value) => value + 1.0,
+        ifAbsent: () => 1.0,
       );
     });
     _saveDraftSilently();
@@ -462,8 +504,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     if (countedQty == null || countedQty <= 0) return;
 
     setState(() {
-      final nextQty = countedQty - 1;
-      if (nextQty == 0) {
+      final nextQty = countedQty - 1.0;
+      if (nextQty <= _quantityEpsilon) {
         _countedQuantities.remove(product.barcode);
       } else {
         _countedQuantities[product.barcode] = nextQty;
@@ -625,15 +667,15 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     String discrepancyText = 'Not counted';
 
     if (hasCount) {
-      if (discrepancy == 0) {
+      if (_quantitiesEqual(discrepancy!, 0)) {
         discrepancyColor = Colors.green;
         discrepancyText = 'Matched';
-      } else if (discrepancy! > 0) {
+      } else if (discrepancy > 0) {
         discrepancyColor = Colors.blue;
-        discrepancyText = '+$discrepancy';
+        discrepancyText = '+${_formatQuantity(discrepancy)}';
       } else {
         discrepancyColor = Colors.orange;
-        discrepancyText = discrepancy.toString();
+        discrepancyText = _formatQuantity(discrepancy);
       }
     }
 
@@ -680,7 +722,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Text(
-                      'Counted: $countedQty',
+                      'Counted: ${_formatProductQuantity(product, countedQty)}',
                       style: const TextStyle(
                         fontWeight: FontWeight.w700,
                         color: Colors.indigo,
@@ -694,7 +736,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                _buildMiniPill('System: ${product.stock}', Colors.grey),
+                _buildMiniPill('System: ${_formatProductQuantity(product, product.stock)}', Colors.grey),
                 _buildMiniPill(
                   hasCount ? 'Counted: $countedQty' : 'Counted: —',
                   Colors.indigo,
@@ -747,7 +789,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     final countedItems = _countedQuantities.length;
     final discrepancyCount = products.where((product) {
       final countedQty = _countedQuantities[product.barcode];
-      return countedQty != null && countedQty != product.stock;
+      return countedQty != null && !_quantitiesEqual(countedQty, product.stock);
     }).length;
 
     final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;

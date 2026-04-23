@@ -6,7 +6,7 @@ class StockReceiptRecord {
   final int? backendReceiptId;
   final String barcode;
   final String productName;
-  final int quantity;
+  final double quantity;
   final int supplierId;
   final String supplierName;
   final int? purchaseOrderId;
@@ -46,7 +46,7 @@ class StockReceiptRecord {
       backendReceiptId: (map['backend_receipt_id'] as num?)?.toInt(),
       barcode: (map['barcode'] ?? '').toString(),
       productName: (map['product_name'] ?? '').toString(),
-      quantity: (map['quantity'] as num?)?.toInt() ?? 0,
+      quantity: ((map['quantity'] as num?) ?? 0).toDouble(),
       supplierId: (map['supplier_id'] as num?)?.toInt() ?? 0,
       supplierName: (map['supplier_name'] ?? '').toString(),
       purchaseOrderId: (map['purchase_order_id'] as num?)?.toInt(),

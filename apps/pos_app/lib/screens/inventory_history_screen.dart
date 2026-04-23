@@ -377,7 +377,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                 child: Wrap(
                   spacing: 14,
                   runSpacing: 14,
-                  children: _movementRows(hydratedMovement)
+                  children: _movementRowsSafe(hydratedMovement)
                       .map(
                         (row) => Container(
                           width: 340,
@@ -423,9 +423,14 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   }
 
   List<MapEntry<String, String>> _movementRows(Map<String, dynamic> movement) {
+    final actionType = (movement['action_type'] ?? '').toString();
+    final hideProductRow =
+        actionType == 'stock_receive' || actionType == 'stock_adjust_set';
+
     return <MapEntry<String, String>>[
-      MapEntry('Action', _movementTitle((movement['action_type'] ?? '').toString())),
-      MapEntry('Product', (movement['product_name'] ?? 'Unknown product').toString()),
+      MapEntry('Action', _movementTitle(actionType)),
+      if (!hideProductRow)
+        MapEntry('Product', (movement['product_name'] ?? 'Unknown product').toString()),
       MapEntry('Barcode', (movement['barcode'] ?? '-').toString()),
       MapEntry('When', _formatDateTime(movement['created_at']?.toString())),
       if ((movement['performed_by'] ?? '').toString().trim().isNotEmpty)
@@ -436,15 +441,11 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         MapEntry('Supplier Cost', 'Rs. ${_asDouble(movement['supplier_cost']).toStringAsFixed(2)}'),
       if (movement['stock_before'] != null || movement['stock_after'] != null)
         MapEntry('Stock', '${movement['stock_before'] ?? '-'} → ${movement['stock_after'] ?? '-'}'),
-      if (movement['quantity_change'] != null)
-        MapEntry('Quantity Change', movement['quantity_change'].toString()),
       if (movement['old_price'] != null || movement['new_price'] != null)
         MapEntry(
           'Price',
           'Rs. ${_asDouble(movement['old_price']).toStringAsFixed(2)} → Rs. ${_asDouble(movement['new_price']).toStringAsFixed(2)}',
         ),
-      if ((movement['reason'] ?? '').toString().trim().isNotEmpty)
-        MapEntry('Reason', movement['reason'].toString()),
     ];
   }
 
@@ -628,20 +629,25 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
 
   Widget _buildMovementTile(Map<String, dynamic> movement) {
     final actionType = (movement['action_type'] ?? '').toString();
-    final quantityChange = (movement['quantity_change'] as num?)?.toInt();
+    final quantityChange = (movement['quantity_change'] as num?)?.toDouble();
     final oldPrice = movement['old_price'] as num?;
     final newPrice = movement['new_price'] as num?;
     final badge = _badgeColor(actionType);
 
-    String subtitle = _movementSubtitle(movement);
+    String subtitle = _movementSubtitleSafe(movement);
     String trailing = _formatDateTime(movement['created_at']?.toString());
 
     if (quantityChange != null) {
+      final baseTrailing = trailing;
       final sign = quantityChange > 0 ? '+' : '';
       trailing = '$sign$quantityChange • $trailing';
+      trailing = '$sign${_formatQuantity(quantityChange.abs())} â€¢ $baseTrailing';
+      trailing = '$sign${_formatQuantity(quantityChange.abs())} - $baseTrailing';
     } else if (oldPrice != null || newPrice != null) {
       trailing = 'Rs. ${newPrice?.toStringAsFixed(2) ?? '0.00'} • $trailing';
     }
+
+    trailing = _movementTrailing(movement);
 
     return InkWell(
       onTap: () => _openMovementDetails(movement),
@@ -793,10 +799,105 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return pieces.isEmpty ? 'Tap to view full details.' : pieces.join(' • ');
   }
 
+  List<MapEntry<String, String>> _movementRowsSafe(Map<String, dynamic> movement) {
+    final actionType = (movement['action_type'] ?? '').toString();
+    final hideProductRow =
+        actionType == 'stock_receive' || actionType == 'stock_adjust_set';
+    final stockBefore = movement['stock_before'];
+    final stockAfter = movement['stock_after'];
+
+    return <MapEntry<String, String>>[
+      MapEntry('Action', _movementTitle(actionType)),
+      if (!hideProductRow)
+        MapEntry('Product', (movement['product_name'] ?? 'Unknown product').toString()),
+      MapEntry('Barcode', (movement['barcode'] ?? '-').toString()),
+      MapEntry('When', _formatDateTime(movement['created_at']?.toString())),
+      if ((movement['performed_by'] ?? '').toString().trim().isNotEmpty)
+        MapEntry('User', movement['performed_by'].toString()),
+      if ((movement['supplier_name'] ?? '').toString().trim().isNotEmpty)
+        MapEntry('Supplier', movement['supplier_name'].toString()),
+      if (movement['supplier_cost'] != null)
+        MapEntry('Supplier Cost', 'Rs. ${_asDouble(movement['supplier_cost']).toStringAsFixed(2)}'),
+      if (stockBefore != null || stockAfter != null)
+        MapEntry(
+          'Stock',
+          '${stockBefore == null ? '-' : _formatQuantity(stockBefore)} -> '
+          '${stockAfter == null ? '-' : _formatQuantity(stockAfter)}',
+        ),
+      if (movement['old_price'] != null || movement['new_price'] != null)
+        MapEntry(
+          'Price',
+          'Rs. ${_asDouble(movement['old_price']).toStringAsFixed(2)} -> '
+          'Rs. ${_asDouble(movement['new_price']).toStringAsFixed(2)}',
+        ),
+    ];
+  }
+
+  String _movementSubtitleSafe(Map<String, dynamic> movement) {
+    final actionType = (movement['action_type'] ?? '').toString();
+    final stockBefore = movement['stock_before'];
+    final stockAfter = movement['stock_after'];
+    final oldPrice = movement['old_price'];
+    final newPrice = movement['new_price'];
+    final reason = (movement['reason'] ?? '').toString().trim();
+    final performedBy = (movement['performed_by'] ?? '').toString().trim();
+
+    final pieces = <String>[];
+
+    if (actionType.startsWith('price_change')) {
+      pieces.add(
+        'Rs. ${_asDouble(oldPrice).toStringAsFixed(2)} -> '
+        'Rs. ${_asDouble(newPrice).toStringAsFixed(2)}',
+      );
+    } else if (stockBefore != null || stockAfter != null) {
+      pieces.add(
+        '${stockBefore == null ? '-' : _formatQuantity(stockBefore)} -> '
+        '${stockAfter == null ? '-' : _formatQuantity(stockAfter)}',
+      );
+    }
+
+    if (reason.isNotEmpty) {
+      pieces.add(reason);
+    }
+
+    if (performedBy.isNotEmpty) {
+      pieces.add(performedBy);
+    }
+
+    return pieces.isEmpty ? 'Tap to view full details.' : pieces.join(' - ');
+  }
+
+  String _movementTrailing(Map<String, dynamic> movement) {
+    final quantityChange = (movement['quantity_change'] as num?)?.toDouble();
+    final newPrice = (movement['new_price'] as num?)?.toDouble();
+    final baseTrailing = _formatDateTime(movement['created_at']?.toString());
+
+    if (quantityChange != null) {
+      final sign = quantityChange > 0 ? '+' : '';
+      return '$sign${_formatQuantity(quantityChange.abs())} - $baseTrailing';
+    }
+
+    if (newPrice != null) {
+      return 'Rs. ${newPrice.toStringAsFixed(2)} - $baseTrailing';
+    }
+
+    return baseTrailing;
+  }
+
   double _asDouble(dynamic value) {
     if (value == null) return 0;
     if (value is num) return value.toDouble();
     return double.tryParse(value.toString()) ?? 0;
+  }
+
+  String _formatQuantity(dynamic value, {int maxDecimals = 3}) {
+    final quantity = _asDouble(value);
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatDateTime(String? raw) {
@@ -1136,3 +1237,6 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     );
   }
 }
+
+
+

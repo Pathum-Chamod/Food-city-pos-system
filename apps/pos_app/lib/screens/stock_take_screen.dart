@@ -2,6 +2,7 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
 
@@ -41,6 +42,8 @@ class StockTakeScreen extends StatefulWidget {
 }
 
 class _StockTakeScreenState extends State<StockTakeScreen> {
+  static const double _quantityEpsilon = 0.000001;
+
   final TextEditingController _barcodeController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _sessionNameController = TextEditingController();
@@ -53,7 +56,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   StockTakeFilter _selectedFilter = StockTakeFilter.all;
 
   List<Product> _products = [];
-  Map<String, int> _countedQuantities = {};
+  Map<String, double> _countedQuantities = {};
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
@@ -106,10 +109,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       final sessionId = (session['id'] as num).toInt();
       final items = await DatabaseHelper.instance.getStockTakeSessionItems(sessionId);
 
-      final counted = <String, int>{};
+      final counted = <String, double>{};
       for (final item in items) {
         counted[(item['barcode'] ?? '').toString()] =
-            (item['counted_stock'] as num?)?.toInt() ?? 0;
+            ((item['counted_stock'] as num?) ?? 0).toDouble();
       }
 
       if (!mounted) return;
@@ -340,8 +343,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     return result ?? false;
   }
 
-  String? _validateCount(String rawValue, {bool allowZero = true}) {
-    final value = int.tryParse(rawValue.trim());
+  String? _validateCount(
+    String rawValue, {
+    required ProductQuantityType quantityType,
+    bool allowZero = true,
+  }) {
+    final value = _tryParseCount(rawValue, quantityType);
     if (value == null) return 'Enter a valid counted quantity.';
     if (allowZero) {
       if (value < 0) return 'Counted quantity cannot be negative.';
@@ -349,6 +356,40 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       return 'Counted quantity must be greater than 0.';
     }
     return null;
+  }
+
+  double? _tryParseCount(String rawValue, ProductQuantityType quantityType) {
+    final trimmed = rawValue.trim();
+    if (trimmed.isEmpty) return null;
+    if (quantityType == ProductQuantityType.weight) {
+      return double.tryParse(trimmed);
+    }
+    final value = int.tryParse(trimmed);
+    return value?.toDouble();
+  }
+
+  double _parseCount(String rawValue, ProductQuantityType quantityType) {
+    return _tryParseCount(rawValue, quantityType) ?? 0.0;
+  }
+
+  bool _quantitiesEqual(num left, num right) {
+    return (left.toDouble() - right.toDouble()).abs() < _quantityEpsilon;
+  }
+
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < _quantityEpsilon) {
+      return quantity.round().toString();
+    }
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _formatProductQuantity(Product product, num value) {
+    final unitLabel = product.unitLabel.trim();
+    if (unitLabel.isEmpty) return _formatQuantity(value);
+    return '${_formatQuantity(value)} $unitLabel';
   }
 
   Map<String, dynamic>? get _currentUserMap {
@@ -643,7 +684,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     return _products.where((product) {
       final countedQty = _countedQuantities[product.barcode];
       final hasCount = countedQty != null;
-      final hasDiscrepancy = hasCount && countedQty != product.stock;
+      final hasDiscrepancy =
+          hasCount && !_quantitiesEqual(countedQty, product.stock);
 
       final matchesSearch = query.isEmpty ||
           product.name.toLowerCase().contains(query) ||
@@ -668,11 +710,11 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   int get _countedItems => _countedQuantities.length;
   int get _discrepancyItems => _products.where((product) {
         final countedQty = _countedQuantities[product.barcode];
-        return countedQty != null && countedQty != product.stock;
+        return countedQty != null && !_quantitiesEqual(countedQty, product.stock);
       }).length;
   int get _matchedItems => _products.where((product) {
         final countedQty = _countedQuantities[product.barcode];
-        return countedQty != null && countedQty == product.stock;
+        return countedQty != null && _quantitiesEqual(countedQty, product.stock);
       }).length;
   int get _uncountedItems => _products.length - _countedItems;
 
@@ -846,7 +888,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     }
   }
 
-  Future<void> _saveCount(Product product, int countedQty) async {
+  Future<void> _saveCount(Product product, double countedQty) async {
     if (_sessionId == null) return;
 
     final success = await DatabaseHelper.instance.saveStockTakeCount(
@@ -914,7 +956,14 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       return;
     }
 
-    final nextQty = (_countedQuantities[matched.barcode] ?? 0) + 1;
+    if (matched.quantityType == ProductQuantityType.weight) {
+      await _setCountDialog(matched);
+      if (!mounted) return;
+      _barcodeController.clear();
+      return;
+    }
+
+    final nextQty = (_countedQuantities[matched.barcode] ?? 0.0) + 1.0;
     await _saveCount(matched, nextQty);
     if (!mounted) return;
     _barcodeController.clear();
@@ -922,8 +971,9 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   }
 
   Future<void> _setCountDialog(Product product) async {
+    final existingCount = _countedQuantities[product.barcode];
     final controller = TextEditingController(
-      text: _countedQuantities[product.barcode]?.toString() ?? '',
+      text: existingCount == null ? '' : _formatQuantity(existingCount),
     );
 
     await showGeneralDialog<void>(
@@ -1002,10 +1052,19 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                       TextField(
                         controller: controller,
                         autofocus: true,
-                        keyboardType: TextInputType.number,
+                        keyboardType: TextInputType.numberWithOptions(
+                          decimal: product.quantityType == ProductQuantityType.weight,
+                        ),
+                        inputFormatters: [
+                          product.quantityType == ProductQuantityType.weight
+                              ? FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
+                              : FilteringTextInputFormatter.digitsOnly,
+                        ],
                         decoration: _fieldDecoration(
                           hintText: 'Counted Quantity',
-                          labelText: 'Counted Quantity',
+                          labelText: product.quantityType == ProductQuantityType.weight
+                              ? 'Counted ${product.unitLabel}'
+                              : 'Counted Quantity',
                           icon: Icons.numbers_rounded,
                         ),
                       ),
@@ -1048,15 +1107,22 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                           Expanded(
                             child: ElevatedButton(
                               onPressed: () async {
-                                final error = _validateCount(controller.text);
+                                final error = _validateCount(
+                                  controller.text,
+                                  quantityType: product.quantityType,
+                                );
                                 if (error != null) {
                                   _showMessage(error, isError: true);
                                   return;
                                 }
-                                final qty = int.parse(controller.text.trim());
+                                final qty = _parseCount(
+                                  controller.text,
+                                  product.quantityType,
+                                );
                                 final confirmed = await _showDecisionDialog(
                                   title: 'Save Count?',
-                                  message: 'Set counted quantity for ${product.name} to $qty?',
+                                  message:
+                                      'Set counted quantity for ${product.name} to ${_formatProductQuantity(product, qty)}?',
                                   confirmText: 'Save',
                                   icon: Icons.done_rounded,
                                   tone: _brand,
@@ -1767,8 +1833,9 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     final countedQty = _countedQuantities[product.barcode];
     final hasCount = countedQty != null;
     final difference = hasCount ? countedQty - product.stock : null;
-    final isMatch = hasCount && difference == 0;
-    final isDiscrepancy = hasCount && difference != 0;
+    final hasDifference = difference != null;
+    final isMatch = hasDifference && _quantitiesEqual(difference!, 0);
+    final isDiscrepancy = hasDifference && !_quantitiesEqual(difference!, 0);
 
     Color accent = _textMuted;
     String stateLabel = 'Uncounted';
@@ -1785,11 +1852,11 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     final diffText = difference == null
         ? null
-        : difference == 0
+        : _quantitiesEqual(difference, 0)
             ? 'Diff 0'
             : difference > 0
-                ? 'Diff +$difference'
-                : 'Diff $difference';
+                ? 'Diff +${_formatQuantity(difference)}'
+                : 'Diff ${_formatQuantity(difference)}';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1860,15 +1927,23 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                 runSpacing: 8,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  _inlineMeta('System ${product.stock}', _textSecondary),
+                  _inlineMeta(
+                    'System ${_formatProductQuantity(product, product.stock)}',
+                    _textSecondary,
+                  ),
                   _buildMetaDot(),
                   _inlineMeta(
-                    hasCount ? 'Counted $countedQty' : 'Count not set',
+                    hasCount
+                        ? 'Counted ${_formatProductQuantity(product, countedQty!)}'
+                        : 'Count not set',
                     hasCount ? _blue : _textMuted,
                   ),
                   if (diffText != null) ...[
                     _buildMetaDot(),
-                    _inlineMeta(diffText, difference == 0 ? _success : _warning),
+                    _inlineMeta(
+                      diffText,
+                      _quantitiesEqual(difference!, 0) ? _success : _warning,
+                    ),
                   ],
                 ],
               ),
@@ -1881,11 +1956,15 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
             children: [
               ElevatedButton.icon(
                 onPressed: () async {
-                  final nextQty = (countedQty ?? 0) + 1;
+                  final nextQty = (countedQty ?? 0.0) + 1.0;
                   await _saveCount(product, nextQty);
                 },
                 icon: const Icon(Icons.add_rounded, size: 16),
-                label: const Text('Count +1'),
+                label: Text(
+                  product.quantityType == ProductQuantityType.weight
+                      ? 'Count +1 ${product.unitLabel}'
+                      : 'Count +1',
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _brand,
                   foregroundColor: Colors.white,

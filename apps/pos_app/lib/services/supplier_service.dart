@@ -283,7 +283,7 @@ class SupplierService {
   Future<bool> receiveStock({
     required PosSupplier supplier,
     required Product product,
-    required int quantity,
+    required num quantity,
     required double cost,
     required String cashierName,
     String referenceNote = '',

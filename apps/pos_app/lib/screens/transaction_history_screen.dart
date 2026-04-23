@@ -14,6 +14,16 @@ class TransactionHistoryScreen extends StatefulWidget {
   State<TransactionHistoryScreen> createState() =>
       _TransactionHistoryScreenState();
 
+  static String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
   static Future<void> showReceiptDialogForTransaction(
     BuildContext context,
     int saleId,
@@ -122,7 +132,7 @@ class TransactionHistoryScreen extends StatefulWidget {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
       return {
         'name': (item['product_name'] ?? 'Item').toString(),
-        'qty': ((item['quantity'] as num?) ?? 0).toInt(),
+        'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
         'lineTotal': finalLineTotal,
       };
@@ -188,7 +198,7 @@ class TransactionHistoryScreen extends StatefulWidget {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
       return {
         'name': (item['product_name'] ?? 'Item').toString(),
-        'qty': ((item['quantity'] as num?) ?? 0).toInt(),
+        'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
         'lineTotal': finalLineTotal,
       };
@@ -351,6 +361,16 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     } catch (_) {
       return raw;
     }
+  }
+
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   bool _matchesDateSearch(String raw, String query) {
@@ -656,7 +676,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     final total = ((tx['total_amount'] as num?) ?? 0).toDouble().abs();
     final id = tx['id'];
     final cashier = (tx['cashier_name'] ?? 'Unknown').toString();
-    final itemQty = (tx['item_quantity_total'] as num?)?.toInt() ?? 0;
+    final itemCount = ((tx['item_line_count'] as num?) ?? 0).toInt();
     final createdAt = (tx['created_at'] ?? '').toString();
     final originalSaleId = tx['original_sale_id'];
     final paymentMethod = (tx['payment_method'] ?? '').toString();
@@ -725,11 +745,10 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                       spacing: 12,
                       runSpacing: 12,
                       children: [
-                        _buildMiniInfoCard(palette, 'Items', itemQty.toString()),
                         _buildMiniInfoCard(
                           palette,
-                          'Payment',
-                          type == 'sale' ? _paymentLabel(paymentMethod) : 'Refund',
+                          'Items',
+                          itemCount.toString(),
                         ),
                         _buildMiniInfoCard(
                           palette,
@@ -1208,7 +1227,9 @@ Future<String?> showTransactionReceiptDialog(
                             final name =
                                 (item['product_name'] ?? 'Unknown').toString();
                             final barcode = (item['barcode'] ?? '').toString();
-                            final qty = (item['quantity'] as num?)?.toInt() ?? 0;
+                            final qty = ((item['quantity'] as num?) ?? 0)
+                                .toDouble();
+                            final qtyLabel = TransactionHistoryScreen._formatQuantity(qty);
                             final unitPrice =
                                 ((item['unit_price'] as num?) ?? 0).toDouble();
                             final baseLineTotal =
@@ -1221,12 +1242,14 @@ Future<String?> showTransactionReceiptDialog(
                                 ((item['line_total'] as num?) ?? 0)
                                     .toDouble()
                                     .abs();
+                            final discountPercent =
+                                !isRefund &&
+                                    itemDiscount > 0 &&
+                                    baseLineTotal > 0
+                                ? (itemDiscount / baseLineTotal) * 100
+                                : 0.0;
 
-                            final shownLineTotal = isRefund
-                                ? finalLineTotal
-                                : (baseLineTotal > 0
-                                      ? baseLineTotal
-                                      : finalLineTotal);
+                            final shownLineTotal = finalLineTotal;
 
                             return Container(
                               margin: const EdgeInsets.only(bottom: 12),
@@ -1236,56 +1259,87 @@ Future<String?> showTransactionReceiptDialog(
                                 borderRadius: BorderRadius.circular(18),
                                 border: Border.all(color: palette.border),
                               ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
-                                  Text(
-                                    name,
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 15,
-                                      color: palette.textPrimary,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Barcode: $barcode',
-                                    style: TextStyle(
-                                      color: palette.textSecondary,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Wrap(
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: [
-                                      buildInfoChip(
-                                        Icons.shopping_basket_outlined,
-                                        'Qty: $qty',
-                                      ),
-                                      buildInfoChip(
-                                        Icons.sell_outlined,
-                                        'Unit: Rs. ${unitPrice.toStringAsFixed(2)}',
-                                      ),
-                                      if (!isRefund && itemDiscount > 0)
-                                        buildInfoChip(
-                                          Icons.discount_outlined,
-                                          'Discount: Rs. ${itemDiscount.toStringAsFixed(2)}',
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          name,
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w800,
+                                            fontSize: 15,
+                                            color: palette.textPrimary,
+                                          ),
                                         ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: Text(
-                                      'Rs. ${shownLineTotal.toStringAsFixed(2)}',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w900,
-                                        fontSize: 15,
-                                        color: palette.textPrimary,
-                                      ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'Barcode: $barcode',
+                                          style: TextStyle(
+                                            color: palette.textSecondary,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          'Qty: $qtyLabel',
+                                          style: TextStyle(
+                                            color: palette.textPrimary,
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'Unit price: Rs. ${unitPrice.toStringAsFixed(2)}',
+                                          style: TextStyle(
+                                            color: palette.textSecondary,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                        if (!isRefund && itemDiscount > 0) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'Discount: ${discountPercent.toStringAsFixed(discountPercent % 1 == 0 ? 0 : 2)}% (-Rs. ${itemDiscount.toStringAsFixed(2)})',
+                                            style: TextStyle(
+                                              color: palette.danger,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
                                     ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      if (!isRefund &&
+                                          itemDiscount > 0 &&
+                                          baseLineTotal > shownLineTotal)
+                                        Text(
+                                          'Rs. ${baseLineTotal.toStringAsFixed(2)}',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 12,
+                                            color: palette.textSecondary,
+                                            decoration: TextDecoration.lineThrough,
+                                          ),
+                                        ),
+                                      Text(
+                                        'Rs. ${shownLineTotal.toStringAsFixed(2)}',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w900,
+                                          fontSize: 15,
+                                          color: palette.textPrimary,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),

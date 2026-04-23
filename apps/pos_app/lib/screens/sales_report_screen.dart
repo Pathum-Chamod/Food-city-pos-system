@@ -232,6 +232,39 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
 
   String _formatMoney(num value) => 'Rs. ${value.toStringAsFixed(2)}';
 
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _formatQuantityWithUnit(Map<String, dynamic> row, num value) {
+    final quantityType = (row['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final unitLabel = (row['unit_label'] ?? '').toString().trim();
+    final formattedQuantity = _formatQuantity(value);
+    if (quantityType == 'weight') {
+      final suffix = unitLabel.isEmpty ? 'kg' : unitLabel;
+      return '$formattedQuantity $suffix';
+    }
+    return formattedQuantity;
+  }
+
+  String _formatSoldText(Map<String, dynamic> row, num value) {
+    return 'Sold ${_formatQuantityWithUnit(row, value)}';
+  }
+
+  String _formatRefundedText(Map<String, dynamic> row, num value) {
+    return 'Refunded ${_formatQuantityWithUnit(row, value)}';
+  }
+
+  String _formatStockText(Map<String, dynamic> row, num value) {
+    return 'Stock ${_formatQuantityWithUnit(row, value)}';
+  }
+
   String _formatCompactMoney(num value) {
     final amount = value.toDouble().abs();
     if (amount >= 1000000) {
@@ -2119,8 +2152,8 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   Widget _buildProductRow(Map<String, dynamic> row, int index) {
     final productName = (row['product_name'] ?? 'Unknown Item').toString();
     final barcode = (row['barcode'] ?? '').toString();
-    final netQty = (row['net_quantity_sold'] as num?)?.toInt() ?? 0;
-    final refundedQty = (row['refunded_quantity'] as num?)?.toInt() ?? 0;
+    final netQty = ((row['net_quantity_sold'] as num?) ?? 0).toDouble();
+    final refundedQty = ((row['refunded_quantity'] as num?) ?? 0).toDouble();
     final netSales = ((row['net_sales_after_refunds'] as num?) ?? 0).toDouble();
     final estimatedProfit = ((row['estimated_profit'] as num?) ?? 0).toDouble();
     final marginPercent = ((row['margin_percent'] as num?) ?? 0).toDouble();
@@ -2161,8 +2194,12 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: _withMetaDividers([
                     if (barcode.isNotEmpty) _buildMetaText(barcode),
-                    _buildMetaText('Sold $netQty'),
-                    if (refundedQty > 0) _buildMetaText('Refunded $refundedQty', color: _danger),
+                    _buildMetaText(_formatSoldText(row, netQty)),
+                    if (refundedQty > 0)
+                      _buildMetaText(
+                        _formatRefundedText(row, refundedQty),
+                        color: _danger,
+                      ),
                     _buildMetaText('Margin ${marginPercent.toStringAsFixed(1)}%', color: _success),
                   ]),
                 ),
@@ -2216,8 +2253,8 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   Widget _buildSlowMoverRow(Map<String, dynamic> row, int index) {
     final productName = (row['product_name'] ?? 'Unknown Item').toString();
     final barcode = (row['barcode'] ?? '').toString();
-    final stock = (row['stock'] as num?)?.toInt() ?? 0;
-    final quantitySold = (row['quantity_sold'] as num?)?.toInt() ?? 0;
+    final stock = ((row['stock'] as num?) ?? 0).toDouble();
+    final quantitySold = ((row['quantity_sold'] as num?) ?? 0).toDouble();
     final stockValue = ((row['stock_value'] as num?) ?? 0).toDouble();
     final isDeadStock = row['is_dead_stock'] == true;
     final statusColor = isDeadStock ? _danger : _textSecondary;
@@ -2256,8 +2293,13 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: _withMetaDividers([
                     if (barcode.isNotEmpty) _buildMetaText(barcode),
-                    _buildMetaText(quantitySold <= 0 ? 'No sales' : 'Sold $quantitySold', color: quantitySold <= 0 ? _danger : _textSecondary),
-                    _buildMetaText('Stock $stock'),
+                    _buildMetaText(
+                      quantitySold <= 0
+                          ? 'No sales'
+                          : _formatSoldText(row, quantitySold),
+                      color: quantitySold <= 0 ? _danger : _textSecondary,
+                    ),
+                    _buildMetaText(_formatStockText(row, stock)),
                     if (isDeadStock) _buildMetaText('Dead stock', color: _danger),
                   ]),
                 ),

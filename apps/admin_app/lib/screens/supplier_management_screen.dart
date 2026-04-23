@@ -62,7 +62,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
             orElse: () => null,
           );
 
-          final qty = int.tryParse(qtyController.text.trim()) ?? 0;
+          final qty = double.tryParse(qtyController.text.trim()) ?? 0.0;
           final cost = double.tryParse(costController.text.trim()) ?? 0.0;
           final projectedStock = selectedProduct != null
               ? selectedProduct.stock + qty
@@ -130,7 +130,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                   TextField(
                     controller: qtyController,
                     enabled: !isSubmitting,
-                    keyboardType: TextInputType.number,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     onChanged: (_) => setDialogState(() {}),
                     decoration: const InputDecoration(
                       labelText: 'Quantity Received',
@@ -192,7 +192,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                         }
 
                         final qty =
-                            int.tryParse(qtyController.text.trim()) ?? 0;
+                            double.tryParse(qtyController.text.trim()) ?? 0.0;
                         final cost =
                             double.tryParse(costController.text.trim()) ?? -1;
 

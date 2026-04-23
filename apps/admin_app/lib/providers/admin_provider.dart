@@ -640,8 +640,8 @@ class AdminProvider with ChangeNotifier {
         ((row['net_quantity_sold'] ??
                     row['sold_quantity'] ??
                     row['quantity_sold']) as num?)
-                ?.toInt() ??
-            0;
+                ?.toDouble() ??
+            0.0;
 
     return {
       ...row,
@@ -1399,7 +1399,7 @@ class AdminProvider with ChangeNotifier {
 
   Future<bool> receiveStock(
     String barcode,
-    int quantity,
+    num quantity,
     int supplierId,
     double cost,
   ) async {
