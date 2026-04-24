@@ -21,6 +21,14 @@ class ReceiptPdfService {
 
   static final ReceiptPdfService instance = ReceiptPdfService._();
 
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final safeValue = value.toDouble().abs() < 0.000001 ? 0.0 : value.toDouble();
+    return safeValue.toStringAsFixed(maxDecimals).replaceFirst(
+      RegExp(r'\.?0+$'),
+      '',
+    );
+  }
+
   Future<ReceiptPdfResponse> saveReceiptPdf({
     required int transactionId,
     required String cashierName,
@@ -141,7 +149,7 @@ class ReceiptPdfService {
               data: items.map((item) {
                 return [
                   (item['name'] ?? 'Item').toString(),
-                  (((item['qty'] as num?) ?? 0).toInt()).toString(),
+                  _formatQuantity(((item['qty'] as num?) ?? 0).toDouble()),
                   'Rs. ${(((item['unitPrice'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
                   'Rs. ${(((item['lineTotal'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
                 ];

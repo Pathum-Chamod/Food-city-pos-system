@@ -8,7 +8,7 @@ class SupplierPurchaseSummary {
   final int receiptCount;
   final int poReceiptCount;
   final int productCount;
-  final int totalUnits;
+  final double totalUnits;
   final double totalCost;
   final String lastReceivedAt;
 
@@ -32,7 +32,7 @@ class SupplierPurchaseSummary {
       receiptCount: (map['receipt_count'] as num?)?.toInt() ?? 0,
       poReceiptCount: (map['po_receipt_count'] as num?)?.toInt() ?? 0,
       productCount: (map['product_count'] as num?)?.toInt() ?? 0,
-      totalUnits: (map['total_units'] as num?)?.toInt() ?? 0,
+      totalUnits: ((map['total_units'] as num?) ?? 0).toDouble(),
       totalCost: ((map['total_cost'] as num?) ?? 0).toDouble(),
       lastReceivedAt: (map['last_received_at'] ?? '').toString(),
     );

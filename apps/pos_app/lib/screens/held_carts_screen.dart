@@ -19,6 +19,7 @@ class HeldCartsScreen extends StatefulWidget {
 }
 
 class _HeldCartsScreenState extends State<HeldCartsScreen> {
+  static const double _quantityEpsilon = 0.000001;
   final TextEditingController _searchController = TextEditingController();
 
   bool _isLoading = true;
@@ -93,7 +94,7 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     return _heldCarts.where((cart) {
       final cartName = (cart['cart_name'] ?? 'Held Cart').toString().toLowerCase();
       final type = ((cart['is_refund_mode'] ?? false) == true ? 'refund' : 'sale');
-      final itemCount = ((cart['item_count'] as num?) ?? 0).toInt().toString();
+      final itemCount = _formatQuantity((cart['item_count'] as num?) ?? 0);
       final totalAmount = ((cart['total_amount'] as num?) ?? 0).toDouble();
       final totalText = totalAmount.toStringAsFixed(2);
       final updatedAt = _formatDateTime((cart['updated_at'] ?? '').toString()).toLowerCase();
@@ -118,6 +119,15 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     } catch (_) {
       return raw;
     }
+  }
+
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final safeValue =
+        value.toDouble().abs() < _quantityEpsilon ? 0.0 : value.toDouble();
+    return safeValue.toStringAsFixed(maxDecimals).replaceFirst(
+      RegExp(r'\.?0+$'),
+      '',
+    );
   }
 
   BoxDecoration _panelDecoration({Color? color}) {
@@ -434,7 +444,7 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     final id = (cart['id'] as num).toInt();
     final cartName = (cart['cart_name'] ?? 'Held Cart').toString();
     final isRefundMode = (cart['is_refund_mode'] ?? false) == true;
-    final itemCount = (cart['item_count'] as num?)?.toInt() ?? 0;
+    final itemCount = _formatQuantity((cart['item_count'] as num?) ?? 0);
     final totalAmount = ((cart['total_amount'] as num?) ?? 0).toDouble();
     final updatedAt = (cart['updated_at'] ?? '').toString();
 
@@ -533,7 +543,7 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         Text(
-                          '$itemCount ${itemCount == 1 ? 'item' : 'items'}',
+                          '$itemCount ${itemCount == '1' ? 'item' : 'items'}',
                           style: TextStyle(
                             color: _textSecondary,
                             fontWeight: FontWeight.w700,

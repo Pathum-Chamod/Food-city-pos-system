@@ -4,6 +4,11 @@ enum ProductPriceType {
   sale,
 }
 
+enum ProductQuantityType {
+  unit,
+  weight,
+}
+
 extension ProductPriceTypeX on ProductPriceType {
   String get dbValue {
     switch (this) {
@@ -40,12 +45,55 @@ extension ProductPriceTypeX on ProductPriceType {
   }
 }
 
+extension ProductQuantityTypeX on ProductQuantityType {
+  String get dbValue {
+    switch (this) {
+      case ProductQuantityType.weight:
+        return 'weight';
+      case ProductQuantityType.unit:
+        return 'unit';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case ProductQuantityType.weight:
+        return 'Weighted';
+      case ProductQuantityType.unit:
+        return 'Unit';
+    }
+  }
+
+  String get defaultUnitLabel {
+    switch (this) {
+      case ProductQuantityType.weight:
+        return 'kg';
+      case ProductQuantityType.unit:
+        return 'pcs';
+    }
+  }
+
+  static ProductQuantityType fromDb(String? value) {
+    switch ((value ?? '').trim().toLowerCase()) {
+      case 'weight':
+        return ProductQuantityType.weight;
+      case 'unit':
+      default:
+        return ProductQuantityType.unit;
+    }
+  }
+}
+
 class Product {
+  static const double quantityEpsilon = 0.000001;
+
   final int? id;
   final String barcode;
   final String name;
 
   final String category;
+  final ProductQuantityType quantityType;
+  final String unitLabel;
 
   final double costPrice;
   final double sellingPrice;
@@ -53,18 +101,20 @@ class Product {
   final double? salePrice;
   final bool saleEnabled;
 
-  final int stock;
+  final double stock;
   final int minStockLevel;
   final bool isActive;
 
   final String updatedAt;
   final String? lastPriceUpdatedAt;
 
-  const Product({
+  Product({
     this.id,
     required this.barcode,
     required this.name,
     this.category = 'General',
+    this.quantityType = ProductQuantityType.unit,
+    String? unitLabel,
     this.costPrice = 0.0,
     required this.sellingPrice,
     double? wholesalePrice,
@@ -75,14 +125,20 @@ class Product {
     this.isActive = true,
     required this.updatedAt,
     this.lastPriceUpdatedAt,
-  }) : wholesalePrice = wholesalePrice ?? sellingPrice;
+  })  : unitLabel = _normalizeUnitLabel(
+          quantityType: quantityType,
+          rawValue: unitLabel,
+        ),
+        wholesalePrice = wholesalePrice ?? sellingPrice;
 
   /// Legacy compatibility for current POS screens that still call product.price
   double get price => sellingPrice;
 
   bool get hasSalePrice => saleEnabled && salePrice != null && salePrice! > 0;
+  bool get isWeighted => quantityType == ProductQuantityType.weight;
+  bool get allowsDecimalQuantity => isWeighted;
 
-  bool get isOutOfStock => stock <= 0;
+  bool get isOutOfStock => stock <= quantityEpsilon;
 
   bool get isLowStock => !isOutOfStock && stock <= minStockLevel;
 
@@ -103,12 +159,14 @@ class Product {
     String? barcode,
     String? name,
     String? category,
+    ProductQuantityType? quantityType,
+    String? unitLabel,
     double? costPrice,
     double? sellingPrice,
     double? wholesalePrice,
     double? salePrice,
     bool? saleEnabled,
-    int? stock,
+    double? stock,
     int? minStockLevel,
     bool? isActive,
     String? updatedAt,
@@ -119,6 +177,8 @@ class Product {
       barcode: barcode ?? this.barcode,
       name: name ?? this.name,
       category: category ?? this.category,
+      quantityType: quantityType ?? this.quantityType,
+      unitLabel: unitLabel ?? this.unitLabel,
       costPrice: costPrice ?? this.costPrice,
       sellingPrice: sellingPrice ?? this.sellingPrice,
       wholesalePrice: wholesalePrice ?? this.wholesalePrice,
@@ -138,6 +198,8 @@ class Product {
       'barcode': barcode,
       'name': name,
       'category': category,
+      'quantity_type': quantityType.dbValue,
+      'unit_label': unitLabel,
 
       // legacy + new
       'price': sellingPrice,
@@ -165,6 +227,10 @@ class Product {
       barcode: (map['barcode'] ?? '').toString(),
       name: (map['name'] ?? '').toString(),
       category: (map['category'] ?? 'General').toString(),
+      quantityType: ProductQuantityTypeX.fromDb(
+        map['quantity_type']?.toString(),
+      ),
+      unitLabel: map['unit_label']?.toString(),
       costPrice: ((map['cost_price'] ?? 0) as num).toDouble(),
       sellingPrice: (rawSelling as num).toDouble(),
       wholesalePrice: (rawWholesale as num).toDouble(),
@@ -173,7 +239,7 @@ class Product {
         map['sale_enabled'],
         fallback: rawSale != null,
       ),
-      stock: (map['stock'] as num?)?.toInt() ?? 0,
+      stock: (map['stock'] as num?)?.toDouble() ?? 0,
       minStockLevel: (map['min_stock_level'] as num?)?.toInt() ?? 0,
       isActive: _readBool(
         map['is_active'],
@@ -197,5 +263,16 @@ class Product {
       return false;
     }
     return fallback;
+  }
+
+  static String _normalizeUnitLabel({
+    required ProductQuantityType quantityType,
+    String? rawValue,
+  }) {
+    final trimmed = (rawValue ?? '').trim();
+    if (trimmed.isNotEmpty) {
+      return trimmed;
+    }
+    return quantityType.defaultUnitLabel;
   }
 }

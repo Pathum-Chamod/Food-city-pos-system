@@ -142,6 +142,27 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
 
   String _formatMoney(num value) => 'Rs. ${value.toStringAsFixed(2)}';
 
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _formatSoldQuantity(Map<String, dynamic> item, num quantity) {
+    final quantityType = (item['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final unitLabel = ((item['unit_label'] ?? '')).toString().trim();
+    final formattedQuantity = _formatQuantity(quantity);
+    if (quantityType == 'weight') {
+      final suffix = unitLabel.isEmpty ? 'kg' : unitLabel;
+      return '$formattedQuantity $suffix sold';
+    }
+    return '$formattedQuantity sold';
+  }
+
   String _formatCompactMoney(num value) {
     final amount = value.toDouble().abs();
     if (amount >= 1000000) return 'Rs. ${(value / 1000000).toStringAsFixed(1)}M';
@@ -607,7 +628,7 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
   Widget _buildTopSellingRow(Map<String, dynamic> item, int index) {
     final productName = (item['product_name'] ?? 'Unknown').toString();
     final barcode = (item['barcode'] ?? '').toString();
-    final qty = ((item['quantity_sold'] as num?) ?? 0).toInt();
+    final qty = ((item['quantity_sold'] as num?) ?? 0).toDouble();
     final netSales = ((item['net_sales_amount'] as num?) ?? 0).toDouble();
 
     return Container(
@@ -667,7 +688,7 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
                       ),
                     ),
                     Text(
-                      '$qty sold',
+                      _formatSoldQuantity(item, qty),
                       style: TextStyle(
                         color: _textSecondary,
                         fontSize: 12,

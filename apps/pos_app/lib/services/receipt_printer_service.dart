@@ -29,6 +29,14 @@ class ReceiptPrinterService {
   bool get isConnected => _printerName != null && _printerName!.trim().isNotEmpty;
   String? get connectedPrinterName => _printerName;
 
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final safeValue = value.toDouble().abs() < 0.000001 ? 0.0 : value.toDouble();
+    return safeValue.toStringAsFixed(maxDecimals).replaceFirst(
+      RegExp(r'\.?0+$'),
+      '',
+    );
+  }
+
   Future<List<String>> getInstalledPrinters() async {
     if (!Platform.isWindows) return const [];
 
@@ -214,7 +222,7 @@ class ReceiptPrinterService {
 
       for (final item in items) {
         final name = (item['name'] ?? 'Item').toString().trim();
-        final qty = ((item['qty'] as num?) ?? 0).toInt();
+        final qty = ((item['qty'] as num?) ?? 0).toDouble();
         final unitPrice = ((item['unitPrice'] as num?) ?? 0).toDouble();
         final lineTotal = ((item['lineTotal'] as num?) ?? 0).toDouble();
 
@@ -224,9 +232,9 @@ class ReceiptPrinterService {
 
         bytes.addAll(
           _text(
-            '${_padLeft('$qty', 4)}'
-            '${_padLeft('Rs.${unitPrice.toStringAsFixed(2)}', 16)}'
-            '${_padLeft('Rs.${lineTotal.toStringAsFixed(2)}', 16)}\n',
+            '${_padLeft(_formatQuantity(qty), 6)}'
+            '${_padLeft('Rs.${unitPrice.toStringAsFixed(2)}', 15)}'
+            '${_padLeft('Rs.${lineTotal.toStringAsFixed(2)}', 15)}\n',
           ),
         );
       }
@@ -341,7 +349,7 @@ class ReceiptPrinterService {
     const col2 = 'UNIT';
     const col3 = 'TOTAL';
 
-    return '${_padLeft(col1, 4)}${_padLeft(col2, 16)}${_padLeft(col3, 16)}';
+    return '${_padLeft(col1, 6)}${_padLeft(col2, 15)}${_padLeft(col3, 15)}';
   }
 
   String _padLeft(String value, int width) {

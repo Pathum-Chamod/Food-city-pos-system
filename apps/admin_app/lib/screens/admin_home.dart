@@ -217,9 +217,9 @@ class _AdminHomeState extends State<AdminHome> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setDialogState) {
-          final enteredQty = int.tryParse(qtyController.text.trim()) ?? 0;
+          final enteredQty = double.tryParse(qtyController.text.trim()) ?? 0.0;
 
-          int resultingStock = product.stock;
+          double resultingStock = product.stock;
           if (adjustmentType == 'increase') {
             resultingStock = product.stock + enteredQty;
           } else if (adjustmentType == 'decrease') {
@@ -291,7 +291,7 @@ class _AdminHomeState extends State<AdminHome> {
                   const SizedBox(height: 14),
                   TextField(
                     controller: qtyController,
-                    keyboardType: TextInputType.number,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     onChanged: (_) => setDialogState(() {}),
                     decoration: InputDecoration(
                       labelText: adjustmentType == 'set_exact'
@@ -346,7 +346,7 @@ class _AdminHomeState extends State<AdminHome> {
                           : Colors.blue,
                 ),
                 onPressed: () {
-                  final qty = int.tryParse(qtyController.text.trim()) ?? -1;
+                  final qty = double.tryParse(qtyController.text.trim()) ?? -1;
                   final reason = reasonController.text.trim();
 
                   if (qty < 0) {
@@ -499,7 +499,7 @@ class _AdminHomeState extends State<AdminHome> {
             orElse: () => null,
           );
 
-          final qty = int.tryParse(qtyController.text.trim()) ?? 0;
+          final qty = double.tryParse(qtyController.text.trim()) ?? 0.0;
           final cost = double.tryParse(costController.text.trim()) ?? 0.0;
           final projectedStock = selectedProduct != null
               ? selectedProduct.stock + qty
@@ -567,7 +567,7 @@ class _AdminHomeState extends State<AdminHome> {
                   TextField(
                     controller: qtyController,
                     enabled: !isSubmitting,
-                    keyboardType: TextInputType.number,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     onChanged: (_) => setDialogState(() {}),
                     decoration: const InputDecoration(
                       labelText: 'Quantity Received',
@@ -629,7 +629,7 @@ class _AdminHomeState extends State<AdminHome> {
                         }
 
                         final qty =
-                            int.tryParse(qtyController.text.trim()) ?? 0;
+                            double.tryParse(qtyController.text.trim()) ?? 0.0;
                         final cost =
                             double.tryParse(costController.text.trim()) ?? -1;
 
@@ -1445,6 +1445,14 @@ class _AdminHomeState extends State<AdminHome> {
                                                       color: Colors.grey[700],
                                                     ),
                                                   ),
+                                                  const SizedBox(height: 2),
+                                                  Text(
+                                                    '${product.quantityType.label} (${product.unitLabel})',
+                                                    style: TextStyle(
+                                                      color: Colors.grey[600],
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  ),
                                                 ],
                                               ),
                                             ),
@@ -1485,7 +1493,7 @@ class _AdminHomeState extends State<AdminHome> {
                                             ),
                                             const SizedBox(width: 10),
                                             Text(
-                                              'Stock: ${product.stock}',
+                                              'Stock: ${product.stock} ${product.unitLabel}',
                                               style: const TextStyle(
                                                 fontWeight: FontWeight.w600,
                                               ),

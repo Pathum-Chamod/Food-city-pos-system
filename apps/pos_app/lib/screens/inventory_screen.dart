@@ -2,6 +2,7 @@ import 'dart:io';
 
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
@@ -377,7 +378,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final metrics = [
       (
         title: 'Stock',
-        value: '${product.stock}',
+        value: _formatProductQuantity(product, product.stock),
         icon: Icons.layers_outlined,
         accent: _accentBlue,
       ),
@@ -596,6 +597,65 @@ class _InventoryScreenState extends State<InventoryScreen> {
     return null;
   }
 
+  String? _validateQuantityInput(
+    String rawValue, {
+    required String label,
+    required ProductQuantityType quantityType,
+    bool allowZero = false,
+  }) {
+    final value = _tryParseQuantityInput(rawValue, quantityType);
+    if (value == null) return 'Enter a valid $label.';
+    if (allowZero) {
+      if (value < 0) return '$label cannot be negative.';
+    } else if (value <= 0) {
+      return '$label must be greater than 0.';
+    }
+    return null;
+  }
+
+  double? _tryParseQuantityInput(
+    String rawValue,
+    ProductQuantityType quantityType,
+  ) {
+    final trimmed = rawValue.trim();
+    if (trimmed.isEmpty) return null;
+    if (quantityType == ProductQuantityType.weight) {
+      return double.tryParse(trimmed);
+    }
+    final value = int.tryParse(trimmed);
+    return value?.toDouble();
+  }
+
+  double _parseQuantityInput(
+    String rawValue,
+    ProductQuantityType quantityType,
+  ) {
+    return _tryParseQuantityInput(rawValue, quantityType) ?? 0.0;
+  }
+
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if (quantity.abs() < 0.000001) {
+      return '0';
+    }
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _formatQuantityWithUnitLabel(num value, String unitLabel) {
+    final trimmedUnitLabel = unitLabel.trim();
+    if (trimmedUnitLabel.isEmpty) return _formatQuantity(value);
+    return '${_formatQuantity(value)} $trimmedUnitLabel';
+  }
+
+  String _formatProductQuantity(Product product, num value) {
+    return _formatQuantityWithUnitLabel(value, product.unitLabel);
+  }
+
   void _disposeControllersNextFrame(List<TextEditingController> controllers) {
     Future<void>.delayed(const Duration(milliseconds: 350), () {
       for (final controller in controllers) {
@@ -621,6 +681,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
       case 'minimum_stock':
       case 'min_stock':
         return 'min_stock_level';
+      case 'measurement_type':
+      case 'measure_type':
+      case 'item_type':
+        return 'quantity_type';
+      case 'unit':
+      case 'unit_name':
+      case 'stock_unit':
+        return 'unit_label';
       default:
         return normalized;
     }
@@ -635,6 +703,71 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   String _stringValue(dynamic value) => value?.toString().trim() ?? '';
+
+  ProductQuantityType _parseImportQuantityType(String? value) {
+    return ProductQuantityTypeX.fromDb(value);
+  }
+
+  String _normalizeUnitLabelInput(
+    String? value,
+    ProductQuantityType quantityType,
+  ) {
+    final trimmed = (value ?? '').trim();
+    if (trimmed.isNotEmpty) return trimmed;
+    return quantityType.defaultUnitLabel;
+  }
+
+  void _syncUnitLabelWithQuantityType({
+    required TextEditingController controller,
+    required ProductQuantityType previousType,
+    required ProductQuantityType nextType,
+  }) {
+    final currentValue = controller.text.trim();
+    if (currentValue.isEmpty || currentValue == previousType.defaultUnitLabel) {
+      controller.text = nextType.defaultUnitLabel;
+    }
+  }
+
+  Widget _buildMeasurementFields({
+    required ProductQuantityType quantityType,
+    required ValueChanged<ProductQuantityType> onQuantityTypeChanged,
+    required TextEditingController unitLabelController,
+  }) {
+    return Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<ProductQuantityType>(
+            initialValue: quantityType,
+            decoration: const InputDecoration(labelText: 'Quantity type'),
+            items: ProductQuantityType.values
+                .map(
+                  (type) => DropdownMenuItem<ProductQuantityType>(
+                    value: type,
+                    child: Text(type.label),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              onQuantityTypeChanged(value);
+            },
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: TextField(
+            controller: unitLabelController,
+            decoration: InputDecoration(
+              labelText: 'Unit label',
+              helperText: quantityType == ProductQuantityType.weight
+                  ? 'Examples: kg, g, lb'
+                  : 'Examples: pcs, pack, bottle',
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   Future<void> _downloadBulkImportTemplate() async {
     try {
@@ -657,6 +790,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
           'wholesale_price',
           'sale_price',
           'sale_enabled',
+          'quantity_type',
+          'unit_label',
           'stock',
           'min_stock_level',
         ],
@@ -669,6 +804,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
           '95.00',
           '90.00',
           'false',
+          'unit',
+          'pcs',
           '25',
           '5',
         ],
@@ -738,6 +875,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
       final wholesalePriceRaw = readValue(row, 'wholesale_price');
       final salePriceRaw = readValue(row, 'sale_price');
       final saleEnabledRaw = readValue(row, 'sale_enabled');
+      final quantityTypeRaw = readValue(row, 'quantity_type');
+      final unitLabelRaw = readValue(row, 'unit_label');
       final stockRaw = readValue(row, 'stock');
       final minStockRaw = readValue(row, 'min_stock_level');
 
@@ -749,6 +888,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
       if (normalizedBarcode.isNotEmpty && seenBarcodes.contains(normalizedBarcode)) {
         errors.add('Duplicate barcode in file');
       }
+
+      final normalizedQuantityType = quantityTypeRaw.trim().toLowerCase();
+      if (normalizedQuantityType.isNotEmpty &&
+          normalizedQuantityType != 'unit' &&
+          normalizedQuantityType != 'weight') {
+        errors.add('Quantity type must be unit or weight');
+      }
+      final quantityType = _parseImportQuantityType(quantityTypeRaw);
+      final unitLabel = _normalizeUnitLabelInput(unitLabelRaw, quantityType);
 
 
       double? costPrice;
@@ -838,6 +986,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
           'wholesale_price': wholesalePrice,
           'sale_price': salePrice,
           'sale_enabled': saleEnabled,
+          'quantity_type': quantityType.dbValue,
+          'unit_label': unitLabel,
           'stock': stock ?? 0,
           'opening_stock': stock ?? 0,
           'min_stock_level': minStock ?? 0,
@@ -1331,7 +1481,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                                 ),
                                                 if (showStockMeta)
                                                   Text(
-                                                    'Stock ${product.stock}',
+                                                    'Stock ${_formatProductQuantity(product, product.stock)}',
                                                     style: TextStyle(
                                                       color: stockAccent,
                                                       fontWeight: FontWeight.w700,
@@ -1479,7 +1629,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                       ),
                                     ),
                                     subtitle: Text(
-                                      '${product.barcode} • ${product.category} • Stock ${product.stock}',
+                                      '${product.barcode} • ${product.category} • ${product.quantityType.label} (${product.unitLabel}) • Stock ${_formatProductQuantity(product, product.stock)}',
                                     ),
                                     trailing: Text(
                                       'Rs. ${product.sellingPrice.toStringAsFixed(2)}',
@@ -1522,7 +1672,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final salePriceController = TextEditingController();
     final openingStockController = TextEditingController(text: '0');
     final minStockController = TextEditingController(text: '0');
+    final unitLabelController = TextEditingController(text: 'pcs');
     bool saleEnabled = false;
+    ProductQuantityType quantityType = ProductQuantityType.unit;
 
     final saved = await _showInventoryPopup<bool>(
       icon: Icons.add_box_outlined,
@@ -1557,6 +1709,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 controller: categoryController,
                 textCapitalization: TextCapitalization.words,
                 decoration: const InputDecoration(labelText: 'Category'),
+              ),
+              const SizedBox(height: 12),
+              _buildMeasurementFields(
+                quantityType: quantityType,
+                unitLabelController: unitLabelController,
+                onQuantityTypeChanged: (value) {
+                  setPopupState(() {
+                    final previousType = quantityType;
+                    quantityType = value;
+                    _syncUnitLabelWithQuantityType(
+                      controller: unitLabelController,
+                      previousType: previousType,
+                      nextType: value,
+                    );
+                  });
+                },
               ),
               const SizedBox(height: 14),
               Row(
@@ -1800,6 +1968,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final openingStock =
                             int.parse(openingStockController.text.trim());
                         final minStock = int.parse(minStockController.text.trim());
+                        final normalizedUnitLabel = _normalizeUnitLabelInput(
+                          unitLabelController.text,
+                          quantityType,
+                        );
 
                         if (saleEnabled && (salePrice == null || salePrice <= 0)) {
                           AppSnackBar.show(
@@ -1813,7 +1985,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final confirmed = await _confirmAction(
                           title: 'Confirm Add Product',
                           message:
-                              'Create $name with opening stock of $openingStock?',
+                              'Create $name as ${quantityType == ProductQuantityType.weight ? 'a weighted' : 'a unit'} item with opening stock of $openingStock $normalizedUnitLabel?',
                           confirmText: 'Create',
                         );
                         if (!confirmed) return;
@@ -1825,6 +1997,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           category: category.isEmpty ? 'General' : category,
                           costPrice: costPrice,
                           sellingPrice: sellingPrice,
+                          quantityType: quantityType,
+                          unitLabel: normalizedUnitLabel,
                           wholesalePrice: wholesalePrice,
                           salePrice: salePrice,
                           saleEnabled: saleEnabled,
@@ -1858,6 +2032,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       salePriceController,
       openingStockController,
       minStockController,
+      unitLabelController,
     ]);
 
     if (saved == true) {
@@ -1988,7 +2163,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final minStockController = TextEditingController(
       text: product.minStockLevel.toString(),
     );
+    final unitLabelController = TextEditingController(text: product.unitLabel);
     bool saleEnabled = product.saleEnabled;
+    ProductQuantityType quantityType = product.quantityType;
 
     final saved = await _showInventoryPopup<bool>(
       icon: Icons.edit_outlined,
@@ -2038,6 +2215,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 controller: categoryController,
                 textCapitalization: TextCapitalization.words,
                 decoration: const InputDecoration(labelText: 'Category'),
+              ),
+              const SizedBox(height: 12),
+              _buildMeasurementFields(
+                quantityType: quantityType,
+                unitLabelController: unitLabelController,
+                onQuantityTypeChanged: (value) {
+                  setPopupState(() {
+                    final previousType = quantityType;
+                    quantityType = value;
+                    _syncUnitLabelWithQuantityType(
+                      controller: unitLabelController,
+                      previousType: previousType,
+                      nextType: value,
+                    );
+                  });
+                },
               ),
               const SizedBox(height: 14),
               Row(
@@ -2233,6 +2426,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final salePrice =
                             rawSale.isEmpty ? null : double.parse(rawSale);
                         final minStock = int.parse(minStockController.text.trim());
+                        final normalizedUnitLabel = _normalizeUnitLabelInput(
+                          unitLabelController.text,
+                          quantityType,
+                        );
 
                         if (saleEnabled && (salePrice == null || salePrice <= 0)) {
                           AppSnackBar.show(
@@ -2256,6 +2453,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final noChanges =
                             name == product.name &&
                             normalizedCategory == product.category &&
+                            quantityType == product.quantityType &&
+                            normalizedUnitLabel == product.unitLabel &&
                             double.parse(costPrice.toStringAsFixed(2)) ==
                                 double.parse(product.costPrice.toStringAsFixed(2)) &&
                             double.parse(sellingPrice.toStringAsFixed(2)) ==
@@ -2295,6 +2494,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           category: category.isEmpty ? 'General' : category,
                           costPrice: costPrice,
                           sellingPrice: sellingPrice,
+                          quantityType: quantityType,
+                          unitLabel: normalizedUnitLabel,
                           wholesalePrice: wholesalePrice,
                           salePrice: salePrice,
                           saleEnabled: saleEnabled,
@@ -2325,6 +2526,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       wholesalePriceController,
       salePriceController,
       minStockController,
+      unitLabelController,
     ]);
 
     if (saved == true) {
@@ -2668,7 +2870,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                     ),
                                     const SizedBox(height: 8),
                                     Text(
-                                      'Sell Rs. ${(data['selling_price'] as num).toStringAsFixed(2)} • Stock ${data['stock']} • Min ${data['min_stock_level']}',
+                                      'Sell Rs. ${(data['selling_price'] as num).toStringAsFixed(2)} | ${(data['quantity_type'] ?? 'unit').toString()} (${data['unit_label']}) | Stock ${data['stock']} | Min ${data['min_stock_level']}',
                                       style: TextStyle(
                                         color: _textSecondary,
                                         fontWeight: FontWeight.w700,
@@ -2828,6 +3030,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
       text: preferredCost > 0 ? preferredCost.toStringAsFixed(2) : '',
     );
     final noteController = TextEditingController();
+    final isWeighted = product.quantityType == ProductQuantityType.weight;
+    final quantityLabel = isWeighted
+        ? 'Received ${product.unitLabel.trim().isEmpty ? 'weight' : product.unitLabel.trim()}'
+        : 'Received quantity';
     int? selectedSupplierId = preferredMapping.supplierId;
     bool setAsPrimary = false;
 
@@ -2857,7 +3063,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 children: [
                   _buildPopupMetricCard(
                     title: 'Current stock',
-                    value: '${product.stock}',
+                    value: _formatProductQuantity(product, product.stock),
                     icon: Icons.layers_outlined,
                     accent: _accentBlue,
                   ),
@@ -2952,9 +3158,20 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   Expanded(
                     child: TextField(
                       controller: qtyController,
-                      keyboardType: TextInputType.number,
-                      decoration:
-                          const InputDecoration(labelText: 'Received quantity'),
+                      keyboardType: TextInputType.numberWithOptions(
+                        decimal: isWeighted,
+                      ),
+                      inputFormatters: [
+                        isWeighted
+                            ? FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
+                            : FilteringTextInputFormatter.digitsOnly,
+                      ],
+                      decoration: InputDecoration(
+                        labelText: quantityLabel,
+                        helperText: isWeighted
+                            ? 'Enter the received ${product.unitLabel}. Example: 2.5'
+                            : null,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -3043,9 +3260,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           return;
                         }
 
-                        final qtyError = _validatePositiveInt(
+                        final qtyError = _validateQuantityInput(
                           qtyController.text,
                           label: 'quantity',
+                          quantityType: product.quantityType,
                         );
                         if (qtyError != null) {
                           AppSnackBar.show(dialogContext, message: qtyError);
@@ -3077,7 +3295,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           return;
                         }
 
-                        final qty = int.parse(qtyController.text.trim());
+                        final qty = _parseQuantityInput(
+                          qtyController.text,
+                          product.quantityType,
+                        );
                         final unitCost =
                             rawCost.isEmpty ? null : double.parse(rawCost);
                         final resolvedCost = unitCost ??
@@ -3088,7 +3309,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final confirmed = await _confirmAction(
                           title: 'Confirm Stock Receive',
                           message:
-                              'Receive $qty units of ${product.name} from ${supplier.name}? This will increase stock immediately.',
+                              'Receive ${_formatProductQuantity(product, qty)} of ${product.name} from ${supplier.name}? This will increase stock immediately.',
                           confirmText: 'Receive',
                         );
                         if (!confirmed) return;
@@ -3512,16 +3733,24 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     final qtyController = TextEditingController();
     final reasonController = TextEditingController();
+    final isWeighted = product.quantityType == ProductQuantityType.weight;
+    final quantityLabel = isWeighted
+        ? product.unitLabel.trim().isEmpty
+            ? 'weight'
+            : product.unitLabel.trim()
+        : 'quantity';
     String adjustmentType = 'add';
 
     final saved = await _showInventoryPopup<bool>(
       icon: Icons.tune_rounded,
       title: 'Stock Adjustment',
-      subtitle: '${product.name} • Current stock ${product.stock}',
+      subtitle:
+          '${product.name} • Current stock ${_formatProductQuantity(product, product.stock)}',
       maxWidth: 620,
       bodyBuilder: (dialogContext, setPopupState) {
-        final previewQty = int.tryParse(qtyController.text.trim()) ?? 0;
-        int resultingStock = product.stock;
+        final previewQty =
+            _tryParseQuantityInput(qtyController.text, product.quantityType) ?? 0.0;
+        double resultingStock = product.stock;
         switch (adjustmentType) {
           case 'add':
             resultingStock = product.stock + previewQty;
@@ -3544,13 +3773,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 children: [
                   _buildPopupMetricCard(
                     title: 'Current stock',
-                    value: '${product.stock}',
+                    value: _formatProductQuantity(product, product.stock),
                     icon: Icons.layers_outlined,
                     accent: _accentBlue,
                   ),
                   _buildPopupMetricCard(
                     title: 'After change',
-                    value: '$resultingStock',
+                    value: _formatProductQuantity(product, resultingStock),
                     icon: Icons.timeline_rounded,
                     accent: resultingStock < 0 ? _dangerColor : _brandColor,
                   ),
@@ -3575,12 +3804,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
               const SizedBox(height: 12),
               TextField(
                 controller: qtyController,
-                keyboardType: TextInputType.number,
+                keyboardType: TextInputType.numberWithOptions(
+                  decimal: isWeighted,
+                ),
+                inputFormatters: [
+                  isWeighted
+                      ? FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
+                      : FilteringTextInputFormatter.digitsOnly,
+                ],
                 onChanged: (_) => setPopupState(() {}),
                 decoration: InputDecoration(
                   labelText: adjustmentType == 'set'
-                      ? 'Final stock quantity'
-                      : 'Quantity',
+                      ? 'Final stock $quantityLabel'
+                      : quantityLabel,
+                  helperText: isWeighted
+                      ? 'Weighted items can use decimals like 0.75.'
+                      : null,
                 ),
               ),
               const SizedBox(height: 12),
@@ -3602,20 +3841,24 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () async {
-                        final qtyError = _validatePositiveInt(
+                        final qtyError = _validateQuantityInput(
                           qtyController.text,
                           label: adjustmentType == 'set'
                               ? 'final stock quantity'
                               : 'quantity',
                           allowZero: adjustmentType == 'set',
+                          quantityType: product.quantityType,
                         );
                         if (qtyError != null) {
                           AppSnackBar.show(dialogContext, message: qtyError);
                           return;
                         }
 
-                        final qty = int.parse(qtyController.text.trim());
-                        int resultingStock;
+                        final qty = _parseQuantityInput(
+                          qtyController.text,
+                          product.quantityType,
+                        );
+                        double resultingStock;
                         switch (adjustmentType) {
                           case 'add':
                             resultingStock = product.stock + qty;
@@ -3645,7 +3888,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         final confirmed = await _confirmAction(
                           title: 'Confirm Stock Adjustment',
                           message:
-                              'This will $actionLabel for ${product.name}. Final stock will be $resultingStock.',
+                              'This will $actionLabel for ${product.name}. Final stock will be ${_formatProductQuantity(product, resultingStock)}.',
                           confirmText: 'Apply',
                         );
                         if (!confirmed) return;
@@ -3725,7 +3968,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 children: [
                   _buildPopupMetricCard(
                     title: 'Current stock',
-                    value: '${product.stock}',
+                    value: _formatProductQuantity(product, product.stock),
                     icon: Icons.inventory_2_outlined,
                     accent: _accentBlue,
                   ),
@@ -4141,7 +4384,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
     await _showInventoryPopup<void>(
       icon: Icons.inventory_2_outlined,
       title: product.name,
-      subtitle: '${product.barcode} • ${product.category}',
+      subtitle:
+          '${product.barcode} • ${product.category} • ${product.quantityType.label} (${product.unitLabel})',
       maxWidth: 980,
       maxHeightFactor: 0.90,
       bodyBuilder: (dialogContext, setPopupState) {
@@ -4456,7 +4700,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
       background = _successSoft;
       label = 'In stock';
     }
-
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -4530,12 +4773,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Widget _buildMovementTile(Map<String, dynamic> movement) {
     final actionType = (movement['action_type'] ?? '').toString();
-    final quantityChange = movement['quantity_change'] as int?;
-    final oldPrice = movement['old_price'] as num?;
-    final newPrice = movement['new_price'] as num?;
 
-    String subtitle = _movementSubtitle(movement);
-    String trailing = _formatDateTime(movement['created_at']?.toString());
+    String subtitle = _movementSubtitleSafe(movement);
+    String trailing = _movementTrailingSafe(movement);
     Color accent = _accentBlue;
     IconData icon = Icons.history_rounded;
 
@@ -4562,12 +4802,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
       icon = Icons.restart_alt_rounded;
     }
 
-    if (quantityChange != null) {
-      final sign = quantityChange > 0 ? '+' : '';
-      trailing = '$sign$quantityChange • $trailing';
-    } else if (oldPrice != null || newPrice != null) {
-      trailing = 'Rs. ${newPrice?.toStringAsFixed(2) ?? '0.00'} • $trailing';
-    }
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -4705,6 +4939,51 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
 
     return pieces.join(' • ');
+  }
+
+  String _movementSubtitleSafe(Map<String, dynamic> movement) {
+    final actionType = (movement['action_type'] ?? '').toString();
+    final stockBefore = movement['stock_before'];
+    final stockAfter = movement['stock_after'];
+    final oldPrice = movement['old_price'];
+    final newPrice = movement['new_price'];
+    final reason = (movement['reason'] ?? '').toString().trim();
+    final performedBy = (movement['performed_by'] ?? '').toString().trim();
+
+    final pieces = <String>[];
+
+    if (actionType.startsWith('price_change')) {
+      pieces.add(
+        'Rs. ${_asDouble(oldPrice).toStringAsFixed(2)} -> Rs. ${_asDouble(newPrice).toStringAsFixed(2)}',
+      );
+    } else if (stockBefore != null || stockAfter != null) {
+      final beforeLabel = stockBefore == null ? '-' : _formatQuantity(_asDouble(stockBefore));
+      final afterLabel = stockAfter == null ? '-' : _formatQuantity(_asDouble(stockAfter));
+      pieces.add('$beforeLabel -> $afterLabel');
+    }
+
+    if (reason.isNotEmpty) {
+      pieces.add(reason);
+    }
+
+    if (performedBy.isNotEmpty) {
+      pieces.add(performedBy);
+    }
+
+    return pieces.join(' - ');
+  }
+
+  String _movementTrailingSafe(Map<String, dynamic> movement) {
+    final quantityChange = (movement['quantity_change'] as num?)?.toDouble();
+    final newPrice = (movement['new_price'] as num?)?.toDouble();
+    final baseTrailing = _formatDateTime(movement['created_at']?.toString());
+
+
+    if (newPrice != null) {
+      return 'Rs. ${newPrice.toStringAsFixed(2)} - $baseTrailing';
+    }
+
+    return baseTrailing;
   }
 
   double _asDouble(dynamic value) {
@@ -4996,7 +5275,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           width: 112,
                           child: statPill(
                             label: 'Stock',
-                            value: product.stock.toString(),
+                            value: _formatProductQuantity(product, product.stock),
                             accent: _textPrimary,
                           ),
                         ),
@@ -5463,3 +5742,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
 extension _FirstOrNullExtension<E> on Iterable<E> {
   E? get firstOrNull => isEmpty ? null : first;
 }
+
+
+

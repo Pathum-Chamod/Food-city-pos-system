@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../config/pos_feature_flags.dart';
@@ -27,7 +28,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
 
   Map<String, dynamic>? _saleSummary;
   List<Map<String, dynamic>> _refundableItems = [];
-  final Map<String, int> _selectedQty = {};
+  final Map<String, double> _selectedQty = {};
 
   final TextEditingController _reasonController = TextEditingController();
 
@@ -88,14 +89,34 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     }
   }
 
-  int _selectedFor(String barcode) => _selectedQty[barcode] ?? 0;
+  double _selectedFor(String barcode) => _selectedQty[barcode] ?? 0.0;
 
-  void _increaseQty(String barcode, int refundableQty) {
+  bool _isWeightedItem(Map<String, dynamic> item) {
+    return (item['quantity_type'] ?? '').toString().toLowerCase() == 'weight';
+  }
+
+  String _unitLabelFor(Map<String, dynamic> item) {
+    final label = (item['unit_label'] ?? '').toString().trim();
+    if (label.isNotEmpty) return label;
+    return _isWeightedItem(item) ? 'kg' : 'pcs';
+  }
+
+  String _formatQuantity(num value, {int maxDecimals = 3}) {
+    final quantity = value.toDouble();
+    if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
+      return quantity.round().toString();
+    }
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  void _increaseQty(String barcode, double refundableQty) {
     final current = _selectedFor(barcode);
-    if (current >= refundableQty) return;
+    if (current + 1.0 > refundableQty + 0.000001) return;
 
     setState(() {
-      _selectedQty[barcode] = current + 1;
+      _selectedQty[barcode] = current + 1.0;
     });
   }
 
@@ -104,7 +125,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     if (current <= 0) return;
 
     setState(() {
-      final next = current - 1;
+      final next = current - 1.0;
       if (next <= 0) {
         _selectedQty.remove(barcode);
       } else {
@@ -128,8 +149,8 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
 
   int get _selectedLineCount => _selectedRefundItems.length;
 
-  int get _selectedUnitsCount =>
-      _selectedQty.values.fold<int>(0, (sum, qty) => sum + qty);
+  double get _selectedUnitsCount =>
+      _selectedQty.values.fold<double>(0.0, (sum, qty) => sum + qty);
 
   List<Map<String, dynamic>> get _selectedRefundItems {
     return _refundableItems
@@ -148,6 +169,87 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
         })
         .whereType<Map<String, dynamic>>()
         .toList();
+  }
+
+  Future<void> _setSelectedQty(Map<String, dynamic> item) async {
+    final barcode = (item['barcode'] ?? '').toString();
+    final refundableQty = ((item['refundable_quantity'] as num?) ?? 0).toDouble();
+    final unitLabel = _unitLabelFor(item);
+    final isWeighted = _isWeightedItem(item);
+    final controller = TextEditingController(
+      text: _selectedFor(barcode) > 0 ? _formatQuantity(_selectedFor(barcode)) : '',
+    );
+
+    final nextQty = await showDialog<double>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Set Refund Quantity'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text((item['product_name'] ?? 'Item').toString()),
+              const SizedBox(height: 8),
+              Text('Available: ${_formatQuantity(refundableQty)} $unitLabel'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                keyboardType: TextInputType.numberWithOptions(decimal: isWeighted),
+                inputFormatters: [
+                  isWeighted
+                      ? FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
+                      : FilteringTextInputFormatter.digitsOnly,
+                ],
+                decoration: InputDecoration(
+                  labelText: 'Refund quantity ($unitLabel)',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 0.0),
+              child: const Text('Clear'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final raw = controller.text.trim();
+                final parsed = isWeighted
+                    ? double.tryParse(raw)
+                    : int.tryParse(raw)?.toDouble();
+                if (parsed == null || parsed < 0 || parsed > refundableQty + 0.000001) {
+                  AppSnackBar.show(
+                    dialogContext,
+                    message: 'Enter a valid quantity up to ${_formatQuantity(refundableQty)}.',
+                    backgroundColor: Colors.red,
+                  );
+                  return;
+                }
+                Navigator.pop(dialogContext, parsed);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    controller.dispose();
+    if (nextQty == null || !mounted) return;
+
+    setState(() {
+      if (nextQty <= 0) {
+        _selectedQty.remove(barcode);
+      } else {
+        _selectedQty[barcode] = nextQty;
+      }
+    });
   }
 
   String _buildApprovalDescription({
@@ -675,9 +777,11 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     final barcode = (item['barcode'] ?? '').toString();
     final name = (item['product_name'] ?? 'Unknown').toString();
     final unitPrice = ((item['unit_price'] as num?) ?? 0).toDouble();
-    final originalQty = (item['original_quantity'] as num?)?.toInt() ?? 0;
-    final refundedQty = (item['refunded_quantity'] as num?)?.toInt() ?? 0;
-    final refundableQty = (item['refundable_quantity'] as num?)?.toInt() ?? 0;
+    final originalQty = ((item['original_quantity'] as num?) ?? 0).toDouble();
+    final refundedQty = ((item['refunded_quantity'] as num?) ?? 0).toDouble();
+    final refundableQty = ((item['refundable_quantity'] as num?) ?? 0).toDouble();
+    final unitLabel = _unitLabelFor(item);
+    final isWeighted = _isWeightedItem(item);
     final selectedQty = _selectedFor(barcode);
     final refundAmount = unitPrice * selectedQty;
     final hasSelection = selectedQty > 0;
@@ -818,14 +922,17 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                       onTap: selectedQty > 0 ? () => _decreaseQty(barcode) : null,
                     ),
                     SizedBox(
-                      width: 34,
-                      child: Text(
-                        '$selectedQty',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: palette.textPrimary,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 20,
+                      width: isWeighted ? 82 : 34,
+                      child: InkWell(
+                        onTap: () => _setSelectedQty(item),
+                        child: Text(
+                          _formatQuantity(selectedQty),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: palette.textPrimary,
+                            fontWeight: FontWeight.w900,
+                            fontSize: isWeighted ? 14 : 20,
+                          ),
                         ),
                       ),
                     ),
@@ -846,11 +953,11 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
             children: [
               statChip('Unit Price', 'Rs. ${unitPrice.toStringAsFixed(2)}'),
               const SizedBox(width: 8),
-              statChip('Sold', '$originalQty'),
+              statChip('Sold', '${_formatQuantity(originalQty)} $unitLabel'),
               const SizedBox(width: 8),
-              statChip('Refunded', '$refundedQty'),
+              statChip('Refunded', '${_formatQuantity(refundedQty)} $unitLabel'),
               const SizedBox(width: 8),
-              statChip('Remaining', '$refundableQty'),
+              statChip('Remaining', '${_formatQuantity(refundableQty)} $unitLabel'),
             ],
           ),
         ],
@@ -987,7 +1094,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
               children: [
                 stat('Original Sale', 'Rs. ${total.toStringAsFixed(2)}'),
                 stat('Selected Lines', '$_selectedLineCount'),
-                stat('Selected Units', '$_selectedUnitsCount'),
+                stat('Selected Units', _formatQuantity(_selectedUnitsCount)),
                 const SizedBox(height: 8),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -1124,7 +1231,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        'Rs. ${((((item['unit_price'] as num?) ?? 0).toDouble()) * (((item['quantity'] as num?) ?? 0).toInt())).toStringAsFixed(2)}',
+                        'Rs. ${((((item['unit_price'] as num?) ?? 0).toDouble()) * (((item['quantity'] as num?) ?? 0).toDouble())).toStringAsFixed(2)}',
                         style: TextStyle(
                           color: palette.danger,
                           fontWeight: FontWeight.w900,
@@ -1237,7 +1344,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     final palette = _RefundPalette.of(context);
     final summary = _saleSummary;
     final hasRefundableQty = _refundableItems.any(
-      (item) => ((item['refundable_quantity'] as num?)?.toInt() ?? 0) > 0,
+      (item) => (((item['refundable_quantity'] as num?) ?? 0).toDouble()) > 0,
     );
 
     return Scaffold(

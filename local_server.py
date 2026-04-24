@@ -184,6 +184,26 @@ def parse_float(value, default=0.0):
         return default
 
 
+def round_quantity(value):
+    return round(parse_float(value, 0.0), 3)
+
+
+def format_quantity(value):
+    text = f"{round_quantity(value):.3f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def normalize_quantity_type(value):
+    return "weight" if str(value or "").strip().lower() == "weight" else "unit"
+
+
+def normalize_unit_label(quantity_type, value):
+    trimmed = str(value or "").strip()
+    if trimmed:
+        return trimmed
+    return "kg" if normalize_quantity_type(quantity_type) == "weight" else "pcs"
+
+
 def now_sql():
     return "datetime('now','localtime')"
 
@@ -196,6 +216,15 @@ def get_product_row(cursor, barcode):
             barcode,
             name,
             COALESCE(category, 'General') AS category,
+            CASE
+                WHEN LOWER(COALESCE(quantity_type, '')) = 'weight' THEN 'weight'
+                ELSE 'unit'
+            END AS quantity_type,
+            CASE
+                WHEN TRIM(COALESCE(unit_label, '')) != '' THEN TRIM(unit_label)
+                WHEN LOWER(COALESCE(quantity_type, 'unit')) = 'weight' THEN 'kg'
+                ELSE 'pcs'
+            END AS unit_label,
             COALESCE(cost_price, 0) AS cost_price,
             COALESCE(selling_price, price, 0) AS selling_price,
             COALESCE(price, selling_price, 0) AS price,
@@ -499,14 +528,14 @@ def update_stock_receive(
     if not row:
         return False, "Product not found", None
 
-    quantity = parse_int(quantity, 0)
+    quantity = round_quantity(quantity)
     if quantity <= 0:
         return False, "Quantity must be greater than 0", None
 
     cost = parse_float(cost, 0)
     product_name = str(row["name"] or "Unknown product")
-    stock_before = parse_int(row["stock"], 0)
-    stock_after = stock_before + quantity
+    stock_before = round_quantity(row["stock"])
+    stock_after = round_quantity(stock_before + quantity)
 
     supplier_id = parse_int(supplier_id, 0)
 
@@ -590,10 +619,10 @@ def update_stock_adjustment(cursor, barcode, adjustment_type, quantity, reason="
     if not row:
         return False, "Product not found", None, None
 
-    current_stock = parse_int(row["stock"], 0)
+    current_stock = round_quantity(row["stock"])
     product_name = str(row["name"] or "Unknown product")
     normalized = str(adjustment_type or "").strip().lower()
-    quantity = parse_int(quantity, 0)
+    quantity = round_quantity(quantity)
 
     if normalized in {"increase", "add"}:
         if quantity <= 0:
@@ -608,15 +637,15 @@ def update_stock_adjustment(cursor, barcode, adjustment_type, quantity, reason="
     elif normalized in {"set_exact", "set"}:
         if quantity < 0:
             return False, "Quantity cannot be negative", None, None
-        stock_delta = quantity - current_stock
+        stock_delta = round_quantity(quantity - current_stock)
         movement_type = "stock_adjust_set"
     else:
         return False, "Invalid adjustment type", None, None
 
-    resulting_stock = current_stock + stock_delta
+    resulting_stock = round_quantity(current_stock + stock_delta)
     if resulting_stock < 0:
         return False, "Resulting stock cannot be negative", None, None
-    if stock_delta == 0:
+    if abs(stock_delta) < 0.000001:
         return False, "No stock change detected", current_stock, 0
 
     cursor.execute(
@@ -711,6 +740,8 @@ def create_or_update_product(
     wholesale_price=None,
     sale_price=None,
     sale_enabled=False,
+    quantity_type="unit",
+    unit_label=None,
     opening_stock=0,
     min_stock_level=0,
     reason="",
@@ -719,6 +750,8 @@ def create_or_update_product(
     barcode = str(barcode or "").strip()
     name = str(name or "").strip()
     category = str(category or "General").strip() or "General"
+    quantity_type = normalize_quantity_type(quantity_type)
+    unit_label = normalize_unit_label(quantity_type, unit_label)
 
     if not barcode:
         return False, "Barcode is required"
@@ -756,6 +789,8 @@ def create_or_update_product(
             UPDATE products
             SET name = ?,
                 category = ?,
+                quantity_type = ?,
+                unit_label = ?,
                 price = ?,
                 cost_price = ?,
                 selling_price = ?,
@@ -772,6 +807,8 @@ def create_or_update_product(
             (
                 name,
                 category,
+                quantity_type,
+                unit_label,
                 selling_price,
                 cost_price,
                 selling_price,
@@ -790,6 +827,8 @@ def create_or_update_product(
                 barcode,
                 name,
                 category,
+                quantity_type,
+                unit_label,
                 price,
                 cost_price,
                 selling_price,
@@ -802,12 +841,14 @@ def create_or_update_product(
                 updated_at,
                 last_price_updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, {now_sql()}, {now_sql()})
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, {now_sql()}, {now_sql()})
             """,
             (
                 barcode,
                 name,
                 category,
+                quantity_type,
+                unit_label,
                 selling_price,
                 cost_price,
                 selling_price,
@@ -958,6 +999,15 @@ def fetch_products(cursor):
             barcode,
             name,
             COALESCE(category, 'General') AS category,
+            CASE
+                WHEN LOWER(COALESCE(quantity_type, '')) = 'weight' THEN 'weight'
+                ELSE 'unit'
+            END AS quantity_type,
+            CASE
+                WHEN TRIM(COALESCE(unit_label, '')) != '' THEN TRIM(unit_label)
+                WHEN LOWER(COALESCE(quantity_type, 'unit')) = 'weight' THEN 'kg'
+                ELSE 'pcs'
+            END AS unit_label,
             COALESCE(cost_price, 0) AS cost_price,
             COALESCE(selling_price, price, 0) AS selling_price,
             COALESCE(price, selling_price, 0) AS price,
@@ -988,7 +1038,7 @@ def _safe_json_loads(raw_value):
 
 
 def _extract_item_quantity(item):
-    return parse_int(item.get("quantity", 0), 0)
+    return round_quantity(item.get("quantity", 0))
 
 
 def _extract_item_price(item):
@@ -1810,7 +1860,7 @@ def _build_owner_sales_report(cursor, params):
 
     top_products = sorted(by_product.values(), key=lambda item: (item["net_sales_after_refunds"], item["quantity_sold"] - item["refunded_quantity"]), reverse=True)[:8]
     for row in top_products:
-        row["net_quantity_sold"] = parse_int(row["quantity_sold"], 0) - parse_int(row["refunded_quantity"], 0)
+        row["net_quantity_sold"] = round_quantity(parse_float(row["quantity_sold"], 0.0) - parse_float(row["refunded_quantity"], 0.0))
         for k in ["sales_amount", "refund_amount", "net_sales_after_refunds", "net_cost_amount", "estimated_profit"]:
             row[k] = round(parse_float(row[k], 0.0), 2)
         sales_val = parse_float(row["net_sales_after_refunds"], 0.0)
@@ -1820,12 +1870,12 @@ def _build_owner_sales_report(cursor, params):
     sold_map = {str(item.get("barcode") or item.get("product_name") or ""): item for item in by_product.values()}
     slow_movers = []
     for product in products:
-        stock = parse_int(product.get("stock", 0), 0)
+        stock = round_quantity(product.get("stock", 0))
         if stock <= 0:
             continue
         key = str(product.get("barcode") or product.get("name") or "")
         sold = sold_map.get(key, {})
-        qty = max(parse_int(sold.get("net_quantity_sold", sold.get("quantity_sold", 0)), 0), 0)
+        qty = max(round_quantity(sold.get("net_quantity_sold", sold.get("quantity_sold", 0))), 0.0)
         slow_movers.append({
             "barcode": product.get("barcode"),
             "product_name": product.get("name"),
@@ -2676,6 +2726,8 @@ def init_db():
     )
 
     ensure_column(c, "products", "category", "category TEXT DEFAULT 'General'")
+    ensure_column(c, "products", "quantity_type", "quantity_type TEXT DEFAULT 'unit'")
+    ensure_column(c, "products", "unit_label", "unit_label TEXT DEFAULT 'pcs'")
     ensure_column(c, "products", "cost_price", "cost_price REAL DEFAULT 0")
     ensure_column(c, "products", "selling_price", "selling_price REAL DEFAULT 0")
     ensure_column(c, "products", "wholesale_price", "wholesale_price REAL DEFAULT 0")
@@ -2689,6 +2741,15 @@ def init_db():
         f"""
         UPDATE products
         SET category = COALESCE(NULLIF(category, ''), 'General'),
+            quantity_type = CASE
+                WHEN LOWER(COALESCE(quantity_type, '')) = 'weight' THEN 'weight'
+                ELSE 'unit'
+            END,
+            unit_label = CASE
+                WHEN TRIM(COALESCE(unit_label, '')) != '' THEN TRIM(unit_label)
+                WHEN LOWER(COALESCE(quantity_type, 'unit')) = 'weight' THEN 'kg'
+                ELSE 'pcs'
+            END,
             selling_price = COALESCE(NULLIF(selling_price, 0), price, 0),
             price = COALESCE(NULLIF(price, 0), selling_price, 0),
             wholesale_price = CASE
@@ -3172,7 +3233,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 for item in items:
                     product = item.get("product", {})
                     barcode = str(product.get("barcode", "")).strip()
-                    qty = int(item.get("quantity", 0))
+                    qty = _extract_item_quantity(item)
 
                     if not barcode:
                         self._set_headers(400)
@@ -3209,14 +3270,14 @@ class APIHandler(BaseHTTPRequestHandler):
                         conn.close()
                         return
 
-                    current_stock = int(row["stock"])
-                    if transaction_type == "sale" and current_stock < qty:
+                    current_stock = round_quantity(row["stock"])
+                    if transaction_type == "sale" and current_stock + 0.000001 < qty:
                         self._set_headers(400)
                         self.wfile.write(
                             json.dumps(
                                 {
                                     "status": "error",
-                                    "message": f"Insufficient backend stock for {barcode}. Available: {current_stock}, requested: {qty}",
+                                    "message": f"Insufficient backend stock for {barcode}. Available: {format_quantity(current_stock)}, requested: {format_quantity(qty)}",
                                 }
                             ).encode()
                         )
@@ -3231,7 +3292,9 @@ class APIHandler(BaseHTTPRequestHandler):
                     subtotal_amount = total_amount + max(discount_amount, 0.0)
                 if discount_amount <= 0 and subtotal_amount > total_amount:
                     discount_amount = subtotal_amount - total_amount
-                items_count = sum(max(_extract_item_quantity(item), 0) for item in items)
+                items_count = round_quantity(
+                    sum(max(_extract_item_quantity(item), 0) for item in items)
+                )
                 gross_profit = 0.0
                 for item in items:
                     quantity = max(_extract_item_quantity(item), 0)
@@ -3283,7 +3346,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 for item in items:
                     product = item.get("product", {})
                     barcode = str(product.get("barcode", "")).strip()
-                    qty = int(item.get("quantity", 0))
+                    qty = _extract_item_quantity(item)
 
                     stock_delta = qty if transaction_type == "refund" else -qty
 
@@ -3333,6 +3396,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     wholesale_price=data.get("wholesale_price"),
                     sale_price=data.get("sale_price"),
                     sale_enabled=data.get("sale_enabled"),
+                    quantity_type=data.get("quantity_type", "unit"),
+                    unit_label=data.get("unit_label"),
                     opening_stock=data.get("opening_stock", data.get("stock", 0)),
                     min_stock_level=data.get("min_stock_level", 0),
                     reason=str(data.get("reason", "")).strip(),
@@ -3362,6 +3427,8 @@ class APIHandler(BaseHTTPRequestHandler):
                         wholesale_price=row.get("wholesale_price"),
                         sale_price=row.get("sale_price"),
                         sale_enabled=row.get("sale_enabled"),
+                        quantity_type=row.get("quantity_type", "unit"),
+                        unit_label=row.get("unit_label"),
                         opening_stock=row.get("opening_stock", row.get("stock", 0)),
                         min_stock_level=row.get("min_stock_level", 0),
                         reason="Bulk product import",
@@ -3392,6 +3459,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     wholesale_price=data.get("wholesale_price"),
                     sale_price=data.get("sale_price"),
                     sale_enabled=data.get("sale_enabled"),
+                    quantity_type=data.get("quantity_type", "unit"),
+                    unit_label=data.get("unit_label"),
                     opening_stock=data.get("opening_stock", data.get("stock", 0)),
                     min_stock_level=data.get("min_stock_level", 0),
                     reason=str(data.get("reason", "")).strip() or "Product updated",
@@ -3503,7 +3572,10 @@ class APIHandler(BaseHTTPRequestHandler):
                     self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
                 else:
                     conn.commit()
+                    stock_delta_value = stock_delta
+                    stock_delta = int(stock_delta)
                     print(f"  ✅ STOCK_ADJUST: {barcode} {adjustment_type} ({stock_delta:+d})")
+                    stock_delta = stock_delta_value
                     self._set_headers()
                     self.wfile.write(
                         json.dumps(
@@ -3704,6 +3776,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 wholesale_price=body.get("wholesale_price"),
                 sale_price=body.get("sale_price"),
                 sale_enabled=body.get("sale_enabled"),
+                quantity_type=body.get("quantity_type", "unit"),
+                unit_label=body.get("unit_label"),
                 opening_stock=body.get("opening_stock", body.get("stock", 0)),
                 min_stock_level=body.get("min_stock_level", 0),
                 reason=str(body.get("reason", "")).strip(),
@@ -3734,6 +3808,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     wholesale_price=row.get("wholesale_price"),
                     sale_price=row.get("sale_price"),
                     sale_enabled=row.get("sale_enabled"),
+                    quantity_type=row.get("quantity_type", "unit"),
+                    unit_label=row.get("unit_label"),
                     opening_stock=row.get("opening_stock", row.get("stock", 0)),
                     min_stock_level=row.get("min_stock_level", 0),
                     reason="Bulk product import",
@@ -3761,6 +3837,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 wholesale_price=body.get("wholesale_price"),
                 sale_price=body.get("sale_price"),
                 sale_enabled=body.get("sale_enabled"),
+                quantity_type=body.get("quantity_type", "unit"),
+                unit_label=body.get("unit_label"),
                 opening_stock=body.get("opening_stock", body.get("stock", 0)),
                 min_stock_level=body.get("min_stock_level", 0),
                 reason=str(body.get("reason", "")).strip() or "Product updated",
@@ -3857,7 +3935,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
+                stock_delta_value = stock_delta
+                stock_delta = int(stock_delta)
                 print(f"  ✅ Stock adjusted: {barcode} {adjustment_type} ({stock_delta:+d})")
+                stock_delta = stock_delta_value
                 self._set_headers()
                 self.wfile.write(
                     json.dumps(

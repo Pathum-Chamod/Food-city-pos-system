@@ -11,7 +11,7 @@ class StockTakeDraft {
 
   final String sessionName;
   final String startedAtIso;
-  final Map<String, int> countedQuantities;
+  final Map<String, double> countedQuantities;
 
   Map<String, dynamic> toMap() {
     return {
@@ -30,7 +30,7 @@ class StockTakeDraft {
       startedAtIso: (map['started_at'] ?? DateTime.now().toIso8601String())
           .toString(),
       countedQuantities: rawCounts.map(
-        (key, value) => MapEntry(key, int.tryParse(value.toString()) ?? 0),
+        (key, value) => MapEntry(key, double.tryParse(value.toString()) ?? 0),
       ),
     );
   }
@@ -47,11 +47,11 @@ class StockTakeHistoryLine {
 
   final String barcode;
   final String productName;
-  final int systemStock;
-  final int countedStock;
+  final double systemStock;
+  final double countedStock;
   final bool applied;
 
-  int get difference => countedStock - systemStock;
+  double get difference => countedStock - systemStock;
 
   Map<String, dynamic> toMap() {
     return {
@@ -67,8 +67,8 @@ class StockTakeHistoryLine {
     return StockTakeHistoryLine(
       barcode: (map['barcode'] ?? '').toString(),
       productName: (map['product_name'] ?? '').toString(),
-      systemStock: int.tryParse(map['system_stock'].toString()) ?? 0,
-      countedStock: int.tryParse(map['counted_stock'].toString()) ?? 0,
+      systemStock: double.tryParse(map['system_stock'].toString()) ?? 0,
+      countedStock: double.tryParse(map['counted_stock'].toString()) ?? 0,
       applied: map['applied'] == true,
     );
   }

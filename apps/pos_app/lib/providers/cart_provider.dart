@@ -3,7 +3,7 @@ import 'package:shared/shared.dart';
 
 class CartItem {
   final Product product;
-  int quantity;
+  double quantity;
   double unitPrice;
   ProductPriceType priceType;
   String discountType;
@@ -13,7 +13,7 @@ class CartItem {
     required this.product,
     required this.unitPrice,
     required this.priceType,
-    this.quantity = 1,
+    this.quantity = 1.0,
     this.discountType = 'none',
     this.discountValue = 0.0,
   });
@@ -44,6 +44,7 @@ class CartItem {
 }
 
 class CartProvider with ChangeNotifier {
+  static const double _quantityEpsilon = 0.000001;
   final List<CartItem> _items = [];
 
   bool _isRefundMode = false;
@@ -171,7 +172,10 @@ class CartProvider with ChangeNotifier {
     return 'none';
   }
 
-  void addToCart(Product product) {
+  void addToCart(Product product, {double quantity = 1.0}) {
+    final safeQuantity = quantity <= _quantityEpsilon ? 0.0 : quantity;
+    if (safeQuantity <= 0) return;
+
     final index = _items.indexWhere(
       (item) =>
           item.product.barcode == product.barcode &&
@@ -179,12 +183,12 @@ class CartProvider with ChangeNotifier {
     );
 
     if (index >= 0) {
-      _items[index].quantity += 1;
+      _items[index].quantity += safeQuantity;
     } else {
       _items.add(
         CartItem(
           product: product,
-          quantity: 1,
+          quantity: safeQuantity,
           unitPrice: product.resolvePrice(_selectedPriceType),
           priceType: _selectedPriceType,
         ),
@@ -194,21 +198,27 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  void increaseQuantity(String barcode) {
-    final index = _items.indexWhere((item) => item.product.barcode == barcode);
+  void increaseQuantity(CartItem target, {double delta = 1.0}) {
+    final safeDelta = delta <= _quantityEpsilon ? 0.0 : delta;
+    if (safeDelta <= 0) return;
+
+    final index = _items.indexOf(target);
     if (index == -1) return;
 
-    _items[index].quantity += 1;
+    _items[index].quantity += safeDelta;
     notifyListeners();
   }
 
-  void decreaseQuantity(String barcode) {
-    final index = _items.indexWhere((item) => item.product.barcode == barcode);
+  void decreaseQuantity(CartItem target, {double delta = 1.0}) {
+    final safeDelta = delta <= _quantityEpsilon ? 0.0 : delta;
+    if (safeDelta <= 0) return;
+
+    final index = _items.indexOf(target);
     if (index == -1) return;
 
-    _items[index].quantity -= 1;
+    _items[index].quantity -= safeDelta;
 
-    if (_items[index].quantity <= 0) {
+    if (_items[index].quantity <= _quantityEpsilon) {
       _items.removeAt(index);
     }
 
@@ -220,8 +230,15 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  void removeItem(String barcode) {
-    _items.removeWhere((item) => item.product.barcode == barcode);
+  void updateQuantity(CartItem target, double quantity) {
+    final index = _items.indexOf(target);
+    if (index == -1) return;
+
+    if (quantity <= _quantityEpsilon) {
+      _items.removeAt(index);
+    } else {
+      _items[index].quantity = quantity;
+    }
 
     if (_items.isEmpty) {
       _discountType = 'none';
@@ -231,10 +248,21 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  int getQuantityFor(String barcode) {
-    final index = _items.indexWhere((item) => item.product.barcode == barcode);
-    if (index == -1) return 0;
-    return _items[index].quantity;
+  void removeItem(CartItem target) {
+    _items.remove(target);
+
+    if (_items.isEmpty) {
+      _discountType = 'none';
+      _discountValue = 0.0;
+    }
+
+    notifyListeners();
+  }
+
+  double getQuantityFor(String barcode) {
+    return _items
+        .where((item) => item.product.barcode == barcode)
+        .fold<double>(0.0, (sum, item) => sum + item.quantity);
   }
 
   void clearCart() {
@@ -267,9 +295,9 @@ class CartProvider with ChangeNotifier {
       final productMap = Map<String, dynamic>.from(item['product'] as Map);
 
       final product = Product.fromMap(productMap);
-      final quantity = (item['quantity'] as num?)?.toInt() ?? 1;
+      final quantity = (item['quantity'] as num?)?.toDouble() ?? 1.0;
 
-      if (quantity <= 0) continue;
+      if (quantity <= _quantityEpsilon) continue;
 
       final itemPriceType = ProductPriceTypeX.fromDb(
         item['price_type_used']?.toString(),

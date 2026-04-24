@@ -12,6 +12,7 @@ import '../models/stock_receipt_record.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
+  static const double _quantityEpsilon = 0.000001;
   static Database? _database;
 
   DatabaseHelper._init();
@@ -36,7 +37,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 20,
+        version: 21,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -101,6 +102,28 @@ class DatabaseHelper {
 
   double _roundMoney(num value) {
     return double.parse(value.toStringAsFixed(2));
+  }
+
+  double _roundQuantity(num value) {
+    return double.parse(value.toStringAsFixed(3));
+  }
+
+  double _parseQuantity(dynamic value, {double fallback = 0.0}) {
+    return _roundQuantity(_parseDouble(value, fallback: fallback));
+  }
+
+  bool _isPositiveQuantity(num value) {
+    return value.toDouble() > _quantityEpsilon;
+  }
+
+  bool _quantityExceeds(num requested, num available) {
+    return requested.toDouble() - available.toDouble() > _quantityEpsilon;
+  }
+
+  String _formatQuantityValue(num value) {
+    final safeValue =
+        value.toDouble().abs() < _quantityEpsilon ? 0.0 : value.toDouble();
+    return safeValue.toStringAsFixed(3).replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _normalizeDiscountType(String? value) {
@@ -284,6 +307,8 @@ class DatabaseHelper {
         barcode TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
         category TEXT NOT NULL DEFAULT 'General',
+        quantity_type TEXT NOT NULL DEFAULT 'unit',
+        unit_label TEXT NOT NULL DEFAULT 'pcs',
         price REAL NOT NULL,
         cost_price REAL NOT NULL DEFAULT 0,
         selling_price REAL NOT NULL DEFAULT 0,
@@ -753,6 +778,18 @@ class DatabaseHelper {
       await _addColumnIfMissing(
         db,
         'products',
+        'quantity_type',
+        "TEXT NOT NULL DEFAULT 'unit'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'unit_label',
+        "TEXT NOT NULL DEFAULT 'pcs'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'products',
         'cost_price',
         "REAL NOT NULL DEFAULT 0",
       );
@@ -797,6 +834,15 @@ class DatabaseHelper {
       await db.execute('''
         UPDATE products
         SET
+          quantity_type = CASE
+            WHEN LOWER(COALESCE(quantity_type, '')) = 'weight' THEN 'weight'
+            ELSE 'unit'
+          END,
+          unit_label = CASE
+            WHEN TRIM(COALESCE(unit_label, '')) != '' THEN TRIM(unit_label)
+            WHEN LOWER(COALESCE(quantity_type, 'unit')) = 'weight' THEN 'kg'
+            ELSE 'pcs'
+          END,
           selling_price = CASE
             WHEN COALESCE(selling_price, 0) <= 0 THEN COALESCE(price, 0)
             ELSE selling_price
@@ -903,6 +949,37 @@ class DatabaseHelper {
     }
 
 
+
+    if (oldVersion < 21) {
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'quantity_type',
+        "TEXT NOT NULL DEFAULT 'unit'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'unit_label',
+        "TEXT NOT NULL DEFAULT 'pcs'",
+      );
+
+      await db.execute('''
+        UPDATE products
+        SET
+          quantity_type = CASE
+            WHEN LOWER(COALESCE(quantity_type, '')) = 'weight' THEN 'weight'
+            ELSE 'unit'
+          END,
+          unit_label = CASE
+            WHEN TRIM(COALESCE(unit_label, '')) != '' THEN TRIM(unit_label)
+            WHEN LOWER(COALESCE(quantity_type, 'unit')) = 'weight' THEN 'kg'
+            ELSE 'pcs'
+          END
+      ''');
+    }
+
+
     if (oldVersion < 17) {
       await _createUserTables(db);
 
@@ -974,6 +1051,19 @@ class DatabaseHelper {
     if (value == null) return fallback;
     if (value is num) return value.toInt();
     return int.tryParse(value.toString()) ?? fallback;
+  }
+
+  String _normalizeProductQuantityType(dynamic value) {
+    return ProductQuantityTypeX.fromDb(value?.toString()).dbValue;
+  }
+
+  String _normalizeProductUnitLabel({
+    required String quantityType,
+    String? unitLabel,
+  }) {
+    final trimmed = (unitLabel ?? '').trim();
+    if (trimmed.isNotEmpty) return trimmed;
+    return ProductQuantityTypeX.fromDb(quantityType).defaultUnitLabel;
   }
 
   String _normalizePriceType(String? value) {
@@ -1196,9 +1286,9 @@ class DatabaseHelper {
     required String barcode,
     required String productName,
     required String actionType,
-    int? quantityChange,
-    int? stockBefore,
-    int? stockAfter,
+    num? quantityChange,
+    num? stockBefore,
+    num? stockAfter,
     double? oldPrice,
     double? newPrice,
     String? priceType,
@@ -1415,6 +1505,8 @@ class DatabaseHelper {
             'barcode': product.barcode,
             'name': product.name,
             'category': product.category,
+            'quantity_type': product.quantityType.dbValue,
+            'unit_label': product.unitLabel,
             'price': product.sellingPrice,
             'cost_price': product.costPrice,
             'selling_price': product.sellingPrice,
@@ -1466,9 +1558,9 @@ class DatabaseHelper {
             );
 
             final barcode = productMap['barcode']?.toString() ?? '';
-            final quantity = (item['quantity'] as num?)?.toInt() ?? 0;
+            final quantity = _parseQuantity(item['quantity']);
 
-            if (barcode.isEmpty || quantity <= 0) continue;
+            if (barcode.isEmpty || !_isPositiveQuantity(quantity)) continue;
 
             final stockDelta = transactionType == 'refund'
                 ? quantity
@@ -1795,7 +1887,7 @@ class DatabaseHelper {
           final unitPrice = _resolveCartItemUnitPrice(item);
           final priceTypeUsed = _resolveCartItemPriceType(item);
           final costPriceSnapshot = _parseDouble(productMap['cost_price']);
-          final quantity = (item['quantity'] as num).toInt();
+          final quantity = _parseQuantity(item['quantity']);
           final computedBaseLineTotal = _roundMoney(unitPrice * quantity);
           final baseLineTotal = _roundMoney(
             ((item['base_line_total'] as num?) ?? computedBaseLineTotal)
@@ -1888,9 +1980,9 @@ class DatabaseHelper {
             final barcode = productMap['barcode']?.toString() ?? '';
             final productName =
                 productMap['name']?.toString() ?? 'Unknown product';
-            final quantity = (item['quantity'] as num?)?.toInt() ?? 0;
+            final quantity = _parseQuantity(item['quantity']);
 
-            if (quantity <= 0) {
+            if (!_isPositiveQuantity(quantity)) {
               throw Exception('Invalid quantity for $productName.');
             }
 
@@ -1908,11 +2000,11 @@ class DatabaseHelper {
               );
             }
 
-            final availableStock = (rows.first['stock'] as num).toInt();
+            final availableStock = _parseQuantity(rows.first['stock']);
 
-            if (availableStock < quantity) {
+            if (_quantityExceeds(quantity, availableStock)) {
               throw Exception(
-                'Insufficient stock for $productName. Available: $availableStock, requested: $quantity.',
+                'Insufficient stock for $productName. Available: ${_formatQuantityValue(availableStock)}, requested: ${_formatQuantityValue(quantity)}.',
               );
             }
           }
@@ -1954,7 +2046,7 @@ class DatabaseHelper {
           final priceTypeUsed = (item['price_category_used'] ?? 'selling').toString();
           final costPriceSnapshot =
               (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
-          final quantity = item['quantity'] as int;
+          final quantity = (item['quantity'] as num).toDouble();
           final baseLineTotal = item['base_line_total'] as double;
           final explicitItemDiscount =
               (item['explicit_item_discount_amount'] as num).toDouble();
@@ -2023,7 +2115,7 @@ class DatabaseHelper {
               (item['price_category_used'] ?? 'selling').toString();
           final costPriceSnapshot =
               (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
-          final quantity = item['quantity'] as int;
+          final quantity = (item['quantity'] as num).toDouble();
           final baseLineTotal = item['base_line_total'] as double;
           final itemDiscount = item['item_discount_amount'] as double;
           final finalLineTotal = item['line_total'] as double;
@@ -2038,8 +2130,8 @@ class DatabaseHelper {
             limit: 1,
           );
           final stockBefore = stockRows.isEmpty
-              ? 0
-              : (stockRows.first['stock'] as num).toInt();
+              ? 0.0
+              : _parseQuantity(stockRows.first['stock']);
 
           final updatedCount = await txn.rawUpdate(
             '''
@@ -2094,7 +2186,7 @@ class DatabaseHelper {
               (item['price_category_used'] ?? 'selling').toString();
           final costPriceSnapshot =
               (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
-          final quantity = item['quantity'] as int;
+          final quantity = (item['quantity'] as num).toDouble();
           final baseLineTotal = (item['base_line_total'] as num).toDouble();
           final itemDiscount =
               (item['item_discount_amount'] as num?)?.toDouble() ?? 0.0;
@@ -2225,9 +2317,9 @@ class DatabaseHelper {
         for (final rawItem in refundItems) {
           final item = Map<String, dynamic>.from(rawItem);
           final barcode = item['barcode']?.toString() ?? '';
-          final quantity = (item['quantity'] as num?)?.toInt() ?? 0;
+          final quantity = _parseQuantity(item['quantity']);
 
-          if (barcode.isEmpty || quantity <= 0) {
+          if (barcode.isEmpty || !_isPositiveQuantity(quantity)) {
             throw Exception('Invalid refund item.');
           }
 
@@ -2238,18 +2330,17 @@ class DatabaseHelper {
             );
           }
 
-          final refundableQty =
-              (refundableData['refundable_quantity'] as num?)?.toInt() ?? 0;
+          final refundableQty = _parseQuantity(refundableData['refundable_quantity']);
           final remainingRefundableTotal =
               ((refundableData['remaining_refundable_total'] as num?) ?? 0)
                   .toDouble();
 
-          if (quantity > refundableQty) {
+          if (_quantityExceeds(quantity, refundableQty)) {
             final productName =
                 (refundableData['product_name'] ?? 'Unknown product')
                     .toString();
             throw Exception(
-              'Cannot refund more than remaining quantity for $productName. Remaining: $refundableQty.',
+              'Cannot refund more than remaining quantity for $productName. Remaining: ${_formatQuantityValue(refundableQty)}.',
             );
           }
 
@@ -2270,8 +2361,8 @@ class DatabaseHelper {
             limit: 1,
           );
           final stockBefore = stockRows.isEmpty
-              ? 0
-              : (stockRows.first['stock'] as num).toInt();
+              ? 0.0
+              : _parseQuantity(stockRows.first['stock']);
 
           final updatedCount = await txn.rawUpdate(
             '''
@@ -2289,7 +2380,7 @@ class DatabaseHelper {
           }
 
           double refundLineTotal;
-          if (quantity == refundableQty) {
+          if ((quantity - refundableQty).abs() < _quantityEpsilon) {
             refundLineTotal = _roundMoney(remainingRefundableTotal);
           } else {
             refundLineTotal = _roundMoney(
@@ -3404,22 +3495,34 @@ class DatabaseHelper {
     final originalItems = await executor.rawQuery(
       '''
       SELECT
-        barcode,
-        product_name,
-        unit_price,
-        price_category_used,
-        cost_price_snapshot,
-        SUM(quantity) AS original_quantity,
+        si.barcode,
+        si.product_name,
+        si.unit_price,
+        si.price_category_used,
+        si.cost_price_snapshot,
+        CASE
+          WHEN LOWER(COALESCE(MAX(p.quantity_type), '')) = 'weight' THEN 'weight'
+          ELSE 'unit'
+        END AS quantity_type,
+        COALESCE(
+          NULLIF(TRIM(MAX(p.unit_label)), ''),
+          CASE
+            WHEN LOWER(COALESCE(MAX(p.quantity_type), '')) = 'weight' THEN 'kg'
+            ELSE 'pcs'
+          END
+        ) AS unit_label,
+        SUM(si.quantity) AS original_quantity,
         COALESCE(SUM(ABS(line_total)), 0) AS original_net_total
-      FROM sale_items
-      WHERE sale_id = ?
+      FROM sale_items si
+      LEFT JOIN products p ON p.barcode = si.barcode
+      WHERE si.sale_id = ?
       GROUP BY
-        barcode,
-        product_name,
-        unit_price,
-        price_category_used,
-        cost_price_snapshot
-      ORDER BY product_name ASC
+        si.barcode,
+        si.product_name,
+        si.unit_price,
+        si.price_category_used,
+        si.cost_price_snapshot
+      ORDER BY si.product_name ASC
       ''',
       [saleId],
     );
@@ -3442,19 +3545,19 @@ class DatabaseHelper {
     final refundedMap = <String, Map<String, dynamic>>{
       for (final row in refundedItems)
         (row['barcode'] ?? '').toString(): {
-          'refunded_quantity': (row['refunded_quantity'] as num?)?.toInt() ?? 0,
+          'refunded_quantity': _parseQuantity(row['refunded_quantity']),
           'refunded_total': ((row['refunded_total'] as num?) ?? 0).toDouble(),
         },
     };
 
     return originalItems.map((row) {
       final barcode = (row['barcode'] ?? '').toString();
-      final originalQty = (row['original_quantity'] as num?)?.toInt() ?? 0;
+      final originalQty = _parseQuantity(row['original_quantity']);
       final originalNetTotal = ((row['original_net_total'] as num?) ?? 0)
           .toDouble();
 
       final refundedQty =
-          (refundedMap[barcode]?['refunded_quantity'] as int?) ?? 0;
+          (refundedMap[barcode]?['refunded_quantity'] as num?)?.toDouble() ?? 0.0;
       final refundedTotal =
           (refundedMap[barcode]?['refunded_total'] as double?) ?? 0.0;
 
@@ -3473,6 +3576,8 @@ class DatabaseHelper {
         'unit_price': row['unit_price'],
         'price_category_used': row['price_category_used'],
         'cost_price_snapshot': row['cost_price_snapshot'],
+        'quantity_type': row['quantity_type'],
+        'unit_label': row['unit_label'],
         'original_quantity': originalQty,
         'refunded_quantity': refundedQty,
         'refundable_quantity': refundableQty < 0 ? 0 : refundableQty,
@@ -3917,6 +4022,17 @@ class DatabaseHelper {
       SELECT
         si.barcode,
         COALESCE(MAX(p.name), MAX(si.product_name)) AS product_name,
+        CASE
+          WHEN LOWER(COALESCE(MAX(p.quantity_type), '')) = 'weight' THEN 'weight'
+          ELSE 'unit'
+        END AS quantity_type,
+        COALESCE(
+          NULLIF(TRIM(MAX(p.unit_label)), ''),
+          CASE
+            WHEN LOWER(COALESCE(MAX(p.quantity_type), '')) = 'weight' THEN 'kg'
+            ELSE 'pcs'
+          END
+        ) AS unit_label,
         COALESCE(SUM(si.quantity), 0) AS quantity_sold,
         COALESCE(SUM(ABS(si.base_line_total)), 0) AS gross_sales_amount,
         COALESCE(SUM(ABS(si.item_discount_amount)), 0) AS discount_amount,
@@ -3937,7 +4053,9 @@ class DatabaseHelper {
           (row) => {
             'barcode': row['barcode'],
             'product_name': row['product_name'],
-            'quantity_sold': (row['quantity_sold'] as num?)?.toInt() ?? 0,
+            'quantity_type': row['quantity_type'],
+            'unit_label': row['unit_label'],
+            'quantity_sold': ((row['quantity_sold'] as num?) ?? 0).toDouble(),
             'gross_sales_amount':
                 ((row['gross_sales_amount'] as num?) ?? 0).toDouble(),
             'discount_amount':
@@ -4096,15 +4214,15 @@ class DatabaseHelper {
         decoded = [];
       }
 
-      int itemCount = 0;
+      double itemCount = 0.0;
       double subtotal = 0;
 
       for (final raw in decoded) {
         final item = Map<String, dynamic>.from(raw as Map);
-        final quantity = (item['quantity'] as num?)?.toInt() ?? 0;
+        final quantity = _parseQuantity(item['quantity']);
         final lineTotal = ((item['line_total'] as num?) ?? 0).toDouble();
 
-        itemCount += quantity;
+        itemCount = _roundQuantity(itemCount + quantity);
         subtotal += lineTotal.abs();
       }
 
@@ -4293,7 +4411,7 @@ class DatabaseHelper {
     String? purchaseOrderNumber,
     required String barcode,
     required String productName,
-    required int quantity,
+    required num quantity,
     required int supplierId,
     required String supplierName,
     required double cost,
@@ -4313,7 +4431,7 @@ class DatabaseHelper {
       'purchase_order_receipt_id': null,
       'barcode': barcode,
       'product_name': productName,
-      'quantity': quantity,
+      'quantity': _roundQuantity(quantity),
       'supplier_id': supplierId,
       'supplier_name': supplierName,
       'cost': _roundMoney(cost),
@@ -4498,7 +4616,7 @@ class DatabaseHelper {
     final row = rows.first;
     return {
       'receipt_count': (row['receipt_count'] as num?)?.toInt() ?? 0,
-      'total_units': (row['total_units'] as num?)?.toInt() ?? 0,
+      'total_units': _roundQuantity((row['total_units'] as num?) ?? 0),
       'total_cost': ((row['total_cost'] as num?) ?? 0).toDouble(),
     };
   }
@@ -4581,7 +4699,7 @@ class DatabaseHelper {
 
       final targetDb = db ?? await database;
       final movementBarcode = (movement['barcode'] ?? '').toString().trim();
-      final quantity = _parseInt(movement['quantity_change']).abs();
+      final quantity = _parseQuantity(movement['quantity_change']).abs();
       final createdAt = (movement['created_at'] ?? '').toString();
       if (movementBarcode.isEmpty || quantity <= 0) {
         return movement;
@@ -4634,14 +4752,15 @@ class DatabaseHelper {
 
   Future<bool> receiveStockLocal(
     String barcode,
-    int quantity, {
+    num quantity, {
     double? unitCost,
     String? performedBy,
     String? reason,
     int? supplierId,
     String? supplierName,
   }) async {
-    if (barcode.trim().isEmpty || quantity <= 0) return false;
+    final safeQuantity = _roundQuantity(quantity);
+    if (barcode.trim().isEmpty || !_isPositiveQuantity(safeQuantity)) return false;
 
     final db = await database;
 
@@ -4662,8 +4781,8 @@ class DatabaseHelper {
 
         final row = rows.first;
         final productName = (row['name'] ?? 'Unknown product').toString();
-        final stockBefore = _parseInt(row['stock']);
-        final stockAfter = stockBefore + quantity;
+        final stockBefore = _parseQuantity(row['stock']);
+        final stockAfter = _roundQuantity(stockBefore + safeQuantity);
 
         final updates = <String, Object?>{
           'stock': stockAfter,
@@ -4687,7 +4806,7 @@ class DatabaseHelper {
           barcode: barcode.trim(),
           productName: productName,
           actionType: 'stock_receive',
-          quantityChange: quantity,
+          quantityChange: safeQuantity,
           stockBefore: stockBefore,
           stockAfter: stockAfter,
           reason: reason,
@@ -4699,7 +4818,7 @@ class DatabaseHelper {
 
         final syncData = jsonEncode({
           'barcode': barcode.trim(),
-          'quantity': quantity,
+          'quantity': safeQuantity,
           'unit_cost': unitCost,
           'reason': reason,
           'performed_by': performedBy,
@@ -4728,16 +4847,17 @@ class DatabaseHelper {
   Future<bool> adjustStockLocal(
     String barcode, {
     required String adjustmentType,
-    required int quantity,
+    required num quantity,
     String? performedBy,
     String? reason,
   }) async {
+    final safeQuantity = _roundQuantity(quantity);
     if (barcode.trim().isEmpty) return false;
     if (adjustmentType != 'add' && adjustmentType != 'remove' && adjustmentType != 'set') {
       return false;
     }
-    if (quantity < 0) return false;
-    if (adjustmentType != 'set' && quantity == 0) return false;
+    if (safeQuantity < 0) return false;
+    if (adjustmentType != 'set' && !_isPositiveQuantity(safeQuantity)) return false;
 
     final db = await database;
 
@@ -4758,33 +4878,37 @@ class DatabaseHelper {
 
         final row = rows.first;
         final productName = (row['name'] ?? 'Unknown product').toString();
-        final stockBefore = _parseInt(row['stock']);
+        final stockBefore = _parseQuantity(row['stock']);
 
-        late final int stockAfter;
-        late final int quantityChange;
+        late final double stockAfter;
+        late final double quantityChange;
         late final String actionType;
 
         switch (adjustmentType) {
           case 'add':
-            stockAfter = stockBefore + quantity;
-            quantityChange = quantity;
+            stockAfter = _roundQuantity(stockBefore + safeQuantity);
+            quantityChange = safeQuantity;
             actionType = 'stock_adjust_add';
             break;
           case 'remove':
-            if (quantity > stockBefore) {
+            if (_quantityExceeds(safeQuantity, stockBefore)) {
               throw Exception('Cannot remove more than available stock.');
             }
-            stockAfter = stockBefore - quantity;
-            quantityChange = -quantity;
+            stockAfter = _roundQuantity(stockBefore - safeQuantity);
+            quantityChange = _roundQuantity(-safeQuantity);
             actionType = 'stock_adjust_remove';
             break;
           case 'set':
-            stockAfter = quantity;
-            quantityChange = quantity - stockBefore;
+            stockAfter = safeQuantity;
+            quantityChange = _roundQuantity(safeQuantity - stockBefore);
             actionType = 'stock_adjust_set';
             break;
           default:
             throw Exception('Unsupported adjustment type.');
+        }
+
+        if (quantityChange.abs() < _quantityEpsilon) {
+          throw Exception('No stock change detected.');
         }
 
         await txn.update(
@@ -4819,7 +4943,7 @@ class DatabaseHelper {
         final syncData = jsonEncode({
           'barcode': barcode.trim(),
           'adjustment_type': backendAdjustmentType,
-          'quantity': quantity,
+          'quantity': safeQuantity,
           'reason': reason,
           'performed_by': performedBy,
           'updated_at': now,
@@ -4926,6 +5050,8 @@ class DatabaseHelper {
     required String category,
     required double costPrice,
     required double sellingPrice,
+    ProductQuantityType quantityType = ProductQuantityType.unit,
+    String? unitLabel,
     double? wholesalePrice,
     double? salePrice,
     required bool saleEnabled,
@@ -4966,11 +5092,18 @@ class DatabaseHelper {
           (wholesalePrice == null || wholesalePrice <= 0) ? sellingPrice : wholesalePrice,
         );
         final resolvedSalePrice = salePrice == null ? null : _roundMoney(salePrice);
+        final resolvedQuantityType = quantityType.dbValue;
+        final resolvedUnitLabel = _normalizeProductUnitLabel(
+          quantityType: resolvedQuantityType,
+          unitLabel: unitLabel,
+        );
 
         await txn.insert('products', {
           'barcode': trimmedBarcode,
           'name': trimmedName,
           'category': trimmedCategory,
+          'quantity_type': resolvedQuantityType,
+          'unit_label': resolvedUnitLabel,
           'price': _roundMoney(sellingPrice),
           'cost_price': _roundMoney(costPrice),
           'selling_price': _roundMoney(sellingPrice),
@@ -5013,6 +5146,8 @@ class DatabaseHelper {
           'barcode': trimmedBarcode,
           'name': trimmedName,
           'category': trimmedCategory,
+          'quantity_type': resolvedQuantityType,
+          'unit_label': resolvedUnitLabel,
           'cost_price': _roundMoney(costPrice),
           'selling_price': _roundMoney(sellingPrice),
           'price': _roundMoney(sellingPrice),
@@ -5050,6 +5185,8 @@ class DatabaseHelper {
     required String category,
     required double costPrice,
     required double sellingPrice,
+    ProductQuantityType quantityType = ProductQuantityType.unit,
+    String? unitLabel,
     double? wholesalePrice,
     double? salePrice,
     required bool saleEnabled,
@@ -5075,6 +5212,8 @@ class DatabaseHelper {
           columns: [
             'name',
             'category',
+            'quantity_type',
+            'unit_label',
             'cost_price',
             'selling_price',
             'wholesale_price',
@@ -5098,22 +5237,34 @@ class DatabaseHelper {
           (wholesalePrice == null || wholesalePrice <= 0) ? sellingPrice : wholesalePrice,
         );
         final resolvedSalePrice = salePrice == null ? null : _roundMoney(salePrice);
+        final resolvedQuantityType = quantityType.dbValue;
+        final resolvedUnitLabel = _normalizeProductUnitLabel(
+          quantityType: resolvedQuantityType,
+          unitLabel: unitLabel,
+        );
 
         final oldName = (row['name'] ?? '').toString();
         final oldCategory = (row['category'] ?? 'General').toString();
+        final oldQuantityType = _normalizeProductQuantityType(row['quantity_type']);
+        final oldUnitLabel = _normalizeProductUnitLabel(
+          quantityType: oldQuantityType,
+          unitLabel: row['unit_label']?.toString(),
+        );
         final oldCostPrice = _parseDouble(row['cost_price']);
         final oldSellingPrice = _parseDouble(row['selling_price']);
         final oldWholesalePrice = _parseDouble(row['wholesale_price']);
         final oldSalePrice = row['sale_price'] == null ? null : _parseDouble(row['sale_price']);
         final oldSaleEnabled = _parseInt(row['sale_enabled']) == 1;
         final oldMinStockLevel = _parseInt(row['min_stock_level']);
-        final currentStock = _parseInt(row['stock']);
+        final currentStock = _parseQuantity(row['stock']);
 
         await txn.update(
           'products',
           {
             'name': trimmedName,
             'category': trimmedCategory,
+            'quantity_type': resolvedQuantityType,
+            'unit_label': resolvedUnitLabel,
             'price': _roundMoney(sellingPrice),
             'cost_price': _roundMoney(costPrice),
             'selling_price': _roundMoney(sellingPrice),
@@ -5131,6 +5282,9 @@ class DatabaseHelper {
         final changes = <String>[];
         if (oldName != trimmedName) changes.add('name');
         if (oldCategory != trimmedCategory) changes.add('category');
+        if (oldQuantityType != resolvedQuantityType || oldUnitLabel != resolvedUnitLabel) {
+          changes.add('measurement');
+        }
         if (oldCostPrice != _roundMoney(costPrice)) changes.add('cost');
         if (oldSellingPrice != _roundMoney(sellingPrice)) changes.add('selling');
         if (oldWholesalePrice != resolvedWholesale) changes.add('wholesale');
@@ -5157,6 +5311,8 @@ class DatabaseHelper {
           'barcode': trimmedBarcode,
           'name': trimmedName,
           'category': trimmedCategory,
+          'quantity_type': resolvedQuantityType,
+          'unit_label': resolvedUnitLabel,
           'cost_price': _roundMoney(costPrice),
           'selling_price': _roundMoney(sellingPrice),
           'price': _roundMoney(sellingPrice),
@@ -5362,6 +5518,11 @@ class DatabaseHelper {
           final category = (raw['category'] ?? 'General').toString().trim().isEmpty
               ? 'General'
               : (raw['category'] ?? 'General').toString().trim();
+          final quantityType = _normalizeProductQuantityType(raw['quantity_type']);
+          final unitLabel = _normalizeProductUnitLabel(
+            quantityType: quantityType,
+            unitLabel: raw['unit_label']?.toString(),
+          );
           final sellingPrice = _roundMoney(_parseDouble(raw['selling_price'] ?? raw['price']));
           final costPrice = _roundMoney(_parseDouble(raw['cost_price']));
           final wholesalePrice = _roundMoney(
@@ -5372,7 +5533,7 @@ class DatabaseHelper {
           final saleEnabled = raw['sale_enabled'] == null
               ? (salePrice != null)
               : (_parseInt(raw['sale_enabled']) == 1 || raw['sale_enabled'] == true);
-          final stock = _parseInt(raw['stock'] ?? raw['opening_stock']);
+          final stock = _parseQuantity(raw['stock'] ?? raw['opening_stock']);
           final minStockLevel = _parseInt(raw['min_stock_level']);
 
           if (barcode.isEmpty || name.isEmpty || sellingPrice <= 0 || costPrice < 0 || stock < 0 || minStockLevel < 0) {
@@ -5395,6 +5556,8 @@ class DatabaseHelper {
               'barcode': barcode,
               'name': name,
               'category': category,
+              'quantity_type': quantityType,
+              'unit_label': unitLabel,
               'price': sellingPrice,
               'cost_price': costPrice,
               'selling_price': sellingPrice,
@@ -5434,12 +5597,14 @@ class DatabaseHelper {
               );
             }
           } else {
-            final stockBefore = _parseInt(existing.first['stock']);
+            final stockBefore = _parseQuantity(existing.first['stock']);
             await txn.update(
               'products',
               {
                 'name': name,
                 'category': category,
+                'quantity_type': quantityType,
+                'unit_label': unitLabel,
                 'price': sellingPrice,
                 'cost_price': costPrice,
                 'selling_price': sellingPrice,
@@ -5475,6 +5640,8 @@ class DatabaseHelper {
             'barcode': barcode,
             'name': name,
             'category': category,
+            'quantity_type': quantityType,
+            'unit_label': unitLabel,
             'cost_price': costPrice,
             'selling_price': sellingPrice,
             'price': sellingPrice,
@@ -5601,9 +5768,10 @@ class DatabaseHelper {
   Future<bool> saveStockTakeCount({
     required int sessionId,
     required Product product,
-    required int countedQty,
+    required num countedQty,
   }) async {
-    if (sessionId <= 0 || countedQty < 0) return false;
+    final safeCountedQty = _roundQuantity(countedQty);
+    if (sessionId <= 0 || safeCountedQty < 0) return false;
     final db = await database;
     final now = DateTime.now().toIso8601String();
     try {
@@ -5615,8 +5783,8 @@ class DatabaseHelper {
             'barcode': product.barcode,
             'product_name': product.name,
             'system_stock': product.stock,
-            'counted_stock': countedQty,
-            'difference_qty': countedQty - product.stock,
+            'counted_stock': safeCountedQty,
+            'difference_qty': _roundQuantity(safeCountedQty - product.stock),
             'applied': 0,
             'created_at': now,
             'updated_at': now,
@@ -5730,7 +5898,9 @@ class DatabaseHelper {
     final sessionName = (session['session_name'] ?? 'Stock Take Session').toString();
     final items = await getStockTakeSessionItems(sessionId);
     final discrepancies = items
-        .where((item) => _parseInt(item['difference_qty']) != 0)
+        .where(
+          (item) => _parseQuantity(item['difference_qty']).abs() >= _quantityEpsilon,
+        )
         .toList();
 
     if (discrepancies.isEmpty) {
@@ -5748,7 +5918,7 @@ class DatabaseHelper {
 
     for (final item in discrepancies) {
       final barcode = (item['barcode'] ?? '').toString();
-      final countedStock = _parseInt(item['counted_stock']);
+      final countedStock = _parseQuantity(item['counted_stock']);
       final success = await adjustStockLocal(
         barcode,
         adjustmentType: 'set',
@@ -6057,6 +6227,17 @@ class DatabaseHelper {
       SELECT
         si.barcode,
         COALESCE(MAX(p.name), MAX(si.product_name)) AS product_name,
+        CASE
+          WHEN LOWER(COALESCE(MAX(p.quantity_type), '')) = 'weight' THEN 'weight'
+          ELSE 'unit'
+        END AS quantity_type,
+        COALESCE(
+          NULLIF(TRIM(MAX(p.unit_label)), ''),
+          CASE
+            WHEN LOWER(COALESCE(MAX(p.quantity_type), '')) = 'weight' THEN 'kg'
+            ELSE 'pcs'
+          END
+        ) AS unit_label,
         COALESCE(
           SUM(CASE WHEN s.transaction_type = 'sale' THEN si.quantity ELSE 0 END),
           0
@@ -6103,8 +6284,8 @@ class DatabaseHelper {
     );
 
     return rows.map((row) {
-      final quantitySold = (row['quantity_sold'] as num?)?.toInt() ?? 0;
-      final refundedQuantity = (row['refunded_quantity'] as num?)?.toInt() ?? 0;
+      final quantitySold = ((row['quantity_sold'] as num?) ?? 0).toDouble();
+      final refundedQuantity = ((row['refunded_quantity'] as num?) ?? 0).toDouble();
       final salesAmount = ((row['sales_amount'] as num?) ?? 0).toDouble();
       final refundAmount = ((row['refund_amount'] as num?) ?? 0).toDouble();
       final netSalesAfterRefunds =
@@ -6118,6 +6299,8 @@ class DatabaseHelper {
       return {
         'barcode': row['barcode'],
         'product_name': row['product_name'],
+        'quantity_type': row['quantity_type'],
+        'unit_label': row['unit_label'],
         'quantity_sold': quantitySold,
         'refunded_quantity': refundedQuantity,
         'net_quantity_sold': quantitySold - refundedQuantity,
@@ -6149,6 +6332,8 @@ class DatabaseHelper {
         p.barcode,
         p.name AS product_name,
         p.category,
+        p.quantity_type,
+        p.unit_label,
         p.stock,
         p.min_stock_level,
         p.cost_price,
@@ -6184,6 +6369,8 @@ class DatabaseHelper {
         p.barcode,
         p.name,
         p.category,
+        p.quantity_type,
+        p.unit_label,
         p.stock,
         p.min_stock_level,
         p.cost_price,
@@ -6199,8 +6386,8 @@ class DatabaseHelper {
     );
 
     return rows.map((row) {
-      final stock = (row['stock'] as num?)?.toInt() ?? 0;
-      final quantitySold = (row['quantity_sold'] as num?)?.toInt() ?? 0;
+      final stock = ((row['stock'] as num?) ?? 0).toDouble();
+      final quantitySold = ((row['quantity_sold'] as num?) ?? 0).toDouble();
       final costPrice = ((row['cost_price'] as num?) ?? 0).toDouble();
       final sellingPrice = ((row['selling_price'] as num?) ?? 0).toDouble();
       final salesAmount = ((row['sales_amount'] as num?) ?? 0).toDouble();
@@ -6209,6 +6396,8 @@ class DatabaseHelper {
         'barcode': row['barcode'],
         'product_name': row['product_name'],
         'category': row['category'],
+        'quantity_type': row['quantity_type'],
+        'unit_label': row['unit_label'],
         'stock': stock,
         'min_stock_level': (row['min_stock_level'] as num?)?.toInt() ?? 0,
         'cost_price': _roundMoney(costPrice),
