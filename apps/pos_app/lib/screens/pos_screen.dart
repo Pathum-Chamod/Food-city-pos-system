@@ -71,6 +71,10 @@ class _DecimalQuantityInputFormatter extends TextInputFormatter {
 
 class _PosScreenState extends State<PosScreen> {
   static const double _quantityEpsilon = 0.000001;
+  static const double _minSupportedWidth = 1180;
+  static const double _minSupportedHeight = 680;
+  static const double _cartPanelWidth = 430;
+  static const double _productTileExtent = 218;
   List<Product> _products = [];
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
@@ -163,8 +167,7 @@ class _PosScreenState extends State<PosScreen> {
 
   void _scheduleWelcomeOverlay() {
     final name = widget.welcomeUserName?.trim();
-    if (!widget.showWelcomeAnimation &&
-        (name == null || name.isEmpty)) {
+    if (!widget.showWelcomeAnimation && (name == null || name.isEmpty)) {
       return;
     }
 
@@ -370,22 +373,20 @@ class _PosScreenState extends State<PosScreen> {
 
   ThemeData _buildPosTheme() {
     final brightness = _isDark ? Brightness.dark : Brightness.light;
-    final base = ThemeData(
-      brightness: brightness,
-      useMaterial3: true,
-    );
+    final base = ThemeData(brightness: brightness, useMaterial3: true);
 
-    final scheme = ColorScheme.fromSeed(
-      seedColor: _brandColor,
-      brightness: brightness,
-    ).copyWith(
-      primary: _brandColor,
-      secondary: _accentBlue,
-      surface: _panelColor,
-      onSurface: _textPrimary,
-      outline: _borderColor,
-      error: _dangerColor,
-    );
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: _brandColor,
+          brightness: brightness,
+        ).copyWith(
+          primary: _brandColor,
+          secondary: _accentBlue,
+          surface: _panelColor,
+          onSurface: _textPrimary,
+          outline: _borderColor,
+          error: _dangerColor,
+        );
 
     return base.copyWith(
       colorScheme: scheme,
@@ -435,10 +436,7 @@ class _PosScreenState extends State<PosScreen> {
           borderRadius: BorderRadius.circular(18),
           side: BorderSide(color: _borderColor),
         ),
-        textStyle: TextStyle(
-          color: _textPrimary,
-          fontWeight: FontWeight.w600,
-        ),
+        textStyle: TextStyle(color: _textPrimary, fontWeight: FontWeight.w600),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
@@ -480,10 +478,7 @@ class _PosScreenState extends State<PosScreen> {
             borderRadius: BorderRadius.circular(18),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-          textStyle: const TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: 14,
-          ),
+          textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -494,10 +489,7 @@ class _PosScreenState extends State<PosScreen> {
             borderRadius: BorderRadius.circular(16),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          textStyle: const TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 13,
-          ),
+          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
         ),
       ),
       iconButtonTheme: IconButtonThemeData(
@@ -564,8 +556,9 @@ class _PosScreenState extends State<PosScreen> {
 
     final cashierName =
         context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
-    final summary =
-        await DatabaseHelper.instance.getOpenShiftSummaryForCashier(cashierName);
+    final summary = await DatabaseHelper.instance.getOpenShiftSummaryForCashier(
+      cashierName,
+    );
 
     if (!mounted) return;
 
@@ -601,10 +594,7 @@ class _PosScreenState extends State<PosScreen> {
       }
 
       if (parts.isNotEmpty) {
-        _showInfoMessage(
-          parts.join(' • '),
-          backgroundColor: _successColor,
-        );
+        _showInfoMessage(parts.join(' • '), backgroundColor: _successColor);
       }
     }
   }
@@ -837,7 +827,9 @@ class _PosScreenState extends State<PosScreen> {
                           ),
                           const Spacer(),
                           TextButton.icon(
-                            onPressed: isBusy ? null : () => refreshLists(setState),
+                            onPressed: isBusy
+                                ? null
+                                : () => refreshLists(setState),
                             icon: const Icon(Icons.refresh),
                             label: const Text('Refresh'),
                           ),
@@ -927,7 +919,8 @@ class _PosScreenState extends State<PosScreen> {
                                   ? 'Currently selected printer'
                                   : 'Installed Windows printer',
                             ),
-                            trailing: printerName == printer.connectedPrinterName
+                            trailing:
+                                printerName == printer.connectedPrinterName
                                 ? OutlinedButton(
                                     onPressed: isBusy
                                         ? null
@@ -952,7 +945,10 @@ class _PosScreenState extends State<PosScreen> {
                                 : ElevatedButton(
                                     onPressed: isBusy
                                         ? null
-                                        : () => selectPrinter(printerName, setState),
+                                        : () => selectPrinter(
+                                            printerName,
+                                            setState,
+                                          ),
                                     child: const Text('Use'),
                                   ),
                           ),
@@ -966,12 +962,16 @@ class _PosScreenState extends State<PosScreen> {
                             runSpacing: 10,
                             children: [
                               OutlinedButton.icon(
-                                onPressed: isBusy ? null : () => runTestPrint(setState),
+                                onPressed: isBusy
+                                    ? null
+                                    : () => runTestPrint(setState),
                                 icon: const Icon(Icons.print),
                                 label: const Text('Print Test Slip'),
                               ),
                               OutlinedButton.icon(
-                                onPressed: isBusy ? null : () => saveTestPdf(setState),
+                                onPressed: isBusy
+                                    ? null
+                                    : () => saveTestPdf(setState),
                                 icon: const Icon(Icons.picture_as_pdf_outlined),
                                 label: const Text('Save Test PDF'),
                               ),
@@ -982,7 +982,9 @@ class _PosScreenState extends State<PosScreen> {
                         Align(
                           alignment: Alignment.centerLeft,
                           child: OutlinedButton.icon(
-                            onPressed: isBusy ? null : () => saveTestPdf(setState),
+                            onPressed: isBusy
+                                ? null
+                                : () => saveTestPdf(setState),
                             icon: const Icon(Icons.picture_as_pdf_outlined),
                             label: const Text('Save Test PDF'),
                           ),
@@ -1139,10 +1141,9 @@ class _PosScreenState extends State<PosScreen> {
 
   String _formatQuantity(num value, {int maxDecimals = 3}) {
     final sanitized = _sanitizeQuantity(value);
-    return sanitized.toStringAsFixed(maxDecimals).replaceFirst(
-      RegExp(r'\.?0+$'),
-      '',
-    );
+    return sanitized
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatQuantityWithUnit(
@@ -1243,7 +1244,10 @@ class _PosScreenState extends State<PosScreen> {
         context: context,
         builder: (dialogContext) => Dialog(
           backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 24,
+          ),
           child: Container(
             constraints: const BoxConstraints(maxWidth: 520),
             padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
@@ -1269,7 +1273,9 @@ class _PosScreenState extends State<PosScreen> {
                       width: 50,
                       height: 50,
                       decoration: BoxDecoration(
-                        color: _priceTypeColor(newType).withOpacity(_isDark ? 0.18 : 0.12),
+                        color: _priceTypeColor(
+                          newType,
+                        ).withOpacity(_isDark ? 0.18 : 0.12),
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
                           color: _priceTypeColor(newType).withOpacity(0.24),
@@ -1279,8 +1285,8 @@ class _PosScreenState extends State<PosScreen> {
                         newType == ProductPriceType.wholesale
                             ? Icons.local_offer_outlined
                             : (newType == ProductPriceType.sale
-                                ? Icons.sell_outlined
-                                : Icons.price_change_outlined),
+                                  ? Icons.sell_outlined
+                                  : Icons.price_change_outlined),
                         color: _priceTypeColor(newType),
                         size: 24,
                       ),
@@ -1436,8 +1442,9 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   // ignore: unused_element
-  int get _lowStockCount =>
-      _products.where((product) => product.stock > 0 && product.isLowStock).length;
+  int get _lowStockCount => _products
+      .where((product) => product.stock > 0 && product.isLowStock)
+      .length;
 
   // ignore: unused_element
   int get _outOfStockCount =>
@@ -1497,7 +1504,8 @@ class _PosScreenState extends State<PosScreen> {
               if (parsed == null || parsed <= 0) {
                 return 'Enter a valid quantity.';
               }
-              if (maxQuantity != null && _quantityExceeds(parsed, maxQuantity)) {
+              if (maxQuantity != null &&
+                  _quantityExceeds(parsed, maxQuantity)) {
                 return 'Only ${_formatStockText(product, maxQuantity)} available.';
               }
               return null;
@@ -1519,7 +1527,10 @@ class _PosScreenState extends State<PosScreen> {
 
             return Dialog(
               backgroundColor: Colors.transparent,
-              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
               child: AnimatedPadding(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOut,
@@ -1589,10 +1600,7 @@ class _PosScreenState extends State<PosScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                _formatPriceCaption(
-                                  product,
-                                  unitPrice,
-                                ),
+                                _formatPriceCaption(product, unitPrice),
                                 style: TextStyle(
                                   color: _textPrimary,
                                   fontWeight: FontWeight.w800,
@@ -1639,7 +1647,8 @@ class _PosScreenState extends State<PosScreen> {
                           children: [
                             Expanded(
                               child: OutlinedButton(
-                                onPressed: () => Navigator.of(dialogContext).pop(),
+                                onPressed: () =>
+                                    Navigator.of(dialogContext).pop(),
                                 child: const Text('Cancel'),
                               ),
                             ),
@@ -1665,13 +1674,10 @@ class _PosScreenState extends State<PosScreen> {
 
       return result == null ? null : _sanitizeQuantity(result);
     } finally {
-      Future<void>.delayed(
-        const Duration(milliseconds: 300),
-        () {
-          _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
-          controller.dispose();
-        },
-      );
+      Future<void>.delayed(const Duration(milliseconds: 300), () {
+        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+        controller.dispose();
+      });
     }
   }
 
@@ -1705,7 +1711,8 @@ class _PosScreenState extends State<PosScreen> {
               if (parsed == null || parsed <= 0) {
                 return 'Enter a valid quantity.';
               }
-              if (maxQuantity != null && _quantityExceeds(parsed, maxQuantity)) {
+              if (maxQuantity != null &&
+                  _quantityExceeds(parsed, maxQuantity)) {
                 return 'Only ${_formatStockTextWithCartUnit(product, maxQuantity)} available.';
               }
               return null;
@@ -1727,7 +1734,10 @@ class _PosScreenState extends State<PosScreen> {
 
             return Dialog(
               backgroundColor: Colors.transparent,
-              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
               child: AnimatedPadding(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOut,
@@ -1797,10 +1807,7 @@ class _PosScreenState extends State<PosScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                _formatPriceCaption(
-                                  product,
-                                  unitPrice,
-                                ),
+                                _formatPriceCaption(product, unitPrice),
                                 style: TextStyle(
                                   color: _textPrimary,
                                   fontWeight: FontWeight.w800,
@@ -1845,7 +1852,8 @@ class _PosScreenState extends State<PosScreen> {
                           children: [
                             Expanded(
                               child: OutlinedButton(
-                                onPressed: () => Navigator.of(dialogContext).pop(),
+                                onPressed: () =>
+                                    Navigator.of(dialogContext).pop(),
                                 child: const Text('Cancel'),
                               ),
                             ),
@@ -1871,13 +1879,10 @@ class _PosScreenState extends State<PosScreen> {
 
       return result == null ? null : _sanitizeQuantity(result);
     } finally {
-      Future<void>.delayed(
-        const Duration(milliseconds: 300),
-        () {
-          _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
-          controller.dispose();
-        },
-      );
+      Future<void>.delayed(const Duration(milliseconds: 300), () {
+        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+        controller.dispose();
+      });
     }
   }
 
@@ -2035,10 +2040,8 @@ class _PosScreenState extends State<PosScreen> {
         context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
 
     if (PosFeatureFlags.enableShiftManagement) {
-      final openShift =
-          await DatabaseHelper.instance.getOpenShiftSummaryForCashier(
-        cashierName,
-      );
+      final openShift = await DatabaseHelper.instance
+          .getOpenShiftSummaryForCashier(cashierName);
 
       if (openShift == null) {
         if (!mounted) return;
@@ -2117,7 +2120,10 @@ class _PosScreenState extends State<PosScreen> {
 
       final printer = ReceiptPrinterService.instance;
       if (printer.isConnected) {
-        await TransactionHistoryScreen.printReceiptForTransaction(context, saleId);
+        await TransactionHistoryScreen.printReceiptForTransaction(
+          context,
+          saleId,
+        );
       }
 
       final action = await _showTransactionSuccessFlow(
@@ -2289,7 +2295,9 @@ class _PosScreenState extends State<PosScreen> {
                       border: Border.all(color: tone.withOpacity(0.24)),
                     ),
                     child: Icon(
-                      isRefund ? Icons.restart_alt_rounded : Icons.check_circle_rounded,
+                      isRefund
+                          ? Icons.restart_alt_rounded
+                          : Icons.check_circle_rounded,
                       color: tone,
                       size: 28,
                     ),
@@ -2357,7 +2365,10 @@ class _PosScreenState extends State<PosScreen> {
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: _panelColor,
                         borderRadius: BorderRadius.circular(999),
@@ -2398,7 +2409,8 @@ class _PosScreenState extends State<PosScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: () => Navigator.of(successContext).pop('receipt'),
+                      onPressed: () =>
+                          Navigator.of(successContext).pop('receipt'),
                       child: const Text('View Receipt'),
                     ),
                   ),
@@ -2427,9 +2439,7 @@ class _PosScreenState extends State<PosScreen> {
 
     await Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => const UserManagementScreen(),
-      ),
+      MaterialPageRoute(builder: (context) => const UserManagementScreen()),
     );
 
     if (!mounted) return;
@@ -2446,9 +2456,8 @@ class _PosScreenState extends State<PosScreen> {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => SupplierManagementScreen(
-            cashierName: cashierName,
-          ),
+          builder: (context) =>
+              SupplierManagementScreen(cashierName: cashierName),
         ),
       );
 
@@ -2486,7 +2495,10 @@ class _PosScreenState extends State<PosScreen> {
       builder: (dialogContext) {
         return Dialog(
           backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 24,
+          ),
           child: StatefulBuilder(
             builder: (context, setLocalState) {
               return Container(
@@ -2708,7 +2720,10 @@ class _PosScreenState extends State<PosScreen> {
       builder: (dialogContext) {
         return Dialog(
           backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 24,
+          ),
           child: Container(
             constraints: const BoxConstraints(maxWidth: 520),
             padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
@@ -2820,10 +2835,7 @@ class _PosScreenState extends State<PosScreen> {
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: () => Navigator.pop(dialogContext, true),
-                        icon: const Icon(
-                          Icons.shopping_bag_outlined,
-                          size: 16,
-                        ),
+                        icon: const Icon(Icons.shopping_bag_outlined, size: 16),
                         label: const Text('Continue'),
                         style: ElevatedButton.styleFrom(
                           minimumSize: const Size.fromHeight(52),
@@ -2856,8 +2868,8 @@ class _PosScreenState extends State<PosScreen> {
       final latestProduct = _getCurrentProduct(barcode);
       final resolvedProductMap = latestProduct?.toMap() ?? productMap;
 
-      final priceTypeUsed =
-          (item['price_type_used'] ?? fallbackPriceType).toString();
+      final priceTypeUsed = (item['price_type_used'] ?? fallbackPriceType)
+          .toString();
       final resolvedUnitPrice =
           (item['unit_price_used'] as num?)?.toDouble() ??
           (latestProduct ?? Product.fromMap(resolvedProductMap)).resolvePrice(
@@ -2866,12 +2878,12 @@ class _PosScreenState extends State<PosScreen> {
       final baseLineTotal =
           (item['base_line_total'] as num?)?.toDouble() ??
           (resolvedUnitPrice * safeQuantity);
-      final itemDiscountType =
-          (item['item_discount_type'] ?? 'none').toString();
-      final itemDiscountValue =
-          ((item['item_discount_value'] as num?) ?? 0).toDouble();
-      final itemDiscountAmount =
-          ((item['item_discount_amount'] as num?) ?? 0).toDouble();
+      final itemDiscountType = (item['item_discount_type'] ?? 'none')
+          .toString();
+      final itemDiscountValue = ((item['item_discount_value'] as num?) ?? 0)
+          .toDouble();
+      final itemDiscountAmount = ((item['item_discount_amount'] as num?) ?? 0)
+          .toDouble();
       final resolvedLineTotal =
           (item['line_total'] as num?)?.toDouble() ??
           (baseLineTotal - itemDiscountAmount);
@@ -2932,10 +2944,7 @@ class _PosScreenState extends State<PosScreen> {
       selectedPriceType: restoredSelectedPriceType,
     );
 
-    _showInfoMessage(
-      'Held cart resumed.',
-      backgroundColor: _successColor,
-    );
+    _showInfoMessage('Held cart resumed.', backgroundColor: _successColor);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _scrollCartToLatest(animated: false);
@@ -2951,7 +2960,8 @@ class _PosScreenState extends State<PosScreen> {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => CashierSummaryScreen(cashierName: cashierName),
+            builder: (context) =>
+                CashierSummaryScreen(cashierName: cashierName),
           ),
         );
         break;
@@ -2961,9 +2971,7 @@ class _PosScreenState extends State<PosScreen> {
       case 'inventory':
         await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (context) => const InventoryScreen(),
-          ),
+          MaterialPageRoute(builder: (context) => const InventoryScreen()),
         );
         break;
       case 'supplier_ops':
@@ -2992,9 +3000,7 @@ class _PosScreenState extends State<PosScreen> {
       case 'sales_report':
         await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (context) => const SalesReportScreen(),
-          ),
+          MaterialPageRoute(builder: (context) => const SalesReportScreen()),
         );
         break;
       case 'shift_management':
@@ -3134,7 +3140,11 @@ class _PosScreenState extends State<PosScreen> {
               ),
             ),
             const SizedBox(width: 6),
-            Icon(Icons.keyboard_arrow_down_rounded, color: _mutedIcon, size: 18),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: _mutedIcon,
+              size: 18,
+            ),
           ],
         ),
       ),
@@ -3270,7 +3280,10 @@ class _PosScreenState extends State<PosScreen> {
               icon: const Icon(Icons.add_shopping_cart_rounded, size: 18),
               label: const Text('Add to Cart'),
               style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
                 minimumSize: const Size(0, 42),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 backgroundColor: _brandColor,
@@ -3287,7 +3300,9 @@ class _PosScreenState extends State<PosScreen> {
               final hasNoInternet =
                   snapshot.data?.contains(ConnectivityResult.none) ?? false;
               return _buildStatusPill(
-                icon: hasNoInternet ? Icons.wifi_off_rounded : Icons.wifi_rounded,
+                icon: hasNoInternet
+                    ? Icons.wifi_off_rounded
+                    : Icons.wifi_rounded,
                 label: hasNoInternet ? 'OFFLINE' : 'ONLINE',
                 color: hasNoInternet ? _warningColor : _successColor,
                 background: hasNoInternet ? _warningSoft : _successSoft,
@@ -3300,10 +3315,13 @@ class _PosScreenState extends State<PosScreen> {
               icon: _currentShiftSummary == null
                   ? Icons.badge_outlined
                   : Icons.badge_rounded,
-              label: _currentShiftSummary == null ? 'SHIFT CLOSED' : 'SHIFT OPEN',
+              label: _currentShiftSummary == null
+                  ? 'SHIFT CLOSED'
+                  : 'SHIFT OPEN',
               color: _currentShiftSummary == null ? _warningColor : _brandColor,
-              background:
-                  _currentShiftSummary == null ? _warningSoft : _brandSoft,
+              background: _currentShiftSummary == null
+                  ? _warningSoft
+                  : _brandSoft,
             ),
           ],
           const SizedBox(width: 10),
@@ -3343,50 +3361,61 @@ class _PosScreenState extends State<PosScreen> {
             ),
           ],
           const SizedBox(width: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: _softDecoration(color: _panelSoft),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircleAvatar(
-                  radius: 15,
-                  backgroundColor: _brandSoft,
-                  child: Text(
-                    (auth.currentUser?.name ?? 'U').trim().isEmpty
-                        ? 'U'
-                        : (auth.currentUser?.name ?? 'U').trim()[0].toUpperCase(),
-                    style: TextStyle(
-                      color: _brandColor,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      auth.currentUser?.name ?? 'Not Logged In',
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 180),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: _softDecoration(color: _panelSoft),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    radius: 15,
+                    backgroundColor: _brandSoft,
+                    child: Text(
+                      (auth.currentUser?.name ?? 'U').trim().isEmpty
+                          ? 'U'
+                          : (auth.currentUser?.name ?? 'U')
+                                .trim()[0]
+                                .toUpperCase(),
                       style: TextStyle(
-                        color: _textPrimary,
-                        fontWeight: FontWeight.w800,
+                        color: _brandColor,
+                        fontWeight: FontWeight.w900,
                         fontSize: 12,
                       ),
                     ),
-                    Text(
-                      auth.hasManagementAccess ? 'manager' : 'cashier',
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 10,
-                      ),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          auth.currentUser?.name ?? 'Not Logged In',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _textPrimary,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12,
+                          ),
+                        ),
+                        Text(
+                          auth.hasManagementAccess ? 'manager' : 'cashier',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(width: 10),
@@ -3400,9 +3429,7 @@ class _PosScreenState extends State<PosScreen> {
 
               Navigator.pushReplacement(
                 context,
-                MaterialPageRoute(
-                  builder: (context) => const LoginScreen(),
-                ),
+                MaterialPageRoute(builder: (context) => const LoginScreen()),
               );
             },
           ),
@@ -3532,7 +3559,11 @@ class _PosScreenState extends State<PosScreen> {
                     color: _accentBlueSoft,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(Icons.search_rounded, color: _accentBlue, size: 18),
+                  child: Icon(
+                    Icons.search_rounded,
+                    color: _accentBlue,
+                    size: 18,
+                  ),
                 ),
                 suffixIcon: _searchQuery.isEmpty
                     ? null
@@ -3598,9 +3629,7 @@ class _PosScreenState extends State<PosScreen> {
 
   Widget _buildProductGrid(CartProvider cart) {
     if (_isLoadingProducts) {
-      return Center(
-        child: CircularProgressIndicator(color: _brandColor),
-      );
+      return Center(child: CircularProgressIndicator(color: _brandColor));
     }
 
     if (_products.isEmpty) {
@@ -3637,7 +3666,7 @@ class _PosScreenState extends State<PosScreen> {
             crossAxisCount: crossAxisCount,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
-            childAspectRatio: 1.28,
+            mainAxisExtent: _productTileExtent,
           ),
           itemBuilder: (context, index) {
             final product = _filteredProducts[index];
@@ -3692,7 +3721,8 @@ class _PosScreenState extends State<PosScreen> {
 
   Widget _buildProductCard(Product product, CartProvider cart) {
     final isOutOfStock =
-        _sanitizeQuantity(product.stock) <= _quantityEpsilon && !cart.isRefundMode;
+        _sanitizeQuantity(product.stock) <= _quantityEpsilon &&
+        !cart.isRefundMode;
     final isLowStock = !isOutOfStock && product.isLowStock;
     final cartQty = _getQuantityInCart(cart, product.barcode);
     final displayPrice = _getDisplayPrice(product, cart);
@@ -3730,7 +3760,9 @@ class _PosScreenState extends State<PosScreen> {
             color: isOutOfStock ? _panelColor.withOpacity(0.72) : _panelSoft,
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: isOutOfStock ? _dangerColor.withOpacity(0.35) : _borderColor,
+              color: isOutOfStock
+                  ? _dangerColor.withOpacity(0.35)
+                  : _borderColor,
             ),
             boxShadow: _isDark
                 ? [
@@ -3772,7 +3804,9 @@ class _PosScreenState extends State<PosScreen> {
                       decoration: BoxDecoration(
                         color: _brandSoft,
                         borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: _brandColor.withOpacity(0.25)),
+                        border: Border.all(
+                          color: _brandColor.withOpacity(0.25),
+                        ),
                       ),
                       child: Text(
                         _formatCartBadgeText(product, cartQty),
@@ -3813,7 +3847,9 @@ class _PosScreenState extends State<PosScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
                 decoration: BoxDecoration(
-                  color: _screenBackgroundAlt.withOpacity(_isDark ? 0.55 : 0.80),
+                  color: _screenBackgroundAlt.withOpacity(
+                    _isDark ? 0.55 : 0.80,
+                  ),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: _borderColor),
                 ),
@@ -3830,7 +3866,10 @@ class _PosScreenState extends State<PosScreen> {
               ),
               const Spacer(),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: toneSoft,
                   borderRadius: BorderRadius.circular(12),
@@ -3842,8 +3881,8 @@ class _PosScreenState extends State<PosScreen> {
                       isOutOfStock
                           ? Icons.error_outline_rounded
                           : (isLowStock
-                              ? Icons.warning_amber_rounded
-                              : Icons.check_circle_outline_rounded),
+                                ? Icons.warning_amber_rounded
+                                : Icons.check_circle_outline_rounded),
                       size: 14,
                       color: tone,
                     ),
@@ -3853,8 +3892,8 @@ class _PosScreenState extends State<PosScreen> {
                         isOutOfStock
                             ? 'Out of stock'
                             : (isLowStock
-                                ? 'Low stock - ${_formatStockText(product, product.stock)}'
-                                : 'Stock - ${_formatStockText(product, product.stock)}'),
+                                  ? 'Low stock - ${_formatStockText(product, product.stock)}'
+                                  : 'Stock - ${_formatStockText(product, product.stock)}'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -3886,11 +3925,7 @@ class _PosScreenState extends State<PosScreen> {
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
             child: Row(
               children: [
-                Icon(
-                  Icons.shopping_cart_rounded,
-                  color: _brandColor,
-                  size: 18,
-                ),
+                Icon(Icons.shopping_cart_rounded, color: _brandColor, size: 18),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -3965,15 +4000,21 @@ class _PosScreenState extends State<PosScreen> {
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 9,
+                ),
                 decoration: BoxDecoration(
-                  color: _currentShiftSummary == null ? _warningSoft : _successSoft,
+                  color: _currentShiftSummary == null
+                      ? _warningSoft
+                      : _successSoft,
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: (_currentShiftSummary == null
-                            ? _warningColor
-                            : _successColor)
-                        .withOpacity(0.25),
+                    color:
+                        (_currentShiftSummary == null
+                                ? _warningColor
+                                : _successColor)
+                            .withOpacity(0.25),
                   ),
                 ),
                 child: Text(
@@ -3981,7 +4022,9 @@ class _PosScreenState extends State<PosScreen> {
                       ? 'Open a shift to process transactions.'
                       : 'Expected cash: Rs. ${((((_currentShiftSummary!['expected_cash'] as num?) ?? 0).toDouble())).toStringAsFixed(2)}',
                   style: TextStyle(
-                    color: _currentShiftSummary == null ? _warningColor : _successColor,
+                    color: _currentShiftSummary == null
+                        ? _warningColor
+                        : _successColor,
                     fontWeight: FontWeight.w800,
                     fontSize: 11,
                   ),
@@ -4026,10 +4069,7 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _toggleSaleRefundModeFromHeader(CartProvider cart) async {
     if (cart.isRefundMode) {
       context.read<CartProvider>().toggleRefundMode(false);
-      _showInfoMessage(
-        'Switched to sale mode.',
-        backgroundColor: _accentBlue,
-      );
+      _showInfoMessage('Switched to sale mode.', backgroundColor: _accentBlue);
       _focusBarcodeField();
       return;
     }
@@ -4037,10 +4077,7 @@ class _PosScreenState extends State<PosScreen> {
     await _runProtectedManagerAction(() async {
       context.read<CartProvider>().toggleRefundMode(true);
       if (!mounted) return;
-      _showInfoMessage(
-        'Refund mode enabled.',
-        backgroundColor: _dangerColor,
-      );
+      _showInfoMessage('Refund mode enabled.', backgroundColor: _dangerColor);
       _focusBarcodeField();
     });
   }
@@ -4195,10 +4232,15 @@ class _PosScreenState extends State<PosScreen> {
                 onPressed: () => _applyItemDiscount(cart, item),
                 icon: Icon(
                   Icons.discount_outlined,
-                  color: item.discountAmount > 0 ? _warningColor : _textSecondary,
+                  color: item.discountAmount > 0
+                      ? _warningColor
+                      : _textSecondary,
                   size: 16,
                 ),
-                constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+                constraints: const BoxConstraints.tightFor(
+                  width: 24,
+                  height: 24,
+                ),
                 padding: EdgeInsets.zero,
               ),
               IconButton(
@@ -4212,7 +4254,10 @@ class _PosScreenState extends State<PosScreen> {
                   color: _dangerColor,
                   size: 16,
                 ),
-                constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+                constraints: const BoxConstraints.tightFor(
+                  width: 24,
+                  height: 24,
+                ),
                 padding: EdgeInsets.zero,
               ),
             ],
@@ -4246,7 +4291,8 @@ class _PosScreenState extends State<PosScreen> {
                 OutlinedButton.icon(
                   onPressed: () async {
                     final otherQtyInCart = _sanitizeQuantity(
-                      _getQuantityInCart(cart, item.product.barcode) - item.quantity,
+                      _getQuantityInCart(cart, item.product.barcode) -
+                          item.quantity,
                     );
                     final maxQuantity = cart.isRefundMode
                         ? null
@@ -4281,7 +4327,10 @@ class _PosScreenState extends State<PosScreen> {
                   },
                   icon: const Icon(Icons.scale_rounded, size: 14),
                   label: Text(
-                    _formatQuantityWithUnit(item.quantity, item.product.unitLabel),
+                    _formatQuantityWithUnit(
+                      item.quantity,
+                      item.product.unitLabel,
+                    ),
                   ),
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size(0, 34),
@@ -4298,7 +4347,8 @@ class _PosScreenState extends State<PosScreen> {
                 GestureDetector(
                   onTap: () async {
                     final otherQtyInCart = _sanitizeQuantity(
-                      _getQuantityInCart(cart, item.product.barcode) - item.quantity,
+                      _getQuantityInCart(cart, item.product.barcode) -
+                          item.quantity,
                     );
                     final maxQuantity = cart.isRefundMode
                         ? null
@@ -4345,7 +4395,10 @@ class _PosScreenState extends State<PosScreen> {
                             _focusBarcodeField();
                           },
                           icon: const Icon(Icons.remove_rounded, size: 14),
-                          constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+                          constraints: const BoxConstraints.tightFor(
+                            width: 28,
+                            height: 28,
+                          ),
                           padding: EdgeInsets.zero,
                         ),
                         SizedBox(
@@ -4363,7 +4416,10 @@ class _PosScreenState extends State<PosScreen> {
                         IconButton(
                           onPressed: () {
                             if (!cart.isRefundMode &&
-                                _quantityExceeds(item.quantity + 1.0, currentStock)) {
+                                _quantityExceeds(
+                                  item.quantity + 1.0,
+                                  currentStock,
+                                )) {
                               _showInfoMessage(
                                 'Cannot exceed available stock for ${item.product.name}.',
                                 backgroundColor: _dangerColor,
@@ -4375,7 +4431,10 @@ class _PosScreenState extends State<PosScreen> {
                             _focusBarcodeField();
                           },
                           icon: const Icon(Icons.add_rounded, size: 14),
-                          constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+                          constraints: const BoxConstraints.tightFor(
+                            width: 28,
+                            height: 28,
+                          ),
                           padding: EdgeInsets.zero,
                         ),
                       ],
@@ -4548,10 +4607,14 @@ class _PosScreenState extends State<PosScreen> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: cart.items.isEmpty ? null : () => _applyDiscount(cart),
+                    onPressed: cart.items.isEmpty
+                        ? null
+                        : () => _applyDiscount(cart),
                     icon: const Icon(Icons.percent_rounded, size: 14),
                     label: Text(
-                      cart.discountAmount > 0 ? 'Edit Discount' : 'Apply Discount',
+                      cart.discountAmount > 0
+                          ? 'Edit Discount'
+                          : 'Apply Discount',
                     ),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -4590,8 +4653,13 @@ class _PosScreenState extends State<PosScreen> {
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: cart.items.isEmpty ? null : () => _holdCurrentCart(cart),
-                  icon: const Icon(Icons.pause_circle_outline_rounded, size: 14),
+                  onPressed: cart.items.isEmpty
+                      ? null
+                      : () => _holdCurrentCart(cart),
+                  icon: const Icon(
+                    Icons.pause_circle_outline_rounded,
+                    size: 14,
+                  ),
                   label: const Text('Hold Cart'),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 8),
@@ -4646,8 +4714,8 @@ class _PosScreenState extends State<PosScreen> {
               _isProcessingCheckout
                   ? Icons.sync_rounded
                   : (cart.isRefundMode
-                      ? Icons.restart_alt_rounded
-                      : Icons.lock_open_rounded),
+                        ? Icons.restart_alt_rounded
+                        : Icons.lock_open_rounded),
               size: 16,
             ),
             label: Text(
@@ -4662,6 +4730,85 @@ class _PosScreenState extends State<PosScreen> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(15),
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUnsupportedWindow() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 30),
+            decoration: _panelDecoration(color: _panelColor),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    color: _brandSoft,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: _brandColor.withValues(alpha: 0.28),
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.open_in_full_rounded,
+                    color: _brandColor,
+                    size: 30,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  'Maximize the screen to continue',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 22,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Food City POS needs a desktop workspace of at least '
+                  '${_minSupportedWidth.toInt()} x ${_minSupportedHeight.toInt()}.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDesktopWorkspace(AuthProvider auth, CartProvider cart) {
+    return Padding(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        children: [
+          _buildTopHeader(auth, cart),
+          const SizedBox(height: 14),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(child: _buildCatalogPanel(cart)),
+                const SizedBox(width: 14),
+                SizedBox(width: _cartPanelWidth, child: _buildCartPanel(cart)),
+              ],
             ),
           ),
         ],
@@ -4685,42 +4832,31 @@ class _PosScreenState extends State<PosScreen> {
         onKey: _handleGlobalKeyboardEvent,
         child: Scaffold(
           body: SafeArea(
-            child: Stack(
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [_screenBackground, _screenBackgroundAlt],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      children: [
-                        _buildTopHeader(auth, cart),
-                        const SizedBox(height: 14),
-                        Expanded(
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: _buildCatalogPanel(cart),
-                              ),
-                              const SizedBox(width: 14),
-                              SizedBox(
-                                width: 430,
-                                child: _buildCartPanel(cart),
-                              ),
-                            ],
-                          ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final isWindowSupported =
+                    constraints.maxWidth >= _minSupportedWidth &&
+                    constraints.maxHeight >= _minSupportedHeight;
+
+                return Stack(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [_screenBackground, _screenBackgroundAlt],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
                         ),
-                      ],
+                      ),
+                      child: isWindowSupported
+                          ? _buildDesktopWorkspace(auth, cart)
+                          : _buildUnsupportedWindow(),
                     ),
-                  ),
-                ),
-                if (_renderWelcomeOverlay) _buildWelcomeOverlay(auth),
-              ],
+                    if (isWindowSupported && _renderWelcomeOverlay)
+                      _buildWelcomeOverlay(auth),
+                  ],
+                );
+              },
             ),
           ),
         ),
@@ -4728,4 +4864,3 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 }
-
