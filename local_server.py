@@ -193,6 +193,10 @@ def format_quantity(value):
     return text or "0"
 
 
+def format_stock_with_unit(quantity_type, unit_label, value):
+    return f"{format_quantity(value)} {normalize_unit_label(quantity_type, unit_label)}"
+
+
 def normalize_quantity_type(value):
     return "weight" if str(value or "").strip().lower() == "weight" else "unit"
 
@@ -1121,6 +1125,20 @@ def _extract_item_barcode(item):
     return str(product.get("barcode") or item.get("barcode") or "")
 
 
+def _extract_item_quantity_type(item):
+    product = item.get("product", {}) or {}
+    return normalize_quantity_type(product.get("quantity_type") or item.get("quantity_type"))
+
+
+def _extract_item_unit_label(item):
+    product = item.get("product", {}) or {}
+    quantity_type = _extract_item_quantity_type(item)
+    return normalize_unit_label(
+        quantity_type,
+        product.get("unit_label") or item.get("unit_label"),
+    )
+
+
 def _sales_rows_between(cursor, start_sql_expr, end_sql_expr):
     return cursor.execute(
         f"""
@@ -1148,6 +1166,8 @@ def _build_owner_summary_from_rows(rows):
             price = max(_extract_item_price(item), 0.0)
             name = _extract_item_name(item)
             barcode = _extract_item_barcode(item)
+            quantity_type = _extract_item_quantity_type(item)
+            unit_label = _extract_item_unit_label(item)
 
             items_sold += quantity
             product_key = barcode or name
@@ -1156,6 +1176,8 @@ def _build_owner_summary_from_rows(rows):
                 products[product_key] = {
                     "barcode": barcode,
                     "product_name": name,
+                    "quantity_type": quantity_type,
+                    "unit_label": unit_label,
                     "quantity_sold": 0,
                     "total_sales": 0.0,
                 }
@@ -1260,18 +1282,28 @@ def _top_sellers_last_days(cursor, days=30, limit=10):
 def _build_owner_alerts(cursor):
     alerts = []
 
+    def stock_text(product, value):
+        return format_stock_with_unit(
+            product.get("quantity_type"),
+            product.get("unit_label"),
+            value,
+        )
+
     products = fetch_products(cursor)
-    out_of_stock = [p for p in products if parse_int(p.get("stock", 0), 0) <= 0]
+    quantity_epsilon = 0.000001
+    out_of_stock = [
+        p for p in products if parse_float(p.get("stock", 0), 0.0) <= quantity_epsilon
+    ]
     low_stock = [
         p
         for p in products
-        if parse_int(p.get("stock", 0), 0) > 0
-        and parse_int(p.get("stock", 0), 0)
-        <= (parse_int(p.get("min_stock_level", 0), 0) or 10)
+        if parse_float(p.get("stock", 0), 0.0) > quantity_epsilon
+        and parse_float(p.get("stock", 0), 0.0)
+        <= (parse_float(p.get("min_stock_level", 0), 0.0) or 10.0)
     ]
 
     out_of_stock = sorted(out_of_stock, key=lambda item: item["name"])
-    low_stock = sorted(low_stock, key=lambda item: item["stock"])
+    low_stock = sorted(low_stock, key=lambda item: parse_float(item.get("stock", 0), 0.0))
 
     for product in out_of_stock[:6]:
         supplier_contact = _latest_supplier_contact_for_barcode(
@@ -1283,7 +1315,7 @@ def _build_owner_alerts(cursor):
                 "type": "out_of_stock",
                 "severity": "critical",
                 "title": f"{product['name']} is out of stock",
-                "subtitle": f"Barcode {product['barcode']} • stock 0",
+                "subtitle": f"Barcode {product['barcode']} - stock {stock_text(product, 0)}",
                 "barcode": product["barcode"],
                 **supplier_contact,
             }
@@ -1297,9 +1329,9 @@ def _build_owner_alerts(cursor):
         if not barcode or barcode not in product_by_barcode:
             continue
         product = product_by_barcode[barcode]
-        stock = parse_int(product.get("stock", 0), 0)
-        min_stock = parse_int(product.get("min_stock_level", 0), 0) or 10
-        if stock > 0 and stock <= min_stock:
+        stock = parse_float(product.get("stock", 0), 0.0)
+        min_stock = parse_float(product.get("min_stock_level", 0), 0.0) or 10.0
+        if stock > quantity_epsilon and stock <= min_stock:
             best_seller_risk.append((seller, product))
 
     for seller, product in best_seller_risk[:4]:
@@ -1312,7 +1344,10 @@ def _build_owner_alerts(cursor):
                 "type": "best_seller_low_stock",
                 "severity": "warning",
                 "title": f"Best seller low in stock: {product['name']}",
-                "subtitle": f"Sold {seller['quantity_sold']} recently • stock {product['stock']}",
+                "subtitle": (
+                    f"Sold {format_quantity(seller['quantity_sold'])} recently - "
+                    f"stock {stock_text(product, product.get('stock', 0))}"
+                ),
                 "barcode": product["barcode"],
                 **supplier_contact,
             }
@@ -1331,7 +1366,7 @@ def _build_owner_alerts(cursor):
                 "type": "low_stock",
                 "severity": "warning",
                 "title": f"{product['name']} is low in stock",
-                "subtitle": f"Barcode {product['barcode']} • stock {product['stock']}",
+                "subtitle": f"Barcode {product['barcode']} - stock {stock_text(product, product.get('stock', 0))}",
                 "barcode": product["barcode"],
                 **supplier_contact,
             }
@@ -1735,6 +1770,8 @@ def _build_owner_sales_report(cursor, params):
                 continue
             barcode = _extract_item_barcode(item)
             name = _extract_item_name(item)
+            quantity_type = _extract_item_quantity_type(item)
+            unit_label = _extract_item_unit_label(item)
             unit_cost = _extract_item_cost_snapshot(item)
             if unit_cost <= 0:
                 unit_cost = parse_float(product_by_barcode.get(barcode, {}).get("cost_price"), 0.0)
@@ -1744,6 +1781,8 @@ def _build_owner_sales_report(cursor, params):
                 {
                     "barcode": barcode,
                     "product_name": name,
+                    "quantity_type": quantity_type,
+                    "unit_label": unit_label,
                     "quantity_sold": 0,
                     "refunded_quantity": 0,
                     "net_quantity_sold": 0,

@@ -292,9 +292,19 @@ class CartProvider with ChangeNotifier {
 
     for (final rawItem in items) {
       final item = Map<String, dynamic>.from(rawItem);
-      final productMap = Map<String, dynamic>.from(item['product'] as Map);
+      final rawProduct = item['product'];
+      if (rawProduct is! Map) continue;
+      final productMap = Map<String, dynamic>.from(rawProduct);
+      final barcode = (productMap['barcode'] ?? '').toString().trim();
+      final name = (productMap['name'] ?? '').toString().trim();
+      if (barcode.isEmpty || name.isEmpty) continue;
 
-      final product = Product.fromMap(productMap);
+      Product product;
+      try {
+        product = Product.fromMap(productMap);
+      } catch (_) {
+        continue;
+      }
       final quantity = (item['quantity'] as num?)?.toDouble() ?? 1.0;
 
       if (quantity <= _quantityEpsilon) continue;

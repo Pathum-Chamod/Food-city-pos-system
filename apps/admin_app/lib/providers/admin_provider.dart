@@ -86,8 +86,14 @@ class AdminProvider with ChangeNotifier {
   Map<String, dynamic> get ownerSalesSummary => Map<String, dynamic>.from((_ownerSalesReport['summary'] as Map?) ?? <String, dynamic>{});
   List<Map<String, dynamic>> get ownerSalesTrendReport => ((_ownerSalesReport['trend'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
   List<Map<String, dynamic>> get ownerSalesCashiers => ((_ownerSalesReport['cashier_summary'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
-  List<Map<String, dynamic>> get ownerSalesTopProducts => ((_ownerSalesReport['top_products'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
-  List<Map<String, dynamic>> get ownerSalesSlowMovers => ((_ownerSalesReport['slow_movers'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
+  List<Map<String, dynamic>> get ownerSalesTopProducts => ((_ownerSalesReport['top_products'] as List?) ?? [])
+      .whereType<Map>()
+      .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
+      .toList();
+  List<Map<String, dynamic>> get ownerSalesSlowMovers => ((_ownerSalesReport['slow_movers'] as List?) ?? [])
+      .whereType<Map>()
+      .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
+      .toList();
 
   bool get isOwnerUsersLoading => _isOwnerUsersLoading;
   Map<String, dynamic> get ownerUsersSummary => _ownerUsersSummary;
@@ -158,15 +164,94 @@ class AdminProvider with ChangeNotifier {
   }
 
   int get totalProducts => _products.length;
-  int get outOfStockCount => _products.where((p) => p.stock <= 0).length;
+  int get outOfStockCount => _products.where((p) => p.isOutOfStock).length;
   int get lowStockCount => _products
-      .where(
-        (p) => p.stock > 0 && p.stock <= (p.minStockLevel > 0 ? p.minStockLevel : 10),
-      )
+      .where((p) => p.isLowStock)
       .length;
 
   final String apiUrl = "http://10.0.2.2:8080/api/pos_sync.php";
   // final String apiUrl = "http://127.0.0.1:8080/api/pos_sync.php";
+
+  String _formatAlertQuantity(Product product, double value) {
+    final safeValue = value.abs() < Product.quantityEpsilon ? 0.0 : value;
+    if (!product.isWeighted) {
+      return '${safeValue.round()} ${product.unitLabel}';
+    }
+
+    final text = safeValue.toStringAsFixed(3).replaceFirst(RegExp(r'\.?0+$'), '');
+    return '$text ${product.unitLabel}';
+  }
+
+  Map<String, dynamic> _normalizeSalesProductRow(Map<String, dynamic> row) {
+    final normalized = Map<String, dynamic>.from(row);
+    final barcode = (normalized['barcode'] ?? '').toString().trim();
+    if (barcode.isEmpty) return normalized;
+
+    Product? product;
+    for (final candidate in _products) {
+      if (candidate.barcode == barcode) {
+        product = candidate;
+        break;
+      }
+    }
+    if (product == null) return normalized;
+
+    normalized['quantity_type'] = product.quantityType.dbValue;
+    normalized['unit_label'] = product.unitLabel;
+    normalized['stock'] = normalized['stock'] ?? product.stock;
+    return normalized;
+  }
+
+  Map<String, dynamic> _normalizeOwnerAlert(Map<String, dynamic> alert) {
+    final normalized = Map<String, dynamic>.from(alert);
+    final barcode = (normalized['barcode'] ?? '').toString().trim();
+    if (barcode.isEmpty) return normalized;
+
+    Product? product;
+    for (final candidate in _products) {
+      if (candidate.barcode == barcode) {
+        product = candidate;
+        break;
+      }
+    }
+    if (product == null) return normalized;
+
+    final type = (normalized['type'] ?? '').toString();
+    final isStockAlert = type == 'out_of_stock' ||
+        type == 'low_stock' ||
+        type == 'best_seller_low_stock';
+    if (!isStockAlert) return normalized;
+
+    final stockText = _formatAlertQuantity(product, product.stock);
+    if (product.isOutOfStock) {
+      normalized['type'] = 'out_of_stock';
+      normalized['severity'] = 'critical';
+      normalized['title'] = '${product.name} is out of stock';
+      normalized['subtitle'] = 'Barcode ${product.barcode} - stock ${_formatAlertQuantity(product, 0)}';
+      return normalized;
+    }
+
+    if (product.isLowStock) {
+      final title = type == 'best_seller_low_stock'
+          ? 'Best seller low in stock: ${product.name}'
+          : '${product.name} is low in stock';
+      normalized['type'] = type == 'best_seller_low_stock' ? 'best_seller_low_stock' : 'low_stock';
+      normalized['severity'] = 'warning';
+      normalized['title'] = title;
+
+      final currentSubtitle = (normalized['subtitle'] ?? '').toString().trim();
+      if (type == 'best_seller_low_stock' && currentSubtitle.startsWith('Sold ')) {
+        final parts = currentSubtitle.split(' - ');
+        final salesPrefix = parts.isNotEmpty ? parts.first : currentSubtitle;
+        normalized['subtitle'] = '$salesPrefix - stock $stockText';
+      } else {
+        normalized['subtitle'] =
+            'Barcode ${product.barcode} - stock $stockText - min ${_formatAlertQuantity(product, product.minStockLevel.toDouble())}';
+      }
+    }
+
+    return normalized;
+  }
 
   Future<void> _restoreSession() async {
     try {
@@ -548,7 +633,8 @@ class AdminProvider with ChangeNotifier {
               .map((item) => Map<String, dynamic>.from(item as Map))
               .toList();
           _ownerTopProducts = ((data['top_products'] as List?) ?? [])
-              .map((item) => Map<String, dynamic>.from(item as Map))
+              .whereType<Map>()
+              .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
               .toList();
           notifyListeners();
           return;
@@ -619,7 +705,8 @@ class AdminProvider with ChangeNotifier {
       if (data['status'] != 'success') return;
 
       final rows = ((data['top_products'] as List?) ?? [])
-          .map((item) => Map<String, dynamic>.from(item as Map))
+          .whereType<Map>()
+          .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
           .toList();
 
       _ownerTopProducts = rows.map(_mapSalesReportProductToDashboardRow).toList();
@@ -661,7 +748,8 @@ class AdminProvider with ChangeNotifier {
 
         if (data['status'] == 'success') {
           _ownerAlerts = ((data['alerts'] as List?) ?? [])
-              .map((item) => Map<String, dynamic>.from(item as Map))
+              .whereType<Map>()
+              .map((item) => _normalizeOwnerAlert(Map<String, dynamic>.from(item)))
               .toList();
           notifyListeners();
           return;
@@ -716,6 +804,14 @@ class AdminProvider with ChangeNotifier {
         final data = json.decode(response.body);
         if (data['status'] == 'success') {
           final payload = Map<String, dynamic>.from(data as Map);
+          payload['top_products'] = ((payload['top_products'] as List?) ?? [])
+              .whereType<Map>()
+              .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
+              .toList();
+          payload['slow_movers'] = ((payload['slow_movers'] as List?) ?? [])
+              .whereType<Map>()
+              .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
+              .toList();
           _ownerSalesReport = payload;
           _ownerSalesHourlyTrend = await _resolveOwnerSalesHourlyTrend(
             payload: payload,
@@ -1515,16 +1611,10 @@ class AdminProvider with ChangeNotifier {
   List<Map<String, dynamic>> _buildFallbackAlertsFromProducts() {
     final alerts = <Map<String, dynamic>>[];
 
-    final outOfStock = _products.where((p) => p.stock <= 0).toList()
+    final outOfStock = _products.where((p) => p.isOutOfStock).toList()
       ..sort((a, b) => a.name.compareTo(b.name));
 
-    final lowStock = _products
-        .where(
-          (p) =>
-              p.stock > 0 &&
-              p.stock <= (p.minStockLevel > 0 ? p.minStockLevel : 10),
-        )
-        .toList()
+    final lowStock = _products.where((p) => p.isLowStock).toList()
       ..sort((a, b) => a.stock.compareTo(b.stock));
 
     for (final product in outOfStock.take(5)) {
@@ -1532,7 +1622,8 @@ class AdminProvider with ChangeNotifier {
         'type': 'out_of_stock',
         'severity': 'critical',
         'title': '${product.name} is out of stock',
-        'subtitle': 'Barcode ${product.barcode} • stock 0',
+        'subtitle':
+            'Barcode ${product.barcode} - stock ${_formatAlertQuantity(product, 0)}',
         'barcode': product.barcode,
       });
     }
@@ -1543,7 +1634,7 @@ class AdminProvider with ChangeNotifier {
         'severity': 'warning',
         'title': '${product.name} is low in stock',
         'subtitle':
-            'Barcode ${product.barcode} • stock ${product.stock} • min ${product.minStockLevel}',
+            'Barcode ${product.barcode} - stock ${_formatAlertQuantity(product, product.stock)} - min ${_formatAlertQuantity(product, product.minStockLevel.toDouble())}',
         'barcode': product.barcode,
       });
     }

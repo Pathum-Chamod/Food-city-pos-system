@@ -2858,21 +2858,37 @@ class _PosScreenState extends State<PosScreen> {
     List<Map<String, dynamic>> rawItems, {
     String fallbackPriceType = 'selling',
   }) {
-    return rawItems.map((raw) {
+    return rawItems.expand<Map<String, dynamic>>((raw) {
       final item = Map<String, dynamic>.from(raw);
-      final productMap = Map<String, dynamic>.from(item['product'] as Map);
+      final rawProduct = item['product'];
+      if (rawProduct is! Map) {
+        return const <Map<String, dynamic>>[];
+      }
+      final productMap = Map<String, dynamic>.from(rawProduct);
       final barcode = productMap['barcode']?.toString() ?? '';
+      final name = productMap['name']?.toString().trim() ?? '';
+      if (barcode.trim().isEmpty || name.isEmpty) {
+        return const <Map<String, dynamic>>[];
+      }
       final quantity = (item['quantity'] as num?)?.toDouble() ?? 1.0;
       final safeQuantity = quantity <= _quantityEpsilon ? 1.0 : quantity;
 
       final latestProduct = _getCurrentProduct(barcode);
       final resolvedProductMap = latestProduct?.toMap() ?? productMap;
+      Product? resolvedProduct = latestProduct;
+      if (resolvedProduct == null) {
+        try {
+          resolvedProduct = Product.fromMap(resolvedProductMap);
+        } catch (_) {
+          return const <Map<String, dynamic>>[];
+        }
+      }
 
       final priceTypeUsed = (item['price_type_used'] ?? fallbackPriceType)
           .toString();
       final resolvedUnitPrice =
           (item['unit_price_used'] as num?)?.toDouble() ??
-          (latestProduct ?? Product.fromMap(resolvedProductMap)).resolvePrice(
+          resolvedProduct!.resolvePrice(
             ProductPriceTypeX.fromDb(priceTypeUsed),
           );
       final baseLineTotal =
@@ -2888,17 +2904,19 @@ class _PosScreenState extends State<PosScreen> {
           (item['line_total'] as num?)?.toDouble() ??
           (baseLineTotal - itemDiscountAmount);
 
-      return {
-        'product': resolvedProductMap,
-        'quantity': safeQuantity,
-        'unit_price_used': resolvedUnitPrice,
-        'price_type_used': priceTypeUsed,
-        'base_line_total': baseLineTotal,
-        'item_discount_type': itemDiscountType,
-        'item_discount_value': itemDiscountValue,
-        'item_discount_amount': itemDiscountAmount,
-        'line_total': resolvedLineTotal < 0 ? 0.0 : resolvedLineTotal,
-      };
+      return [
+        {
+          'product': resolvedProductMap,
+          'quantity': safeQuantity,
+          'unit_price_used': resolvedUnitPrice,
+          'price_type_used': priceTypeUsed,
+          'base_line_total': baseLineTotal,
+          'item_discount_type': itemDiscountType,
+          'item_discount_value': itemDiscountValue,
+          'item_discount_amount': itemDiscountAmount,
+          'line_total': resolvedLineTotal < 0 ? 0.0 : resolvedLineTotal,
+        },
+      ];
     }).toList();
   }
 
@@ -2924,9 +2942,20 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    final restoredItems = (restored['items'] as List<dynamic>)
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
+    final resumeError = (restored['resume_error'] ?? '').toString().trim();
+    if (resumeError.isNotEmpty) {
+      _showInfoMessage(resumeError, backgroundColor: _dangerColor);
+      _focusBarcodeField();
+      return;
+    }
+
+    final restoredRawItems = restored['items'];
+    final restoredItems = restoredRawItems is List
+        ? restoredRawItems
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList()
+        : <Map<String, dynamic>>[];
 
     final restoredSelectedPriceType =
         (restored['selected_price_type'] ?? 'selling').toString();
@@ -2935,6 +2964,15 @@ class _PosScreenState extends State<PosScreen> {
       restoredItems,
       fallbackPriceType: restoredSelectedPriceType,
     );
+
+    if (preparedItems.isEmpty) {
+      _showInfoMessage(
+        'Held cart could not be restored because its saved items are invalid.',
+        backgroundColor: _dangerColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
 
     cart.loadHeldCart(
       items: preparedItems,

@@ -1078,6 +1078,54 @@ class DatabaseHelper {
     return 'cashier';
   }
 
+  List<Map<String, dynamic>> _decodeHeldCartItemsJson(String itemsJson) {
+    try {
+      final decoded = jsonDecode(itemsJson);
+      if (decoded is! List) return const <Map<String, dynamic>>[];
+
+      return decoded
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .where((item) => item['product'] is Map)
+          .toList();
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  Map<String, dynamic>? _tryCastMap(dynamic value) {
+    if (value is! Map) return null;
+    return Map<String, dynamic>.from(value);
+  }
+
+  List<Map<String, dynamic>> _decodePendingSaleItems(dynamic rawItems) {
+    if (rawItems is! List) return const <Map<String, dynamic>>[];
+
+    return rawItems
+        .whereType<Map>()
+        .map((rawItem) => Map<String, dynamic>.from(rawItem))
+        .where((item) => _tryCastMap(item['product']) != null)
+        .toList(growable: false);
+  }
+
+  Map<String, dynamic> _requireCartItemProductMap(
+    Map<String, dynamic> item, {
+    String fallbackName = 'This cart item',
+  }) {
+    final productMap = _tryCastMap(item['product']);
+    if (productMap == null) {
+      throw Exception('$fallbackName is missing valid product data.');
+    }
+
+    final barcode = productMap['barcode']?.toString().trim() ?? '';
+    final productName = productMap['name']?.toString().trim() ?? '';
+    if (barcode.isEmpty || productName.isEmpty) {
+      throw Exception('$fallbackName is missing required product details.');
+    }
+
+    return productMap;
+  }
+
   String _normalizeUserStatusFilter(String? value) {
     final normalized = (value ?? '').trim().toLowerCase();
     if (normalized == 'active') return 'active';
@@ -1231,7 +1279,14 @@ class DatabaseHelper {
       return _parseDouble(explicitUnitPrice);
     }
 
-    final productMap = Map<String, dynamic>.from(item['product'] as Map);
+    final fallbackName = item['product_name']?.toString().trim();
+    final productMap = _requireCartItemProductMap(
+      item,
+      fallbackName:
+          fallbackName == null || fallbackName.isEmpty
+              ? 'This cart item'
+              : fallbackName,
+    );
     final priceType = _normalizePriceType(item['price_type_used']?.toString());
 
     final sellingPrice = _parseDouble(
@@ -1545,17 +1600,18 @@ class DatabaseHelper {
         }
 
         if (type == 'SALE') {
-          final data = Map<String, dynamic>.from(decodedData as Map);
+          if (decodedData is! Map) {
+            continue;
+          }
+          final data = Map<String, dynamic>.from(decodedData);
           final transactionType = (data['transaction_type'] ?? 'sale')
               .toString()
               .toLowerCase();
-          final items = (data['items'] as List?) ?? [];
+          final items = _decodePendingSaleItems(data['items']);
 
-          for (final rawItem in items) {
-            final item = Map<String, dynamic>.from(rawItem as Map);
-            final productMap = Map<String, dynamic>.from(
-              item['product'] as Map,
-            );
+          for (final item in items) {
+            final productMap = _tryCastMap(item['product']);
+            if (productMap == null) continue;
 
             final barcode = productMap['barcode']?.toString() ?? '';
             final quantity = _parseQuantity(item['quantity']);
@@ -1880,7 +1936,7 @@ class DatabaseHelper {
         double explicitItemDiscountTotal = 0.0;
 
         for (final item in cartItems) {
-          final productMap = Map<String, dynamic>.from(item['product'] as Map);
+          final productMap = _requireCartItemProductMap(item);
           final barcode = productMap['barcode']?.toString() ?? '';
           final productName =
               productMap['name']?.toString() ?? 'Unknown product';
@@ -1974,9 +2030,7 @@ class DatabaseHelper {
           }
 
           for (final item in cartItems) {
-            final productMap = Map<String, dynamic>.from(
-              item['product'] as Map,
-            );
+            final productMap = _requireCartItemProductMap(item);
             final barcode = productMap['barcode']?.toString() ?? '';
             final productName =
                 productMap['name']?.toString() ?? 'Unknown product';
@@ -4206,19 +4260,13 @@ class DatabaseHelper {
 
     return rows.map((row) {
       final itemsJson = (row['items_json'] ?? '[]').toString();
-      List<dynamic> decoded;
-
-      try {
-        decoded = jsonDecode(itemsJson) as List<dynamic>;
-      } catch (_) {
-        decoded = [];
-      }
+      final decoded = _decodeHeldCartItemsJson(itemsJson);
 
       double itemCount = 0.0;
       double subtotal = 0;
 
       for (final raw in decoded) {
-        final item = Map<String, dynamic>.from(raw as Map);
+        final item = Map<String, dynamic>.from(raw);
         final quantity = _parseQuantity(item['quantity']);
         final lineTotal = ((item['line_total'] as num?) ?? 0).toDouble();
 
@@ -4278,16 +4326,14 @@ class DatabaseHelper {
 
       final row = Map<String, dynamic>.from(rows.first);
       final itemsJson = (row['items_json'] ?? '[]').toString();
+      final decodedItems = _decodeHeldCartItemsJson(itemsJson);
+      final hadStoredItems = itemsJson.trim().isNotEmpty && itemsJson.trim() != '[]';
 
-      List<Map<String, dynamic>> decodedItems = [];
-
-      try {
-        final decoded = jsonDecode(itemsJson) as List<dynamic>;
-        decodedItems = decoded
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-      } catch (_) {
-        decodedItems = [];
+      if (hadStoredItems && decodedItems.isEmpty) {
+        result = {
+          'resume_error': 'This held cart contains invalid saved item data.',
+        };
+        return;
       }
 
       await txn.delete(
