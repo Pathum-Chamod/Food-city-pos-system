@@ -112,7 +112,7 @@ class CartProvider with ChangeNotifier {
     ProductPriceType value, {
     bool applyToExistingItems = false,
   }) {
-    if (_selectedPriceType == value) return;
+    if (_selectedPriceType == value && !applyToExistingItems) return;
 
     _selectedPriceType = value;
 

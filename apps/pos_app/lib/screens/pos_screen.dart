@@ -75,6 +75,7 @@ class _PosScreenState extends State<PosScreen> {
   static const double _minSupportedHeight = 680;
   static const double _cartPanelWidth = 430;
   static const double _productTileExtent = 218;
+  static const Duration _priceModeDoubleTapWindow = Duration(milliseconds: 650);
   List<Product> _products = [];
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
@@ -91,6 +92,10 @@ class _PosScreenState extends State<PosScreen> {
   DateTime? _lastBarcodeInputAt;
   String _lastBarcodeInputValue = '';
   int _rapidBarcodeInputSteps = 0;
+  ProductPriceType? _lastPriceModeTapType;
+  ProductPriceType? _lastPriceModePreviousType;
+  DateTime? _lastPriceModeTapAt;
+  bool _isPriceModePromptOpen = false;
 
   final ScrollController _cartScrollController = ScrollController();
   int _lastCartItemCount = 0;
@@ -654,37 +659,6 @@ class _PosScreenState extends State<PosScreen> {
     final isModifierOnly =
         event.isAltPressed || event.isControlPressed || event.isMetaPressed;
     if (isModifierOnly) return;
-
-    final cart = context.read<CartProvider>();
-    if (_activeModalCount == 0 && !_searchFocusNode.hasFocus) {
-      ProductPriceType? shortcutPriceType;
-      if (event.logicalKey == LogicalKeyboardKey.f1) {
-        shortcutPriceType = ProductPriceType.selling;
-      } else if (event.logicalKey == LogicalKeyboardKey.f2) {
-        shortcutPriceType = ProductPriceType.wholesale;
-      } else if (event.logicalKey == LogicalKeyboardKey.f3) {
-        shortcutPriceType = ProductPriceType.sale;
-      }
-
-      if (shortcutPriceType != null) {
-        unawaited(_handlePriceTypeSelection(cart, shortcutPriceType));
-        return;
-      }
-    }
-
-    final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
-        event.logicalKey == LogicalKeyboardKey.numpadEnter;
-    if (isEnterKey &&
-        _activeModalCount == 0 &&
-        !_searchFocusNode.hasFocus &&
-        _barcodeController.text.trim().isEmpty) {
-      if (cart.items.isNotEmpty &&
-          !_isProcessingCheckout &&
-          !_isPaymentDialogOpen) {
-        unawaited(_handleCheckout(cart));
-        return;
-      }
-    }
 
     if (!_barcodeFocusNode.hasFocus && !_searchFocusNode.hasFocus) {
       _barcodeFocusNode.requestFocus();
@@ -1379,7 +1353,47 @@ class _PosScreenState extends State<PosScreen> {
     CartProvider cart,
     ProductPriceType newType,
   ) async {
-    if (cart.isRefundMode || cart.selectedPriceType == newType) return;
+    if (cart.isRefundMode) return;
+
+    final now = DateTime.now();
+    final previousType = cart.selectedPriceType;
+    final isDoubleTap = _lastPriceModeTapType == newType &&
+        _lastPriceModeTapAt != null &&
+        now.difference(_lastPriceModeTapAt!) <= _priceModeDoubleTapWindow;
+
+    _lastPriceModeTapType = newType;
+    _lastPriceModeTapAt = now;
+
+    if (isDoubleTap && cart.items.isNotEmpty) {
+      final typeBeforeFirstTap = _lastPriceModePreviousType;
+      _lastPriceModeTapType = null;
+      _lastPriceModePreviousType = null;
+      _lastPriceModeTapAt = null;
+
+      final confirmed = await _confirmApplyPriceTypeToCart(newType);
+      if (!mounted) return;
+
+      if (confirmed) {
+        cart.setPriceType(newType, applyToExistingItems: true);
+        _showInfoMessage(
+          'Whole cart switched to ${_priceTypeTitle(newType)}.',
+          backgroundColor: _priceTypeColor(newType),
+        );
+      } else if (typeBeforeFirstTap != null &&
+          typeBeforeFirstTap != cart.selectedPriceType) {
+        cart.setPriceType(typeBeforeFirstTap);
+      }
+
+      _focusBarcodeField();
+      return;
+    }
+
+    _lastPriceModePreviousType = previousType;
+
+    if (cart.selectedPriceType == newType) {
+      _focusBarcodeField();
+      return;
+    }
 
     cart.setPriceType(newType);
 
@@ -1388,6 +1402,178 @@ class _PosScreenState extends State<PosScreen> {
       backgroundColor: _priceTypeColor(newType),
     );
     _focusBarcodeField();
+  }
+
+  Future<bool> _confirmApplyPriceTypeToCart(ProductPriceType newType) async {
+    if (_isPriceModePromptOpen) return false;
+
+    _isPriceModePromptOpen = true;
+    _activeModalCount += 1;
+
+    var didChoose = false;
+
+    void choose(BuildContext dialogContext, bool value) {
+      if (didChoose) return;
+      didChoose = true;
+      Navigator.pop(dialogContext, value);
+    }
+
+    try {
+      final color = _priceTypeColor(newType);
+      final confirmed = await showPremiumDialog<bool>(
+        context: context,
+        builder: (dialogContext) {
+          return Focus(
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+                  event.logicalKey == LogicalKeyboardKey.numpadEnter;
+              if (!isEnterKey) return KeyEventResult.ignored;
+              choose(dialogContext, true);
+              return KeyEventResult.handled;
+            },
+            child: Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 500),
+                padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+                decoration: _panelDecoration(color: _panelColor),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 46,
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: _borderColor,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        Container(
+                          width: 50,
+                          height: 50,
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(_isDark ? 0.18 : 0.12),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: color.withOpacity(0.28)),
+                          ),
+                          child: Icon(
+                            Icons.price_change_rounded,
+                            color: color,
+                            size: 26,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Switch Whole Cart?',
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Apply ${_priceTypeTitle(newType)} to every item already in the cart.',
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: () => choose(dialogContext, false),
+                          child: Ink(
+                            width: 42,
+                            height: 42,
+                            decoration: _softDecoration(color: _panelSoft),
+                            child: Icon(
+                              Icons.close_rounded,
+                              color: _textSecondary,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: _panelSoft,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: _borderColor),
+                      ),
+                      child: Text(
+                        'This will recalculate the unit price of current cart items using ${_priceTypeTitle(newType)}. New items will also use this mode.',
+                        style: TextStyle(
+                          color: _textSecondary,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => choose(dialogContext, false),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => choose(dialogContext, true),
+                            icon: const Icon(Icons.swap_horiz_rounded, size: 16),
+                            label: const Text('Switch Cart'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: color,
+                              minimumSize: const Size.fromHeight(52),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+
+      return confirmed ?? false;
+    } finally {
+      _isPriceModePromptOpen = false;
+      Future<void>.delayed(const Duration(milliseconds: 300), () {
+        if (!mounted) return;
+        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+      });
+    }
   }
 
   // ignore: unused_element
