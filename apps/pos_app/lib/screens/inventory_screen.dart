@@ -516,60 +516,79 @@ class _InventoryScreenState extends State<InventoryScreen> {
     String confirmText = 'Confirm',
     bool isDestructive = false,
   }) async {
+    var didChoose = false;
+
+    void choose(BuildContext dialogContext, bool value) {
+      if (didChoose) return;
+      didChoose = true;
+      Navigator.pop(dialogContext, value);
+    }
+
     final confirmed = await showPremiumDialog<bool>(
       context: context,
       builder: (dialogContext) => Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 460),
-          child: Container(
-            margin: const EdgeInsets.all(24),
-            decoration: _panelDecoration(),
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: _textPrimary,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  message,
-                  style: TextStyle(
-                    color: _textSecondary,
-                    height: 1.45,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.pop(dialogContext, false),
-                        child: const Text('Cancel'),
-                      ),
+          child: Focus(
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+                  event.logicalKey == LogicalKeyboardKey.numpadEnter;
+              if (!isEnterKey) return KeyEventResult.ignored;
+              choose(dialogContext, true);
+              return KeyEventResult.handled;
+            },
+            child: Container(
+              margin: const EdgeInsets.all(24),
+              decoration: _panelDecoration(),
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: _textPrimary,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor:
-                              isDestructive ? _dangerColor : _brandColor,
-                          foregroundColor: Colors.white,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    message,
+                    style: TextStyle(
+                      color: _textSecondary,
+                      height: 1.45,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => choose(dialogContext, false),
+                          child: const Text('Cancel'),
                         ),
-                        onPressed: () => Navigator.pop(dialogContext, true),
-                        child: Text(confirmText),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                isDestructive ? _dangerColor : _brandColor,
+                            foregroundColor: Colors.white,
+                          ),
+                          onPressed: () => choose(dialogContext, true),
+                          child: Text(confirmText),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -662,6 +681,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
         controller.dispose();
       }
     });
+  }
+
+  TextEditingController _selectedTextController(String text) {
+    return TextEditingController.fromValue(
+      TextEditingValue(
+        text: text,
+        selection: TextSelection(baseOffset: 0, extentOffset: text.length),
+      ),
+    );
   }
 
   String _normalizeImportHeader(String raw) {
@@ -757,12 +785,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
         Expanded(
           child: TextField(
             controller: unitLabelController,
+            textInputAction: TextInputAction.next,
             decoration: InputDecoration(
               labelText: 'Unit label',
               helperText: quantityType == ProductQuantityType.weight
                   ? 'Examples: kg, g, lb'
                   : 'Examples: pcs, pack, bottle',
             ),
+            onSubmitted: (_) => FocusManager.instance.primaryFocus?.nextFocus(),
           ),
         ),
       ],
@@ -1665,14 +1695,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     final nameController = TextEditingController();
     final barcodeController = TextEditingController();
-    final categoryController = TextEditingController(text: 'General');
+    final categoryController = _selectedTextController('General');
     final costPriceController = TextEditingController();
     final sellingPriceController = TextEditingController();
     final wholesalePriceController = TextEditingController();
     final salePriceController = TextEditingController();
-    final openingStockController = TextEditingController(text: '0');
-    final minStockController = TextEditingController(text: '0');
-    final unitLabelController = TextEditingController(text: 'pcs');
+    final openingStockController = _selectedTextController('0');
+    final minStockController = _selectedTextController('0');
+    final unitLabelController = _selectedTextController('pcs');
     bool saleEnabled = false;
     ProductQuantityType quantityType = ProductQuantityType.unit;
 
@@ -2146,24 +2176,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     final nameController = TextEditingController(text: product.name);
     final categoryController = TextEditingController(text: product.category);
-    final costPriceController = TextEditingController(
-      text: product.costPrice.toStringAsFixed(2),
+    final costPriceController = _selectedTextController(
+      product.costPrice.toStringAsFixed(2),
     );
-    final sellingPriceController = TextEditingController(
-      text: product.sellingPrice.toStringAsFixed(2),
+    final sellingPriceController = _selectedTextController(
+      product.sellingPrice.toStringAsFixed(2),
     );
-    final wholesalePriceController = TextEditingController(
-      text: product.wholesalePrice.toStringAsFixed(2),
+    final wholesalePriceController = _selectedTextController(
+      product.wholesalePrice.toStringAsFixed(2),
     );
-    final salePriceController = TextEditingController(
-      text: product.salePrice == null
-          ? ''
-          : product.salePrice!.toStringAsFixed(2),
+    final salePriceController = _selectedTextController(
+      product.salePrice == null ? '' : product.salePrice!.toStringAsFixed(2),
     );
-    final minStockController = TextEditingController(
-      text: product.minStockLevel.toString(),
+    final minStockController = _selectedTextController(
+      product.minStockLevel.toString(),
     );
-    final unitLabelController = TextEditingController(text: product.unitLabel);
+    final unitLabelController = _selectedTextController(product.unitLabel);
     bool saleEnabled = product.saleEnabled;
     ProductQuantityType quantityType = product.quantityType;
 
@@ -3023,11 +3051,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final qtyController = TextEditingController();
+    final qtyFocusNode = FocusNode();
     final preferredCost = preferredMapping.defaultUnitCost > 0
         ? preferredMapping.defaultUnitCost
         : product.costPrice;
-    final costController = TextEditingController(
-      text: preferredCost > 0 ? preferredCost.toStringAsFixed(2) : '',
+    final costController = _selectedTextController(
+      preferredCost > 0 ? preferredCost.toStringAsFixed(2) : '',
     );
     final noteController = TextEditingController();
     final isWeighted = product.quantityType == ProductQuantityType.weight;
@@ -3052,6 +3081,117 @@ class _InventoryScreenState extends State<InventoryScreen> {
         final selectedMapping = selectedSupplierId == null
             ? null
             : mappingBySupplierId[selectedSupplierId];
+
+        Future<void> submitReceive() async {
+          if (selectedSupplierId == null) {
+            AppSnackBar.show(
+              dialogContext,
+              message: 'Select a mapped supplier first.',
+            );
+            return;
+          }
+
+          final qtyError = _validateQuantityInput(
+            qtyController.text,
+            label: 'quantity',
+            quantityType: product.quantityType,
+          );
+          if (qtyError != null) {
+            AppSnackBar.show(dialogContext, message: qtyError);
+            return;
+          }
+
+          final rawCost = costController.text.trim();
+          if (rawCost.isNotEmpty) {
+            final costError = _validateNonNegativeMoney(
+              rawCost,
+              label: 'unit cost',
+            );
+            if (costError != null) {
+              AppSnackBar.show(dialogContext, message: costError);
+              return;
+            }
+          }
+
+          final supplier = suppliers.firstWhere(
+            (item) => item.id == selectedSupplierId,
+          );
+          final activeMapping = mappingBySupplierId[selectedSupplierId];
+          if (activeMapping == null) {
+            AppSnackBar.show(
+              dialogContext,
+              message: 'This supplier is not linked to the selected product.',
+            );
+            return;
+          }
+
+          final qty = _parseQuantityInput(
+            qtyController.text,
+            product.quantityType,
+          );
+          final unitCost = rawCost.isEmpty ? null : double.parse(rawCost);
+          final resolvedCost = unitCost ??
+              (activeMapping.defaultUnitCost > 0
+                  ? activeMapping.defaultUnitCost
+                  : product.costPrice);
+
+          final confirmed = await _confirmAction(
+            title: 'Confirm Stock Receive',
+            message:
+                'Receive ${_formatProductQuantity(product, qty)} of ${product.name} from ${supplier.name}? This will increase stock immediately.',
+            confirmText: 'Receive',
+          );
+          if (!confirmed) return;
+
+          final success = await DatabaseHelper.instance.receiveStockLocal(
+            product.barcode,
+            qty,
+            unitCost: unitCost,
+            performedBy: changedBy,
+            reason: noteController.text.trim(),
+            supplierId: supplier.id,
+            supplierName: supplier.name,
+          );
+
+          if (!success) {
+            if (!dialogContext.mounted) return;
+            Navigator.pop(dialogContext, false);
+            return;
+          }
+
+          await DatabaseHelper.instance.insertStockReceipt(
+            barcode: product.barcode,
+            productName: product.name,
+            quantity: qty,
+            supplierId: supplier.id,
+            supplierName: supplier.name,
+            cost: resolvedCost,
+            referenceNote: noteController.text.trim(),
+            cashierName: changedBy,
+            backendStatus: 'local',
+          );
+
+          if (setAsPrimary) {
+            await DatabaseHelper.instance.upsertSupplierProductMapping(
+              activeMapping.copyWith(
+                isPreferred: true,
+                defaultUnitCost: resolvedCost,
+                updatedAt: DateTime.now().toIso8601String(),
+              ),
+            );
+          } else if (resolvedCost > 0 &&
+              resolvedCost != activeMapping.defaultUnitCost) {
+            await DatabaseHelper.instance.upsertSupplierProductMapping(
+              activeMapping.copyWith(
+                defaultUnitCost: resolvedCost,
+                updatedAt: DateTime.now().toIso8601String(),
+              ),
+            );
+          }
+
+          if (!dialogContext.mounted) return;
+          Navigator.pop(dialogContext, true);
+        }
 
         return SingleChildScrollView(
           child: Column(
@@ -3096,9 +3236,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     final mappedCost = mapping?.defaultUnitCost ?? 0;
                     final resolvedCost =
                         mappedCost > 0 ? mappedCost : product.costPrice;
-                    costController.text = resolvedCost > 0
-                        ? resolvedCost.toStringAsFixed(2)
-                        : '';
+                    final costText =
+                        resolvedCost > 0 ? resolvedCost.toStringAsFixed(2) : '';
+                    costController.value = TextEditingValue(
+                      text: costText,
+                      selection: TextSelection(
+                        baseOffset: 0,
+                        extentOffset: costText.length,
+                      ),
+                    );
                   });
                 },
               ),
@@ -3158,6 +3304,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   Expanded(
                     child: TextField(
                       controller: qtyController,
+                      focusNode: qtyFocusNode,
+                      autofocus: true,
+                      textInputAction: TextInputAction.done,
                       keyboardType: TextInputType.numberWithOptions(
                         decimal: isWeighted,
                       ),
@@ -3172,16 +3321,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             ? 'Enter the received ${product.unitLabel}. Example: 2.5'
                             : null,
                       ),
+                      onSubmitted: (_) => submitReceive(),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: TextField(
                       controller: costController,
+                      textInputAction: TextInputAction.done,
                       keyboardType:
                           const TextInputType.numberWithOptions(decimal: true),
                       decoration:
                           const InputDecoration(labelText: 'Unit cost (optional)'),
+                      onSubmitted: (_) => submitReceive(),
                     ),
                   ),
                 ],
@@ -3251,119 +3403,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () async {
-                        if (selectedSupplierId == null) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: 'Select a mapped supplier first.',
-                          );
-                          return;
-                        }
-
-                        final qtyError = _validateQuantityInput(
-                          qtyController.text,
-                          label: 'quantity',
-                          quantityType: product.quantityType,
-                        );
-                        if (qtyError != null) {
-                          AppSnackBar.show(dialogContext, message: qtyError);
-                          return;
-                        }
-
-                        final rawCost = costController.text.trim();
-                        if (rawCost.isNotEmpty) {
-                          final costError = _validateNonNegativeMoney(
-                            rawCost,
-                            label: 'unit cost',
-                          );
-                          if (costError != null) {
-                            AppSnackBar.show(dialogContext, message: costError);
-                            return;
-                          }
-                        }
-
-                        final supplier = suppliers.firstWhere(
-                          (item) => item.id == selectedSupplierId,
-                        );
-                        final selectedMapping = mappingBySupplierId[selectedSupplierId];
-                        if (selectedMapping == null) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message:
-                                'This supplier is not linked to the selected product.',
-                          );
-                          return;
-                        }
-
-                        final qty = _parseQuantityInput(
-                          qtyController.text,
-                          product.quantityType,
-                        );
-                        final unitCost =
-                            rawCost.isEmpty ? null : double.parse(rawCost);
-                        final resolvedCost = unitCost ??
-                            (selectedMapping.defaultUnitCost > 0
-                                ? selectedMapping.defaultUnitCost
-                                : product.costPrice);
-
-                        final confirmed = await _confirmAction(
-                          title: 'Confirm Stock Receive',
-                          message:
-                              'Receive ${_formatProductQuantity(product, qty)} of ${product.name} from ${supplier.name}? This will increase stock immediately.',
-                          confirmText: 'Receive',
-                        );
-                        if (!confirmed) return;
-
-                        final success = await DatabaseHelper.instance
-                            .receiveStockLocal(
-                          product.barcode,
-                          qty,
-                          unitCost: unitCost,
-                          performedBy: changedBy,
-                          reason: noteController.text.trim(),
-                          supplierId: supplier.id,
-                          supplierName: supplier.name,
-                        );
-
-                        if (!success) {
-                          if (!dialogContext.mounted) return;
-                          Navigator.pop(dialogContext, false);
-                          return;
-                        }
-
-                        await DatabaseHelper.instance.insertStockReceipt(
-                          barcode: product.barcode,
-                          productName: product.name,
-                          quantity: qty,
-                          supplierId: supplier.id,
-                          supplierName: supplier.name,
-                          cost: resolvedCost,
-                          referenceNote: noteController.text.trim(),
-                          cashierName: changedBy,
-                          backendStatus: 'local',
-                        );
-
-                        if (setAsPrimary) {
-                          await DatabaseHelper.instance.upsertSupplierProductMapping(
-                            selectedMapping.copyWith(
-                              isPreferred: true,
-                              defaultUnitCost: resolvedCost,
-                              updatedAt: DateTime.now().toIso8601String(),
-                            ),
-                          );
-                        } else if (resolvedCost > 0 &&
-                            resolvedCost != selectedMapping.defaultUnitCost) {
-                          await DatabaseHelper.instance.upsertSupplierProductMapping(
-                            selectedMapping.copyWith(
-                              defaultUnitCost: resolvedCost,
-                              updatedAt: DateTime.now().toIso8601String(),
-                            ),
-                          );
-                        }
-
-                        if (!dialogContext.mounted) return;
-                        Navigator.pop(dialogContext, true);
-                      },
+                      onPressed: submitReceive,
                       icon: const Icon(Icons.inventory_2_rounded),
                       label: const Text('Save Receive Entry'),
                     ),
@@ -3381,6 +3421,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       costController,
       noteController,
     ]);
+    qtyFocusNode.dispose();
 
     if (saved == true) {
       await _loadData(showLoader: false);
@@ -3733,6 +3774,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     final qtyController = TextEditingController();
     final reasonController = TextEditingController();
+    final adjustmentTypeFocusNode = FocusNode();
+    final qtyFocusNode = FocusNode();
     final isWeighted = product.quantityType == ProductQuantityType.weight;
     final quantityLabel = isWeighted
         ? product.unitLabel.trim().isEmpty
@@ -3748,6 +3791,69 @@ class _InventoryScreenState extends State<InventoryScreen> {
           '${product.name} • Current stock ${_formatProductQuantity(product, product.stock)}',
       maxWidth: 620,
       bodyBuilder: (dialogContext, setPopupState) {
+        Future<void> submitAdjustment() async {
+          final qtyError = _validateQuantityInput(
+            qtyController.text,
+            label: adjustmentType == 'set' ? 'final stock quantity' : 'quantity',
+            allowZero: adjustmentType == 'set',
+            quantityType: product.quantityType,
+          );
+          if (qtyError != null) {
+            AppSnackBar.show(dialogContext, message: qtyError);
+            return;
+          }
+
+          final qty = _parseQuantityInput(
+            qtyController.text,
+            product.quantityType,
+          );
+          double resultingStock;
+          switch (adjustmentType) {
+            case 'add':
+              resultingStock = product.stock + qty;
+              break;
+            case 'remove':
+              resultingStock = product.stock - qty;
+              break;
+            case 'set':
+            default:
+              resultingStock = qty;
+              break;
+          }
+
+          if (resultingStock < 0) {
+            AppSnackBar.show(
+              dialogContext,
+              message: 'Resulting stock cannot be negative.',
+            );
+            return;
+          }
+
+          final actionLabel = adjustmentType == 'add'
+              ? 'increase stock'
+              : adjustmentType == 'remove'
+                  ? 'decrease stock'
+                  : 'set exact stock';
+          final confirmed = await _confirmAction(
+            title: 'Confirm Stock Adjustment',
+            message:
+                'This will $actionLabel for ${product.name}. Final stock will be ${_formatProductQuantity(product, resultingStock)}.',
+            confirmText: 'Apply',
+          );
+          if (!confirmed) return;
+
+          final success = await DatabaseHelper.instance.adjustStockLocal(
+            product.barcode,
+            adjustmentType: adjustmentType,
+            quantity: qty,
+            performedBy: changedBy,
+            reason: reasonController.text.trim(),
+          );
+
+          if (!dialogContext.mounted) return;
+          Navigator.pop(dialogContext, success);
+        }
+
         final previewQty =
             _tryParseQuantityInput(qtyController.text, product.quantityType) ?? 0.0;
         double resultingStock = product.stock;
@@ -3788,6 +3894,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 initialValue: adjustmentType,
+                focusNode: adjustmentTypeFocusNode,
+                autofocus: true,
                 decoration: const InputDecoration(labelText: 'Adjustment type'),
                 items: const [
                   DropdownMenuItem(value: 'add', child: Text('Add Stock')),
@@ -3804,6 +3912,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
               const SizedBox(height: 12),
               TextField(
                 controller: qtyController,
+                focusNode: qtyFocusNode,
+                textInputAction: TextInputAction.done,
                 keyboardType: TextInputType.numberWithOptions(
                   decimal: isWeighted,
                 ),
@@ -3821,6 +3931,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       ? 'Weighted items can use decimals like 0.75.'
                       : null,
                 ),
+                onSubmitted: (_) => submitAdjustment(),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -3840,71 +3951,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () async {
-                        final qtyError = _validateQuantityInput(
-                          qtyController.text,
-                          label: adjustmentType == 'set'
-                              ? 'final stock quantity'
-                              : 'quantity',
-                          allowZero: adjustmentType == 'set',
-                          quantityType: product.quantityType,
-                        );
-                        if (qtyError != null) {
-                          AppSnackBar.show(dialogContext, message: qtyError);
-                          return;
-                        }
-
-                        final qty = _parseQuantityInput(
-                          qtyController.text,
-                          product.quantityType,
-                        );
-                        double resultingStock;
-                        switch (adjustmentType) {
-                          case 'add':
-                            resultingStock = product.stock + qty;
-                            break;
-                          case 'remove':
-                            resultingStock = product.stock - qty;
-                            break;
-                          case 'set':
-                          default:
-                            resultingStock = qty;
-                            break;
-                        }
-
-                        if (resultingStock < 0) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: 'Resulting stock cannot be negative.',
-                          );
-                          return;
-                        }
-
-                        final actionLabel = adjustmentType == 'add'
-                            ? 'increase stock'
-                            : adjustmentType == 'remove'
-                                ? 'decrease stock'
-                                : 'set exact stock';
-                        final confirmed = await _confirmAction(
-                          title: 'Confirm Stock Adjustment',
-                          message:
-                              'This will $actionLabel for ${product.name}. Final stock will be ${_formatProductQuantity(product, resultingStock)}.',
-                          confirmText: 'Apply',
-                        );
-                        if (!confirmed) return;
-
-                        final success = await DatabaseHelper.instance
-                            .adjustStockLocal(
-                          product.barcode,
-                          adjustmentType: adjustmentType,
-                          quantity: qty,
-                          performedBy: changedBy,
-                          reason: reasonController.text.trim(),
-                        );
-
-                        if (!dialogContext.mounted) return;
-                        Navigator.pop(dialogContext, success);
-                      },
+                      onPressed: submitAdjustment,
                       icon: const Icon(Icons.tune_rounded),
                       label: const Text('Save Adjustment'),
                     ),
@@ -3921,6 +3968,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
       qtyController,
       reasonController,
     ]);
+    adjustmentTypeFocusNode.dispose();
+    qtyFocusNode.dispose();
 
     if (saved == true) {
       await _loadData(showLoader: false);
@@ -3939,9 +3988,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
-    final controller = TextEditingController(
-      text: product.minStockLevel.toString(),
-    );
+    final controller = _selectedTextController(product.minStockLevel.toString());
 
     final changed = await _showInventoryPopup<bool>(
       icon: Icons.warning_amber_rounded,
@@ -3950,6 +3997,34 @@ class _InventoryScreenState extends State<InventoryScreen> {
       maxWidth: 560,
       maxHeightFactor: 0.54,
       bodyBuilder: (dialogContext, setPopupState) {
+        Future<void> submitMinimumStock() async {
+          final error = _validatePositiveInt(
+            controller.text,
+            label: 'minimum stock level',
+            allowZero: true,
+          );
+          if (error != null) {
+            _showMessage(error, isError: true);
+            return;
+          }
+          final value = int.parse(controller.text.trim());
+          final confirmed = await _confirmAction(
+            title: 'Confirm Minimum Stock Update',
+            message: 'Set minimum stock for ${product.name} to $value?',
+            confirmText: 'Save',
+          );
+          if (!confirmed) return;
+
+          final success =
+              await DatabaseHelper.instance.updateProductMinStockLevelLocal(
+            product.barcode,
+            value,
+            changedBy: changedBy,
+          );
+          if (!dialogContext.mounted) return;
+          Navigator.pop(dialogContext, success);
+        }
+
         return SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3984,11 +4059,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
               TextField(
                 controller: controller,
                 autofocus: true,
+                textInputAction: TextInputAction.done,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(
                   labelText: 'Minimum stock level',
                   hintText: 'Enter the alert threshold',
                 ),
+                onSubmitted: (_) => submitMinimumStock(),
               ),
               const SizedBox(height: 20),
               Row(
@@ -4002,34 +4079,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: () async {
-                        final error = _validatePositiveInt(
-                          controller.text,
-                          label: 'minimum stock level',
-                          allowZero: true,
-                        );
-                        if (error != null) {
-                          _showMessage(error, isError: true);
-                          return;
-                        }
-                        final value = int.parse(controller.text.trim());
-                        final confirmed = await _confirmAction(
-                          title: 'Confirm Minimum Stock Update',
-                          message:
-                              'Set minimum stock for ${product.name} to $value?',
-                          confirmText: 'Save',
-                        );
-                        if (!confirmed) return;
-
-                        final success = await DatabaseHelper.instance
-                            .updateProductMinStockLevelLocal(
-                          product.barcode,
-                          value,
-                          changedBy: changedBy,
-                        );
-                        if (!dialogContext.mounted) return;
-                        Navigator.pop(dialogContext, success);
-                      },
+                      onPressed: submitMinimumStock,
                       child: const Text('Save Changes'),
                     ),
                   ),
@@ -4064,10 +4114,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
-    final valueController = TextEditingController(
-      text: product.sellingPrice.toStringAsFixed(2),
-    );
+    final valueController =
+        _selectedTextController(product.sellingPrice.toStringAsFixed(2));
     final noteController = TextEditingController();
+    final priceTypeFocusNode = FocusNode();
+    final valueFocusNode = FocusNode();
     String priceType = 'selling';
     bool saleEnabled = product.saleEnabled;
 
@@ -4075,61 +4126,126 @@ class _InventoryScreenState extends State<InventoryScreen> {
       icon: Icons.sell_rounded,
       title: 'Change Price',
       subtitle: '${product.name} • ${product.barcode}',
-      maxWidth: 660,
+      maxWidth: 860,
       bodyBuilder: (dialogContext, setPopupState) {
+        void setSelectedPriceText(String text) {
+          valueController.value = TextEditingValue(
+            text: text,
+            selection: TextSelection(baseOffset: 0, extentOffset: text.length),
+          );
+        }
+
         void syncField() {
           switch (priceType) {
             case 'cost':
-              valueController.text = product.costPrice.toStringAsFixed(2);
+              setSelectedPriceText(product.costPrice.toStringAsFixed(2));
               break;
             case 'wholesale':
-              valueController.text = product.wholesalePrice.toStringAsFixed(2);
+              setSelectedPriceText(product.wholesalePrice.toStringAsFixed(2));
               break;
             case 'sale':
-              valueController.text =
-                  (product.salePrice ?? product.sellingPrice).toStringAsFixed(2);
+              setSelectedPriceText(
+                (product.salePrice ?? product.sellingPrice).toStringAsFixed(2),
+              );
               saleEnabled = product.saleEnabled;
               break;
             case 'selling':
             default:
-              valueController.text = product.sellingPrice.toStringAsFixed(2);
+              setSelectedPriceText(product.sellingPrice.toStringAsFixed(2));
               break;
           }
+        }
+
+        Future<void> submitPriceChange() async {
+          final priceError = _validateNonNegativeMoney(
+            valueController.text,
+            label: 'price',
+          );
+          if (priceError != null) {
+            AppSnackBar.show(dialogContext, message: priceError);
+            return;
+          }
+
+          final newPrice = double.parse(valueController.text.trim());
+          if (priceType == 'sale' && saleEnabled && newPrice <= 0) {
+            AppSnackBar.show(
+              dialogContext,
+              message: 'Active sale price must be greater than 0.',
+            );
+            return;
+          }
+
+          final confirmed = await _confirmAction(
+            title: 'Confirm Price Change',
+            message:
+                'Update ${product.name} ${priceType.toUpperCase()} price to Rs. ${newPrice.toStringAsFixed(2)}?',
+            confirmText: 'Update',
+          );
+          if (!confirmed) return;
+
+          final success = await DatabaseHelper.instance.updateProductPriceLocal(
+            product.barcode,
+            newPrice,
+            priceType: priceType,
+            changedBy: changedBy,
+            reason: noteController.text.trim(),
+            saleEnabled: priceType == 'sale' ? saleEnabled : null,
+          );
+
+          if (!dialogContext.mounted) return;
+          Navigator.pop(dialogContext, success);
         }
 
         return SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
+              Row(
                 children: [
-                  _buildPopupMetricCard(
-                    title: 'Selling',
-                    value: 'Rs. ${product.sellingPrice.toStringAsFixed(2)}',
-                    icon: Icons.sell_outlined,
-                    accent: _brandColor,
+                  Expanded(
+                    child: _buildPopupMetricCard(
+                      title: 'Selling',
+                      value: 'Rs. ${product.sellingPrice.toStringAsFixed(2)}',
+                      icon: Icons.sell_outlined,
+                      accent: _brandColor,
+                    ),
                   ),
-                  _buildPopupMetricCard(
-                    title: 'Wholesale',
-                    value: 'Rs. ${product.wholesalePrice.toStringAsFixed(2)}',
-                    icon: Icons.local_offer_outlined,
-                    accent: Colors.deepPurple,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _buildPopupMetricCard(
+                      title: 'Wholesale',
+                      value: 'Rs. ${product.wholesalePrice.toStringAsFixed(2)}',
+                      icon: Icons.local_offer_outlined,
+                      accent: Colors.deepPurple,
+                    ),
                   ),
-                  _buildPopupMetricCard(
-                    title: 'Sale',
-                    value: product.salePrice == null
-                        ? 'Not set'
-                        : 'Rs. ${product.salePrice!.toStringAsFixed(2)}',
-                    icon: Icons.discount_outlined,
-                    accent: _warningColor,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _buildPopupMetricCard(
+                      title: 'Sale',
+                      value: product.salePrice == null
+                          ? 'Not set'
+                          : 'Rs. ${product.salePrice!.toStringAsFixed(2)}',
+                      icon: Icons.discount_outlined,
+                      accent: _warningColor,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _buildPopupMetricCard(
+                      title: 'Cost',
+                      value: 'Rs. ${product.costPrice.toStringAsFixed(2)}',
+                      icon: Icons.payments_outlined,
+                      accent: _accentBlue,
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 initialValue: priceType,
+                focusNode: priceTypeFocusNode,
+                autofocus: true,
                 decoration: const InputDecoration(labelText: 'Price field'),
                 items: const [
                   DropdownMenuItem(value: 'selling', child: Text('Selling Price')),
@@ -4151,9 +4267,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
               const SizedBox(height: 12),
               TextField(
                 controller: valueController,
+                focusNode: valueFocusNode,
+                textInputAction: TextInputAction.done,
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(labelText: 'New price'),
+                onSubmitted: (_) => submitPriceChange(),
               ),
               if (priceType == 'sale') ...[
                 const SizedBox(height: 14),
@@ -4218,46 +4337,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: () async {
-                        final priceError = _validateNonNegativeMoney(
-                          valueController.text,
-                          label: 'price',
-                        );
-                        if (priceError != null) {
-                          AppSnackBar.show(dialogContext, message: priceError);
-                          return;
-                        }
-
-                        final newPrice = double.parse(valueController.text.trim());
-                        if (priceType == 'sale' && saleEnabled && newPrice <= 0) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: 'Active sale price must be greater than 0.',
-                          );
-                          return;
-                        }
-
-                        final confirmed = await _confirmAction(
-                          title: 'Confirm Price Change',
-                          message:
-                              'Update ${product.name} ${priceType.toUpperCase()} price to Rs. ${newPrice.toStringAsFixed(2)}?',
-                          confirmText: 'Update',
-                        );
-                        if (!confirmed) return;
-
-                        final success = await DatabaseHelper.instance
-                            .updateProductPriceLocal(
-                          product.barcode,
-                          newPrice,
-                          priceType: priceType,
-                          changedBy: changedBy,
-                          reason: noteController.text.trim(),
-                          saleEnabled: priceType == 'sale' ? saleEnabled : null,
-                        );
-
-                        if (!dialogContext.mounted) return;
-                        Navigator.pop(dialogContext, success);
-                      },
+                      onPressed: submitPriceChange,
                       icon: const Icon(Icons.sell_rounded),
                       label: const Text('Save Price Change'),
                     ),
@@ -4274,6 +4354,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
       valueController,
       noteController,
     ]);
+    priceTypeFocusNode.dispose();
+    valueFocusNode.dispose();
 
     if (saved == true) {
       await _loadData(showLoader: false);

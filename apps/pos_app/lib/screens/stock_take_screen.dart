@@ -10,6 +10,15 @@ import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 import '../widgets/app_snackbar.dart';
 
+TextEditingController _selectedTextController(String text) {
+  return TextEditingController.fromValue(
+    TextEditingValue(
+      text: text,
+      selection: TextSelection(baseOffset: 0, extentOffset: text.length),
+    ),
+  );
+}
+
 enum StockTakeFilter {
   all,
   counted,
@@ -211,6 +220,13 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     Color? tone,
   }) async {
     final actionTone = tone ?? (destructive ? _danger : _brand);
+    var didChoose = false;
+
+    void choose(BuildContext dialogContext, bool value) {
+      if (didChoose) return;
+      didChoose = true;
+      Navigator.pop(dialogContext, value);
+    }
 
     final result = await showGeneralDialog<bool>(
       context: context,
@@ -219,21 +235,31 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       barrierColor: Colors.black.withOpacity(_isDark ? 0.34 : 0.22),
       transitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Material(
-                color: Colors.transparent,
-                child: Container(
-                  constraints: const BoxConstraints(maxWidth: 500),
-                  padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
-                  decoration: _panelDecoration(color: _surface),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
+        return Focus(
+          autofocus: true,
+          onKeyEvent: (node, event) {
+            if (event is! KeyDownEvent) return KeyEventResult.ignored;
+            final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.numpadEnter;
+            if (!isEnterKey) return KeyEventResult.ignored;
+            choose(dialogContext, true);
+            return KeyEventResult.handled;
+          },
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 500),
+                    padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+                    decoration: _panelDecoration(color: _surface),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                       Center(
                         child: Container(
                           width: 46,
@@ -290,7 +316,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                         children: [
                           Expanded(
                             child: OutlinedButton(
-                              onPressed: () => Navigator.pop(dialogContext, false),
+                              onPressed: () => choose(dialogContext, false),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: _textPrimary,
                                 side: BorderSide(color: _borderStrong),
@@ -305,7 +331,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: ElevatedButton(
-                              onPressed: () => Navigator.pop(dialogContext, true),
+                              onPressed: () => choose(dialogContext, true),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: actionTone,
                                 foregroundColor: Colors.white,
@@ -324,6 +350,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                   ),
                 ),
               ),
+            ),
             ),
           ),
         );
@@ -972,8 +999,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
   Future<void> _setCountDialog(Product product) async {
     final existingCount = _countedQuantities[product.barcode];
-    final controller = TextEditingController(
-      text: existingCount == null ? '' : _formatQuantity(existingCount),
+    final controller = _selectedTextController(
+      existingCount == null ? '' : _formatQuantity(existingCount),
     );
 
     await showGeneralDialog<void>(
@@ -983,6 +1010,34 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       barrierColor: Colors.black.withOpacity(_isDark ? 0.34 : 0.22),
       transitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        Future<void> submitCount() async {
+          final error = _validateCount(
+            controller.text,
+            quantityType: product.quantityType,
+          );
+          if (error != null) {
+            _showMessage(error, isError: true);
+            return;
+          }
+          final qty = _parseCount(
+            controller.text,
+            product.quantityType,
+          );
+          final confirmed = await _showDecisionDialog(
+            title: 'Save Count?',
+            message:
+                'Set counted quantity for ${product.name} to ${_formatProductQuantity(product, qty)}?',
+            confirmText: 'Save',
+            icon: Icons.done_rounded,
+            tone: _brand,
+          );
+          if (!confirmed) return;
+          if (dialogContext.mounted) {
+            Navigator.pop(dialogContext);
+          }
+          await _saveCount(product, qty);
+        }
+
         return BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
           child: Center(
@@ -1052,6 +1107,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                       TextField(
                         controller: controller,
                         autofocus: true,
+                        textInputAction: TextInputAction.done,
                         keyboardType: TextInputType.numberWithOptions(
                           decimal: product.quantityType == ProductQuantityType.weight,
                         ),
@@ -1067,6 +1123,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                               : 'Counted Quantity',
                           icon: Icons.numbers_rounded,
                         ),
+                        onSubmitted: (_) => submitCount(),
                       ),
                       const SizedBox(height: 18),
                       Row(
@@ -1106,33 +1163,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: ElevatedButton(
-                              onPressed: () async {
-                                final error = _validateCount(
-                                  controller.text,
-                                  quantityType: product.quantityType,
-                                );
-                                if (error != null) {
-                                  _showMessage(error, isError: true);
-                                  return;
-                                }
-                                final qty = _parseCount(
-                                  controller.text,
-                                  product.quantityType,
-                                );
-                                final confirmed = await _showDecisionDialog(
-                                  title: 'Save Count?',
-                                  message:
-                                      'Set counted quantity for ${product.name} to ${_formatProductQuantity(product, qty)}?',
-                                  confirmText: 'Save',
-                                  icon: Icons.done_rounded,
-                                  tone: _brand,
-                                );
-                                if (!confirmed) return;
-                                if (dialogContext.mounted) {
-                                  Navigator.pop(dialogContext);
-                                }
-                                await _saveCount(product, qty);
-                              },
+                              onPressed: submitCount,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: _brand,
                                 foregroundColor: Colors.white,
@@ -1166,6 +1197,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         );
       },
     );
+    await Future<void>.delayed(const Duration(milliseconds: 260));
+    controller.dispose();
   }
 
   Future<void> _discardDraft() async {

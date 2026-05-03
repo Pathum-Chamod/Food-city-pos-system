@@ -9,6 +9,15 @@ import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
 import '../widgets/app_snackbar.dart';
 
+TextEditingController _selectedTextController(String text) {
+  return TextEditingController.fromValue(
+    TextEditingValue(
+      text: text,
+      selection: TextSelection(baseOffset: 0, extentOffset: text.length),
+    ),
+  );
+}
+
 class RefundTransactionScreen extends StatefulWidget {
   final int originalSaleId;
 
@@ -176,13 +185,29 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     final refundableQty = ((item['refundable_quantity'] as num?) ?? 0).toDouble();
     final unitLabel = _unitLabelFor(item);
     final isWeighted = _isWeightedItem(item);
-    final controller = TextEditingController(
-      text: _selectedFor(barcode) > 0 ? _formatQuantity(_selectedFor(barcode)) : '',
+    final controller = _selectedTextController(
+      _selectedFor(barcode) > 0 ? _formatQuantity(_selectedFor(barcode)) : '',
     );
 
     final nextQty = await showDialog<double>(
       context: context,
       builder: (dialogContext) {
+        void submitQuantity() {
+          final raw = controller.text.trim();
+          final parsed = isWeighted
+              ? double.tryParse(raw)
+              : int.tryParse(raw)?.toDouble();
+          if (parsed == null || parsed < 0 || parsed > refundableQty + 0.000001) {
+            AppSnackBar.show(
+              dialogContext,
+              message: 'Enter a valid quantity up to ${_formatQuantity(refundableQty)}.',
+              backgroundColor: Colors.red,
+            );
+            return;
+          }
+          Navigator.pop(dialogContext, parsed);
+        }
+
         return AlertDialog(
           title: const Text('Set Refund Quantity'),
           content: Column(
@@ -196,6 +221,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
               TextField(
                 controller: controller,
                 autofocus: true,
+                textInputAction: TextInputAction.done,
                 keyboardType: TextInputType.numberWithOptions(decimal: isWeighted),
                 inputFormatters: [
                   isWeighted
@@ -205,6 +231,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                 decoration: InputDecoration(
                   labelText: 'Refund quantity ($unitLabel)',
                 ),
+                onSubmitted: (_) => submitQuantity(),
               ),
             ],
           ),
@@ -218,21 +245,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
               child: const Text('Clear'),
             ),
             ElevatedButton(
-              onPressed: () {
-                final raw = controller.text.trim();
-                final parsed = isWeighted
-                    ? double.tryParse(raw)
-                    : int.tryParse(raw)?.toDouble();
-                if (parsed == null || parsed < 0 || parsed > refundableQty + 0.000001) {
-                  AppSnackBar.show(
-                    dialogContext,
-                    message: 'Enter a valid quantity up to ${_formatQuantity(refundableQty)}.',
-                    backgroundColor: Colors.red,
-                  );
-                  return;
-                }
-                Navigator.pop(dialogContext, parsed);
-              },
+              onPressed: submitQuantity,
               child: const Text('Save'),
             ),
           ],

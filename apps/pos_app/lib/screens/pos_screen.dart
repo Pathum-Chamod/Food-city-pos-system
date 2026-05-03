@@ -2645,137 +2645,155 @@ class _PosScreenState extends State<PosScreen> {
 
   Future<bool> _confirmReplaceCurrentCartIfNeeded(CartProvider cart) async {
     if (cart.items.isEmpty) return true;
+    var didChoose = false;
+
+    void choose(BuildContext dialogContext, bool value) {
+      if (didChoose) return;
+      didChoose = true;
+      Navigator.pop(dialogContext, value);
+    }
 
     final confirmed = await showPremiumDialog<bool>(
       context: context,
       builder: (dialogContext) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 24,
-            vertical: 24,
-          ),
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 520),
-            padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
-            decoration: _panelDecoration(color: _panelColor),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 46,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: _borderColor,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Row(
-                  children: [
-                    Container(
-                      width: 50,
-                      height: 50,
+        return Focus(
+          autofocus: true,
+          onKeyEvent: (node, event) {
+            if (event is! KeyDownEvent) return KeyEventResult.ignored;
+            final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.numpadEnter;
+            if (!isEnterKey) return KeyEventResult.ignored;
+            choose(dialogContext, true);
+            return KeyEventResult.handled;
+          },
+          child: Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
+            ),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 520),
+              padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+              decoration: _panelDecoration(color: _panelColor),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 46,
+                      height: 5,
                       decoration: BoxDecoration(
-                        color: _warningSoft,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: _warningColor.withOpacity(0.24),
+                        color: _borderColor,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Container(
+                        width: 50,
+                        height: 50,
+                        decoration: BoxDecoration(
+                          color: _warningSoft,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: _warningColor.withOpacity(0.24),
+                          ),
                         ),
-                      ),
-                      child: Icon(
-                        Icons.swap_horiz_rounded,
-                        color: _warningColor,
-                        size: 26,
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Replace Current Cart?',
-                            style: TextStyle(
-                              color: _textPrimary,
-                              fontSize: 24,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Opening a held bill will replace the current cart on the register.',
-                            style: TextStyle(
-                              color: _textSecondary,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              height: 1.4,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    InkWell(
-                      borderRadius: BorderRadius.circular(14),
-                      onTap: () => Navigator.pop(dialogContext, false),
-                      child: Ink(
-                        width: 42,
-                        height: 42,
-                        decoration: _softDecoration(color: _panelSoft),
                         child: Icon(
-                          Icons.close_rounded,
-                          color: _textSecondary,
-                          size: 20,
+                          Icons.swap_horiz_rounded,
+                          color: _warningColor,
+                          size: 26,
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: _panelSoft,
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: _borderColor),
-                  ),
-                  child: Text(
-                    'Hold or clear the current cart first if you want to keep it before resuming a held bill.',
-                    style: TextStyle(
-                      color: _textSecondary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      height: 1.5,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: () => Navigator.pop(dialogContext, false),
-                        child: const Text('Cancel'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        onPressed: () => Navigator.pop(dialogContext, true),
-                        icon: const Icon(Icons.shopping_bag_outlined, size: 16),
-                        label: const Text('Continue'),
-                        style: ElevatedButton.styleFrom(
-                          minimumSize: const Size.fromHeight(52),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Replace Current Cart?',
+                              style: TextStyle(
+                                color: _textPrimary,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Opening a held bill will replace the current cart on the register.',
+                              style: TextStyle(
+                                color: _textSecondary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(14),
+                        onTap: () => choose(dialogContext, false),
+                        child: Ink(
+                          width: 42,
+                          height: 42,
+                          decoration: _softDecoration(color: _panelSoft),
+                          child: Icon(
+                            Icons.close_rounded,
+                            color: _textSecondary,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: _panelSoft,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: _borderColor),
                     ),
-                  ],
-                ),
-              ],
+                    child: Text(
+                      'Hold or clear the current cart first if you want to keep it before resuming a held bill.',
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => choose(dialogContext, false),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () => choose(dialogContext, true),
+                          icon: const Icon(Icons.shopping_bag_outlined, size: 16),
+                          label: const Text('Continue'),
+                          style: ElevatedButton.styleFrom(
+                            minimumSize: const Size.fromHeight(52),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -3537,10 +3555,28 @@ class _PosScreenState extends State<PosScreen> {
             TextField(
               controller: _searchController,
               focusNode: _searchFocusNode,
+              textInputAction: TextInputAction.done,
               onChanged: (value) {
                 setState(() {
                   _searchQuery = value;
                 });
+              },
+              onSubmitted: (_) {
+                final cart = context.read<CartProvider>();
+                final matches = List<Product>.from(_filteredProducts);
+                if (matches.length == 1) {
+                  unawaited(() async {
+                    await _handleProductTap(matches.first, cart);
+                    if (!mounted) return;
+                    _searchController.clear();
+                    setState(() {
+                      _searchQuery = '';
+                    });
+                    _focusBarcodeField();
+                  }());
+                  return;
+                }
+                _focusBarcodeField();
               },
               decoration: InputDecoration(
                 labelText: 'Search products',
