@@ -1190,6 +1190,15 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  TextEditingController _selectedTextController(String text) {
+    return TextEditingController.fromValue(
+      TextEditingValue(
+        text: text,
+        selection: TextSelection(baseOffset: 0, extentOffset: text.length),
+      ),
+    );
+  }
+
   Product? _findProductByBarcode(String barcode) {
     final trimmed = barcode.trim();
     if (trimmed.isEmpty) return null;
@@ -1435,8 +1444,8 @@ class _PosScreenState extends State<PosScreen> {
     final boundedInitial = maxQuantity != null && maxQuantity > 0
         ? (initialQuantity > maxQuantity ? maxQuantity : initialQuantity)
         : initialQuantity;
-    final controller = TextEditingController(
-      text: _formatQuantity(
+    final controller = _selectedTextController(
+      _formatQuantity(
         boundedInitial <= _quantityEpsilon ? 1.0 : boundedInitial,
       ),
     );
@@ -1572,6 +1581,7 @@ class _PosScreenState extends State<PosScreen> {
                         TextField(
                           controller: controller,
                           autofocus: true,
+                          textInputAction: TextInputAction.done,
                           keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
                           ),
@@ -1644,8 +1654,8 @@ class _PosScreenState extends State<PosScreen> {
     final safeInitial = boundedInitial <= _quantityEpsilon
         ? 1.0
         : boundedInitial.floorToDouble();
-    final controller = TextEditingController(
-      text: _formatQuantity(safeInitial, maxDecimals: 0),
+    final controller = _selectedTextController(
+      _formatQuantity(safeInitial, maxDecimals: 0),
     );
     String? quantityError;
     _activeModalCount += 1;
@@ -1779,6 +1789,7 @@ class _PosScreenState extends State<PosScreen> {
                         TextField(
                           controller: controller,
                           autofocus: true,
+                          textInputAction: TextInputAction.done,
                           keyboardType: TextInputType.number,
                           inputFormatters: [
                             FilteringTextInputFormatter.digitsOnly,
@@ -3217,16 +3228,43 @@ class _PosScreenState extends State<PosScreen> {
                 ),
                 suffixIcon: _barcodeController.text.isEmpty
                     ? null
-                    : IconButton(
-                        tooltip: 'Clear barcode',
-                        onPressed: () {
-                          _resetBarcodeScannerTracking();
-                          _barcodeController.clear();
-                          setState(() {});
-                          _focusBarcodeField();
-                        },
-                        icon: const Icon(Icons.close_rounded),
+                    : Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Center(
+                          widthFactor: 1,
+                          heightFactor: 1,
+                          child: IconButton(
+                            tooltip: 'Clear barcode',
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: 34,
+                              height: 34,
+                            ),
+                            style: IconButton.styleFrom(
+                              backgroundColor: _panelSoft,
+                              foregroundColor: _mutedIcon,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            onPressed: () {
+                              _resetBarcodeScannerTracking();
+                              _barcodeController.clear();
+                              setState(() {});
+                              _focusBarcodeField();
+                            },
+                            icon: const Icon(
+                              Icons.close_rounded,
+                              size: 18,
+                            ),
+                          ),
+                        ),
                       ),
+                suffixIconConstraints: const BoxConstraints(
+                  minWidth: 48,
+                  minHeight: 42,
+                ),
               ),
             ),
           ),
