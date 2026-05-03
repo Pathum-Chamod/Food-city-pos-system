@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -22,7 +23,21 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
   double amountTendered = totalAmount;
   double changeAmount = 0.0;
   bool isProcessingCard = false;
+  bool hasConfirmedPayment = false;
+  bool replaceAmountOnNextEdit = true;
   String? cardStatusMessage;
+
+  void setAmountText(String value, {bool selectForReplacement = true}) {
+    amountController.value = TextEditingValue(
+      text: value,
+      selection: selectForReplacement
+          ? TextSelection(baseOffset: 0, extentOffset: value.length)
+          : TextSelection.collapsed(offset: value.length),
+    );
+    replaceAmountOnNextEdit = selectForReplacement;
+  }
+
+  setAmountText(totalAmount.toStringAsFixed(2));
 
   void recalculate() {
     if (selectedMethod == 'cash') {
@@ -150,8 +165,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                     : () {
                         setState(() {
                           selectedMethod = value;
-                          amountController.text =
-                              totalAmount.toStringAsFixed(2);
+                          setAmountText(totalAmount.toStringAsFixed(2));
                           cardStatusMessage = null;
                         });
                       },
@@ -235,6 +249,22 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
           final canConfirm = selectedMethod == 'card'
               ? !isProcessingCard
               : amountTendered >= totalAmount;
+
+          Future<void> confirmPayment() async {
+            if (!canConfirm || hasConfirmedPayment) return;
+
+            if (selectedMethod == 'card') {
+              await processCardPayment();
+              return;
+            }
+
+            hasConfirmedPayment = true;
+            Navigator.pop(context, {
+              'payment_method': selectedMethod,
+              'amount_tendered': amountTendered,
+              'change_amount': changeAmount,
+            });
+          }
 
           final remainingAmount = math.max(0, totalAmount - amountTendered);
           final cardStatusLower = cardStatusMessage?.toLowerCase() ?? '';
@@ -395,6 +425,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                             TextField(
                               controller: amountController,
                               autofocus: true,
+                              textInputAction: TextInputAction.done,
                               keyboardType: const TextInputType.numberWithOptions(
                                 decimal: true,
                               ),
@@ -407,7 +438,20 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                                 prefixText: 'Rs. ',
                                 helperText: 'Enter the cash received from customer.',
                               ),
-                              onChanged: (_) => setState(() {}),
+                              onTap: () {
+                                if (!replaceAmountOnNextEdit) return;
+                                amountController.selection = TextSelection(
+                                  baseOffset: 0,
+                                  extentOffset: amountController.text.length,
+                                );
+                              },
+                              onChanged: (_) {
+                                replaceAmountOnNextEdit = false;
+                                setState(() {});
+                              },
+                              onSubmitted: (_) {
+                                unawaited(confirmPayment());
+                              },
                             ),
                             const SizedBox(height: 14),
                             Wrap(
@@ -424,7 +468,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                                 return InkWell(
                                   borderRadius: BorderRadius.circular(999),
                                   onTap: () {
-                                    amountController.text = value.toStringAsFixed(2);
+                                    setAmountText(value.toStringAsFixed(2));
                                     setState(() {});
                                   },
                                   child: Container(
@@ -646,17 +690,8 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                         Expanded(
                           child: ElevatedButton.icon(
                             onPressed: canConfirm
-                                ? () async {
-                                    if (selectedMethod == 'card') {
-                                      await processCardPayment();
-                                      return;
-                                    }
-
-                                    Navigator.pop(context, {
-                                      'payment_method': selectedMethod,
-                                      'amount_tendered': amountTendered,
-                                      'change_amount': changeAmount,
-                                    });
+                                ? () {
+                                    unawaited(confirmPayment());
                                   }
                                 : null,
                             style: ElevatedButton.styleFrom(
@@ -708,6 +743,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
     },
   );
 
+  await Future<void>.delayed(const Duration(milliseconds: 280));
   amountController.dispose();
   return result;
 }

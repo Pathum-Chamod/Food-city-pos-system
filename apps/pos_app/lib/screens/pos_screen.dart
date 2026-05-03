@@ -78,6 +78,7 @@ class _PosScreenState extends State<PosScreen> {
   List<Product> _products = [];
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
+  bool _isPaymentDialogOpen = false;
   bool _isRefreshingProducts = false;
   int _activeModalCount = 0;
   bool _showWelcomeOverlay = false;
@@ -605,6 +606,21 @@ class _PosScreenState extends State<PosScreen> {
     final isModifierOnly =
         event.isAltPressed || event.isControlPressed || event.isMetaPressed;
     if (isModifierOnly) return;
+
+    final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (isEnterKey &&
+        _activeModalCount == 0 &&
+        !_searchFocusNode.hasFocus &&
+        _barcodeController.text.trim().isEmpty) {
+      final cart = context.read<CartProvider>();
+      if (cart.items.isNotEmpty &&
+          !_isProcessingCheckout &&
+          !_isPaymentDialogOpen) {
+        unawaited(_handleCheckout(cart));
+        return;
+      }
+    }
 
     if (!_barcodeFocusNode.hasFocus && !_searchFocusNode.hasFocus) {
       _barcodeFocusNode.requestFocus();
@@ -1308,6 +1324,11 @@ class _PosScreenState extends State<PosScreen> {
     final barcode = _barcodeController.text.trim();
 
     if (barcode.isEmpty) {
+      if (cart.items.isNotEmpty && !_isProcessingCheckout) {
+        await _handleCheckout(cart);
+        return;
+      }
+
       _focusBarcodeField();
       return;
     }
@@ -1888,7 +1909,9 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _handleCheckout(CartProvider cart) async {
-    if (cart.items.isEmpty || _isProcessingCheckout) return;
+    if (cart.items.isEmpty || _isProcessingCheckout || _isPaymentDialogOpen) {
+      return;
+    }
 
     final cashierName =
         context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
@@ -1921,11 +1944,17 @@ class _PosScreenState extends State<PosScreen> {
     double? changeAmount;
 
     if (!isRefund) {
-      final paymentResult = await showCheckoutPaymentDialog(
-        context,
-        totalAmount: displayTotal,
-        onOpenHardwareSetup: _showHardwareSetupDialog,
-      );
+      _isPaymentDialogOpen = true;
+      final Map<String, dynamic>? paymentResult;
+      try {
+        paymentResult = await showCheckoutPaymentDialog(
+          context,
+          totalAmount: displayTotal,
+          onOpenHardwareSetup: _showHardwareSetupDialog,
+        );
+      } finally {
+        _isPaymentDialogOpen = false;
+      }
 
       if (paymentResult == null) {
         _focusBarcodeField();
@@ -2011,6 +2040,7 @@ class _PosScreenState extends State<PosScreen> {
         setState(() {
           _isProcessingCheckout = false;
         });
+        _focusBarcodeField();
       }
     }
   }
@@ -2117,9 +2147,15 @@ class _PosScreenState extends State<PosScreen> {
   }) async {
     final dialogContext = overlayContext ?? context;
     final title = isRefund ? 'Refund Completed' : 'Payment Successful';
-    final amountLabel = isRefund ? 'Refund Amount' : 'Total Paid';
     final tone = isRefund ? _dangerColor : _brandColor;
     final toneSoft = isRefund ? _dangerSoft : _brandSoft;
+    var successDismissed = false;
+
+    void dismissSuccess(BuildContext successContext, String action) {
+      if (successDismissed) return;
+      successDismissed = true;
+      Navigator.of(successContext).pop(action);
+    }
 
     final result = await showPremiumDialog<String>(
       context: dialogContext,
@@ -2127,150 +2163,106 @@ class _PosScreenState extends State<PosScreen> {
       includeBackdrop: false,
       barrierColor: Colors.transparent,
       transitionDuration: const Duration(milliseconds: 220),
-      builder: (successContext) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 460),
-          padding: const EdgeInsets.all(24),
-          decoration: _panelDecoration(color: _panelColor),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: toneSoft,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: tone.withOpacity(0.24)),
-                    ),
-                    child: Icon(
-                      isRefund
-                          ? Icons.restart_alt_rounded
-                          : Icons.check_circle_rounded,
-                      color: tone,
-                      size: 28,
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: TextStyle(
-                            color: _textPrimary,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Transaction #$saleId completed successfully.',
-                          style: TextStyle(
-                            color: _textSecondary,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 18),
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: toneSoft,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: tone.withOpacity(0.22)),
-                ),
-                child: Row(
+      builder: (successContext) => Focus(
+        autofocus: true,
+        onKeyEvent: (node, event) {
+          final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+              event.logicalKey == LogicalKeyboardKey.numpadEnter;
+          if (event is KeyDownEvent && isEnterKey) {
+            dismissSuccess(successContext, 'next');
+            return KeyEventResult.handled;
+          }
+
+          return KeyEventResult.ignored;
+        },
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 460),
+            padding: const EdgeInsets.all(24),
+            decoration: _panelDecoration(color: _panelColor),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
                   children: [
+                    Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: toneSoft,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: tone.withOpacity(0.24)),
+                      ),
+                      child: Icon(
+                        isRefund
+                            ? Icons.restart_alt_rounded
+                            : Icons.check_circle_rounded,
+                        color: tone,
+                        size: 28,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            amountLabel.toUpperCase(),
+                            title,
                             style: TextStyle(
-                              color: _textSecondary,
-                              fontSize: 11,
+                              color: _textPrimary,
+                              fontSize: 22,
                               fontWeight: FontWeight.w900,
-                              letterSpacing: 0.6,
                             ),
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 4),
                           Text(
-                            'Rs. ${displayTotal.toStringAsFixed(2)}',
+                            'Transaction #$saleId completed successfully.',
                             style: TextStyle(
-                              color: tone,
-                              fontSize: 28,
-                              fontWeight: FontWeight.w900,
+                              color: _textSecondary,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Text(
+                  'Local save, sync attempt, and product refresh are complete for this transaction.',
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () =>
+                            dismissSuccess(successContext, 'next'),
+                        child: const Text('Next Customer'),
                       ),
-                      decoration: BoxDecoration(
-                        color: _panelColor,
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: _borderColor),
-                      ),
-                      child: Text(
-                        isRefund ? 'REFUND' : 'PAID',
-                        style: TextStyle(
-                          color: tone,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 11,
-                          letterSpacing: 0.4,
-                        ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () =>
+                            dismissSuccess(successContext, 'receipt'),
+                        child: const Text('View Receipt'),
                       ),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Local save, sync attempt, and product refresh are complete for this transaction.',
-                style: TextStyle(
-                  color: _textSecondary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  height: 1.45,
-                ),
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.of(successContext).pop('next'),
-                      child: const Text('Next Customer'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () =>
-                          Navigator.of(successContext).pop('receipt'),
-                      child: const Text('View Receipt'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
