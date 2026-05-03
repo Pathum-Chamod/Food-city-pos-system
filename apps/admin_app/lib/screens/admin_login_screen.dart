@@ -18,21 +18,43 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   String? _errorText;
 
   @override
+  void initState() {
+    super.initState();
+    _pinFocusNode.addListener(_refreshPinPanel);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focusPinEntry();
+    });
+  }
+
+  @override
   void dispose() {
+    _pinFocusNode.removeListener(_refreshPinPanel);
     _pinController.dispose();
     _pinFocusNode.dispose();
     super.dispose();
   }
 
-  Future<void> _submit() async {
-    FocusScope.of(context).unfocus();
+  void _refreshPinPanel() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
 
+  void _focusPinEntry() {
+    if (!_pinFocusNode.hasFocus) {
+      _pinFocusNode.requestFocus();
+    }
+  }
+
+  Future<void> _submit() async {
     final pin = _pinController.text.trim();
 
     if (pin.length != 4) {
       setState(() {
         _errorText = 'Enter your 4-digit owner PIN';
       });
+      _focusPinEntry();
       return;
     }
 
@@ -50,6 +72,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         _errorText = message;
       });
       _pinController.clear();
+      _focusPinEntry();
       return;
     }
 
@@ -72,7 +95,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
         final isBusy = provider.isAuthenticating;
 
         return GestureDetector(
-          onTap: () => FocusScope.of(context).unfocus(),
+          onTap: _focusPinEntry,
           child: Scaffold(
             backgroundColor: const Color(0xFFF4F7FB),
             body: Stack(
@@ -224,7 +247,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                                     ),
                                     const SizedBox(height: 8),
                                     const Text(
-                                      'Use your 4-digit owner PIN. Keyboard opens only when you tap the PIN panel.',
+                                      'Use your 4-digit owner PIN. Type it directly and press Enter to continue.',
                                       style: TextStyle(
                                         color: Color(0xFF667085),
                                         fontSize: 13.2,
@@ -244,7 +267,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                                               controller: _pinController,
                                               focusNode: _pinFocusNode,
                                               enabled: !isBusy,
-                                              autofocus: false,
+                                              autofocus: true,
                                               keyboardType: TextInputType.number,
                                               textInputAction: TextInputAction.done,
                                               autocorrect: false,
@@ -271,7 +294,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                                           borderRadius: BorderRadius.circular(24),
                                           onTap: isBusy
                                               ? null
-                                              : () => FocusScope.of(context).requestFocus(_pinFocusNode),
+                                              : _focusPinEntry,
                                           child: Container(
                                             padding: const EdgeInsets.symmetric(
                                               horizontal: 10,
@@ -354,7 +377,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                                       duration: const Duration(milliseconds: 180),
                                       child: _errorText == null
                                           ? const Text(
-                                              'Tap to enter your PIN, then continue.',
+                                              'Type your PIN and press Enter.',
                                               key: ValueKey('helper'),
                                               style: TextStyle(
                                                 color: Color(0xFF667085),

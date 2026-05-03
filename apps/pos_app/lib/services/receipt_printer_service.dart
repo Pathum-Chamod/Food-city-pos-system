@@ -177,6 +177,8 @@ class ReceiptPrinterService {
 
     try {
       final bytes = <int>[];
+      final shouldShowSubtotal =
+          (subtotal - total).abs() > 0.000001 || discountAmount > 0;
 
       // Reset + basic formatting
       bytes.addAll(_escInit());
@@ -261,8 +263,10 @@ class ReceiptPrinterService {
         );
       }
 
-      bytes.addAll(_text('${_line('-')}\n'));
-      bytes.addAll(_text('${_labelValue('Subtotal', 'Rs.${subtotal.toStringAsFixed(2)}')}\n'));
+      if (shouldShowSubtotal) {
+        bytes.addAll(_text('${_line('-')}\n'));
+        bytes.addAll(_text('${_labelValue('Subtotal', 'Rs.${subtotal.toStringAsFixed(2)}')}\n'));
+      }
 
       if (discountAmount > 0) {
         final percent = _discountPercentLabel(

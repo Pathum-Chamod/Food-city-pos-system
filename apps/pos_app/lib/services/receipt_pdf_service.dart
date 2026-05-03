@@ -78,6 +78,8 @@ class ReceiptPdfService {
           'receipt_${transactionId}_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}.pdf';
 
       final pdf = pw.Document();
+      final shouldShowSubtotal =
+          (subtotal - total).abs() > 0.000001 || discountAmount > 0;
       final dateStr =
           '${now.day.toString().padLeft(2, '0')}/'
           '${now.month.toString().padLeft(2, '0')}/'
@@ -176,8 +178,10 @@ class ReceiptPdfService {
                     pw.SizedBox(height: 3),
                   ];
                 }),
-                _receiptDivider(),
-                _receiptLabelValue('Subtotal', _formatMoney(subtotal)),
+                if (shouldShowSubtotal) ...[
+                  _receiptDivider(),
+                  _receiptLabelValue('Subtotal', _formatMoney(subtotal)),
+                ],
                 if (discountAmount > 0)
                   _receiptLabelValue(
                     'Discount (${_discountPercentLabel(

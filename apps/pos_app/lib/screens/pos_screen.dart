@@ -140,6 +140,7 @@ class _PosScreenState extends State<PosScreen> {
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleHardwareKeyboardEvent);
     _loadProducts(showLoader: true);
     _refreshProductsFromBackendAndReload(silentOnFailure: true);
     _startAutoRefresh();
@@ -157,6 +158,7 @@ class _PosScreenState extends State<PosScreen> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKeyboardEvent);
     _productRefreshTimer?.cancel();
     _barcodeScannerSubmitTimer?.cancel();
     _welcomeOverlayTimer?.cancel();
@@ -168,6 +170,48 @@ class _PosScreenState extends State<PosScreen> {
     _searchFocusNode.dispose();
     _keyboardListenerFocusNode.dispose();
     super.dispose();
+  }
+
+  bool _handleHardwareKeyboardEvent(KeyEvent event) {
+    if (event is! KeyDownEvent || !mounted) return false;
+
+    final keyboard = HardwareKeyboard.instance;
+    final hasModifier = keyboard.isAltPressed ||
+        keyboard.isControlPressed ||
+        keyboard.isMetaPressed;
+    if (hasModifier) return false;
+
+    final cart = context.read<CartProvider>();
+    if (_activeModalCount == 0 && !_searchFocusNode.hasFocus) {
+      ProductPriceType? shortcutPriceType;
+      if (event.logicalKey == LogicalKeyboardKey.f1) {
+        shortcutPriceType = ProductPriceType.selling;
+      } else if (event.logicalKey == LogicalKeyboardKey.f2) {
+        shortcutPriceType = ProductPriceType.wholesale;
+      } else if (event.logicalKey == LogicalKeyboardKey.f3) {
+        shortcutPriceType = ProductPriceType.sale;
+      }
+
+      if (shortcutPriceType != null) {
+        unawaited(_handlePriceTypeSelection(cart, shortcutPriceType));
+        return true;
+      }
+    }
+
+    final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (isEnterKey &&
+        _activeModalCount == 0 &&
+        !_searchFocusNode.hasFocus &&
+        _barcodeController.text.trim().isEmpty &&
+        cart.items.isNotEmpty &&
+        !_isProcessingCheckout &&
+        !_isPaymentDialogOpen) {
+      unawaited(_handleCheckout(cart));
+      return true;
+    }
+
+    return false;
   }
 
   void _scheduleWelcomeOverlay() {
@@ -4582,12 +4626,14 @@ class _PosScreenState extends State<PosScreen> {
         children: [
           _buildSummaryLine(
             label: 'Subtotal',
-            value: 'Rs. ${cart.subtotal.toStringAsFixed(2)}',
+            value: 'Rs. ${cart.discountedSubtotal.toStringAsFixed(2)}',
           ),
           _buildSummaryLine(
             label: 'Discount',
-            value: 'Rs. ${cart.discountAmount.toStringAsFixed(2)}',
-            valueColor: cart.discountAmount > 0 ? _dangerColor : _textPrimary,
+            value: 'Rs. ${cart.cartLevelDiscountAmount.toStringAsFixed(2)}',
+            valueColor: cart.cartLevelDiscountAmount > 0
+                ? _dangerColor
+                : _textPrimary,
           ),
           const SizedBox(height: 6),
           Container(
@@ -4644,7 +4690,7 @@ class _PosScreenState extends State<PosScreen> {
                         : () => _applyDiscount(cart),
                     icon: const Icon(Icons.percent_rounded, size: 14),
                     label: Text(
-                      cart.discountAmount > 0
+                      cart.cartLevelDiscountAmount > 0
                           ? 'Edit Discount'
                           : 'Apply Discount',
                     ),
@@ -4660,7 +4706,7 @@ class _PosScreenState extends State<PosScreen> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: cart.discountAmount > 0
+                    onPressed: cart.cartLevelDiscountAmount > 0
                         ? () {
                             cart.clearDiscount();
                             _focusBarcodeField();
@@ -4863,32 +4909,36 @@ class _PosScreenState extends State<PosScreen> {
         autofocus: true,
         onKey: _handleGlobalKeyboardEvent,
         child: Scaffold(
-          body: SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final isWindowSupported =
-                    constraints.maxWidth >= _minSupportedWidth &&
-                    constraints.maxHeight >= _minSupportedHeight;
+          body: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: _focusBarcodeField,
+            child: SafeArea(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final isWindowSupported =
+                      constraints.maxWidth >= _minSupportedWidth &&
+                      constraints.maxHeight >= _minSupportedHeight;
 
-                return Stack(
-                  children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [_screenBackground, _screenBackgroundAlt],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
+                  return Stack(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [_screenBackground, _screenBackgroundAlt],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
                         ),
+                        child: isWindowSupported
+                            ? _buildDesktopWorkspace(auth, cart)
+                            : _buildUnsupportedWindow(),
                       ),
-                      child: isWindowSupported
-                          ? _buildDesktopWorkspace(auth, cart)
-                          : _buildUnsupportedWindow(),
-                    ),
-                    if (isWindowSupported && _renderWelcomeOverlay)
-                      _buildWelcomeOverlay(auth),
-                  ],
-                );
-              },
+                      if (isWindowSupported && _renderWelcomeOverlay)
+                        _buildWelcomeOverlay(auth),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ),

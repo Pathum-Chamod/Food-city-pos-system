@@ -20,6 +20,28 @@ class _LoginScreenState extends State<LoginScreen> {
   static const Color _brandColor = Color(0xFF2AAA8A);
   static const Color _accentColor = Color(0xFF7C9BFF);
   static const Color _warningColor = Color(0xFFF4A340);
+  static final Map<LogicalKeyboardKey, String> _digitKeys = {
+    LogicalKeyboardKey.digit0: '0',
+    LogicalKeyboardKey.digit1: '1',
+    LogicalKeyboardKey.digit2: '2',
+    LogicalKeyboardKey.digit3: '3',
+    LogicalKeyboardKey.digit4: '4',
+    LogicalKeyboardKey.digit5: '5',
+    LogicalKeyboardKey.digit6: '6',
+    LogicalKeyboardKey.digit7: '7',
+    LogicalKeyboardKey.digit8: '8',
+    LogicalKeyboardKey.digit9: '9',
+    LogicalKeyboardKey.numpad0: '0',
+    LogicalKeyboardKey.numpad1: '1',
+    LogicalKeyboardKey.numpad2: '2',
+    LogicalKeyboardKey.numpad3: '3',
+    LogicalKeyboardKey.numpad4: '4',
+    LogicalKeyboardKey.numpad5: '5',
+    LogicalKeyboardKey.numpad6: '6',
+    LogicalKeyboardKey.numpad7: '7',
+    LogicalKeyboardKey.numpad8: '8',
+    LogicalKeyboardKey.numpad9: '9',
+  };
 
   final FocusNode _keyboardFocusNode = FocusNode(debugLabel: 'login_screen');
   String _enteredPin = '';
@@ -109,9 +131,9 @@ class _LoginScreenState extends State<LoginScreen> {
       return KeyEventResult.ignored;
     }
 
-    final label = event.logicalKey.keyLabel;
-    if (RegExp(r'^\d$').hasMatch(label)) {
-      _onKeyPress(label);
+    final digit = _digitKeys[event.logicalKey];
+    if (digit != null) {
+      _onKeyPress(digit);
       return KeyEventResult.handled;
     }
 
