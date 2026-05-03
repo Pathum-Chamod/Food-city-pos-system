@@ -110,7 +110,7 @@ class CartProvider with ChangeNotifier {
 
   void setPriceType(
     ProductPriceType value, {
-    bool applyToExistingItems = true,
+    bool applyToExistingItems = false,
   }) {
     if (_selectedPriceType == value) return;
 
