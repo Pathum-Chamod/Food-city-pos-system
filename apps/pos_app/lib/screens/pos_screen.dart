@@ -607,13 +607,29 @@ class _PosScreenState extends State<PosScreen> {
         event.isAltPressed || event.isControlPressed || event.isMetaPressed;
     if (isModifierOnly) return;
 
+    final cart = context.read<CartProvider>();
+    if (_activeModalCount == 0 && !_searchFocusNode.hasFocus) {
+      ProductPriceType? shortcutPriceType;
+      if (event.logicalKey == LogicalKeyboardKey.f1) {
+        shortcutPriceType = ProductPriceType.selling;
+      } else if (event.logicalKey == LogicalKeyboardKey.f2) {
+        shortcutPriceType = ProductPriceType.wholesale;
+      } else if (event.logicalKey == LogicalKeyboardKey.f3) {
+        shortcutPriceType = ProductPriceType.sale;
+      }
+
+      if (shortcutPriceType != null) {
+        unawaited(_handlePriceTypeSelection(cart, shortcutPriceType));
+        return;
+      }
+    }
+
     final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
     if (isEnterKey &&
         _activeModalCount == 0 &&
         !_searchFocusNode.hasFocus &&
         _barcodeController.text.trim().isEmpty) {
-      final cart = context.read<CartProvider>();
       if (cart.items.isNotEmpty &&
           !_isProcessingCheckout &&
           !_isPaymentDialogOpen) {
