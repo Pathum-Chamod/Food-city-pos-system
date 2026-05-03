@@ -20,6 +20,10 @@ class ReceiptPdfService {
   ReceiptPdfService._();
 
   static final ReceiptPdfService instance = ReceiptPdfService._();
+  static final PdfPageFormat _receiptPageFormat = PdfPageFormat(
+    80 * PdfPageFormat.mm,
+    297 * PdfPageFormat.mm,
+  );
 
   String _formatQuantity(num value, {int maxDecimals = 3}) {
     final safeValue = value.toDouble().abs() < 0.000001 ? 0.0 : value.toDouble();
@@ -28,6 +32,8 @@ class ReceiptPdfService {
       '',
     );
   }
+
+  String _formatMoney(num value) => 'Rs. ${value.toDouble().toStringAsFixed(2)}';
 
   Future<ReceiptPdfResponse> saveReceiptPdf({
     required int transactionId,
@@ -45,12 +51,159 @@ class ReceiptPdfService {
     bool isRefund = false,
     String? footerNote,
   }) async {
+    String? outputPath;
     try {
       final now = DateTime.now();
       final fileName =
           'receipt_${transactionId}_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}.pdf';
 
-      final outputPath = await FilePicker.platform.saveFile(
+      final pdf = pw.Document();
+      final dateStr =
+          '${now.day.toString().padLeft(2, '0')}/'
+          '${now.month.toString().padLeft(2, '0')}/'
+          '${now.year} '
+          '${now.hour.toString().padLeft(2, '0')}:'
+          '${now.minute.toString().padLeft(2, '0')}:'
+          '${now.second.toString().padLeft(2, '0')}';
+
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: _receiptPageFormat,
+          margin: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          build: (context) => [
+            pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
+                pw.Text(
+                  storeName.toUpperCase(),
+                  textAlign: pw.TextAlign.center,
+                  style: pw.TextStyle(
+                    fontSize: 14,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                if (storeAddress.trim().isNotEmpty) ...[
+                  pw.SizedBox(height: 2),
+                  pw.Text(
+                    storeAddress.trim(),
+                    textAlign: pw.TextAlign.center,
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
+                ],
+                if (storePhone.trim().isNotEmpty) ...[
+                  pw.SizedBox(height: 2),
+                  pw.Text(
+                    'Tel: ${storePhone.trim()}',
+                    textAlign: pw.TextAlign.center,
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
+                ],
+                pw.SizedBox(height: 6),
+                pw.Text(
+                  isRefund ? '*** REFUND RECEIPT ***' : 'SALES RECEIPT',
+                  textAlign: pw.TextAlign.center,
+                  style: pw.TextStyle(
+                    fontSize: 10,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                _receiptDivider(),
+                _receiptLabelValue('Date', dateStr),
+                _receiptLabelValue('Txn', '#$transactionId'),
+                _receiptLabelValue('Cashier', cashierName),
+                _receiptDivider(),
+                pw.Row(
+                  children: [
+                    pw.Expanded(
+                      flex: 5,
+                      child: _receiptText('Item', bold: true),
+                    ),
+                    pw.Expanded(
+                      flex: 2,
+                      child: _receiptText('Qty', bold: true, alignRight: true),
+                    ),
+                    pw.Expanded(
+                      flex: 3,
+                      child: _receiptText(
+                        'Total',
+                        bold: true,
+                        alignRight: true,
+                      ),
+                    ),
+                  ],
+                ),
+                _receiptDivider(),
+                ...items.expand((item) {
+                  final name = (item['name'] ?? 'Item').toString();
+                  final qty = ((item['qty'] as num?) ?? 0).toDouble();
+                  final unitPrice =
+                      ((item['unitPrice'] as num?) ?? 0).toDouble();
+                  final lineTotal =
+                      ((item['lineTotal'] as num?) ?? 0).toDouble();
+
+                  return [
+                    _receiptText(name, bold: true),
+                    pw.Row(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Expanded(
+                          child: _receiptText(
+                            '${_formatQuantity(qty)} x ${_formatMoney(unitPrice)}',
+                          ),
+                        ),
+                        pw.SizedBox(width: 8),
+                        _receiptText(
+                          _formatMoney(lineTotal),
+                          bold: true,
+                          alignRight: true,
+                        ),
+                      ],
+                    ),
+                    pw.SizedBox(height: 4),
+                  ];
+                }),
+                _receiptDivider(),
+                _receiptLabelValue('Subtotal', _formatMoney(subtotal)),
+                if (discountAmount > 0)
+                  _receiptLabelValue(
+                    'Discount',
+                    '- ${_formatMoney(discountAmount)}',
+                    valueColor: PdfColors.red700,
+                  ),
+                _receiptDivider(char: '='),
+                _receiptLabelValue(
+                  isRefund ? 'REFUND TOTAL' : 'TOTAL',
+                  _formatMoney(total),
+                  bold: true,
+                  fontSize: 11,
+                ),
+                _receiptDivider(char: '='),
+                _receiptLabelValue('Paid by', paymentMethod.toUpperCase()),
+                if (!isRefund && amountTendered != null)
+                  _receiptLabelValue('Tendered', _formatMoney(amountTendered)),
+                if (!isRefund && changeAmount != null)
+                  _receiptLabelValue('Change', _formatMoney(changeAmount)),
+                pw.SizedBox(height: 10),
+                pw.Text(
+                  footerNote ?? 'Thank you for shopping with us!',
+                  textAlign: pw.TextAlign.center,
+                  style: const pw.TextStyle(fontSize: 8),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+
+      final pdfBytes = await pdf.save();
+      if (pdfBytes.isEmpty) {
+        return const ReceiptPdfResponse(
+          isSuccess: false,
+          message: 'Could not save PDF: generated receipt file was empty.',
+        );
+      }
+
+      outputPath = await FilePicker.platform.saveFile(
         dialogTitle: 'Save receipt as PDF',
         fileName: fileName,
         type: FileType.custom,
@@ -64,139 +217,18 @@ class ReceiptPdfService {
         );
       }
 
-      final pdf = pw.Document();
-      final dateStr =
-          '${now.day.toString().padLeft(2, '0')}/'
-          '${now.month.toString().padLeft(2, '0')}/'
-          '${now.year} '
-          '${now.hour.toString().padLeft(2, '0')}:'
-          '${now.minute.toString().padLeft(2, '0')}:'
-          '${now.second.toString().padLeft(2, '0')}';
-
-      pdf.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a4,
-          margin: const pw.EdgeInsets.all(24),
-          build: (context) => [
-            pw.Center(
-              child: pw.Column(
-                children: [
-                  pw.Text(
-                    storeName,
-                    style: pw.TextStyle(
-                      fontSize: 22,
-                      fontWeight: pw.FontWeight.bold,
-                    ),
-                  ),
-                  if (storeAddress.trim().isNotEmpty)
-                    pw.Padding(
-                      padding: const pw.EdgeInsets.only(top: 4),
-                      child: pw.Text(storeAddress),
-                    ),
-                  if (storePhone.trim().isNotEmpty)
-                    pw.Padding(
-                      padding: const pw.EdgeInsets.only(top: 2),
-                      child: pw.Text('Tel: $storePhone'),
-                    ),
-                  pw.SizedBox(height: 12),
-                  pw.Text(
-                    isRefund ? 'REFUND RECEIPT' : 'SALES RECEIPT',
-                    style: pw.TextStyle(
-                      fontSize: 16,
-                      fontWeight: pw.FontWeight.bold,
-                      color: isRefund ? PdfColors.red700 : PdfColors.teal700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            pw.SizedBox(height: 16),
-            pw.Container(
-              padding: const pw.EdgeInsets.all(12),
-              decoration: pw.BoxDecoration(
-                border: pw.Border.all(color: PdfColors.grey400),
-                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
-              ),
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  _pdfLabelValue('Date', dateStr),
-                  _pdfLabelValue('Transaction', '#$transactionId'),
-                  _pdfLabelValue('Cashier', cashierName),
-                  _pdfLabelValue('Payment', paymentMethod.toUpperCase()),
-                  if (!isRefund && amountTendered != null)
-                    _pdfLabelValue(
-                      'Tendered',
-                      'Rs. ${amountTendered.toStringAsFixed(2)}',
-                    ),
-                  if (!isRefund && changeAmount != null)
-                    _pdfLabelValue(
-                      'Change',
-                      'Rs. ${changeAmount.toStringAsFixed(2)}',
-                    ),
-                ],
-              ),
-            ),
-            pw.SizedBox(height: 16),
-            pw.Table.fromTextArray(
-              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
-              headerDecoration: const pw.BoxDecoration(
-                color: PdfColors.grey300,
-              ),
-              cellAlignment: pw.Alignment.centerLeft,
-              cellPadding: const pw.EdgeInsets.all(8),
-              headers: const ['Item', 'Qty', 'Unit Price', 'Line Total'],
-              data: items.map((item) {
-                return [
-                  (item['name'] ?? 'Item').toString(),
-                  _formatQuantity(((item['qty'] as num?) ?? 0).toDouble()),
-                  'Rs. ${(((item['unitPrice'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
-                  'Rs. ${(((item['lineTotal'] as num?) ?? 0).toDouble()).toStringAsFixed(2)}',
-                ];
-              }).toList(),
-            ),
-            pw.SizedBox(height: 16),
-            pw.Align(
-              alignment: pw.Alignment.centerRight,
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.end,
-                children: [
-                  pw.Text('Subtotal: Rs. ${subtotal.toStringAsFixed(2)}'),
-                  if (discountAmount > 0)
-                    pw.Padding(
-                      padding: const pw.EdgeInsets.only(top: 4),
-                      child: pw.Text(
-                        'Discount: - Rs. ${discountAmount.toStringAsFixed(2)}',
-                        style: const pw.TextStyle(color: PdfColors.red700),
-                      ),
-                    ),
-                  pw.Padding(
-                    padding: const pw.EdgeInsets.only(top: 6),
-                    child: pw.Text(
-                      '${isRefund ? 'Refund Total' : 'Total'}: Rs. ${total.toStringAsFixed(2)}',
-                      style: pw.TextStyle(
-                        fontSize: 15,
-                        fontWeight: pw.FontWeight.bold,
-                        color: isRefund ? PdfColors.red700 : PdfColors.teal700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            pw.SizedBox(height: 24),
-            pw.Center(
-              child: pw.Text(
-                footerNote ?? 'Thank you for shopping with us!',
-                style: const pw.TextStyle(color: PdfColors.grey700),
-              ),
-            ),
-          ],
-        ),
-      );
-
       final file = File(outputPath);
-      await file.writeAsBytes(await pdf.save(), flush: true);
+      await file.writeAsBytes(pdfBytes, flush: true);
+      final writtenBytes = await file.length();
+      if (writtenBytes <= 0) {
+        if (await file.exists()) {
+          await file.delete();
+        }
+        return const ReceiptPdfResponse(
+          isSuccess: false,
+          message: 'Could not save PDF: no data was written to the file.',
+        );
+      }
 
       return ReceiptPdfResponse(
         isSuccess: true,
@@ -204,6 +236,13 @@ class ReceiptPdfService {
         filePath: outputPath,
       );
     } catch (e) {
+      final path = outputPath;
+      if (path != null && path.trim().isNotEmpty) {
+        final file = File(path);
+        if (await file.exists() && await file.length() == 0) {
+          await file.delete();
+        }
+      }
       return ReceiptPdfResponse(
         isSuccess: false,
         message: 'Could not save PDF: $e',
@@ -211,18 +250,59 @@ class ReceiptPdfService {
     }
   }
 
-  pw.Widget _pdfLabelValue(String label, String value) {
+  pw.Widget _receiptDivider({String char = '-'}) {
     return pw.Padding(
-      padding: const pw.EdgeInsets.only(bottom: 4),
+      padding: const pw.EdgeInsets.symmetric(vertical: 5),
+      child: pw.Text(
+        List.filled(32, char).join(),
+        style: const pw.TextStyle(fontSize: 8),
+      ),
+    );
+  }
+
+  pw.Widget _receiptText(
+    String value, {
+    bool bold = false,
+    bool alignRight = false,
+    double fontSize = 8,
+    PdfColor? color,
+  }) {
+    return pw.Text(
+      value,
+      textAlign: alignRight ? pw.TextAlign.right : pw.TextAlign.left,
+      style: pw.TextStyle(
+        fontSize: fontSize,
+        fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+        color: color,
+      ),
+    );
+  }
+
+  pw.Widget _receiptLabelValue(
+    String label,
+    String value, {
+    bool bold = false,
+    double fontSize = 8,
+    PdfColor? valueColor,
+  }) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 3),
       child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
           pw.Expanded(
-            child: pw.Text(
-              label,
-              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+            child: _receiptText(label, bold: bold, fontSize: fontSize),
+          ),
+          pw.SizedBox(width: 8),
+          pw.Expanded(
+            child: _receiptText(
+              value,
+              bold: bold,
+              alignRight: true,
+              fontSize: fontSize,
+              color: valueColor,
             ),
           ),
-          pw.Text(value),
         ],
       ),
     );

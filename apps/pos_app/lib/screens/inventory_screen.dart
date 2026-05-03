@@ -4126,7 +4126,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       icon: Icons.sell_rounded,
       title: 'Change Price',
       subtitle: '${product.name} • ${product.barcode}',
-      maxWidth: 860,
+      maxWidth: 760,
       bodyBuilder: (dialogContext, setPopupState) {
         void setSelectedPriceText(String text) {
           valueController.value = TextEditingValue(
@@ -4210,7 +4210,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       accent: _brandColor,
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: _buildPopupMetricCard(
                       title: 'Wholesale',
@@ -4219,7 +4219,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       accent: Colors.deepPurple,
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: _buildPopupMetricCard(
                       title: 'Sale',
@@ -4230,7 +4230,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       accent: _warningColor,
                     ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: _buildPopupMetricCard(
                       title: 'Cost',
