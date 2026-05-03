@@ -146,6 +146,8 @@ class ReceiptPrinterService {
     required List<Map<String, dynamic>> items,
     required double subtotal,
     required double discountAmount,
+    String discountType = 'none',
+    double discountValue = 0.0,
     required double total,
     double? amountTendered,
     double? changeAmount,
@@ -216,25 +218,45 @@ class ReceiptPrinterService {
       bytes.addAll(_text('${_labelValue('Cashier', cashierName)}\n'));
       bytes.addAll(_text('${_line('-')}\n'));
       bytes.addAll(_boldOn());
-      bytes.addAll(_text('${_itemHeader()}\n'));
+      bytes.addAll(_text('${_itemValueHeader()}\n'));
       bytes.addAll(_boldOff());
-      bytes.addAll(_text('${_line('-')}\n'));
-
       for (final item in items) {
         final name = (item['name'] ?? 'Item').toString().trim();
         final qty = ((item['qty'] as num?) ?? 0).toDouble();
         final unitPrice = ((item['unitPrice'] as num?) ?? 0).toDouble();
+        final markedPrice = ((item['markedPrice'] as num?) ?? unitPrice).toDouble();
+        final baseLineTotal =
+            ((item['baseLineTotal'] as num?) ?? (unitPrice * qty)).toDouble();
+        final itemDiscountAmount =
+            ((item['itemDiscountAmount'] as num?) ?? 0).toDouble();
+        final itemDiscountType =
+            (item['itemDiscountType'] ?? 'none').toString();
+        final itemDiscountValue =
+            ((item['itemDiscountValue'] as num?) ?? 0).toDouble();
         final lineTotal = ((item['lineTotal'] as num?) ?? 0).toDouble();
 
         for (final line in _wrapText(name, 28)) {
           bytes.addAll(_text('$line\n'));
         }
 
+        var unitPriceText = 'Rs.${unitPrice.toStringAsFixed(2)}';
+        if (itemDiscountAmount > 0) {
+          final percent = _discountPercentLabel(
+            discountAmount: itemDiscountAmount,
+            baseAmount: baseLineTotal,
+            discountType: itemDiscountType,
+            discountValue: itemDiscountValue,
+          );
+          unitPriceText = '$unitPriceText(-$percent%)';
+        }
         bytes.addAll(
           _text(
-            '${_padLeft(_formatQuantity(qty), 6)}'
-            '${_padLeft('Rs.${unitPrice.toStringAsFixed(2)}', 15)}'
-            '${_padLeft('Rs.${lineTotal.toStringAsFixed(2)}', 15)}\n',
+            '${_itemValueRow(
+              unitPrice: unitPriceText,
+              markedPrice: 'Rs.${markedPrice.toStringAsFixed(2)}',
+              quantity: _formatQuantity(qty),
+              total: 'Rs.${lineTotal.toStringAsFixed(2)}',
+            )}\n\n',
           ),
         );
       }
@@ -243,8 +265,14 @@ class ReceiptPrinterService {
       bytes.addAll(_text('${_labelValue('Subtotal', 'Rs.${subtotal.toStringAsFixed(2)}')}\n'));
 
       if (discountAmount > 0) {
+        final percent = _discountPercentLabel(
+          discountAmount: discountAmount,
+          baseAmount: subtotal,
+          discountType: discountType,
+          discountValue: discountValue,
+        );
         bytes.addAll(
-          _text('${_labelValue('Discount', '- Rs.${discountAmount.toStringAsFixed(2)}')}\n'),
+          _text('${_labelValue('Discount ($percent%)', '- Rs.${discountAmount.toStringAsFixed(2)}')}\n'),
         );
       }
 
@@ -330,6 +358,24 @@ class ReceiptPrinterService {
   List<int> _cut() => [29, 86, 66, 0];
   List<int> _text(String value) => latin1.encode(value);
 
+  String _formatPercent(num value) {
+    final number = value.toDouble();
+    return number.toStringAsFixed(number % 1 == 0 ? 0 : 2);
+  }
+
+  String _discountPercentLabel({
+    required double discountAmount,
+    required double baseAmount,
+    required String discountType,
+    required double discountValue,
+  }) {
+    if (discountAmount <= 0 || baseAmount <= 0) return '0';
+    if (discountType == 'percent' && discountValue > 0) {
+      return _formatPercent(discountValue);
+    }
+    return _formatPercent((discountAmount / baseAmount) * 100);
+  }
+
   String _line(String char) => List.filled(_lineWidth, char).join();
 
   String _labelValue(String label, String value) {
@@ -352,9 +398,33 @@ class ReceiptPrinterService {
     return '${_padLeft(col1, 6)}${_padLeft(col2, 15)}${_padLeft(col3, 15)}';
   }
 
+  String _itemValueHeader() {
+    return '${_padRight('Unit price', 15)}'
+        '${_padRight('Mark price', 13)}'
+        '${_padLeft('Qty', 5)}'
+        '${_padLeft('Total', 15)}';
+  }
+
+  String _itemValueRow({
+    required String unitPrice,
+    required String markedPrice,
+    required String quantity,
+    required String total,
+  }) {
+    return '${_padRight(unitPrice, 15)}'
+        '${_padRight(markedPrice, 13)}'
+        '${_padLeft(quantity, 5)}'
+        '${_padLeft(total, 15)}';
+  }
+
   String _padLeft(String value, int width) {
     final safe = value.length > width ? value.substring(0, width) : value;
     return safe.padLeft(width);
+  }
+
+  String _padRight(String value, int width) {
+    final safe = value.length > width ? value.substring(0, width) : value;
+    return safe.padRight(width);
   }
 
   List<String> _wrapText(String text, int maxWidth) {

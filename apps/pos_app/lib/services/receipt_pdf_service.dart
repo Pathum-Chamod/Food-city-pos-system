@@ -35,6 +35,24 @@ class ReceiptPdfService {
 
   String _formatMoney(num value) => 'Rs. ${value.toDouble().toStringAsFixed(2)}';
 
+  String _formatPercent(num value) {
+    final number = value.toDouble();
+    return number.toStringAsFixed(number % 1 == 0 ? 0 : 2);
+  }
+
+  String _discountPercentLabel({
+    required double discountAmount,
+    required double baseAmount,
+    required String discountType,
+    required double discountValue,
+  }) {
+    if (discountAmount <= 0 || baseAmount <= 0) return '0';
+    if (discountType == 'percent' && discountValue > 0) {
+      return _formatPercent(discountValue);
+    }
+    return _formatPercent((discountAmount / baseAmount) * 100);
+  }
+
   Future<ReceiptPdfResponse> saveReceiptPdf({
     required int transactionId,
     required String cashierName,
@@ -42,6 +60,8 @@ class ReceiptPdfService {
     required List<Map<String, dynamic>> items,
     required double subtotal,
     required double discountAmount,
+    String discountType = 'none',
+    double discountValue = 0.0,
     required double total,
     double? amountTendered,
     double? changeAmount,
@@ -69,7 +89,7 @@ class ReceiptPdfService {
       pdf.addPage(
         pw.MultiPage(
           pageFormat: _receiptPageFormat,
-          margin: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          margin: const pw.EdgeInsets.symmetric(horizontal: 14, vertical: 14),
           build: (context) => [
             pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
@@ -112,61 +132,60 @@ class ReceiptPdfService {
                 _receiptLabelValue('Txn', '#$transactionId'),
                 _receiptLabelValue('Cashier', cashierName),
                 _receiptDivider(),
-                pw.Row(
-                  children: [
-                    pw.Expanded(
-                      flex: 5,
-                      child: _receiptText('Item', bold: true),
-                    ),
-                    pw.Expanded(
-                      flex: 2,
-                      child: _receiptText('Qty', bold: true, alignRight: true),
-                    ),
-                    pw.Expanded(
-                      flex: 3,
-                      child: _receiptText(
-                        'Total',
-                        bold: true,
-                        alignRight: true,
-                      ),
-                    ),
-                  ],
-                ),
-                _receiptDivider(),
+                _receiptItemHeader(),
+                _receiptThinDivider(),
+                pw.SizedBox(height: 3),
                 ...items.expand((item) {
                   final name = (item['name'] ?? 'Item').toString();
                   final qty = ((item['qty'] as num?) ?? 0).toDouble();
                   final unitPrice =
                       ((item['unitPrice'] as num?) ?? 0).toDouble();
+                  final markedPrice =
+                      ((item['markedPrice'] as num?) ?? unitPrice).toDouble();
+                  final baseLineTotal =
+                      ((item['baseLineTotal'] as num?) ?? (unitPrice * qty))
+                          .toDouble();
+                  final itemDiscountAmount =
+                      ((item['itemDiscountAmount'] as num?) ?? 0).toDouble();
+                  final itemDiscountType =
+                      (item['itemDiscountType'] ?? 'none').toString();
+                  final itemDiscountValue =
+                      ((item['itemDiscountValue'] as num?) ?? 0).toDouble();
                   final lineTotal =
                       ((item['lineTotal'] as num?) ?? 0).toDouble();
+                  final itemDiscountPercent = _discountPercentLabel(
+                    discountAmount: itemDiscountAmount,
+                    baseAmount: baseLineTotal,
+                    discountType: itemDiscountType,
+                    discountValue: itemDiscountValue,
+                  );
+                  final unitPriceText = itemDiscountAmount > 0
+                      ? '${_formatMoney(unitPrice)} (-$itemDiscountPercent%)'
+                      : _formatMoney(unitPrice);
 
                   return [
-                    _receiptText(name, bold: true),
-                    pw.Row(
-                      crossAxisAlignment: pw.CrossAxisAlignment.start,
-                      children: [
-                        pw.Expanded(
-                          child: _receiptText(
-                            '${_formatQuantity(qty)} x ${_formatMoney(unitPrice)}',
-                          ),
-                        ),
-                        pw.SizedBox(width: 8),
-                        _receiptText(
-                          _formatMoney(lineTotal),
-                          bold: true,
-                          alignRight: true,
-                        ),
-                      ],
+                    pw.SizedBox(height: 5),
+                    _receiptText(name, bold: true, fontSize: 8.4),
+                    pw.SizedBox(height: 2),
+                    _receiptItemValueRow(
+                      unitPrice: unitPriceText,
+                      markedPrice: _formatMoney(markedPrice),
+                      quantity: _formatQuantity(qty),
+                      total: _formatMoney(lineTotal),
                     ),
-                    pw.SizedBox(height: 4),
+                    pw.SizedBox(height: 3),
                   ];
                 }),
                 _receiptDivider(),
                 _receiptLabelValue('Subtotal', _formatMoney(subtotal)),
                 if (discountAmount > 0)
                   _receiptLabelValue(
-                    'Discount',
+                    'Discount (${_discountPercentLabel(
+                      discountAmount: discountAmount,
+                      baseAmount: subtotal,
+                      discountType: discountType,
+                      discountValue: discountValue,
+                    )}%)',
                     '- ${_formatMoney(discountAmount)}',
                     valueColor: PdfColors.red700,
                   ),
@@ -252,11 +271,27 @@ class ReceiptPdfService {
 
   pw.Widget _receiptDivider({String char = '-'}) {
     return pw.Padding(
-      padding: const pw.EdgeInsets.symmetric(vertical: 5),
-      child: pw.Text(
-        List.filled(32, char).join(),
-        style: const pw.TextStyle(fontSize: 8),
+      padding: const pw.EdgeInsets.symmetric(vertical: 7),
+      child: pw.Row(
+        children: List.generate(
+          char == '=' ? 38 : 48,
+          (index) => pw.Expanded(
+            child: pw.Container(
+              height: char == '=' ? 1.1 : 0.8,
+              margin: const pw.EdgeInsets.symmetric(horizontal: 0.8),
+              color: char == '=' ? PdfColors.grey800 : PdfColors.grey600,
+            ),
+          ),
+        ),
       ),
+    );
+  }
+
+  pw.Widget _receiptThinDivider() {
+    return pw.Container(
+      height: 0.5,
+      margin: const pw.EdgeInsets.only(top: 3, bottom: 6),
+      color: PdfColors.grey500,
     );
   }
 
@@ -274,6 +309,60 @@ class ReceiptPdfService {
         fontSize: fontSize,
         fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
         color: color,
+      ),
+    );
+  }
+
+  pw.Widget _receiptItemHeader() {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(top: 1, bottom: 2),
+      child: pw.Row(
+        children: [
+          _receiptItemCell('Unit price', flex: 30, bold: true),
+          _receiptItemCell('Mark price', flex: 27, bold: true),
+          _receiptItemCell('Qty', flex: 13, bold: true, alignRight: true),
+          _receiptItemCell('Total', flex: 30, bold: true, alignRight: true),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _receiptItemValueRow({
+    required String unitPrice,
+    required String markedPrice,
+    required String quantity,
+    required String total,
+  }) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(top: 2),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          _receiptItemCell(unitPrice, flex: 30),
+          _receiptItemCell(markedPrice, flex: 27),
+          _receiptItemCell(quantity, flex: 13, alignRight: true),
+          _receiptItemCell(total, flex: 30, bold: true, alignRight: true),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _receiptItemCell(
+    String value, {
+    required int flex,
+    bool bold = false,
+    bool alignRight = false,
+  }) {
+    return pw.Expanded(
+      flex: flex,
+      child: pw.Padding(
+        padding: const pw.EdgeInsets.only(right: 3),
+        child: _receiptText(
+          value,
+          bold: bold,
+          alignRight: alignRight,
+          fontSize: bold ? 6.8 : 6.5,
+        ),
       ),
     );
   }

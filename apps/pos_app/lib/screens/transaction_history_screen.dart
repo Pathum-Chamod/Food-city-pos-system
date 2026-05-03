@@ -120,6 +120,9 @@ class TransactionHistoryScreen extends StatefulWidget {
         ((summary['subtotal_amount'] as num?) ?? 0).toDouble().abs();
     final discountAmount =
         ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
+    final discountType = (summary['discount_type'] ?? 'none').toString();
+    final discountValue =
+        ((summary['discount_value'] as num?) ?? 0).toDouble().abs();
     final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
     final amountTendered =
         ((summary['amount_tendered'] as num?) ?? 0).toDouble();
@@ -130,21 +133,60 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     final receiptItems = items.map((item) {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
+      final baseLineTotal =
+          ((item['base_line_total'] as num?) ?? finalLineTotal).toDouble().abs();
+      final storedExplicitItemDiscount =
+          ((item['explicit_item_discount_amount'] as num?) ?? 0)
+              .toDouble()
+              .abs();
+      final storedCartDiscount =
+          ((item['cart_discount_amount'] as num?) ?? 0).toDouble().abs();
+      final storedCombinedItemDiscount =
+          ((item['item_discount_amount'] as num?) ?? 0).toDouble().abs();
+      final explicitItemDiscount = storedExplicitItemDiscount > 0
+          ? storedExplicitItemDiscount
+          : (storedCartDiscount <= 0 && discountType == 'none'
+              ? storedCombinedItemDiscount
+              : 0.0);
       return {
         'name': (item['product_name'] ?? 'Item').toString(),
         'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
-        'lineTotal': finalLineTotal,
+        'markedPrice':
+            ((item['marked_price'] as num?) ?? (item['unit_price'] as num?) ?? 0)
+                .toDouble(),
+        'priceType': (item['price_category_used'] ?? 'selling').toString(),
+        'baseLineTotal': baseLineTotal,
+        'itemDiscountType': (item['item_discount_type'] ?? 'none').toString(),
+        'itemDiscountValue':
+            ((item['item_discount_value'] as num?) ?? 0).toDouble().abs(),
+        'itemDiscountAmount': explicitItemDiscount,
+        'lineTotal': baseLineTotal - explicitItemDiscount,
       };
     }).toList();
+    final receiptItemDiscountTotal = receiptItems.fold<double>(
+      0.0,
+      (sum, item) =>
+          sum + (((item['itemDiscountAmount'] as num?) ?? 0).toDouble()),
+    );
+    final receiptCartDiscountAmount =
+        (discountAmount - receiptItemDiscountTotal)
+            .clamp(0.0, discountAmount)
+            .toDouble();
+    final receiptSubtotal = receiptItems.fold<double>(
+      0.0,
+      (sum, item) => sum + (((item['lineTotal'] as num?) ?? 0).toDouble()),
+    );
 
     final response = await printer.printReceipt(
       transactionId: saleId,
       cashierName: cashierName,
       paymentMethod: paymentMethod,
       items: receiptItems,
-      subtotal: subtotal,
-      discountAmount: discountAmount,
+      subtotal: receiptSubtotal,
+      discountAmount: receiptCartDiscountAmount,
+      discountType: discountType,
+      discountValue: discountValue,
       total: total,
       amountTendered: paymentMethod.toLowerCase() == 'cash' ? amountTendered : null,
       changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
@@ -186,6 +228,9 @@ class TransactionHistoryScreen extends StatefulWidget {
         ((summary['subtotal_amount'] as num?) ?? 0).toDouble().abs();
     final discountAmount =
         ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
+    final discountType = (summary['discount_type'] ?? 'none').toString();
+    final discountValue =
+        ((summary['discount_value'] as num?) ?? 0).toDouble().abs();
     final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
     final amountTendered =
         ((summary['amount_tendered'] as num?) ?? 0).toDouble();
@@ -196,21 +241,60 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     final receiptItems = items.map((item) {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
+      final baseLineTotal =
+          ((item['base_line_total'] as num?) ?? finalLineTotal).toDouble().abs();
+      final storedExplicitItemDiscount =
+          ((item['explicit_item_discount_amount'] as num?) ?? 0)
+              .toDouble()
+              .abs();
+      final storedCartDiscount =
+          ((item['cart_discount_amount'] as num?) ?? 0).toDouble().abs();
+      final storedCombinedItemDiscount =
+          ((item['item_discount_amount'] as num?) ?? 0).toDouble().abs();
+      final explicitItemDiscount = storedExplicitItemDiscount > 0
+          ? storedExplicitItemDiscount
+          : (storedCartDiscount <= 0 && discountType == 'none'
+              ? storedCombinedItemDiscount
+              : 0.0);
       return {
         'name': (item['product_name'] ?? 'Item').toString(),
         'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
-        'lineTotal': finalLineTotal,
+        'markedPrice':
+            ((item['marked_price'] as num?) ?? (item['unit_price'] as num?) ?? 0)
+                .toDouble(),
+        'priceType': (item['price_category_used'] ?? 'selling').toString(),
+        'baseLineTotal': baseLineTotal,
+        'itemDiscountType': (item['item_discount_type'] ?? 'none').toString(),
+        'itemDiscountValue':
+            ((item['item_discount_value'] as num?) ?? 0).toDouble().abs(),
+        'itemDiscountAmount': explicitItemDiscount,
+        'lineTotal': baseLineTotal - explicitItemDiscount,
       };
     }).toList();
+    final receiptItemDiscountTotal = receiptItems.fold<double>(
+      0.0,
+      (sum, item) =>
+          sum + (((item['itemDiscountAmount'] as num?) ?? 0).toDouble()),
+    );
+    final receiptCartDiscountAmount =
+        (discountAmount - receiptItemDiscountTotal)
+            .clamp(0.0, discountAmount)
+            .toDouble();
+    final receiptSubtotal = receiptItems.fold<double>(
+      0.0,
+      (sum, item) => sum + (((item['lineTotal'] as num?) ?? 0).toDouble()),
+    );
 
     final response = await ReceiptPdfService.instance.saveReceiptPdf(
       transactionId: saleId,
       cashierName: cashierName,
       paymentMethod: paymentMethod,
       items: receiptItems,
-      subtotal: subtotal,
-      discountAmount: discountAmount,
+      subtotal: receiptSubtotal,
+      discountAmount: receiptCartDiscountAmount,
+      discountType: discountType,
+      discountValue: discountValue,
       total: total,
       amountTendered: paymentMethod.toLowerCase() == 'cash' ? amountTendered : null,
       changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
@@ -1034,15 +1118,105 @@ Future<String?> showTransactionReceiptDialog(
   final amountTendered = ((summary['amount_tendered'] as num?) ?? 0).toDouble();
   final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
 
+  String formatPercent(num value) {
+    final number = value.toDouble();
+    return number.toStringAsFixed(number % 1 == 0 ? 0 : 2);
+  }
+
+  String discountPercentLabel({
+    required double amount,
+    required double base,
+    required String type,
+    required double value,
+  }) {
+    if (amount <= 0 || base <= 0) return '';
+    if (type == 'percent' && value > 0) return formatPercent(value);
+    return formatPercent((amount / base) * 100);
+  }
+
+  final receiptItems = items.map((item) {
+    final rawLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
+    final baseLineTotal =
+        ((item['base_line_total'] as num?) ?? rawLineTotal).toDouble().abs();
+    final storedExplicitItemDiscount =
+        ((item['explicit_item_discount_amount'] as num?) ?? 0)
+            .toDouble()
+            .abs();
+    final storedCartDiscount =
+        ((item['cart_discount_amount'] as num?) ?? 0).toDouble().abs();
+    final storedCombinedItemDiscount =
+        ((item['item_discount_amount'] as num?) ?? 0).toDouble().abs();
+    final explicitItemDiscount = storedExplicitItemDiscount > 0
+        ? storedExplicitItemDiscount
+        : (storedCartDiscount <= 0 && discountType == 'none'
+            ? storedCombinedItemDiscount
+            : 0.0);
+    return {
+      'name': (item['product_name'] ?? 'Unknown').toString(),
+      'barcode': (item['barcode'] ?? '').toString(),
+      'quantity': ((item['quantity'] as num?) ?? 0).toDouble(),
+      'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
+      'markedPrice':
+          ((item['marked_price'] as num?) ?? (item['unit_price'] as num?) ?? 0)
+              .toDouble(),
+      'baseLineTotal': baseLineTotal,
+      'itemDiscountType': (item['item_discount_type'] ?? 'none').toString(),
+      'itemDiscountValue':
+          ((item['item_discount_value'] as num?) ?? 0).toDouble().abs(),
+      'itemDiscountAmount': explicitItemDiscount,
+      'lineTotal': baseLineTotal - explicitItemDiscount,
+    };
+  }).toList();
+  final receiptItemDiscountTotal = receiptItems.fold<double>(
+    0.0,
+    (sum, item) =>
+        sum + (((item['itemDiscountAmount'] as num?) ?? 0).toDouble()),
+  );
+  final receiptCartDiscountAmount = (discountAmount - receiptItemDiscountTotal)
+      .clamp(0.0, discountAmount)
+      .toDouble();
+  final receiptSubtotal = receiptItems.fold<double>(
+    0.0,
+    (sum, item) => sum + (((item['lineTotal'] as num?) ?? 0).toDouble()),
+  );
+
   String discountLabel() {
-    if (discountAmount <= 0) return '';
+    if (receiptCartDiscountAmount <= 0) return '';
     if (discountType == 'percent') {
-      return '${discountValue.toStringAsFixed(discountValue % 1 == 0 ? 0 : 2)}%';
+      return '${formatPercent(discountValue)}%';
     }
     if (discountType == 'fixed') {
       return 'Rs. ${discountValue.toStringAsFixed(2)}';
     }
     return '';
+  }
+
+  Widget receiptColumnHeader(String text, {bool alignRight = false}) {
+    return Expanded(
+      child: Text(
+        text,
+        textAlign: alignRight ? TextAlign.right : TextAlign.left,
+        style: TextStyle(
+          color: palette.textSecondary,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget receiptColumnValue(String text, {bool alignRight = false, Color? color}) {
+    return Expanded(
+      child: Text(
+        text,
+        textAlign: alignRight ? TextAlign.right : TextAlign.left,
+        style: TextStyle(
+          color: color ?? palette.textPrimary,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
   }
 
   Widget buildInfoChip(IconData icon, String text) {
@@ -1223,33 +1397,41 @@ Future<String?> showTransactionReceiptDialog(
                           const SizedBox(height: 16),
                           Divider(color: palette.border),
                           const SizedBox(height: 8),
-                          ...items.map((item) {
-                            final name =
-                                (item['product_name'] ?? 'Unknown').toString();
+                          ...receiptItems.map((item) {
+                            final name = (item['name'] ?? 'Unknown').toString();
                             final barcode = (item['barcode'] ?? '').toString();
-                            final qty = ((item['quantity'] as num?) ?? 0)
-                                .toDouble();
+                            final qty =
+                                ((item['quantity'] as num?) ?? 0).toDouble();
                             final qtyLabel = TransactionHistoryScreen._formatQuantity(qty);
                             final unitPrice =
-                                ((item['unit_price'] as num?) ?? 0).toDouble();
+                                ((item['unitPrice'] as num?) ?? 0).toDouble();
+                            final markedPrice =
+                                ((item['markedPrice'] as num?) ?? unitPrice)
+                                    .toDouble();
                             final baseLineTotal =
-                                ((item['base_line_total'] as num?) ?? 0)
+                                ((item['baseLineTotal'] as num?) ?? 0)
                                     .toDouble();
                             final itemDiscount =
-                                ((item['item_discount_amount'] as num?) ?? 0)
+                                ((item['itemDiscountAmount'] as num?) ?? 0)
+                                    .toDouble();
+                            final itemDiscountType =
+                                (item['itemDiscountType'] ?? 'none').toString();
+                            final itemDiscountValue =
+                                ((item['itemDiscountValue'] as num?) ?? 0)
                                     .toDouble();
                             final finalLineTotal =
-                                ((item['line_total'] as num?) ?? 0)
-                                    .toDouble()
-                                    .abs();
-                            final discountPercent =
-                                !isRefund &&
+                                ((item['lineTotal'] as num?) ?? 0).toDouble();
+                            final discountPercent = discountPercentLabel(
+                              amount: itemDiscount,
+                              base: baseLineTotal,
+                              type: itemDiscountType,
+                              value: itemDiscountValue,
+                            );
+                            final unitPriceText = !isRefund &&
                                     itemDiscount > 0 &&
-                                    baseLineTotal > 0
-                                ? (itemDiscount / baseLineTotal) * 100
-                                : 0.0;
-
-                            final shownLineTotal = finalLineTotal;
+                                    discountPercent.isNotEmpty
+                                ? 'Rs. ${unitPrice.toStringAsFixed(2)} (-$discountPercent%)'
+                                : 'Rs. ${unitPrice.toStringAsFixed(2)}';
 
                             return Container(
                               margin: const EdgeInsets.only(bottom: 12),
@@ -1260,7 +1442,7 @@ Future<String?> showTransactionReceiptDialog(
                                 border: Border.all(color: palette.border),
                               ),
                               child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Expanded(
                                     child: Column(
@@ -1274,72 +1456,49 @@ Future<String?> showTransactionReceiptDialog(
                                             color: palette.textPrimary,
                                           ),
                                         ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          'Barcode: $barcode',
-                                          style: TextStyle(
-                                            color: palette.textSecondary,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        Text(
-                                          'Qty: $qtyLabel',
-                                          style: TextStyle(
-                                            color: palette.textPrimary,
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          'Unit price: Rs. ${unitPrice.toStringAsFixed(2)}',
-                                          style: TextStyle(
-                                            color: palette.textSecondary,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                        if (!isRefund && itemDiscount > 0) ...[
+                                        if (barcode.isNotEmpty) ...[
                                           const SizedBox(height: 4),
                                           Text(
-                                            'Discount: ${discountPercent.toStringAsFixed(discountPercent % 1 == 0 ? 0 : 2)}% (-Rs. ${itemDiscount.toStringAsFixed(2)})',
+                                            'Barcode: $barcode',
                                             style: TextStyle(
-                                              color: palette.danger,
+                                              color: palette.textSecondary,
                                               fontSize: 12,
-                                              fontWeight: FontWeight.w700,
                                             ),
                                           ),
                                         ],
+                                        const SizedBox(height: 12),
+                                        Row(
+                                          children: [
+                                            receiptColumnHeader('Unit price'),
+                                            receiptColumnHeader('Mark price'),
+                                            receiptColumnHeader('Qty', alignRight: true),
+                                            receiptColumnHeader('Total', alignRight: true),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Row(
+                                          children: [
+                                            receiptColumnValue(
+                                              unitPriceText,
+                                              color: !isRefund && itemDiscount > 0
+                                                  ? palette.danger
+                                                  : palette.textPrimary,
+                                            ),
+                                            receiptColumnValue(
+                                              'Rs. ${markedPrice.toStringAsFixed(2)}',
+                                            ),
+                                            receiptColumnValue(
+                                              qtyLabel,
+                                              alignRight: true,
+                                            ),
+                                            receiptColumnValue(
+                                              'Rs. ${finalLineTotal.toStringAsFixed(2)}',
+                                              alignRight: true,
+                                            ),
+                                          ],
+                                        ),
                                       ],
                                     ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      if (!isRefund &&
-                                          itemDiscount > 0 &&
-                                          baseLineTotal > shownLineTotal)
-                                        Text(
-                                          'Rs. ${baseLineTotal.toStringAsFixed(2)}',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 12,
-                                            color: palette.textSecondary,
-                                            decoration: TextDecoration.lineThrough,
-                                          ),
-                                        ),
-                                      Text(
-                                        'Rs. ${shownLineTotal.toStringAsFixed(2)}',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w900,
-                                          fontSize: 15,
-                                          color: palette.textPrimary,
-                                        ),
-                                      ),
-                                    ],
                                   ),
                                 ],
                               ),
@@ -1350,7 +1509,7 @@ Future<String?> showTransactionReceiptDialog(
                             Align(
                               alignment: Alignment.centerRight,
                               child: Text(
-                                'Subtotal: Rs. ${subtotal.toStringAsFixed(2)}',
+                                'Subtotal: Rs. ${receiptSubtotal.toStringAsFixed(2)}',
                                 style: TextStyle(
                                   color: palette.textPrimary,
                                   fontSize: 16,
@@ -1358,12 +1517,12 @@ Future<String?> showTransactionReceiptDialog(
                                 ),
                               ),
                             ),
-                            if (discountAmount > 0) ...[
+                            if (receiptCartDiscountAmount > 0) ...[
                               const SizedBox(height: 4),
                               Align(
                                 alignment: Alignment.centerRight,
                                 child: Text(
-                                  'Discount${discountLabel().isEmpty ? '' : ' (${discountLabel()})'}: -Rs. ${discountAmount.toStringAsFixed(2)}',
+                                  'Discount${discountLabel().isEmpty ? '' : ' (${discountLabel()})'}: -Rs. ${receiptCartDiscountAmount.toStringAsFixed(2)}',
                                   style: TextStyle(
                                     fontSize: 16,
                                     color: palette.danger,

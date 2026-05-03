@@ -37,7 +37,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 21,
+        version: 22,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -349,10 +349,15 @@ class DatabaseHelper {
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
         unit_price REAL NOT NULL,
+        marked_price REAL NOT NULL DEFAULT 0,
         price_category_used TEXT NOT NULL DEFAULT 'selling',
         cost_price_snapshot REAL NOT NULL DEFAULT 0,
         quantity INTEGER NOT NULL,
         base_line_total REAL NOT NULL DEFAULT 0,
+        item_discount_type TEXT NOT NULL DEFAULT 'none',
+        item_discount_value REAL NOT NULL DEFAULT 0,
+        explicit_item_discount_amount REAL NOT NULL DEFAULT 0,
+        cart_discount_amount REAL NOT NULL DEFAULT 0,
         item_discount_amount REAL NOT NULL DEFAULT 0,
         line_total REAL NOT NULL,
         created_at TEXT NOT NULL,
@@ -586,6 +591,39 @@ class DatabaseHelper {
 
     if (oldVersion < 8) {
       await _createSupplierTables(db);
+    }
+
+    if (oldVersion < 22) {
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'marked_price',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'item_discount_type',
+        "TEXT NOT NULL DEFAULT 'none'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'item_discount_value',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'explicit_item_discount_amount',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'cart_discount_amount',
+        "REAL NOT NULL DEFAULT 0",
+      );
     }
 
     if (oldVersion < 9) {
@@ -1942,6 +1980,9 @@ class DatabaseHelper {
               productMap['name']?.toString() ?? 'Unknown product';
           final unitPrice = _resolveCartItemUnitPrice(item);
           final priceTypeUsed = _resolveCartItemPriceType(item);
+          final markedPrice = _parseDouble(productMap['selling_price']) > 0
+              ? _parseDouble(productMap['selling_price'])
+              : unitPrice;
           final costPriceSnapshot = _parseDouble(productMap['cost_price']);
           final quantity = _parseQuantity(item['quantity']);
           final computedBaseLineTotal = _roundMoney(unitPrice * quantity);
@@ -1951,6 +1992,11 @@ class DatabaseHelper {
           );
           final providedItemDiscount = ((item['item_discount_amount'] as num?) ?? 0)
               .toDouble();
+          final itemDiscountType = _normalizeDiscountType(
+            item['item_discount_type']?.toString() ?? 'none',
+          );
+          final itemDiscountValue =
+              ((item['item_discount_value'] as num?) ?? 0).toDouble();
           final providedLineTotal =
               ((item['line_total'] as num?) ?? (baseLineTotal - providedItemDiscount))
                   .toDouble();
@@ -1976,10 +2022,13 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'marked_price': markedPrice,
             'price_category_used': priceTypeUsed,
             'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': baseLineTotal,
+            'item_discount_type': itemDiscountType,
+            'item_discount_value': itemDiscountValue < 0 ? 0.0 : itemDiscountValue,
             'explicit_item_discount_amount': safeItemDiscount,
             'net_line_total_before_cart_discount': netLineTotal,
           });
@@ -2097,11 +2146,16 @@ class DatabaseHelper {
           final barcode = item['barcode'] as String;
           final productName = item['product_name'] as String;
           final unitPrice = item['unit_price'] as double;
+          final markedPrice = item['marked_price'] as double;
           final priceTypeUsed = (item['price_category_used'] ?? 'selling').toString();
           final costPriceSnapshot =
               (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
           final quantity = (item['quantity'] as num).toDouble();
           final baseLineTotal = item['base_line_total'] as double;
+          final itemDiscountType =
+              (item['item_discount_type'] ?? 'none').toString();
+          final itemDiscountValue =
+              (item['item_discount_value'] as num?)?.toDouble() ?? 0.0;
           final explicitItemDiscount =
               (item['explicit_item_discount_amount'] as num).toDouble();
           final netLineTotalBeforeCartDiscount =
@@ -2152,10 +2206,15 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'marked_price': markedPrice,
             'price_category_used': priceTypeUsed,
             'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': baseLineTotal,
+            'item_discount_type': itemDiscountType,
+            'item_discount_value': itemDiscountValue,
+            'explicit_item_discount_amount': isRefund ? 0.0 : explicitItemDiscount,
+            'cart_discount_amount': isRefund ? 0.0 : cartLevelItemDiscount,
             'item_discount_amount': isRefund ? 0.0 : safeItemDiscount,
             'line_total': finalLineTotal,
           });
@@ -2165,12 +2224,21 @@ class DatabaseHelper {
           final barcode = item['barcode'] as String;
           final productName = item['product_name'] as String;
           final unitPrice = item['unit_price'] as double;
+          final markedPrice = (item['marked_price'] as num?)?.toDouble() ?? unitPrice;
           final priceCategoryUsed =
               (item['price_category_used'] ?? 'selling').toString();
           final costPriceSnapshot =
               (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
           final quantity = (item['quantity'] as num).toDouble();
           final baseLineTotal = item['base_line_total'] as double;
+          final itemDiscountType =
+              (item['item_discount_type'] ?? 'none').toString();
+          final itemDiscountValue =
+              (item['item_discount_value'] as num?)?.toDouble() ?? 0.0;
+          final explicitItemDiscount =
+              (item['explicit_item_discount_amount'] as num?)?.toDouble() ?? 0.0;
+          final cartDiscount =
+              (item['cart_discount_amount'] as num?)?.toDouble() ?? 0.0;
           final itemDiscount = item['item_discount_amount'] as double;
           final finalLineTotal = item['line_total'] as double;
 
@@ -2207,10 +2275,15 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'marked_price': markedPrice,
             'price_category_used': priceCategoryUsed,
             'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': baseLineTotal,
+            'item_discount_type': itemDiscountType,
+            'item_discount_value': itemDiscountValue,
+            'explicit_item_discount_amount': explicitItemDiscount,
+            'cart_discount_amount': cartDiscount,
             'item_discount_amount': itemDiscount,
             'line_total': finalLineTotal,
             'created_at': now,
@@ -2449,10 +2522,15 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'marked_price': unitPrice,
             'price_category_used': originalPriceCategory,
             'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': refundLineTotal,
+            'item_discount_type': 'none',
+            'item_discount_value': 0.0,
+            'explicit_item_discount_amount': 0.0,
+            'cart_discount_amount': 0.0,
             'item_discount_amount': 0.0,
             'line_total': -refundLineTotal,
             'created_at': now,
@@ -3489,11 +3567,36 @@ class DatabaseHelper {
   Future<List<Map<String, dynamic>>> getTransactionItems(int saleId) async {
     final db = await database;
 
-    final rows = await db.query(
-      'sale_items',
-      where: 'sale_id = ?',
-      whereArgs: [saleId],
-      orderBy: 'id ASC',
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        si.id,
+        si.sale_id,
+        si.barcode,
+        si.product_name,
+        si.unit_price,
+        CASE
+          WHEN COALESCE(si.marked_price, 0) > 0 THEN si.marked_price
+          WHEN COALESCE(p.selling_price, 0) > 0 THEN p.selling_price
+          ELSE si.unit_price
+        END AS marked_price,
+        si.price_category_used,
+        si.cost_price_snapshot,
+        si.quantity,
+        si.base_line_total,
+        si.item_discount_type,
+        si.item_discount_value,
+        si.explicit_item_discount_amount,
+        si.cart_discount_amount,
+        si.item_discount_amount,
+        si.line_total,
+        si.created_at
+      FROM sale_items si
+      LEFT JOIN products p ON p.barcode = si.barcode
+      WHERE si.sale_id = ?
+      ORDER BY si.id ASC
+      ''',
+      [saleId],
     );
 
     return rows
@@ -3504,10 +3607,15 @@ class DatabaseHelper {
             'barcode': row['barcode'],
             'product_name': row['product_name'],
             'unit_price': row['unit_price'],
+            'marked_price': row['marked_price'],
             'price_category_used': row['price_category_used'],
             'cost_price_snapshot': row['cost_price_snapshot'],
             'quantity': row['quantity'],
             'base_line_total': row['base_line_total'],
+            'item_discount_type': row['item_discount_type'],
+            'item_discount_value': row['item_discount_value'],
+            'explicit_item_discount_amount': row['explicit_item_discount_amount'],
+            'cart_discount_amount': row['cart_discount_amount'],
             'item_discount_amount': row['item_discount_amount'],
             'line_total': row['line_total'],
             'created_at': row['created_at'],
