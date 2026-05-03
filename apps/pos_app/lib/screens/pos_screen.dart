@@ -84,9 +84,13 @@ class _PosScreenState extends State<PosScreen> {
   bool _showWelcomeOverlay = false;
   bool _renderWelcomeOverlay = false;
   Timer? _productRefreshTimer;
-  Timer? _barcodeInputTimer;
+  Timer? _barcodeScannerSubmitTimer;
   Timer? _welcomeOverlayTimer;
   Timer? _welcomeOverlayCleanupTimer;
+  DateTime? _barcodeInputStartedAt;
+  DateTime? _lastBarcodeInputAt;
+  String _lastBarcodeInputValue = '';
+  int _rapidBarcodeInputSteps = 0;
 
   final ScrollController _cartScrollController = ScrollController();
   int _lastCartItemCount = 0;
@@ -154,7 +158,7 @@ class _PosScreenState extends State<PosScreen> {
   @override
   void dispose() {
     _productRefreshTimer?.cancel();
-    _barcodeInputTimer?.cancel();
+    _barcodeScannerSubmitTimer?.cancel();
     _welcomeOverlayTimer?.cancel();
     _welcomeOverlayCleanupTimer?.cancel();
     _barcodeController.dispose();
@@ -645,19 +649,72 @@ class _PosScreenState extends State<PosScreen> {
 
   void _handleBarcodeChanged(CartProvider cart, String value) {
     setState(() {});
-    _barcodeInputTimer?.cancel();
 
-    final trimmed = value.trim();
-    if (trimmed.length < 6) {
+    _barcodeScannerSubmitTimer?.cancel();
+
+    final text = value.trim();
+    final now = DateTime.now();
+    if (text.isEmpty) {
+      _resetBarcodeScannerTracking();
       return;
     }
 
-    _barcodeInputTimer = Timer(const Duration(milliseconds: 150), () {
+    final previousValue = _lastBarcodeInputValue;
+    final previousAt = _lastBarcodeInputAt;
+    final isGrowingInput =
+        previousValue.isEmpty ||
+        (value.length > previousValue.length && value.startsWith(previousValue));
+
+    if (!isGrowingInput) {
+      _barcodeInputStartedAt = now;
+      _rapidBarcodeInputSteps = value.length;
+    } else if (previousAt == null) {
+      _barcodeInputStartedAt = now;
+      _rapidBarcodeInputSteps = value.length;
+    } else {
+      final gapMs = now.difference(previousAt).inMilliseconds;
+      final addedChars = value.length - previousValue.length;
+      if (gapMs <= 45) {
+        _rapidBarcodeInputSteps += addedChars > 0 ? addedChars : 1;
+      } else {
+        _barcodeInputStartedAt = now;
+        _rapidBarcodeInputSteps = addedChars > 0 ? addedChars : 1;
+      }
+    }
+
+    _lastBarcodeInputAt = now;
+    _lastBarcodeInputValue = value;
+
+    if (text.length < 6) return;
+
+    _barcodeScannerSubmitTimer = Timer(const Duration(milliseconds: 90), () {
       if (!mounted) return;
-      if (_barcodeController.text.trim() != trimmed) return;
+      if (_barcodeController.text.trim() != text) return;
       if (_searchFocusNode.hasFocus) return;
+      if (_findProductByBarcode(text) == null) return;
+
+      final startedAt = _barcodeInputStartedAt;
+      if (startedAt == null) return;
+
+      final elapsedMs = DateTime.now().difference(startedAt).inMilliseconds;
+      final maxScannerMs = text.length <= 8 ? 300 : 520;
+      final minScannerSteps = text.length < 6 ? text.length : 6;
+      final looksLikeScanner =
+          _rapidBarcodeInputSteps >= minScannerSteps &&
+          elapsedMs <= maxScannerMs;
+
+      if (!looksLikeScanner) return;
+
       _handleBarcodeSubmit(cart);
     });
+  }
+
+  void _resetBarcodeScannerTracking() {
+    _barcodeScannerSubmitTimer?.cancel();
+    _barcodeInputStartedAt = null;
+    _lastBarcodeInputAt = null;
+    _lastBarcodeInputValue = '';
+    _rapidBarcodeInputSteps = 0;
   }
 
   Future<void> _showHardwareSetupDialog() async {
@@ -1337,6 +1394,7 @@ class _PosScreenState extends State<PosScreen> {
       _products.where((product) => product.stock <= 0).length;
 
   Future<void> _handleBarcodeSubmit(CartProvider cart) async {
+    _resetBarcodeScannerTracking();
     final barcode = _barcodeController.text.trim();
 
     if (barcode.isEmpty) {
@@ -3162,7 +3220,7 @@ class _PosScreenState extends State<PosScreen> {
                     : IconButton(
                         tooltip: 'Clear barcode',
                         onPressed: () {
-                          _barcodeInputTimer?.cancel();
+                          _resetBarcodeScannerTracking();
                           _barcodeController.clear();
                           setState(() {});
                           _focusBarcodeField();
