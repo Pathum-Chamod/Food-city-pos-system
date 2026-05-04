@@ -100,6 +100,7 @@ class _PosScreenState extends State<PosScreen> {
 
   final ScrollController _cartScrollController = ScrollController();
   int _lastCartItemCount = 0;
+  int? _selectedCartIndex;
 
   final TextEditingController _barcodeController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
@@ -185,9 +186,24 @@ class _PosScreenState extends State<PosScreen> {
     final hasModifier = keyboard.isAltPressed ||
         keyboard.isControlPressed ||
         keyboard.isMetaPressed;
-    if (hasModifier) return false;
 
     final cart = context.read<CartProvider>();
+    if (_activeModalCount == 0 &&
+        (keyboard.isControlPressed || keyboard.isMetaPressed) &&
+        !keyboard.isAltPressed) {
+      if (event.logicalKey == LogicalKeyboardKey.keyD) {
+        _clearSelectedItemDiscount(cart);
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.keyL) {
+        unawaited(_confirmClearCart(cart));
+        return true;
+      }
+    }
+
+    if (hasModifier) return false;
+
     if (_activeModalCount == 0) {
       if (event.logicalKey == LogicalKeyboardKey.home) {
         _focusBarcodeField();
@@ -236,6 +252,64 @@ class _PosScreenState extends State<PosScreen> {
           baseOffset: 0,
           extentOffset: _searchController.text.length,
         );
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+        _moveCartSelection(cart, -1);
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        _moveCartSelection(cart, 1);
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.pageUp) {
+        _jumpCartSelection(cart, toBottom: false);
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.pageDown) {
+        _jumpCartSelection(cart, toBottom: true);
+        return true;
+      }
+
+      final character = event.character;
+      final isPlusKey = character == '+' ||
+          event.logicalKey == LogicalKeyboardKey.numpadAdd;
+      final isMinusKey = character == '-' ||
+          event.logicalKey == LogicalKeyboardKey.minus ||
+          event.logicalKey == LogicalKeyboardKey.numpadSubtract;
+      final canUseLetterCartShortcut =
+          !_searchFocusNode.hasFocus && _barcodeController.text.trim().isEmpty;
+
+      if (isPlusKey && !_searchFocusNode.hasFocus) {
+        unawaited(_increaseSelectedCartItem(cart));
+        return true;
+      }
+
+      if (isMinusKey && !_searchFocusNode.hasFocus) {
+        unawaited(_decreaseSelectedCartItem(cart));
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.delete &&
+          !_searchFocusNode.hasFocus &&
+          _barcodeController.text.trim().isEmpty) {
+        unawaited(_confirmRemoveSelectedCartItem(cart));
+        return true;
+      }
+
+      if (canUseLetterCartShortcut &&
+          event.logicalKey == LogicalKeyboardKey.keyQ) {
+        unawaited(_editSelectedCartItemQuantity(cart));
+        return true;
+      }
+
+      if (canUseLetterCartShortcut &&
+          event.logicalKey == LogicalKeyboardKey.keyD) {
+        unawaited(_applyDiscountToSelectedCartItem(cart));
         return true;
       }
 
@@ -466,19 +540,44 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
+  void _scrollCartToIndex(int index, {bool animated = true}) {
+    if (!_cartScrollController.hasClients) return;
+
+    final maxScroll = _cartScrollController.position.maxScrollExtent;
+    final target = (index * 112.0).clamp(0.0, maxScroll);
+
+    if (animated) {
+      _cartScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _cartScrollController.jumpTo(target);
+    }
+  }
+
   void _syncCartAutoScroll(CartProvider cart) {
     final currentCount = cart.items.length;
 
     if (currentCount == 0) {
       _lastCartItemCount = 0;
+      _selectedCartIndex = null;
       return;
     }
 
     if (currentCount > _lastCartItemCount) {
+      _selectedCartIndex = currentCount - 1;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _scrollCartToLatest();
       });
+    } else if (_selectedCartIndex == null) {
+      _selectedCartIndex = currentCount - 1;
+    } else if (_selectedCartIndex! >= currentCount) {
+      _selectedCartIndex = currentCount - 1;
+    } else if (_selectedCartIndex! < 0) {
+      _selectedCartIndex = 0;
     }
 
     _lastCartItemCount = currentCount;
@@ -1348,6 +1447,385 @@ class _PosScreenState extends State<PosScreen> {
       return _formatQuantityWithUnit(quantity, product.unitLabel);
     }
     return '${_formatQuantity(quantity)} pcs';
+  }
+
+  CartItem? _selectedCartItem(CartProvider cart, {bool showMessage = true}) {
+    if (cart.items.isEmpty) {
+      if (showMessage) {
+        _showInfoMessage(
+          'Cart is empty.',
+          backgroundColor: _warningColor,
+        );
+      }
+      return null;
+    }
+
+    final index = ((_selectedCartIndex ?? cart.items.length - 1).clamp(
+      0,
+      cart.items.length - 1,
+    )) as int;
+    _selectedCartIndex = index;
+    return cart.items[index];
+  }
+
+  void _moveCartSelection(CartProvider cart, int delta) {
+    if (cart.items.isEmpty) {
+      _selectedCartIndex = null;
+      _focusBarcodeField();
+      return;
+    }
+
+    final current = _selectedCartIndex ?? cart.items.length - 1;
+    final next = ((current + delta).clamp(0, cart.items.length - 1)) as int;
+
+    setState(() {
+      _selectedCartIndex = next;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _selectedCartIndex == null) return;
+      _scrollCartToIndex(_selectedCartIndex!);
+    });
+    _focusBarcodeField();
+  }
+
+  void _jumpCartSelection(CartProvider cart, {required bool toBottom}) {
+    if (cart.items.isEmpty) {
+      _selectedCartIndex = null;
+      _focusBarcodeField();
+      return;
+    }
+
+    final next = toBottom ? cart.items.length - 1 : 0;
+    setState(() {
+      _selectedCartIndex = next;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_cartScrollController.hasClients) return;
+      if (toBottom) {
+        _scrollCartToLatest();
+      } else {
+        _cartScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    });
+    _focusBarcodeField();
+  }
+
+  double? _maxQuantityForCartItem(CartProvider cart, CartItem item) {
+    if (cart.isRefundMode) return null;
+
+    final currentStock = _getCurrentStock(
+      item.product.barcode,
+      fallback: item.product.stock,
+    );
+    final otherQtyInCart = _sanitizeQuantity(
+      _getQuantityInCart(cart, item.product.barcode) - item.quantity,
+    );
+    return _sanitizeQuantity(currentStock - otherQtyInCart);
+  }
+
+  Future<void> _editCartItemQuantity(CartProvider cart, CartItem item) async {
+    final maxQuantity = _maxQuantityForCartItem(cart, item);
+
+    if (!cart.isRefundMode &&
+        maxQuantity != null &&
+        maxQuantity <= _quantityEpsilon) {
+      _showInfoMessage(
+        'No stock is available to increase ${item.product.name}.',
+        backgroundColor: _dangerColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    final updatedQuantity = item.product.isWeighted
+        ? await _promptWeightedQuantity(
+            product: item.product,
+            title: 'Edit ${item.product.unitLabel} quantity',
+            confirmLabel: 'Update',
+            initialQuantity: item.quantity,
+            unitPrice: item.unitPrice,
+            maxQuantity: maxQuantity,
+          )
+        : await _promptUnitQuantity(
+            product: item.product,
+            title: 'Edit quantity',
+            confirmLabel: 'Update',
+            initialQuantity: item.quantity,
+            unitPrice: item.unitPrice,
+            maxQuantity: maxQuantity,
+          );
+
+    if (updatedQuantity == null) {
+      _focusBarcodeField();
+      return;
+    }
+
+    cart.updateQuantity(item, updatedQuantity);
+    _focusBarcodeField();
+  }
+
+  Future<void> _editSelectedCartItemQuantity(CartProvider cart) async {
+    final item = _selectedCartItem(cart);
+    if (item == null) return;
+
+    await _editCartItemQuantity(cart, item);
+  }
+
+  Future<void> _increaseSelectedCartItem(CartProvider cart) async {
+    final item = _selectedCartItem(cart);
+    if (item == null) return;
+
+    if (item.product.isWeighted) {
+      await _editCartItemQuantity(cart, item);
+      return;
+    }
+
+    final maxQuantity = _maxQuantityForCartItem(cart, item);
+    if (maxQuantity != null &&
+        _quantityExceeds(item.quantity + 1.0, maxQuantity)) {
+      _showInfoMessage(
+        'Cannot exceed available stock for ${item.product.name}.',
+        backgroundColor: _dangerColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    cart.increaseQuantity(item);
+    _focusBarcodeField();
+  }
+
+  Future<void> _decreaseSelectedCartItem(CartProvider cart) async {
+    final item = _selectedCartItem(cart);
+    if (item == null) return;
+
+    if (item.product.isWeighted) {
+      await _editCartItemQuantity(cart, item);
+      return;
+    }
+
+    final willRemove = item.quantity <= 1 + _quantityEpsilon;
+    final currentIndex = _selectedCartIndex ?? cart.items.indexOf(item);
+    cart.decreaseQuantity(item);
+
+    if (willRemove) {
+      setState(() {
+        _selectedCartIndex = cart.items.isEmpty
+            ? null
+            : (currentIndex.clamp(0, cart.items.length - 1)) as int;
+      });
+      _showInfoMessage('Item removed from cart.', backgroundColor: _warningColor);
+    }
+
+    _focusBarcodeField();
+  }
+
+  Future<bool> _showKeyboardConfirmDialog({
+    required String title,
+    required String message,
+    required String confirmLabel,
+    required IconData icon,
+    Color? confirmColor,
+  }) async {
+    _activeModalCount += 1;
+
+    try {
+      final tone = confirmColor ?? _brandColor;
+      final toneSoft = tone.withOpacity(_isDark ? 0.18 : 0.12);
+      final result = await showPremiumDialog<bool>(
+        context: context,
+        builder: (dialogContext) {
+          void close(bool value) {
+            Navigator.of(dialogContext).pop(value);
+          }
+
+          return Focus(
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+                  event.logicalKey == LogicalKeyboardKey.numpadEnter;
+
+              if (isEnterKey) {
+                close(true);
+                return KeyEventResult.handled;
+              }
+
+              if (event.logicalKey == LogicalKeyboardKey.escape) {
+                close(false);
+                return KeyEventResult.handled;
+              }
+
+              return KeyEventResult.ignored;
+            },
+            child: Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 460),
+                padding: const EdgeInsets.all(24),
+                decoration: _panelDecoration(color: _panelColor),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            color: toneSoft,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: tone.withOpacity(0.24)),
+                          ),
+                          child: Icon(icon, color: tone, size: 28),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Text(
+                            title,
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      message,
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        height: 1.45,
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => close(false),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () => close(true),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: tone,
+                              foregroundColor: Colors.white,
+                              minimumSize: const Size.fromHeight(46),
+                            ),
+                            child: Text(confirmLabel),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+
+      return result ?? false;
+    } finally {
+      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+    }
+  }
+
+  Future<void> _confirmRemoveSelectedCartItem(CartProvider cart) async {
+    final item = _selectedCartItem(cart);
+    if (item == null) return;
+
+    final confirmed = await _showKeyboardConfirmDialog(
+      title: 'Remove Selected Item?',
+      message: 'Remove ${item.product.name} from the current cart?',
+      confirmLabel: 'Remove',
+      icon: Icons.delete_outline_rounded,
+      confirmColor: _dangerColor,
+    );
+
+    if (!mounted || !confirmed) {
+      _focusBarcodeField();
+      return;
+    }
+
+    final currentIndex = _selectedCartIndex ?? cart.items.indexOf(item);
+    cart.removeItem(item);
+    setState(() {
+      _selectedCartIndex = cart.items.isEmpty
+          ? null
+          : (currentIndex.clamp(0, cart.items.length - 1)) as int;
+    });
+    _focusBarcodeField();
+  }
+
+  Future<void> _applyDiscountToSelectedCartItem(CartProvider cart) async {
+    final item = _selectedCartItem(cart);
+    if (item == null) return;
+
+    await _applyItemDiscount(cart, item);
+  }
+
+  void _clearSelectedItemDiscount(CartProvider cart) {
+    final item = _selectedCartItem(cart);
+    if (item == null) return;
+
+    if (item.discountAmount <= 0) {
+      _showInfoMessage(
+        'Selected item has no discount.',
+        backgroundColor: _warningColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    cart.clearItemDiscount(item);
+    _focusBarcodeField();
+  }
+
+  Future<void> _confirmClearCart(CartProvider cart) async {
+    if (cart.items.isEmpty) {
+      _showInfoMessage('Cart is already empty.', backgroundColor: _warningColor);
+      _focusBarcodeField();
+      return;
+    }
+
+    final confirmed = await _showKeyboardConfirmDialog(
+      title: 'Clear Whole Cart?',
+      message: 'Remove every item from the current cart?',
+      confirmLabel: 'Clear Cart',
+      icon: Icons.delete_sweep_rounded,
+      confirmColor: _dangerColor,
+    );
+
+    if (!mounted || !confirmed) {
+      _focusBarcodeField();
+      return;
+    }
+
+    cart.clearCart();
+    setState(() {
+      _selectedCartIndex = null;
+    });
+    _focusBarcodeField();
   }
 
   String _formatPriceCaption(Product product, double unitPrice) {
@@ -2229,15 +2707,22 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     await _runProtectedManagerAction(() async {
-      final result = await showCartDiscountDialog(
-        context,
-        subtotal: cart.discountedSubtotal,
-        currentDiscountType: cart.discountType,
-        currentDiscountValue: cart.discountValue,
-        title: 'Apply Cart Discount',
-        amountLabel: 'Discountable Total',
-        totalLabel: 'Cart Total',
-      );
+      _activeModalCount += 1;
+      Map<String, dynamic>? result;
+
+      try {
+        result = await showCartDiscountDialog(
+          context,
+          subtotal: cart.discountedSubtotal,
+          currentDiscountType: cart.discountType,
+          currentDiscountValue: cart.discountValue,
+          title: 'Apply Cart Discount',
+          amountLabel: 'Discountable Total',
+          totalLabel: 'Cart Total',
+        );
+      } finally {
+        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+      }
 
       if (!mounted || result == null) return;
 
@@ -2260,15 +2745,22 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     await _runProtectedManagerAction(() async {
-      final result = await showCartDiscountDialog(
-        context,
-        subtotal: item.baseTotal,
-        currentDiscountType: item.discountType,
-        currentDiscountValue: item.discountValue,
-        title: 'Apply Item Discount',
-        amountLabel: 'Item Total',
-        totalLabel: 'Line Total',
-      );
+      _activeModalCount += 1;
+      Map<String, dynamic>? result;
+
+      try {
+        result = await showCartDiscountDialog(
+          context,
+          subtotal: item.baseTotal,
+          currentDiscountType: item.discountType,
+          currentDiscountValue: item.discountValue,
+          title: 'Apply Item Discount',
+          amountLabel: 'Item Total',
+          totalLabel: 'Line Total',
+        );
+      } finally {
+        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+      }
 
       if (!mounted || result == null) return;
 
@@ -4389,7 +4881,12 @@ class _PosScreenState extends State<PosScreen> {
                       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
                       itemBuilder: (context, index) {
                         final item = cart.items[index];
-                        return _buildCartItemRow(cart, item);
+                        return _buildCartItemRow(
+                          cart,
+                          item,
+                          index: index,
+                          isSelected: _selectedCartIndex == index,
+                        );
                       },
                       separatorBuilder: (_, __) => const SizedBox(height: 6),
                       itemCount: cart.items.length,
@@ -4531,20 +5028,50 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  Widget _buildCartItemRow(CartProvider cart, CartItem item) {
+  Widget _buildCartItemRow(
+    CartProvider cart,
+    CartItem item, {
+    required int index,
+    required bool isSelected,
+  }) {
     final currentStock = _getCurrentStock(
       item.product.barcode,
       fallback: item.product.stock,
     );
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
-      decoration: BoxDecoration(
-        color: _panelSoft,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _borderColor),
-      ),
-      child: Column(
+    final selectedColor = cart.isRefundMode ? _dangerColor : _brandColor;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () {
+        setState(() {
+          _selectedCartIndex = index;
+        });
+        _focusBarcodeField();
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? selectedColor.withOpacity(_isDark ? 0.18 : 0.10)
+              : _panelSoft,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected ? selectedColor : _borderColor,
+            width: isSelected ? 1.4 : 1.0,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: selectedColor.withOpacity(_isDark ? 0.16 : 0.10),
+                    blurRadius: 14,
+                    offset: const Offset(0, 6),
+                  ),
+                ]
+              : null,
+        ),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -4837,6 +5364,7 @@ class _PosScreenState extends State<PosScreen> {
             ),
           ],
         ],
+      ),
       ),
     );
   }
