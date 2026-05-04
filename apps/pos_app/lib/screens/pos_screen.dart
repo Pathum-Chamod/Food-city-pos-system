@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
 
 import '../config/pos_feature_flags.dart';
+import '../navigation/pos_route_names.dart';
 import '../providers/auth_provider.dart';
 import '../providers/cart_provider.dart';
 import '../providers/app_theme_provider.dart';
@@ -187,7 +188,12 @@ class _PosScreenState extends State<PosScreen> {
     if (hasModifier) return false;
 
     final cart = context.read<CartProvider>();
-    if (_activeModalCount == 0 && !_searchFocusNode.hasFocus) {
+    if (_activeModalCount == 0) {
+      if (event.logicalKey == LogicalKeyboardKey.home) {
+        _focusBarcodeField();
+        return true;
+      }
+
       ProductPriceType? shortcutPriceType;
       if (event.logicalKey == LogicalKeyboardKey.f1) {
         shortcutPriceType = ProductPriceType.selling;
@@ -199,6 +205,59 @@ class _PosScreenState extends State<PosScreen> {
 
       if (shortcutPriceType != null) {
         unawaited(_handlePriceTypeSelection(cart, shortcutPriceType));
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.f4) {
+        if (cart.items.isEmpty) {
+          _showInfoMessage(
+            'Add items before holding the cart.',
+            backgroundColor: _warningColor,
+          );
+        } else {
+          unawaited(_holdCurrentCart(cart));
+        }
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.f5) {
+        unawaited(_openHeldCarts(cart));
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.f6) {
+        unawaited(_applyDiscount(cart));
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.f7) {
+        _searchFocusNode.requestFocus();
+        _searchController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _searchController.text.length,
+        );
+        return true;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.escape) {
+        if (_searchFocusNode.hasFocus) {
+          if (_searchController.text.isNotEmpty) {
+            _searchController.clear();
+            setState(() {
+              _searchQuery = '';
+            });
+          }
+          _focusBarcodeField();
+          return true;
+        }
+
+        if (_barcodeController.text.isNotEmpty) {
+          _barcodeController.clear();
+          _resetBarcodeScannerTracking();
+          return true;
+        }
+
+        _focusBarcodeField();
         return true;
       }
     }
@@ -2600,7 +2659,10 @@ class _PosScreenState extends State<PosScreen> {
 
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => const UserManagementScreen()),
+      MaterialPageRoute(
+        settings: const RouteSettings(name: PosRouteNames.userManagement),
+        builder: (context) => const UserManagementScreen(),
+      ),
     );
 
     if (!mounted) return;
@@ -2617,6 +2679,7 @@ class _PosScreenState extends State<PosScreen> {
       await Navigator.push(
         context,
         MaterialPageRoute(
+          settings: const RouteSettings(name: PosRouteNames.supplierManagement),
           builder: (context) =>
               SupplierManagementScreen(cashierName: cashierName),
         ),
@@ -2638,6 +2701,7 @@ class _PosScreenState extends State<PosScreen> {
     await Navigator.push<bool>(
       context,
       MaterialPageRoute(
+        settings: const RouteSettings(name: PosRouteNames.shiftManagement),
         builder: (context) => ShiftManagementScreen(cashierName: cashierName),
       ),
     );
@@ -3112,6 +3176,7 @@ class _PosScreenState extends State<PosScreen> {
     final restored = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
+        settings: const RouteSettings(name: PosRouteNames.heldCarts),
         builder: (context) => HeldCartsScreen(cashierName: cashierName),
       ),
     );
@@ -3177,6 +3242,7 @@ class _PosScreenState extends State<PosScreen> {
         await Navigator.push(
           context,
           MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.cashierSummary),
             builder: (context) =>
                 CashierSummaryScreen(cashierName: cashierName),
           ),
@@ -3188,7 +3254,10 @@ class _PosScreenState extends State<PosScreen> {
       case 'inventory':
         await Navigator.push(
           context,
-          MaterialPageRoute(builder: (context) => const InventoryScreen()),
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.inventory),
+            builder: (context) => const InventoryScreen(),
+          ),
         );
         break;
       case 'supplier_ops':
@@ -3198,6 +3267,8 @@ class _PosScreenState extends State<PosScreen> {
         await Navigator.push(
           context,
           MaterialPageRoute(
+            settings:
+                const RouteSettings(name: PosRouteNames.transactionHistory),
             builder: (context) => const TransactionHistoryScreen(),
           ),
         );
@@ -3217,7 +3288,10 @@ class _PosScreenState extends State<PosScreen> {
       case 'sales_report':
         await Navigator.push(
           context,
-          MaterialPageRoute(builder: (context) => const SalesReportScreen()),
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.salesReport),
+            builder: (context) => const SalesReportScreen(),
+          ),
         );
         break;
       case 'shift_management':
@@ -3673,7 +3747,10 @@ class _PosScreenState extends State<PosScreen> {
 
               Navigator.pushReplacement(
                 context,
-                MaterialPageRoute(builder: (context) => const LoginScreen()),
+                MaterialPageRoute(
+                  settings: const RouteSettings(name: PosRouteNames.login),
+                  builder: (context) => const LoginScreen(),
+                ),
               );
             },
           ),

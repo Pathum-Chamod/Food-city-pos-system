@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/app_theme_provider.dart';
 import '../providers/auth_provider.dart';
+import '../navigation/pos_route_names.dart';
 import '../widgets/app_snackbar.dart';
 import 'pos_screen.dart';
 
@@ -200,6 +201,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Route<void> _buildPosRoute(String? userName) {
     return PageRouteBuilder<void>(
+      settings: const RouteSettings(name: PosRouteNames.pos),
       transitionDuration: const Duration(milliseconds: 720),
       reverseTransitionDuration: const Duration(milliseconds: 360),
       pageBuilder: (_, animation, secondaryAnimation) => PosScreen(
