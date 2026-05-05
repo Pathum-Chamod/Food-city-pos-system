@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../services/card_terminal_service.dart';
 import '../widgets/premium_dialog.dart';
@@ -274,13 +275,32 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                   ? warning
                   : danger;
 
-          return Dialog(
-            backgroundColor: Colors.transparent,
-            insetPadding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 24,
-            ),
-            child: Container(
+          return Focus(
+            onKeyEvent: (node, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+                  event.logicalKey == LogicalKeyboardKey.numpadEnter;
+              if (isEnterKey) {
+                unawaited(confirmPayment());
+                return KeyEventResult.handled;
+              }
+
+              if (event.logicalKey == LogicalKeyboardKey.escape &&
+                  !isProcessingCard) {
+                Navigator.pop(context);
+                return KeyEventResult.handled;
+              }
+
+              return KeyEventResult.ignored;
+            },
+            child: Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
+              child: Container(
               constraints: const BoxConstraints(maxWidth: 540),
               decoration: BoxDecoration(
                 color: bg,
@@ -735,6 +755,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                     ),
                   ],
                 ),
+              ),
               ),
             ),
           );

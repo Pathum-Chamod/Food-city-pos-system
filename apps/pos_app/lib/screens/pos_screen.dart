@@ -902,13 +902,15 @@ class _PosScreenState extends State<PosScreen> {
 
     if (!mounted) return;
 
-    await showPremiumDialog<void>(
-      context: context,
-      builder: (context) {
-        var ports = List<String>.from(initialPorts);
-        var printers = List<String>.from(initialPrinters);
-        var selectedBaudRate = cardTerminal.baudRate;
-        var isBusy = false;
+    _activeModalCount += 1;
+    try {
+      await showPremiumDialog<void>(
+        context: context,
+        builder: (context) {
+          var ports = List<String>.from(initialPorts);
+          var printers = List<String>.from(initialPrinters);
+          var selectedBaudRate = cardTerminal.baudRate;
+          var isBusy = false;
 
         Future<void> refreshLists(StateSetter setState) async {
           setState(() {
@@ -1031,9 +1033,9 @@ class _PosScreenState extends State<PosScreen> {
           );
         }
 
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
+          return StatefulBuilder(
+            builder: (context, setState) {
+              return AlertDialog(
               title: const Text('Hardware Setup'),
               content: SizedBox(
                 width: 580,
@@ -1268,11 +1270,14 @@ class _PosScreenState extends State<PosScreen> {
                   child: const Text('Close'),
                 ),
               ],
-            );
-          },
-        );
-      },
-    );
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+    }
 
     _focusBarcodeField();
   }
@@ -2250,13 +2255,24 @@ class _PosScreenState extends State<PosScreen> {
               ).pop(_sanitizeQuantity(double.parse(controller.text.trim())));
             }
 
-            return Dialog(
-              backgroundColor: Colors.transparent,
-              insetPadding: const EdgeInsets.symmetric(
-                horizontal: 24,
-                vertical: 24,
-              ),
-              child: AnimatedPadding(
+            return Focus(
+              onKeyEvent: (node, event) {
+                if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+                if (event.logicalKey == LogicalKeyboardKey.escape) {
+                  Navigator.of(dialogContext).pop();
+                  return KeyEventResult.handled;
+                }
+
+                return KeyEventResult.ignored;
+              },
+              child: Dialog(
+                backgroundColor: Colors.transparent,
+                insetPadding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 24,
+                ),
+                child: AnimatedPadding(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOut,
                 padding: EdgeInsets.only(
@@ -2392,6 +2408,7 @@ class _PosScreenState extends State<PosScreen> {
                     ),
                   ),
                 ),
+                ),
               ),
             );
           },
@@ -2458,13 +2475,24 @@ class _PosScreenState extends State<PosScreen> {
               ).pop(_sanitizeQuantity(double.parse(controller.text.trim())));
             }
 
-            return Dialog(
-              backgroundColor: Colors.transparent,
-              insetPadding: const EdgeInsets.symmetric(
-                horizontal: 24,
-                vertical: 24,
-              ),
-              child: AnimatedPadding(
+            return Focus(
+              onKeyEvent: (node, event) {
+                if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+                if (event.logicalKey == LogicalKeyboardKey.escape) {
+                  Navigator.of(dialogContext).pop();
+                  return KeyEventResult.handled;
+                }
+
+                return KeyEventResult.ignored;
+              },
+              child: Dialog(
+                backgroundColor: Colors.transparent,
+                insetPadding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 24,
+                ),
+                child: AnimatedPadding(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOut,
                 padding: EdgeInsets.only(
@@ -2597,6 +2625,7 @@ class _PosScreenState extends State<PosScreen> {
                       ],
                     ),
                   ),
+                ),
                 ),
               ),
             );
@@ -2811,6 +2840,7 @@ class _PosScreenState extends State<PosScreen> {
 
     if (!isRefund) {
       _isPaymentDialogOpen = true;
+      _activeModalCount += 1;
       final Map<String, dynamic>? paymentResult;
       try {
         paymentResult = await showCheckoutPaymentDialog(
@@ -2820,6 +2850,7 @@ class _PosScreenState extends State<PosScreen> {
         );
       } finally {
         _isPaymentDialogOpen = false;
+        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
       }
 
       if (paymentResult == null) {
@@ -3206,17 +3237,31 @@ class _PosScreenState extends State<PosScreen> {
     if (cart.items.isEmpty) return;
 
     final controller = TextEditingController();
+    _activeModalCount += 1;
 
-    final cartName = await showPremiumDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 24,
-            vertical: 24,
-          ),
-          child: StatefulBuilder(
+    String? cartName;
+    try {
+      cartName = await showPremiumDialog<String>(
+        context: context,
+        builder: (dialogContext) {
+          return Focus(
+            onKeyEvent: (node, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+              if (event.logicalKey == LogicalKeyboardKey.escape) {
+                Navigator.pop(dialogContext);
+                return KeyEventResult.handled;
+              }
+
+              return KeyEventResult.ignored;
+            },
+            child: Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
+              child: StatefulBuilder(
             builder: (context, setLocalState) {
               return Container(
                 constraints: const BoxConstraints(maxWidth: 520),
@@ -3384,9 +3429,13 @@ class _PosScreenState extends State<PosScreen> {
               );
             },
           ),
-        );
-      },
-    );
+            ),
+          );
+        },
+      );
+    } finally {
+      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+    }
 
     controller.dispose();
 
