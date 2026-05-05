@@ -369,21 +369,21 @@ class _PosScreenState extends State<PosScreen> {
         _renderWelcomeOverlay = true;
       });
 
-      Future<void>.delayed(const Duration(milliseconds: 30), () {
+      Future<void>.delayed(const Duration(milliseconds: 16), () {
         if (!mounted) return;
         setState(() {
           _showWelcomeOverlay = true;
         });
       });
 
-      _welcomeOverlayTimer = Timer(const Duration(milliseconds: 2300), () {
+      _welcomeOverlayTimer = Timer(const Duration(milliseconds: 1600), () {
         if (!mounted) return;
         setState(() {
           _showWelcomeOverlay = false;
         });
 
         _welcomeOverlayCleanupTimer = Timer(
-          const Duration(milliseconds: 420),
+          const Duration(milliseconds: 220),
           () {
             if (!mounted) return;
             setState(() {
@@ -419,23 +419,23 @@ class _PosScreenState extends State<PosScreen> {
           child: Align(
             alignment: Alignment.topCenter,
             child: AnimatedSlide(
-              duration: const Duration(milliseconds: 480),
+              duration: const Duration(milliseconds: 220),
               curve: Curves.easeOutCubic,
               offset: _showWelcomeOverlay
                   ? Offset.zero
-                  : const Offset(0, -0.18),
+                  : const Offset(0, -0.08),
               child: AnimatedScale(
-                duration: const Duration(milliseconds: 480),
-                curve: Curves.easeOutBack,
-                scale: _showWelcomeOverlay ? 1 : 0.94,
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                scale: _showWelcomeOverlay ? 1 : 0.98,
                 child: AnimatedOpacity(
-                  duration: const Duration(milliseconds: 360),
-                  curve: Curves.easeOut,
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
                   opacity: _showWelcomeOverlay ? 1 : 0,
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(28),
                     child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                       child: Container(
                         constraints: const BoxConstraints(maxWidth: 420),
                         padding: const EdgeInsets.symmetric(

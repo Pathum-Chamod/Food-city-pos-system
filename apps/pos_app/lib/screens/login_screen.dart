@@ -202,8 +202,8 @@ class _LoginScreenState extends State<LoginScreen> {
   Route<void> _buildPosRoute(String? userName) {
     return PageRouteBuilder<void>(
       settings: const RouteSettings(name: PosRouteNames.pos),
-      transitionDuration: const Duration(milliseconds: 720),
-      reverseTransitionDuration: const Duration(milliseconds: 360),
+      transitionDuration: const Duration(milliseconds: 240),
+      reverseTransitionDuration: const Duration(milliseconds: 140),
       pageBuilder: (_, animation, secondaryAnimation) => PosScreen(
         showWelcomeAnimation: true,
         welcomeUserName: userName,
@@ -211,29 +211,20 @@ class _LoginScreenState extends State<LoginScreen> {
       transitionsBuilder: (_, animation, secondaryAnimation, child) {
         final fade = CurvedAnimation(
           parent: animation,
-          curve: const Interval(0.0, 0.78, curve: Curves.easeOut),
+          curve: Curves.easeOutCubic,
         );
         final slide = Tween<Offset>(
-          begin: const Offset(0, 0.045),
+          begin: const Offset(0, 0.018),
           end: Offset.zero,
         ).animate(
-          CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
-        );
-        final scale = Tween<double>(
-          begin: 0.985,
-          end: 1,
-        ).animate(
-          CurvedAnimation(parent: animation, curve: Curves.easeOutQuart),
+          CurvedAnimation(parent: animation, curve: Curves.easeOutQuad),
         );
 
         return FadeTransition(
           opacity: fade,
           child: SlideTransition(
             position: slide,
-            child: ScaleTransition(
-              scale: scale,
-              child: child,
-            ),
+            child: child,
           ),
         );
       },
