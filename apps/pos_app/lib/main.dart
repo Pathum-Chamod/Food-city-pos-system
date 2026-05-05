@@ -83,6 +83,8 @@ class _PosAppState extends State<PosApp> {
   late final _ShortcutRouteObserver _routeObserver;
   String? _currentRouteName;
   bool _isHandlingGlobalShortcut = false;
+  bool _isShortcutLegendOpen = false;
+  BuildContext? _shortcutLegendDialogContext;
 
   @override
   void initState() {
@@ -100,7 +102,20 @@ class _PosAppState extends State<PosApp> {
   }
 
   bool _handleGlobalKeyboardEvent(KeyEvent event) {
-    if (event is! KeyDownEvent || _isHandlingGlobalShortcut) return false;
+    if (event is! KeyDownEvent) return false;
+
+    final key = event.logicalKey;
+    if (_isShortcutLegendOpen) {
+      if (key == LogicalKeyboardKey.escape) {
+        final dialogContext = _shortcutLegendDialogContext;
+        if (dialogContext != null && dialogContext.mounted) {
+          Navigator.pop(dialogContext);
+        }
+      }
+      return true;
+    }
+
+    if (_isHandlingGlobalShortcut) return false;
 
     final navigatorContext = AppSnackBar.navigatorKey.currentContext;
     if (navigatorContext == null) return false;
@@ -108,11 +123,15 @@ class _PosAppState extends State<PosApp> {
     final auth = navigatorContext.read<AuthProvider>();
     if (!auth.isLoggedIn) return false;
 
-    final key = event.logicalKey;
     final keyboard = HardwareKeyboard.instance;
     final hasControl = keyboard.isControlPressed || keyboard.isMetaPressed;
     final hasShift = keyboard.isShiftPressed;
     final hasAlt = keyboard.isAltPressed;
+
+    if (hasControl && !hasAlt && key == LogicalKeyboardKey.slash) {
+      _runGlobalShortcut(_showShortcutLegend);
+      return true;
+    }
 
     if (key == LogicalKeyboardKey.home) {
       final navigator = AppSnackBar.navigatorKey.currentState;
@@ -187,7 +206,7 @@ class _PosAppState extends State<PosApp> {
   }
 
   void _runGlobalShortcutFromIntent(Future<void> Function() action) {
-    if (_isHandlingGlobalShortcut) return;
+    if (_isHandlingGlobalShortcut || _isShortcutLegendOpen) return;
     final context = AppSnackBar.navigatorKey.currentContext;
     if (context == null) return;
     if (!context.read<AuthProvider>().isLoggedIn) return;
@@ -315,6 +334,322 @@ class _PosAppState extends State<PosApp> {
     if (context == null) return;
 
     await showHardwareSetupDialog(context);
+  }
+
+  Future<void> _showShortcutLegend() async {
+    final context = AppSnackBar.navigatorKey.currentContext;
+    if (context == null || _isShortcutLegendOpen) return;
+
+    _isShortcutLegendOpen = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          _shortcutLegendDialogContext = dialogContext;
+          final theme = Theme.of(dialogContext);
+          final isDark = theme.brightness == Brightness.dark;
+          const brand = Color(0xFF2AAA8A);
+          final bg = isDark ? const Color(0xFF081221) : Colors.white;
+          final surface =
+              isDark ? const Color(0xFF0F1B2D) : const Color(0xFFF6F9FC);
+          final surfaceAlt =
+              isDark ? const Color(0xFF14233A) : const Color(0xFFEFF4FB);
+          final border =
+              isDark ? const Color(0xFF23344E) : const Color(0xFFD9E3F0);
+          final textPrimary =
+              isDark ? Colors.white : const Color(0xFF122033);
+          final textSecondary =
+              isDark ? const Color(0xFFAAB8CB) : const Color(0xFF607089);
+          final screenSize = MediaQuery.of(dialogContext).size;
+          final dialogWidth =
+              screenSize.width >= 1240 ? 1180.0 : screenSize.width - 48;
+
+          Widget keyChip(String label) {
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              decoration: BoxDecoration(
+                color: surfaceAlt,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: border),
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: textPrimary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            );
+          }
+
+          Widget shortcutRow(String keys, String action) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 118,
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: keys.split(' + ').map(keyChip).toList(),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      action,
+                      style: TextStyle(
+                        color: textPrimary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          Widget section(String title, List<Widget> rows) {
+            return Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: brand,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ...rows,
+                ],
+              ),
+            );
+          }
+
+          final posFlowSection = section('POS Flow', [
+              shortcutRow('Barcode + Enter', 'Add item to cart'),
+              shortcutRow('Enter', 'Checkout when input is empty and cart has items'),
+              shortcutRow('Esc', 'Return to barcode/search flow'),
+              shortcutRow('Home', 'Return to POS screen/barcode flow'),
+            ]);
+          final priceModesSection = section('Price Modes', [
+              shortcutRow('F1', 'Selling price mode'),
+              shortcutRow('F2', 'Wholesale price mode'),
+              shortcutRow('F3', 'Sale price mode'),
+              shortcutRow('Double F1/F2/F3', 'Switch whole cart to that price mode'),
+            ]);
+          final cartActionsSection = section('Cart Actions', [
+              shortcutRow('Up / Down', 'Select cart item'),
+              shortcutRow('Page Up', 'Select top cart item'),
+              shortcutRow('Page Down', 'Select bottom cart item'),
+              shortcutRow('+ / -', 'Increase or decrease selected item quantity'),
+              shortcutRow('Delete', 'Remove selected item'),
+              shortcutRow('Q', 'Edit selected item quantity'),
+              shortcutRow('D', 'Apply discount to selected item'),
+              shortcutRow('Ctrl + D', 'Clear selected item discount'),
+              shortcutRow('Ctrl + L', 'Clear whole cart'),
+            ]);
+          final posActionsSection = section('POS Actions', [
+              shortcutRow('F4', 'Hold current cart'),
+              shortcutRow('F5', 'Open held carts'),
+              shortcutRow('F6', 'Apply cart discount'),
+              shortcutRow('F7', 'Focus product search'),
+            ]);
+          final modulesSection = section('Modules', [
+              shortcutRow('F8', 'Transaction history'),
+              shortcutRow('F9', 'Inventory'),
+              shortcutRow('F11', 'Supplier operations'),
+              shortcutRow('F12', 'Store sales report'),
+              shortcutRow('Ctrl + I', 'Inventory'),
+              shortcutRow('Ctrl + H', 'Held carts'),
+              shortcutRow('Ctrl + R', 'Sales report'),
+              shortcutRow('Ctrl + U', 'User management'),
+              shortcutRow('Ctrl + S', 'Cashier summary'),
+              shortcutRow('Ctrl + Shift + H', 'Hardware setup'),
+              shortcutRow('Ctrl + ?', 'Open this shortcut legend'),
+            ]);
+          final popupRulesSection = section('Popup Rules', [
+              shortcutRow('Tab', 'Move to next field'),
+              shortcutRow('Shift + Tab', 'Move to previous field'),
+              shortcutRow('Enter', 'Submit the current step'),
+              shortcutRow('Esc', 'Close or cancel the current popup'),
+            ]);
+
+          final landscapeColumns = <List<Widget>>[
+            [posFlowSection, posActionsSection],
+            [priceModesSection, modulesSection],
+            [cartActionsSection, popupRulesSection],
+          ];
+          final mediumColumns = <List<Widget>>[
+            [posFlowSection, posActionsSection, popupRulesSection],
+            [priceModesSection, cartActionsSection, modulesSection],
+          ];
+          final allSections = <Widget>[
+            posFlowSection,
+            priceModesSection,
+            cartActionsSection,
+            posActionsSection,
+            modulesSection,
+            popupRulesSection,
+          ];
+
+          return Focus(
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+              if (event.logicalKey == LogicalKeyboardKey.escape) {
+                Navigator.pop(dialogContext);
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
+              child: Container(
+                width: dialogWidth,
+                constraints: BoxConstraints(
+                  maxWidth: 1180,
+                  maxHeight: screenSize.height - 64,
+                ),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: border),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(isDark ? 0.34 : 0.12),
+                      blurRadius: 34,
+                      offset: const Offset(0, 18),
+                    ),
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 46,
+                            height: 46,
+                            decoration: BoxDecoration(
+                              color: brand.withOpacity(0.14),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: const Icon(
+                              Icons.keyboard_rounded,
+                              color: brand,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Keyboard Shortcuts',
+                                  style: TextStyle(
+                                    color: textPrimary,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Fast POS actions grouped by workflow.',
+                                  style: TextStyle(
+                                    color: textSecondary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Close',
+                            onPressed: () => Navigator.pop(dialogContext),
+                            style: IconButton.styleFrom(
+                              backgroundColor: surfaceAlt,
+                              foregroundColor: textSecondary,
+                            ),
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              Widget sectionColumn(List<Widget> column) {
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    for (var i = 0; i < column.length; i++) ...[
+                                      if (i > 0) const SizedBox(height: 12),
+                                      column[i],
+                                    ],
+                                  ],
+                                );
+                              }
+
+                              final columns = constraints.maxWidth >= 1040
+                                  ? landscapeColumns
+                                  : constraints.maxWidth >= 720
+                                      ? mediumColumns
+                                      : <List<Widget>>[allSections];
+
+                              if (columns.length == 1) {
+                                return sectionColumn(columns.first);
+                              }
+
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  for (var i = 0; i < columns.length; i++) ...[
+                                    if (i > 0) const SizedBox(width: 12),
+                                    Expanded(child: sectionColumn(columns[i])),
+                                  ],
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    } finally {
+      _isShortcutLegendOpen = false;
+      _shortcutLegendDialogContext = null;
+    }
   }
 
   Future<void> _openHeldCarts() async {
@@ -555,6 +890,16 @@ class _PosAppState extends State<PosApp> {
               shift: true,
             ): () {
               _runGlobalShortcutFromIntent(_openHardwareSetup);
+            },
+            const SingleActivator(LogicalKeyboardKey.slash, control: true): () {
+              _runGlobalShortcutFromIntent(_showShortcutLegend);
+            },
+            const SingleActivator(
+              LogicalKeyboardKey.slash,
+              control: true,
+              shift: true,
+            ): () {
+              _runGlobalShortcutFromIntent(_showShortcutLegend);
             },
           },
           child: child ?? const SizedBox.shrink(),
