@@ -77,6 +77,7 @@ class _PosScreenState extends State<PosScreen> {
   static const double _cartPanelWidth = 430;
   static const double _productTileExtent = 218;
   static const Duration _priceModeDoubleTapWindow = Duration(milliseconds: 650);
+  static const Duration _cartSelectionVisibleDuration = Duration(milliseconds: 1600);
   List<Product> _products = [];
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
@@ -89,6 +90,7 @@ class _PosScreenState extends State<PosScreen> {
   Timer? _barcodeScannerSubmitTimer;
   Timer? _welcomeOverlayTimer;
   Timer? _welcomeOverlayCleanupTimer;
+  Timer? _cartSelectionHideTimer;
   DateTime? _barcodeInputStartedAt;
   DateTime? _lastBarcodeInputAt;
   String _lastBarcodeInputValue = '';
@@ -101,6 +103,7 @@ class _PosScreenState extends State<PosScreen> {
   final ScrollController _cartScrollController = ScrollController();
   int _lastCartItemCount = 0;
   int? _selectedCartIndex;
+  bool _isCartSelectionVisible = false;
 
   final TextEditingController _barcodeController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
@@ -168,6 +171,7 @@ class _PosScreenState extends State<PosScreen> {
     HardwareKeyboard.instance.removeHandler(_handleHardwareKeyboardEvent);
     _productRefreshTimer?.cancel();
     _barcodeScannerSubmitTimer?.cancel();
+    _cartSelectionHideTimer?.cancel();
     _welcomeOverlayTimer?.cancel();
     _welcomeOverlayCleanupTimer?.cancel();
     _barcodeController.dispose();
@@ -557,12 +561,37 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
+  void _showTemporaryCartSelection() {
+    _cartSelectionHideTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _isCartSelectionVisible = true;
+      });
+    } else {
+      _isCartSelectionVisible = true;
+    }
+
+    _cartSelectionHideTimer = Timer(_cartSelectionVisibleDuration, () {
+      if (!mounted) return;
+      setState(() {
+        _isCartSelectionVisible = false;
+      });
+    });
+  }
+
+  void _hideCartSelection() {
+    _cartSelectionHideTimer?.cancel();
+    _cartSelectionHideTimer = null;
+    _isCartSelectionVisible = false;
+  }
+
   void _syncCartAutoScroll(CartProvider cart) {
     final currentCount = cart.items.length;
 
     if (currentCount == 0) {
       _lastCartItemCount = 0;
       _selectedCartIndex = null;
+      _hideCartSelection();
       return;
     }
 
@@ -1470,12 +1499,14 @@ class _PosScreenState extends State<PosScreen> {
       cart.items.length - 1,
     )) as int;
     _selectedCartIndex = index;
+    _showTemporaryCartSelection();
     return cart.items[index];
   }
 
   void _moveCartSelection(CartProvider cart, int delta) {
     if (cart.items.isEmpty) {
       _selectedCartIndex = null;
+      _hideCartSelection();
       _focusBarcodeField();
       return;
     }
@@ -1486,6 +1517,7 @@ class _PosScreenState extends State<PosScreen> {
     setState(() {
       _selectedCartIndex = next;
     });
+    _showTemporaryCartSelection();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _selectedCartIndex == null) return;
@@ -1497,6 +1529,7 @@ class _PosScreenState extends State<PosScreen> {
   void _jumpCartSelection(CartProvider cart, {required bool toBottom}) {
     if (cart.items.isEmpty) {
       _selectedCartIndex = null;
+      _hideCartSelection();
       _focusBarcodeField();
       return;
     }
@@ -1505,6 +1538,7 @@ class _PosScreenState extends State<PosScreen> {
     setState(() {
       _selectedCartIndex = next;
     });
+    _showTemporaryCartSelection();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_cartScrollController.hasClients) return;
@@ -1572,6 +1606,7 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     cart.updateQuantity(item, updatedQuantity);
+    _showTemporaryCartSelection();
     _focusBarcodeField();
   }
 
@@ -1603,6 +1638,7 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     cart.increaseQuantity(item);
+    _showTemporaryCartSelection();
     _focusBarcodeField();
   }
 
@@ -1625,7 +1661,14 @@ class _PosScreenState extends State<PosScreen> {
             ? null
             : (currentIndex.clamp(0, cart.items.length - 1)) as int;
       });
+      if (cart.items.isEmpty) {
+        _hideCartSelection();
+      } else {
+        _showTemporaryCartSelection();
+      }
       _showInfoMessage('Item removed from cart.', backgroundColor: _warningColor);
+    } else {
+      _showTemporaryCartSelection();
     }
 
     _focusBarcodeField();
@@ -1779,6 +1822,11 @@ class _PosScreenState extends State<PosScreen> {
           ? null
           : (currentIndex.clamp(0, cart.items.length - 1)) as int;
     });
+    if (cart.items.isEmpty) {
+      _hideCartSelection();
+    } else {
+      _showTemporaryCartSelection();
+    }
     _focusBarcodeField();
   }
 
@@ -1803,6 +1851,7 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     cart.clearItemDiscount(item);
+    _showTemporaryCartSelection();
     _focusBarcodeField();
   }
 
@@ -1829,7 +1878,10 @@ class _PosScreenState extends State<PosScreen> {
     cart.clearCart();
     setState(() {
       _selectedCartIndex = null;
+      _isCartSelectionVisible = false;
     });
+    _cartSelectionHideTimer?.cancel();
+    _cartSelectionHideTimer = null;
     _focusBarcodeField();
   }
 
@@ -4934,7 +4986,8 @@ class _PosScreenState extends State<PosScreen> {
                           cart,
                           item,
                           index: index,
-                          isSelected: _selectedCartIndex == index,
+                          isSelected:
+                              _isCartSelectionVisible && _selectedCartIndex == index,
                         );
                       },
                       separatorBuilder: (_, __) => const SizedBox(height: 6),
@@ -5096,10 +5149,11 @@ class _PosScreenState extends State<PosScreen> {
         setState(() {
           _selectedCartIndex = index;
         });
+        _showTemporaryCartSelection();
         _focusBarcodeField();
       },
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 140),
+        duration: const Duration(milliseconds: 220),
         padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
         decoration: BoxDecoration(
           color: isSelected
