@@ -766,35 +766,43 @@ class _PosAppState extends State<PosApp> {
               }
               return KeyEventResult.ignored;
             },
-            child: Dialog(
-              backgroundColor: Colors.transparent,
-              insetPadding: const EdgeInsets.symmetric(
-                horizontal: 24,
-                vertical: 24,
-              ),
-              child: Container(
-                width: dialogWidth,
-                constraints: BoxConstraints(
-                  maxWidth: 1180,
-                  maxHeight: screenSize.height - 64,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                    child: const SizedBox.expand(),
+                  ),
                 ),
-                decoration: BoxDecoration(
-                  color: bg,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: border),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(isDark ? 0.34 : 0.12),
-                      blurRadius: 34,
-                      offset: const Offset(0, 18),
+                Dialog(
+                  backgroundColor: Colors.transparent,
+                  insetPadding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 24,
+                  ),
+                  child: Container(
+                    width: dialogWidth,
+                    constraints: BoxConstraints(
+                      maxWidth: 1180,
+                      maxHeight: screenSize.height - 64,
                     ),
-                  ],
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    decoration: BoxDecoration(
+                      color: bg,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: border),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(isDark ? 0.34 : 0.12),
+                          blurRadius: 34,
+                          offset: const Offset(0, 18),
+                        ),
+                      ],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
@@ -887,9 +895,11 @@ class _PosAppState extends State<PosApp> {
                         ),
                       ),
                     ],
+                      ),
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
           );
         },
