@@ -77,7 +77,7 @@ class _PosScreenState extends State<PosScreen> {
   static const double _cartPanelWidth = 430;
   static const double _productTileExtent = 218;
   static const Duration _priceModeDoubleTapWindow = Duration(milliseconds: 650);
-  static const Duration _cartSelectionVisibleDuration = Duration(milliseconds: 1600);
+  static const Duration _cartSelectionVisibleDuration = Duration(seconds: 2);
   List<Product> _products = [];
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
@@ -561,18 +561,25 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  void _showTemporaryCartSelection() {
+  void _showTemporaryCartSelection({int? selectedIndex}) {
     _cartSelectionHideTimer?.cancel();
     if (mounted) {
       setState(() {
+        if (selectedIndex != null) {
+          _selectedCartIndex = selectedIndex;
+        }
         _isCartSelectionVisible = true;
       });
     } else {
+      if (selectedIndex != null) {
+        _selectedCartIndex = selectedIndex;
+      }
       _isCartSelectionVisible = true;
     }
 
     _cartSelectionHideTimer = Timer(_cartSelectionVisibleDuration, () {
       if (!mounted) return;
+      if (!_isCartSelectionVisible) return;
       setState(() {
         _isCartSelectionVisible = false;
       });
@@ -1514,10 +1521,7 @@ class _PosScreenState extends State<PosScreen> {
     final current = _selectedCartIndex ?? cart.items.length - 1;
     final next = ((current + delta).clamp(0, cart.items.length - 1)) as int;
 
-    setState(() {
-      _selectedCartIndex = next;
-    });
-    _showTemporaryCartSelection();
+    _showTemporaryCartSelection(selectedIndex: next);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _selectedCartIndex == null) return;
@@ -1535,10 +1539,7 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     final next = toBottom ? cart.items.length - 1 : 0;
-    setState(() {
-      _selectedCartIndex = next;
-    });
-    _showTemporaryCartSelection();
+    _showTemporaryCartSelection(selectedIndex: next);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_cartScrollController.hasClients) return;
@@ -5146,14 +5147,11 @@ class _PosScreenState extends State<PosScreen> {
     return InkWell(
       borderRadius: BorderRadius.circular(14),
       onTap: () {
-        setState(() {
-          _selectedCartIndex = index;
-        });
-        _showTemporaryCartSelection();
+        _showTemporaryCartSelection(selectedIndex: index);
         _focusBarcodeField();
       },
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
+        duration: const Duration(milliseconds: 80),
         padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
         decoration: BoxDecoration(
           color: isSelected
