@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -84,6 +85,8 @@ class _PosAppState extends State<PosApp> {
   String? _currentRouteName;
   bool _isHandlingGlobalShortcut = false;
   bool _isShortcutLegendOpen = false;
+  bool _isShortcutLegendClosing = false;
+  bool _isLogoutConfirmOpen = false;
   BuildContext? _shortcutLegendDialogContext;
 
   @override
@@ -102,15 +105,14 @@ class _PosAppState extends State<PosApp> {
   }
 
   bool _handleGlobalKeyboardEvent(KeyEvent event) {
+    if (_isLogoutConfirmOpen) return false;
+
     if (event is! KeyDownEvent) return false;
 
     final key = event.logicalKey;
     if (_isShortcutLegendOpen) {
       if (key == LogicalKeyboardKey.escape) {
-        final dialogContext = _shortcutLegendDialogContext;
-        if (dialogContext != null && dialogContext.mounted) {
-          Navigator.pop(dialogContext);
-        }
+        _closeShortcutLegend();
       }
       return true;
     }
@@ -127,6 +129,11 @@ class _PosAppState extends State<PosApp> {
     final hasControl = keyboard.isControlPressed || keyboard.isMetaPressed;
     final hasShift = keyboard.isShiftPressed;
     final hasAlt = keyboard.isAltPressed;
+
+    if (hasShift && !hasControl && !hasAlt && key == LogicalKeyboardKey.escape) {
+      _runGlobalShortcut(_showLogoutConfirmation);
+      return true;
+    }
 
     if (hasControl && !hasAlt && key == LogicalKeyboardKey.slash) {
       _runGlobalShortcut(_showShortcutLegend);
@@ -189,6 +196,235 @@ class _PosAppState extends State<PosApp> {
     }
 
     return false;
+  }
+
+  Future<void> _showLogoutConfirmation() async {
+    final context = AppSnackBar.navigatorKey.currentContext;
+    final navigator = AppSnackBar.navigatorKey.currentState;
+    if (context == null || navigator == null || _isLogoutConfirmOpen) return;
+
+    final auth = context.read<AuthProvider>();
+    if (!auth.isLoggedIn) return;
+
+    _isLogoutConfirmOpen = true;
+    try {
+      final theme = Theme.of(context);
+      final isDark = theme.brightness == Brightness.dark;
+      final bg = isDark ? const Color(0xFF0F1C31) : Colors.white;
+      final surface =
+          isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+      final border =
+          isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+      final textPrimary = isDark ? Colors.white : const Color(0xFF14263B);
+      final textSecondary =
+          isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+      const danger = Color(0xFFFF6B7A);
+      final userName = auth.currentUser?.name ?? 'current user';
+
+      final confirmed = await showGeneralDialog<bool>(
+        context: context,
+        barrierLabel: 'Logout confirmation',
+        barrierDismissible: true,
+        barrierColor: Colors.black.withOpacity(isDark ? 0.34 : 0.24),
+        transitionDuration: const Duration(milliseconds: 220),
+        transitionBuilder: (context, animation, secondaryAnimation, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+          );
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
+              child: child,
+            ),
+          );
+        },
+        pageBuilder: (dialogContext, animation, secondaryAnimation) {
+          var isClosing = false;
+          var isWaitingForEscapeRelease =
+              HardwareKeyboard.instance.isLogicalKeyPressed(
+            LogicalKeyboardKey.escape,
+          );
+
+          void close(bool value) {
+            if (isClosing) return;
+            isClosing = true;
+            Navigator.of(dialogContext).pop(value);
+          }
+
+          return Focus(
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event.logicalKey == LogicalKeyboardKey.escape) {
+                if (event is KeyUpEvent) {
+                  isWaitingForEscapeRelease = false;
+                  return KeyEventResult.handled;
+                }
+
+                if (event is KeyDownEvent) {
+                  if (isWaitingForEscapeRelease) {
+                    return KeyEventResult.handled;
+                  }
+                  close(false);
+                  return KeyEventResult.handled;
+                }
+              }
+
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+                  event.logicalKey == LogicalKeyboardKey.numpadEnter;
+
+              if (isEnterKey) {
+                close(true);
+                return KeyEventResult.handled;
+              }
+
+              return KeyEventResult.ignored;
+            },
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Dialog(
+                backgroundColor: Colors.transparent,
+                insetPadding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 24,
+                ),
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 460),
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: bg,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: border),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(isDark ? 0.34 : 0.12),
+                        blurRadius: 28,
+                        offset: const Offset(0, 16),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
+                              color: danger.withOpacity(isDark ? 0.18 : 0.12),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: danger.withOpacity(0.24),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.logout_rounded,
+                              color: danger,
+                              size: 28,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Text(
+                              'Logout?',
+                              style: TextStyle(
+                                color: textPrimary,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: surface,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: border),
+                        ),
+                        child: Text(
+                          'End the current session for $userName and return to login?',
+                          style: TextStyle(
+                            color: textSecondary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            height: 1.45,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => close(false),
+                              child: const Text('Cancel'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => close(true),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: danger,
+                                foregroundColor: Colors.white,
+                                minimumSize: const Size.fromHeight(46),
+                              ),
+                              child: const Text('Logout'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+
+      if (confirmed == true) {
+        await _performLogout();
+      }
+    } finally {
+      _isLogoutConfirmOpen = false;
+    }
+  }
+
+  Future<void> _performLogout() async {
+    final context = AppSnackBar.navigatorKey.currentContext;
+    final navigator = AppSnackBar.navigatorKey.currentState;
+    if (context == null || navigator == null) return;
+
+    await context.read<AuthProvider>().logout();
+    context.read<CartProvider>().clearCart();
+    navigator.pushAndRemoveUntil(
+      MaterialPageRoute<void>(
+        settings: const RouteSettings(name: PosRouteNames.login),
+        builder: (context) => const LoginScreen(),
+      ),
+      (route) => false,
+    );
+  }
+
+  void _closeShortcutLegend() {
+    if (_isShortcutLegendClosing) return;
+
+    final dialogContext = _shortcutLegendDialogContext;
+    if (dialogContext == null || !dialogContext.mounted) return;
+
+    final route = ModalRoute.of(dialogContext);
+    if (route == null || !route.isCurrent) return;
+
+    _isShortcutLegendClosing = true;
+    Navigator.of(dialogContext, rootNavigator: true).pop();
   }
 
   void _runGlobalShortcut(Future<void> Function() action) {
@@ -341,6 +577,7 @@ class _PosAppState extends State<PosApp> {
     if (context == null || _isShortcutLegendOpen) return;
 
     _isShortcutLegendOpen = true;
+    _isShortcutLegendClosing = false;
     try {
       await showDialog<void>(
         context: context,
@@ -469,6 +706,16 @@ class _PosAppState extends State<PosApp> {
               shortcutRow('F5', 'Open held carts'),
               shortcutRow('F6', 'Apply cart discount'),
               shortcutRow('F7', 'Focus product search'),
+              shortcutRow('Shift + Esc', 'Open logout confirmation'),
+            ]);
+          final heldBillsSection = section('Held Bills', [
+              shortcutRow('1 - 9', 'Select visible held bill'),
+              shortcutRow('Double 1 - 9', 'Resume selected held bill to cart'),
+              shortcutRow('Up / Down', 'Move held bill selection'),
+              shortcutRow('Page Up', 'Select top held bill'),
+              shortcutRow('Page Down', 'Select bottom held bill'),
+              shortcutRow('Enter', 'Resume selected held bill'),
+              shortcutRow('Delete', 'Delete selected held bill'),
             ]);
           final modulesSection = section('Modules', [
               shortcutRow('F8', 'Transaction history'),
@@ -491,12 +738,12 @@ class _PosAppState extends State<PosApp> {
             ]);
 
           final landscapeColumns = <List<Widget>>[
-            [posFlowSection, posActionsSection],
+            [posFlowSection, posActionsSection, heldBillsSection],
             [priceModesSection, modulesSection],
             [cartActionsSection, popupRulesSection],
           ];
           final mediumColumns = <List<Widget>>[
-            [posFlowSection, posActionsSection, popupRulesSection],
+            [posFlowSection, posActionsSection, heldBillsSection, popupRulesSection],
             [priceModesSection, cartActionsSection, modulesSection],
           ];
           final allSections = <Widget>[
@@ -504,6 +751,7 @@ class _PosAppState extends State<PosApp> {
             priceModesSection,
             cartActionsSection,
             posActionsSection,
+            heldBillsSection,
             modulesSection,
             popupRulesSection,
           ];
@@ -513,7 +761,7 @@ class _PosAppState extends State<PosApp> {
             onKeyEvent: (node, event) {
               if (event is! KeyDownEvent) return KeyEventResult.ignored;
               if (event.logicalKey == LogicalKeyboardKey.escape) {
-                Navigator.pop(dialogContext);
+                _closeShortcutLegend();
                 return KeyEventResult.handled;
               }
               return KeyEventResult.ignored;
@@ -588,7 +836,7 @@ class _PosAppState extends State<PosApp> {
                           ),
                           IconButton(
                             tooltip: 'Close',
-                            onPressed: () => Navigator.pop(dialogContext),
+                            onPressed: _closeShortcutLegend,
                             style: IconButton.styleFrom(
                               backgroundColor: surfaceAlt,
                               foregroundColor: textSecondary,
@@ -648,6 +896,7 @@ class _PosAppState extends State<PosApp> {
       );
     } finally {
       _isShortcutLegendOpen = false;
+      _isShortcutLegendClosing = false;
       _shortcutLegendDialogContext = null;
     }
   }
