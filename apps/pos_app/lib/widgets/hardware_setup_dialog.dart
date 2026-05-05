@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../services/card_terminal_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import 'app_snackbar.dart';
@@ -22,10 +21,7 @@ Future<void> showHardwareSetupDialog(BuildContext context) async {
     );
   }
 
-  final cardTerminal = CardTerminalService.instance;
   final printer = ReceiptPrinterService.instance;
-
-  final initialPorts = cardTerminal.getAvailablePorts();
   final initialPrinters = await printer.getInstalledPrinters();
 
   if (!context.mounted) return;
@@ -33,9 +29,7 @@ Future<void> showHardwareSetupDialog(BuildContext context) async {
   await showPremiumDialog<void>(
     context: context,
     builder: (context) {
-      var ports = List<String>.from(initialPorts);
       var printers = List<String>.from(initialPrinters);
-      var selectedBaudRate = cardTerminal.baudRate;
       var isBusy = false;
 
       Future<void> refreshLists(StateSetter setState) async {
@@ -48,34 +42,9 @@ Future<void> showHardwareSetupDialog(BuildContext context) async {
         if (!context.mounted) return;
 
         setState(() {
-          ports = cardTerminal.getAvailablePorts();
           printers = nextPrinters;
           isBusy = false;
         });
-      }
-
-      Future<void> connectCardPort(String port, StateSetter setState) async {
-        setState(() {
-          isBusy = true;
-        });
-
-        final ok = await cardTerminal.connect(
-          port,
-          baudRate: selectedBaudRate,
-        );
-
-        if (!context.mounted) return;
-
-        setState(() {
-          isBusy = false;
-        });
-
-        showInfoMessage(
-          ok
-              ? 'Connected card terminal on $port'
-              : 'Failed to connect card terminal on $port',
-          backgroundColor: ok ? successColor : dangerColor,
-        );
       }
 
       Future<void> selectPrinter(
@@ -174,117 +143,19 @@ Future<void> showHardwareSetupDialog(BuildContext context) async {
                       children: [
                         const Expanded(
                           child: Text(
-                            'Card Terminal',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w800,
-                              fontSize: 16,
-                            ),
-                          ),
-                        ),
-                        if (cardTerminal.isConnected)
-                          Chip(
-                            label: Text(
-                              cardTerminal.connectedPortName ?? 'Connected',
-                            ),
-                            backgroundColor: successSoft,
-                            side: BorderSide(color: successColor),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        const Text(
-                          'Baud rate:',
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(width: 12),
-                        DropdownButton<int>(
-                          value: selectedBaudRate,
-                          items: const [9600, 19200, 38400, 57600, 115200]
-                              .map(
-                                (value) => DropdownMenuItem<int>(
-                                  value: value,
-                                  child: Text('$value'),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: isBusy
-                              ? null
-                              : (value) {
-                                  if (value == null) return;
-                                  setState(() {
-                                    selectedBaudRate = value;
-                                  });
-                                },
-                        ),
-                        const Spacer(),
-                        TextButton.icon(
-                          onPressed: isBusy
-                              ? null
-                              : () => refreshLists(setState),
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('Refresh'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (ports.isEmpty)
-                      Text(
-                        'No COM ports found. Connect the terminal, then refresh.',
-                        style: TextStyle(color: dangerColor),
-                      )
-                    else
-                      ...ports.map(
-                        (port) => ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(port),
-                          subtitle: Text(
-                            port == cardTerminal.connectedPortName
-                                ? 'Currently connected'
-                                : 'Available serial port',
-                          ),
-                          trailing: port == cardTerminal.connectedPortName
-                              ? OutlinedButton(
-                                  onPressed: isBusy
-                                      ? null
-                                      : () async {
-                                          setState(() {
-                                            isBusy = true;
-                                          });
-                                          await cardTerminal.disconnect(
-                                            clearSaved: true,
-                                          );
-                                          if (!context.mounted) return;
-                                          setState(() {
-                                            isBusy = false;
-                                          });
-                                          showInfoMessage(
-                                            'Card terminal disconnected.',
-                                            backgroundColor: warningColor,
-                                          );
-                                        },
-                                  child: const Text('Disconnect'),
-                                )
-                              : ElevatedButton(
-                                  onPressed: isBusy
-                                      ? null
-                                      : () => connectCardPort(port, setState),
-                                  child: const Text('Connect'),
-                                ),
-                        ),
-                      ),
-                    const Divider(height: 28),
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
                             'Receipt Printer',
                             style: TextStyle(
                               fontWeight: FontWeight.w800,
                               fontSize: 16,
                             ),
                           ),
+                        ),
+                        TextButton.icon(
+                          onPressed: isBusy
+                              ? null
+                              : () => refreshLists(setState),
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Refresh'),
                         ),
                         if (printer.isConnected)
                           Chip(

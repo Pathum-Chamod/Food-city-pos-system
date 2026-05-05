@@ -46,7 +46,6 @@ dependencies:
   pdf: ^3.11.3
   csv: ^6.0.0
   shared_preferences: ^2.5.5
-  flutter_libserialport: ^0.6.0
   esc_pos_utils_plus: ^2.0.3
   usb_esc_printer_windows: ^0.0.3
 

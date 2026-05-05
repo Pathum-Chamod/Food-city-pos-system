@@ -4,17 +4,14 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../services/card_terminal_service.dart';
 import '../widgets/premium_dialog.dart';
 
 Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
   BuildContext context, {
   required double totalAmount,
-  Future<void> Function()? onOpenHardwareSetup,
 }) async {
   const brand = Color(0xFF2AAA8A);
   const danger = Color(0xFFE85D75);
-  const warning = Color(0xFFF2A74B);
 
   final amountController = TextEditingController(
     text: totalAmount.toStringAsFixed(2),
@@ -23,10 +20,8 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
   String selectedMethod = 'cash';
   double amountTendered = totalAmount;
   double changeAmount = 0.0;
-  bool isProcessingCard = false;
   bool hasConfirmedPayment = false;
   bool replaceAmountOnNextEdit = true;
-  String? cardStatusMessage;
 
   void setAmountText(String value, {bool selectForReplacement = true}) {
     amountController.value = TextEditingValue(
@@ -62,7 +57,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
           recalculate();
           final theme = Theme.of(context);
           final isDark = theme.brightness == Brightness.dark;
-          final terminal = CardTerminalService.instance;
 
           final bg = isDark ? const Color(0xFF091321) : const Color(0xFFF3F7FB);
           final surface = isDark ? const Color(0xFF0F1C2E) : Colors.white;
@@ -77,51 +71,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
               isDark ? const Color(0xFFF3F7FF) : const Color(0xFF1B2B44);
           final textSecondary =
               isDark ? const Color(0xFF97AAC6) : const Color(0xFF61758F);
-
-          Future<void> processCardPayment() async {
-            if (isProcessingCard) return;
-
-            if (!terminal.isConnected) {
-              setState(() {
-                cardStatusMessage =
-                    'Card terminal is not connected. Open hardware setup and connect the terminal first.';
-              });
-              return;
-            }
-
-            setState(() {
-              isProcessingCard = true;
-              cardStatusMessage = 'Waiting for terminal response...';
-            });
-
-            final response = await terminal.requestSale(totalAmount);
-
-            if (!context.mounted) return;
-
-            setState(() {
-              isProcessingCard = false;
-              cardStatusMessage = response.message;
-            });
-
-            switch (response.result) {
-              case CardTransactionResult.approved:
-                Navigator.pop(context, {
-                  'payment_method': 'card',
-                  'amount_tendered': totalAmount,
-                  'change_amount': 0.0,
-                  'approval_code': response.approvalCode,
-                  'auth_code': response.authCode,
-                  'card_last4': response.cardLast4,
-                  'card_type': response.cardType,
-                });
-                return;
-              case CardTransactionResult.declined:
-              case CardTransactionResult.cancelled:
-              case CardTransactionResult.timeout:
-              case CardTransactionResult.error:
-                return;
-            }
-          }
 
           InputDecoration fieldDecoration({
             required String label,
@@ -161,15 +110,12 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
             return Expanded(
               child: InkWell(
                 borderRadius: BorderRadius.circular(16),
-                onTap: isProcessingCard
-                    ? null
-                    : () {
-                        setState(() {
-                          selectedMethod = value;
-                          setAmountText(totalAmount.toStringAsFixed(2));
-                          cardStatusMessage = null;
-                        });
-                      },
+                onTap: () {
+                  setState(() {
+                    selectedMethod = value;
+                    setAmountText(totalAmount.toStringAsFixed(2));
+                  });
+                },
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 180),
                   padding: const EdgeInsets.symmetric(
@@ -247,33 +193,22 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
             );
           }
 
-          final canConfirm = selectedMethod == 'card'
-              ? !isProcessingCard
-              : amountTendered >= totalAmount;
+          final canConfirm =
+              selectedMethod == 'card' || amountTendered >= totalAmount;
 
           Future<void> confirmPayment() async {
             if (!canConfirm || hasConfirmedPayment) return;
 
-            if (selectedMethod == 'card') {
-              await processCardPayment();
-              return;
-            }
-
             hasConfirmedPayment = true;
             Navigator.pop(context, {
               'payment_method': selectedMethod,
-              'amount_tendered': amountTendered,
-              'change_amount': changeAmount,
+              'amount_tendered':
+                  selectedMethod == 'card' ? totalAmount : amountTendered,
+              'change_amount': selectedMethod == 'card' ? 0.0 : changeAmount,
             });
           }
 
           final remainingAmount = math.max(0, totalAmount - amountTendered);
-          final cardStatusLower = cardStatusMessage?.toLowerCase() ?? '';
-          final cardStatusColor = cardStatusLower.contains('approved')
-              ? brand
-              : cardStatusLower.contains('waiting')
-                  ? warning
-                  : danger;
 
           return Focus(
             onKeyEvent: (node, event) {
@@ -286,8 +221,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                 return KeyEventResult.handled;
               }
 
-              if (event.logicalKey == LogicalKeyboardKey.escape &&
-                  !isProcessingCard) {
+              if (event.logicalKey == LogicalKeyboardKey.escape) {
                 Navigator.pop(context);
                 return KeyEventResult.handled;
               }
@@ -360,9 +294,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                         ),
                         IconButton(
                           tooltip: 'Close',
-                          onPressed: isProcessingCard
-                              ? null
-                              : () => Navigator.pop(context),
+                          onPressed: () => Navigator.pop(context),
                           style: IconButton.styleFrom(
                             backgroundColor: surfaceAlt,
                             foregroundColor: textSecondary,
@@ -552,23 +484,17 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                               width: double.infinity,
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
-                                color: terminal.isConnected
-                                    ? brand.withOpacity(0.10)
-                                    : warning.withOpacity(0.12),
+                                color: brand.withOpacity(0.10),
                                 borderRadius: BorderRadius.circular(16),
                                 border: Border.all(
-                                  color: terminal.isConnected
-                                      ? brand.withOpacity(0.35)
-                                      : warning.withOpacity(0.40),
+                                  color: brand.withOpacity(0.35),
                                 ),
                               ),
                               child: Row(
                                 children: [
-                                  Icon(
-                                    terminal.isConnected
-                                        ? Icons.usb_rounded
-                                        : Icons.usb_off_rounded,
-                                    color: terminal.isConnected ? brand : warning,
+                                  const Icon(
+                                    Icons.credit_score_rounded,
+                                    color: brand,
                                   ),
                                   const SizedBox(width: 10),
                                   Expanded(
@@ -577,9 +503,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                                           CrossAxisAlignment.start,
                                       children: [
                                         Text(
-                                          terminal.isConnected
-                                              ? 'Terminal connected'
-                                              : 'Terminal not connected',
+                                          'Manual card payment',
                                           style: TextStyle(
                                             color: textPrimary,
                                             fontWeight: FontWeight.w800,
@@ -587,9 +511,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                                         ),
                                         const SizedBox(height: 2),
                                         Text(
-                                          terminal.isConnected
-                                              ? 'Connected on ${terminal.connectedPortName}'
-                                              : 'Open hardware setup before charging the card.',
+                                          'Enter the amount on the bank card machine, then confirm here after approval.',
                                           style: TextStyle(
                                             color: textSecondary,
                                             fontWeight: FontWeight.w600,
@@ -637,49 +559,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                                 ],
                               ),
                             ),
-                            const SizedBox(height: 14),
-                            if (cardStatusMessage != null)
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(14),
-                                decoration: BoxDecoration(
-                                  color: cardStatusColor.withOpacity(0.10),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: cardStatusColor.withOpacity(0.30),
-                                  ),
-                                ),
-                                child: Text(
-                                  cardStatusMessage!,
-                                  style: TextStyle(
-                                    color: cardStatusColor,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            if (cardStatusMessage != null) const SizedBox(height: 14),
-                            OutlinedButton.icon(
-                              onPressed: isProcessingCard || onOpenHardwareSetup == null
-                                  ? null
-                                  : () async {
-                                      await onOpenHardwareSetup();
-                                      if (!context.mounted) return;
-                                      setState(() {});
-                                    },
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: textPrimary,
-                                side: BorderSide(color: border),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 14,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                              ),
-                              icon: const Icon(Icons.settings_input_component_rounded),
-                              label: const Text('Hardware Setup'),
-                            ),
                           ],
                         ),
                       ),
@@ -689,9 +568,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                       children: [
                         Expanded(
                           child: OutlinedButton(
-                            onPressed: isProcessingCard
-                                ? null
-                                : () => Navigator.pop(context),
+                            onPressed: () => Navigator.pop(context),
                             style: OutlinedButton.styleFrom(
                               foregroundColor: textPrimary,
                               side: BorderSide(color: border),
@@ -725,26 +602,15 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                               ),
                               elevation: 0,
                             ),
-                            icon: isProcessingCard
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : Icon(
-                                    selectedMethod == 'card'
-                                        ? Icons.credit_card_rounded
-                                        : Icons.check_circle_outline_rounded,
-                                  ),
+                            icon: Icon(
+                              selectedMethod == 'card'
+                                  ? Icons.credit_card_rounded
+                                  : Icons.check_circle_outline_rounded,
+                            ),
                             label: Text(
-                              isProcessingCard
-                                  ? 'Processing...'
-                                  : selectedMethod == 'card'
-                                      ? 'Charge Card'
-                                      : 'Confirm Payment',
+                              selectedMethod == 'card'
+                                  ? 'Complete Card Sale'
+                                  : 'Confirm Payment',
                               style: const TextStyle(
                                 fontWeight: FontWeight.w800,
                               ),

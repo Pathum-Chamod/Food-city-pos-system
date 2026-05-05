@@ -12,7 +12,6 @@ import '../navigation/pos_route_names.dart';
 import '../providers/auth_provider.dart';
 import '../providers/cart_provider.dart';
 import '../providers/app_theme_provider.dart';
-import '../services/card_terminal_service.dart';
 import '../services/database_helper.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
@@ -827,19 +826,14 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _restoreHardwareConnections() async {
-    final cardTerminal = CardTerminalService.instance;
     final printer = ReceiptPrinterService.instance;
 
-    final cardConnected = await cardTerminal.restoreSavedConnection();
     final printerConnected = await printer.restoreSavedPrinter();
 
     if (!mounted) return;
 
-    if (cardConnected || printerConnected) {
+    if (printerConnected) {
       final parts = <String>[];
-      if (cardConnected && cardTerminal.connectedPortName != null) {
-        parts.add('Card terminal: ${cardTerminal.connectedPortName}');
-      }
       if (printerConnected && printer.connectedPrinterName != null) {
         parts.add('Printer: ${printer.connectedPrinterName}');
       }
@@ -933,10 +927,8 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _showHardwareSetupDialog() async {
-    final cardTerminal = CardTerminalService.instance;
     final printer = ReceiptPrinterService.instance;
 
-    final initialPorts = cardTerminal.getAvailablePorts();
     final initialPrinters = await printer.getInstalledPrinters();
 
     if (!mounted) return;
@@ -946,9 +938,7 @@ class _PosScreenState extends State<PosScreen> {
       await showPremiumDialog<void>(
         context: context,
         builder: (context) {
-          var ports = List<String>.from(initialPorts);
           var printers = List<String>.from(initialPrinters);
-          var selectedBaudRate = cardTerminal.baudRate;
           var isBusy = false;
 
         Future<void> refreshLists(StateSetter setState) async {
@@ -961,34 +951,9 @@ class _PosScreenState extends State<PosScreen> {
           if (!context.mounted) return;
 
           setState(() {
-            ports = cardTerminal.getAvailablePorts();
             printers = nextPrinters;
             isBusy = false;
           });
-        }
-
-        Future<void> connectCardPort(String port, StateSetter setState) async {
-          setState(() {
-            isBusy = true;
-          });
-
-          final ok = await cardTerminal.connect(
-            port,
-            baudRate: selectedBaudRate,
-          );
-
-          if (!context.mounted) return;
-
-          setState(() {
-            isBusy = false;
-          });
-
-          _showInfoMessage(
-            ok
-                ? 'Connected card terminal on $port'
-                : 'Failed to connect card terminal on $port',
-            backgroundColor: ok ? _successColor : _dangerColor,
-          );
         }
 
         Future<void> selectPrinter(
@@ -1087,111 +1052,6 @@ class _PosScreenState extends State<PosScreen> {
                         children: [
                           const Expanded(
                             child: Text(
-                              'Card Terminal',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 16,
-                              ),
-                            ),
-                          ),
-                          if (cardTerminal.isConnected)
-                            Chip(
-                              label: Text(
-                                cardTerminal.connectedPortName ?? 'Connected',
-                              ),
-                              backgroundColor: _successSoft,
-                              side: BorderSide(color: _successColor),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          const Text(
-                            'Baud rate:',
-                            style: TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(width: 12),
-                          DropdownButton<int>(
-                            value: selectedBaudRate,
-                            items: const [9600, 19200, 38400, 57600, 115200]
-                                .map(
-                                  (value) => DropdownMenuItem<int>(
-                                    value: value,
-                                    child: Text('$value'),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: isBusy
-                                ? null
-                                : (value) {
-                                    if (value == null) return;
-                                    setState(() {
-                                      selectedBaudRate = value;
-                                    });
-                                  },
-                          ),
-                          const Spacer(),
-                          TextButton.icon(
-                            onPressed: isBusy
-                                ? null
-                                : () => refreshLists(setState),
-                            icon: const Icon(Icons.refresh),
-                            label: const Text('Refresh'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      if (ports.isEmpty)
-                        Text(
-                          'No COM ports found. Connect the terminal, then refresh.',
-                          style: TextStyle(color: _dangerColor),
-                        )
-                      else
-                        ...ports.map(
-                          (port) => ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(port),
-                            subtitle: Text(
-                              port == cardTerminal.connectedPortName
-                                  ? 'Currently connected'
-                                  : 'Available serial port',
-                            ),
-                            trailing: port == cardTerminal.connectedPortName
-                                ? OutlinedButton(
-                                    onPressed: isBusy
-                                        ? null
-                                        : () async {
-                                            setState(() {
-                                              isBusy = true;
-                                            });
-                                            await cardTerminal.disconnect(
-                                              clearSaved: true,
-                                            );
-                                            if (!context.mounted) return;
-                                            setState(() {
-                                              isBusy = false;
-                                            });
-                                            _showInfoMessage(
-                                              'Card terminal disconnected.',
-                                              backgroundColor: _warningColor,
-                                            );
-                                          },
-                                    child: const Text('Disconnect'),
-                                  )
-                                : ElevatedButton(
-                                    onPressed: isBusy
-                                        ? null
-                                        : () => connectCardPort(port, setState),
-                                    child: const Text('Connect'),
-                                  ),
-                          ),
-                        ),
-                      const Divider(height: 28),
-                      Row(
-                        children: [
-                          const Expanded(
-                            child: Text(
                               'Receipt Printer',
                               style: TextStyle(
                                 fontWeight: FontWeight.w800,
@@ -1207,6 +1067,13 @@ class _PosScreenState extends State<PosScreen> {
                               backgroundColor: _successSoft,
                               side: BorderSide(color: _successColor),
                             ),
+                          TextButton.icon(
+                            onPressed: isBusy
+                                ? null
+                                : () => refreshLists(setState),
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Refresh'),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 8),
@@ -2902,7 +2769,6 @@ class _PosScreenState extends State<PosScreen> {
         paymentResult = await showCheckoutPaymentDialog(
           context,
           totalAmount: displayTotal,
-          onOpenHardwareSetup: _showHardwareSetupDialog,
         );
       } finally {
         _isPaymentDialogOpen = false;
@@ -3912,7 +3778,7 @@ class _PosScreenState extends State<PosScreen> {
       case 'cashier_summary':
         return Icons.bar_chart_rounded;
       case 'hardware_setup':
-        return Icons.usb_rounded;
+        return Icons.print_rounded;
       case 'inventory':
         return Icons.inventory_2_outlined;
       case 'supplier_ops':
