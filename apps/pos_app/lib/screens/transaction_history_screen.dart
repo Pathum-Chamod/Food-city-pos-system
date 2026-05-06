@@ -319,7 +319,9 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   bool _isLoading = true;
   bool _isRefreshing = false;
   String _filter = 'all';
+  String _dateFilter = 'all';
   String _searchQuery = '';
+  DateTime? _selectedDate;
   List<Map<String, dynamic>> _transactions = [];
 
   @override
@@ -342,10 +344,31 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     }
 
     final type = _filter == 'all' ? null : _filter;
+    final selectedDay = _dateFilter == 'today'
+        ? _normalizedDay(DateTime.now())
+        : _dateFilter == 'specific'
+            ? _selectedDate
+            : null;
+    final start = selectedDay == null
+        ? null
+        : DateTime(selectedDay.year, selectedDay.month, selectedDay.day);
+    final end = selectedDay == null
+        ? null
+        : DateTime(
+            selectedDay.year,
+            selectedDay.month,
+            selectedDay.day,
+            23,
+            59,
+            59,
+            999,
+          );
 
     final transactions = await DatabaseHelper.instance.getRecentTransactions(
       transactionType: type,
-      limit: 100,
+      start: start,
+      end: end,
+      limit: null,
     );
 
     if (!mounted) return;
@@ -432,6 +455,69 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
         (sum, tx) =>
             sum + (((tx['total_amount'] as num?) ?? 0).toDouble().abs()),
       );
+
+  bool get _isTodaySelected {
+    return _dateFilter == 'today';
+  }
+
+  DateTime _normalizedDay(DateTime value) {
+    return DateTime(value.year, value.month, value.day);
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final today = _normalizedDay(now);
+    final selected = _selectedDate;
+    final initialDate = selected != null && !selected.isAfter(today)
+        ? selected
+        : today;
+
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(now.year - 2, 1, 1),
+      lastDate: today,
+      selectableDayPredicate: (day) {
+        return !_normalizedDay(day).isAfter(today);
+      },
+      helpText: 'Select transaction date',
+    );
+
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      _dateFilter = 'specific';
+      _selectedDate = _normalizedDay(picked);
+    });
+    await _loadTransactions();
+  }
+
+  Future<void> _selectToday() async {
+    if (_dateFilter == 'today') return;
+
+    setState(() {
+      _dateFilter = 'today';
+      _selectedDate = null;
+    });
+    await _loadTransactions();
+  }
+
+  Future<void> _clearDateFilter() async {
+    if (_dateFilter == 'all') return;
+
+    setState(() {
+      _dateFilter = 'all';
+      _selectedDate = null;
+    });
+    await _loadTransactions();
+  }
+
+  String _formatDate(DateTime value) {
+    final y = value.year.toString().padLeft(4, '0');
+    final m = value.month.toString().padLeft(2, '0');
+    final d = value.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
 
   String _formatDateTime(String raw) {
     try {
@@ -521,7 +607,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   }
 
   Color _typeColor(_TxPalette palette, String type) {
-    return type == 'refund' ? palette.danger : palette.success;
+    return type == 'refund' ? palette.danger : palette.brand;
   }
 
   String _typeLabel(String type) {
@@ -550,6 +636,80 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
         fontWeight: FontWeight.w700,
       ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    );
+  }
+
+  Widget _buildTodayChip(_TxPalette palette) {
+    final selected = _isTodaySelected;
+
+    return ChoiceChip(
+      label: const Text('Today'),
+      selected: selected,
+      onSelected: (_) => _selectToday(),
+      showCheckmark: false,
+      selectedColor: palette.brandSoft,
+      backgroundColor: palette.soft,
+      side: BorderSide(
+        color: selected ? palette.brand.withOpacity(0.25) : palette.border,
+      ),
+      labelStyle: TextStyle(
+        color: selected ? palette.brand : palette.textPrimary,
+        fontWeight: FontWeight.w800,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _buildDateChip(_TxPalette palette) {
+    final selected = _dateFilter == 'specific';
+    final label = selected && _selectedDate != null
+        ? _formatDate(_selectedDate!)
+        : 'Pick Date';
+
+    return ActionChip(
+      avatar: Icon(
+        Icons.calendar_month_rounded,
+        size: 18,
+        color: selected ? Colors.white : palette.textPrimary,
+      ),
+      label: Text(label),
+      onPressed: _pickDate,
+      backgroundColor: selected ? palette.accentBlue : palette.soft,
+      side: BorderSide(
+        color: selected ? palette.accentBlue.withOpacity(0.35) : palette.border,
+      ),
+      labelStyle: TextStyle(
+        color: selected ? Colors.white : palette.textPrimary,
+        fontWeight: FontWeight.w800,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _buildAllDatesChip(_TxPalette palette) {
+    final selected = _dateFilter == 'all';
+
+    return ChoiceChip(
+      label: const Text('All Dates'),
+      selected: selected,
+      onSelected: (_) => _clearDateFilter(),
+      showCheckmark: false,
+      selectedColor: palette.brandSoft,
+      backgroundColor: palette.soft,
+      side: BorderSide(
+        color: selected ? palette.brand.withOpacity(0.25) : palette.border,
+      ),
+      labelStyle: TextStyle(
+        color: selected ? palette.brand : palette.textPrimary,
+        fontWeight: FontWeight.w800,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
     );
   }
 
@@ -677,17 +837,48 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
             ],
           ),
           const SizedBox(height: 14),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _buildFilterChip(palette, 'all', 'All'),
-                _buildFilterChip(palette, 'sale', 'Sales'),
-                _buildFilterChip(palette, 'refund', 'Refunds'),
-              ],
-            ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final typeFilters = Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _buildFilterChip(palette, 'all', 'All'),
+                  _buildFilterChip(palette, 'sale', 'Sales'),
+                  _buildFilterChip(palette, 'refund', 'Refunds'),
+                ],
+              );
+              final dateFilters = Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                alignment: WrapAlignment.end,
+                children: [
+                  _buildAllDatesChip(palette),
+                  _buildTodayChip(palette),
+                  _buildDateChip(palette),
+                ],
+              );
+
+              if (constraints.maxWidth < 720) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    typeFilters,
+                    const SizedBox(height: 10),
+                    dateFilters,
+                  ],
+                );
+              }
+
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: typeFilters),
+                  const SizedBox(width: 12),
+                  dateFilters,
+                ],
+              );
+            },
           ),
         ],
       ),
@@ -952,29 +1143,6 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                   style: TextStyle(
                     color: palette.textSecondary,
                     fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: palette.brandSoft,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: palette.brand.withOpacity(0.25)),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.receipt_long_rounded, color: palette.brand, size: 18),
-                const SizedBox(width: 8),
-                Text(
-                  '${_visibleTransactions.length} visible',
-                  style: TextStyle(
-                    color: palette.brand,
-                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ],

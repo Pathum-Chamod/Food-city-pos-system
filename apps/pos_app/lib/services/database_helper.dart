@@ -3416,17 +3416,37 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> getRecentTransactions({
     String? transactionType,
-    int limit = 50,
+    DateTime? start,
+    DateTime? end,
+    int? limit = 50,
   }) async {
     final db = await database;
 
-    String whereClause = '';
-    List<Object?> whereArgs = [];
+    final whereParts = <String>[];
+    final whereArgs = <Object?>[];
 
     if (transactionType != null && transactionType.isNotEmpty) {
-      whereClause = 'WHERE s.transaction_type = ?';
-      whereArgs = [transactionType];
+      whereParts.add('s.transaction_type = ?');
+      whereArgs.add(transactionType);
     }
+
+    if (start != null) {
+      whereParts.add('datetime(s.created_at) >= datetime(?)');
+      whereArgs.add(start.toIso8601String());
+    }
+
+    if (end != null) {
+      whereParts.add('datetime(s.created_at) <= datetime(?)');
+      whereArgs.add(end.toIso8601String());
+    }
+
+    final whereClause =
+        whereParts.isEmpty ? '' : 'WHERE ${whereParts.join(' AND ')}';
+    final limitClause = limit == null ? '' : 'LIMIT ?';
+    final queryArgs = <Object?>[
+      ...whereArgs,
+      if (limit != null) limit,
+    ];
 
     final rows = await db.rawQuery(
       '''
@@ -3466,9 +3486,9 @@ class DatabaseHelper {
         s.change_amount,
         s.created_at
       ORDER BY datetime(s.created_at) DESC, s.id DESC
-      LIMIT ?
+      $limitClause
       ''',
-      [...whereArgs, limit],
+      queryArgs,
     );
 
     return rows
