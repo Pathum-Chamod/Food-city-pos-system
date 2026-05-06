@@ -1,9 +1,17 @@
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 import '../services/database_helper.dart';
+import '../widgets/app_snackbar.dart';
 
 class SalesReportScreen extends StatefulWidget {
   const SalesReportScreen({super.key});
@@ -38,7 +46,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   List<Map<String, dynamic>> _slowMovers = [];
   int? _hoveredBarIndex;
   final ScrollController _trendChartScrollController = ScrollController();
+  final GlobalKey _pdfExportKey = GlobalKey();
   int _contentVersion = 0;
+  bool _isExportingPdf = false;
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
@@ -163,6 +173,121 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
       _hasLoadedOnce = true;
       _contentVersion += 1;
     });
+  }
+
+  Future<void> _exportReportPdf() async {
+    if (_isLoading || _isExportingPdf) return;
+
+    setState(() {
+      _isExportingPdf = true;
+    });
+
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      final boundary = _pdfExportKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+
+      if (boundary == null) {
+        throw Exception('Report export view was not ready.');
+      }
+
+      final image = await boundary.toImage(pixelRatio: 2);
+      final imageWidth = image.width.toDouble();
+      final imageHeight = image.height.toDouble();
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+
+      final pngBytes = byteData?.buffer.asUint8List();
+      if (pngBytes == null || pngBytes.isEmpty) {
+        throw Exception('Report export image was empty.');
+      }
+
+      final outputPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Export sales report as PDF',
+        fileName: _salesReportPdfFileName(),
+        type: FileType.custom,
+        allowedExtensions: const ['pdf'],
+      );
+
+      if (outputPath == null || outputPath.trim().isEmpty) {
+        if (mounted) {
+          AppSnackBar.show(
+            context,
+            message: 'Sales report PDF export canceled.',
+            backgroundColor: Colors.orange,
+          );
+        }
+        return;
+      }
+
+      final pdfBytes = await _buildReportImagePdf(
+        pngBytes,
+        imageWidth,
+        imageHeight,
+      );
+      final file = File(outputPath);
+      await file.writeAsBytes(pdfBytes, flush: true);
+
+      if (!mounted) return;
+      AppSnackBar.show(
+        context,
+        message: 'Sales report PDF exported to $outputPath',
+        backgroundColor: _success,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      AppSnackBar.show(
+        context,
+        message: 'Could not export sales report PDF: $error',
+        backgroundColor: _danger,
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExportingPdf = false;
+        });
+      }
+    }
+  }
+
+  Future<Uint8List> _buildReportImagePdf(
+    Uint8List imageBytes,
+    double imageWidth,
+    double imageHeight,
+  ) async {
+    final reportImage = pw.MemoryImage(imageBytes);
+
+    final pageWidth = PdfPageFormat.a4.width;
+    final pageHeight = (pageWidth / imageWidth) * imageHeight;
+    final pdf = pw.Document();
+
+    pdf.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat(pageWidth, pageHeight),
+        margin: pw.EdgeInsets.zero,
+        build: (context) => pw.Image(
+          reportImage,
+          width: pageWidth,
+          height: pageHeight,
+          fit: pw.BoxFit.fill,
+        ),
+      ),
+    );
+
+    return pdf.save();
+  }
+
+  String _salesReportPdfFileName() {
+    final now = DateTime.now();
+    final range = _formatRangeText()
+        .replaceAll(RegExp(r'[^0-9A-Za-z]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '')
+        .toLowerCase();
+    final stamp =
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_'
+        '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+    return 'sales_report_${range}_$stamp.pdf';
   }
 
   Future<void> _pickSpecificDate() async {
@@ -470,7 +595,10 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
     );
   }
 
-  Widget _buildTopHero(Map<String, dynamic>? summary) {
+  Widget _buildTopHero(
+    Map<String, dynamic>? summary, {
+    bool includeReportControls = true,
+  }) {
     final netSales = ((summary?['net_after_refunds'] as num?) ?? 0).toDouble();
     final transactions = ((summary?['transaction_count'] as num?) ?? 0).toInt();
     final itemsSold = ((summary?['items_sold'] as num?) ?? 0).toInt();
@@ -513,22 +641,24 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               final heroLeft = Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      _buildCapsule(
-                        icon: Icons.bar_chart_rounded,
-                        label: 'Store Sales Workspace',
-                        color: _brand,
-                      ),
-                      // Only show delta badge for multi-day ranges (not Today)
-                      if (_selectedRange != SalesReportRange.today)
-                        _buildDeltaBadge(deltaPct),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
+                  if (includeReportControls) ...[
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        _buildCapsule(
+                          icon: Icons.bar_chart_rounded,
+                          label: 'Store Sales Workspace',
+                          color: _brand,
+                        ),
+                        // Only show delta badge for multi-day ranges (not Today)
+                        if (_selectedRange != SalesReportRange.today)
+                          _buildDeltaBadge(deltaPct),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   Text(
                     'Sales Report',
                     style: TextStyle(
@@ -608,30 +738,40 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               final heroRight = Column(
                 crossAxisAlignment: isWide ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                 children: [
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    alignment: isWide ? WrapAlignment.end : WrapAlignment.start,
-                    children: [
-                      _buildRangeChip(SalesReportRange.today, 'Today'),
-                      _buildRangeChip(SalesReportRange.last7Days, '7 Days'),
-                      _buildRangeChip(SalesReportRange.last30Days, '30 Days'),
-                      _buildDateChip(),
-                      _buildDateRangeChip(),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  FilledButton.tonalIcon(
-                    onPressed: _loadReport,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _brand.withOpacity(_isDark ? 0.16 : 0.10),
-                      foregroundColor: _brand,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  if (includeReportControls) ...[
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      alignment: isWide
+                          ? WrapAlignment.end
+                          : WrapAlignment.start,
+                      children: [
+                        _buildRangeChip(SalesReportRange.today, 'Today'),
+                        _buildRangeChip(SalesReportRange.last7Days, '7 Days'),
+                        _buildRangeChip(SalesReportRange.last30Days, '30 Days'),
+                        _buildDateChip(),
+                        _buildDateRangeChip(),
+                      ],
                     ),
-                    icon: const Icon(Icons.refresh_rounded, size: 18),
-                    label: const Text('Refresh Report'),
-                  ),
+                    const SizedBox(height: 14),
+                    FilledButton.tonalIcon(
+                      onPressed: _loadReport,
+                      style: FilledButton.styleFrom(
+                        backgroundColor:
+                            _brand.withOpacity(_isDark ? 0.16 : 0.10),
+                        foregroundColor: _brand,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      icon: const Icon(Icons.refresh_rounded, size: 18),
+                      label: const Text('Refresh Report'),
+                    ),
+                  ],
                 ],
               );
 
@@ -2467,6 +2607,63 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
     );
   }
 
+  Widget _buildPdfExportSurface(Map<String, dynamic>? summary) {
+    return Positioned(
+      left: 0,
+      top: 0,
+      width: MediaQuery.sizeOf(context).width,
+      child: IgnorePointer(
+        child: Opacity(
+          opacity: 0.01,
+          child: RepaintBoundary(
+            key: _pdfExportKey,
+            child: Material(
+              color: _page,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final isWide = constraints.maxWidth >= 1100;
+
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildTopHero(
+                          summary,
+                          includeReportControls: false,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildTrendPanel(),
+                        const SizedBox(height: 16),
+                        _buildCompositionPanel(summary),
+                        const SizedBox(height: 16),
+                        _buildBreakdownPanel(),
+                        const SizedBox(height: 16),
+                        if (!isWide) ...[
+                          _buildProductsPanel(),
+                          const SizedBox(height: 16),
+                          _buildSlowMoversPanel(),
+                        ] else
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: _buildProductsPanel()),
+                              const SizedBox(width: 16),
+                              Expanded(child: _buildSlowMoversPanel()),
+                            ],
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final summary = _summary;
@@ -2488,6 +2685,20 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
         ),
         actions: [
           IconButton(
+            tooltip: 'Export PDF',
+            onPressed: _isLoading || _isExportingPdf ? null : _exportReportPdf,
+            icon: _isExportingPdf
+                ? SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: _textPrimary,
+                    ),
+                  )
+                : Icon(Icons.picture_as_pdf_outlined, color: _textPrimary),
+          ),
+          IconButton(
             tooltip: 'Refresh report',
             onPressed: _isLoading ? null : _loadReport,
             icon: Icon(Icons.refresh_rounded, color: _textPrimary),
@@ -2503,6 +2714,7 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                   onRefresh: _loadReport,
                   child: _buildDashboardBody(summary),
                 ),
+                if (_isExportingPdf) _buildPdfExportSurface(summary),
               ],
             ),
     );
