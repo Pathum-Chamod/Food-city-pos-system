@@ -20,10 +20,7 @@ enum InventoryHistoryFilter {
 class InventoryHistoryScreen extends StatefulWidget {
   final String? initialBarcode;
 
-  const InventoryHistoryScreen({
-    super.key,
-    this.initialBarcode,
-  });
+  const InventoryHistoryScreen({super.key, this.initialBarcode});
 
   @override
   State<InventoryHistoryScreen> createState() => _InventoryHistoryScreenState();
@@ -42,22 +39,33 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _brand => const Color(0xFF2AAA8A);
-  Color get _screenBg => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
-  Color get _screenBgAlt => _isDark ? const Color(0xFF0B1729) : const Color(0xFFFFFFFF);
-  Color get _panel => _isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
-  Color get _panelSoft => _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
-  Color get _panelAlt => _isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
-  Color get _border => _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
-  Color get _textPrimary => _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
-  Color get _textSecondary => _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
-  Color get _muted => _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
-  Color get _inputFill => _isDark ? const Color(0xFF0B1628) : const Color(0xFFF7F9FC);
+  Color get _screenBg =>
+      _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _screenBgAlt =>
+      _isDark ? const Color(0xFF0B1729) : const Color(0xFFFFFFFF);
+  Color get _panel =>
+      _isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
+  Color get _panelSoft =>
+      _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get _panelAlt =>
+      _isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
+  Color get _border =>
+      _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get _textPrimary =>
+      _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get _textSecondary =>
+      _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get _muted =>
+      _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
+  Color get _inputFill =>
+      _isDark ? const Color(0xFF0B1628) : const Color(0xFFF7F9FC);
   Color get _shadow => Colors.black.withOpacity(_isDark ? 0.26 : 0.06);
 
   @override
   void initState() {
     super.initState();
-    if (widget.initialBarcode != null && widget.initialBarcode!.trim().isNotEmpty) {
+    if (widget.initialBarcode != null &&
+        widget.initialBarcode!.trim().isNotEmpty) {
       _searchController.text = widget.initialBarcode!.trim();
     }
     final cached = _historyCache[_cacheKey];
@@ -113,9 +121,11 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         limit: 200,
         barcode: widget.initialBarcode,
         actionTypes: _selectedActionTypes,
-        searchQuery: widget.initialBarcode == null ? _searchController.text.trim() : '',
+        searchQuery: widget.initialBarcode == null
+            ? _searchController.text.trim()
+            : '',
         onDate: _selectedDate,
-        hydrateSuppliers: false,
+        hydrateSuppliers: true,
       );
 
       if (!mounted) return;
@@ -124,7 +134,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         _movements = movements;
         _isLoading = false;
       });
-      _historyCache[_cacheKey] = movements.map((row) => Map<String, dynamic>.from(row)).toList();
+      _historyCache[_cacheKey] = movements
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList();
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -139,11 +151,11 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   }
 
   String get _cacheKey => [
-        widget.initialBarcode?.trim() ?? '',
-        _selectedFilter.name,
-        _searchController.text.trim(),
-        _selectedDate == null ? '' : _formatDateLabel(_selectedDate!),
-      ].join('|');
+    widget.initialBarcode?.trim() ?? '',
+    _selectedFilter.name,
+    _searchController.text.trim(),
+    _selectedDate == null ? '' : _formatDateLabel(_selectedDate!),
+  ].join('|');
 
   void _handleSearchChanged(String _) {
     setState(() {});
@@ -157,7 +169,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   Future<void> _pickDate() async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final initialDate = _selectedDate != null && !_selectedDate!.isAfter(today) ? _selectedDate! : today;
+    final initialDate = _selectedDate != null && !_selectedDate!.isAfter(today)
+        ? _selectedDate!
+        : today;
 
     final picked = await showDatePicker(
       context: context,
@@ -178,7 +192,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
           ),
           dialogTheme: DialogThemeData(
             backgroundColor: _panel,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
           ),
         ),
         child: child!,
@@ -238,7 +254,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                   Positioned.fill(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: barrierDismissible ? () => Navigator.of(context).maybePop() : null,
+                      onTap: barrierDismissible
+                          ? () => Navigator.of(context).maybePop()
+                          : null,
                       child: TweenAnimationBuilder<double>(
                         tween: Tween(begin: 0, end: 1),
                         duration: const Duration(milliseconds: 240),
@@ -249,7 +267,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                               sigmaY: 16 * value,
                             ),
                             child: Container(
-                              color: Colors.black.withOpacity(_isDark ? 0.42 * value : 0.22 * value),
+                              color: Colors.black.withOpacity(
+                                _isDark ? 0.42 * value : 0.22 * value,
+                              ),
                             ),
                           );
                         },
@@ -286,9 +306,10 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   }
 
   Future<void> _openMovementDetails(Map<String, dynamic> movement) async {
-    final hydratedMovement = await DatabaseHelper.instance.hydrateInventoryMovementSupplierData(
-      Map<String, dynamic>.from(movement),
-    );
+    final hydratedMovement = await DatabaseHelper.instance
+        .hydrateInventoryMovementSupplierData(
+          Map<String, dynamic>.from(movement),
+        );
 
     if (!mounted) return;
 
@@ -331,12 +352,18 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                     width: 50,
                     height: 50,
                     decoration: BoxDecoration(
-                      color: _badgeColor((hydratedMovement['action_type'] ?? '').toString()).$2,
+                      color: _badgeColor(
+                        (hydratedMovement['action_type'] ?? '').toString(),
+                      ).$2,
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Icon(
-                      _badgeColor((hydratedMovement['action_type'] ?? '').toString()).$3,
-                      color: _badgeColor((hydratedMovement['action_type'] ?? '').toString()).$1,
+                      _badgeColor(
+                        (hydratedMovement['action_type'] ?? '').toString(),
+                      ).$3,
+                      color: _badgeColor(
+                        (hydratedMovement['action_type'] ?? '').toString(),
+                      ).$1,
                     ),
                   ),
                   const SizedBox(width: 14),
@@ -345,7 +372,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _movementTitle((hydratedMovement['action_type'] ?? '').toString()),
+                          _movementTitle(
+                            (hydratedMovement['action_type'] ?? '').toString(),
+                          ),
                           style: TextStyle(
                             color: _textPrimary,
                             fontSize: 26,
@@ -354,7 +383,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          (hydratedMovement['product_name'] ?? 'Unknown product').toString(),
+                          (hydratedMovement['product_name'] ??
+                                  'Unknown product')
+                              .toString(),
                           style: TextStyle(
                             color: _textSecondary,
                             fontSize: 14,
@@ -430,7 +461,10 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return <MapEntry<String, String>>[
       MapEntry('Action', _movementTitle(actionType)),
       if (!hideProductRow)
-        MapEntry('Product', (movement['product_name'] ?? 'Unknown product').toString()),
+        MapEntry(
+          'Product',
+          (movement['product_name'] ?? 'Unknown product').toString(),
+        ),
       MapEntry('Barcode', (movement['barcode'] ?? '-').toString()),
       MapEntry('When', _formatDateTime(movement['created_at']?.toString())),
       if ((movement['performed_by'] ?? '').toString().trim().isNotEmpty)
@@ -438,9 +472,22 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       if ((movement['supplier_name'] ?? '').toString().trim().isNotEmpty)
         MapEntry('Supplier', movement['supplier_name'].toString()),
       if (movement['supplier_cost'] != null)
-        MapEntry('Supplier Cost', 'Rs. ${_asDouble(movement['supplier_cost']).toStringAsFixed(2)}'),
+        MapEntry(
+          'Supplier Cost',
+          'Rs. ${_asDouble(movement['supplier_cost']).toStringAsFixed(2)}',
+        ),
+      if ((movement['batch_number'] ?? '').toString().trim().isNotEmpty)
+        MapEntry('Batch', movement['batch_number'].toString()),
+      if ((movement['expiry_date'] ?? '').toString().trim().isNotEmpty)
+        MapEntry(
+          'Expiry Date',
+          _formatDateOnly(movement['expiry_date']?.toString()),
+        ),
       if (movement['stock_before'] != null || movement['stock_after'] != null)
-        MapEntry('Stock', '${movement['stock_before'] ?? '-'} → ${movement['stock_after'] ?? '-'}'),
+        MapEntry(
+          'Stock',
+          '${movement['stock_before'] ?? '-'} → ${movement['stock_after'] ?? '-'}',
+        ),
       if (movement['old_price'] != null || movement['new_price'] != null)
         MapEntry(
           'Price',
@@ -521,9 +568,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       showCheckmark: false,
       selectedColor: _brand.withOpacity(_isDark ? 0.18 : 0.12),
       backgroundColor: _inputFill,
-      side: BorderSide(
-        color: selected ? _brand : _border,
-      ),
+      side: BorderSide(color: selected ? _brand : _border),
       labelStyle: TextStyle(
         color: selected ? _brand : _textSecondary,
         fontWeight: FontWeight.w800,
@@ -550,7 +595,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       ),
       label: Text(selected ? _formatDateLabel(_selectedDate!) : 'Pick Date'),
       onPressed: _pickDate,
-      backgroundColor: selected ? _brand.withOpacity(_isDark ? 0.18 : 0.12) : _inputFill,
+      backgroundColor: selected
+          ? _brand.withOpacity(_isDark ? 0.18 : 0.12)
+          : _inputFill,
       side: BorderSide(color: selected ? _brand : _border),
       labelStyle: TextStyle(
         color: selected ? _brand : _textSecondary,
@@ -581,30 +628,66 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
 
   (Color, Color, IconData) _badgeColor(String actionType) {
     if (actionType.contains('product_create')) {
-      return (const Color(0xFF7C8EA7), const Color(0xFF7C8EA7).withOpacity(_isDark ? 0.18 : 0.12), Icons.inventory_2_outlined);
+      return (
+        const Color(0xFF7C8EA7),
+        const Color(0xFF7C8EA7).withOpacity(_isDark ? 0.18 : 0.12),
+        Icons.inventory_2_outlined,
+      );
     }
     if (actionType.contains('receive')) {
-      return (const Color(0xFF1FCF9A), const Color(0xFF1FCF9A).withOpacity(_isDark ? 0.18 : 0.12), Icons.inventory_2_rounded);
+      return (
+        const Color(0xFF1FCF9A),
+        const Color(0xFF1FCF9A).withOpacity(_isDark ? 0.18 : 0.12),
+        Icons.inventory_2_rounded,
+      );
     }
     if (actionType.contains('adjust')) {
-      return (const Color(0xFFFFB65C), const Color(0xFFFFB65C).withOpacity(_isDark ? 0.18 : 0.12), Icons.tune_rounded);
+      return (
+        const Color(0xFFFFB65C),
+        const Color(0xFFFFB65C).withOpacity(_isDark ? 0.18 : 0.12),
+        Icons.tune_rounded,
+      );
     }
     if (actionType.contains('price')) {
-      return (const Color(0xFF8B5CF6), const Color(0xFF8B5CF6).withOpacity(_isDark ? 0.18 : 0.12), Icons.sell_rounded);
+      return (
+        const Color(0xFF8B5CF6),
+        const Color(0xFF8B5CF6).withOpacity(_isDark ? 0.18 : 0.12),
+        Icons.sell_rounded,
+      );
     }
     if (actionType.contains('stock_take')) {
-      return (const Color(0xFF17B8A6), const Color(0xFF17B8A6).withOpacity(_isDark ? 0.18 : 0.12), Icons.playlist_add_check_circle_rounded);
+      return (
+        const Color(0xFF17B8A6),
+        const Color(0xFF17B8A6).withOpacity(_isDark ? 0.18 : 0.12),
+        Icons.playlist_add_check_circle_rounded,
+      );
     }
     if (actionType.contains('refund')) {
-      return (const Color(0xFFFF6B7A), const Color(0xFFFF6B7A).withOpacity(_isDark ? 0.18 : 0.12), Icons.undo_rounded);
+      return (
+        const Color(0xFFFF6B7A),
+        const Color(0xFFFF6B7A).withOpacity(_isDark ? 0.18 : 0.12),
+        Icons.undo_rounded,
+      );
     }
     if (actionType.contains('min_stock')) {
-      return (const Color(0xFFE8A23D), const Color(0xFFE8A23D).withOpacity(_isDark ? 0.18 : 0.12), Icons.warning_amber_rounded);
+      return (
+        const Color(0xFFE8A23D),
+        const Color(0xFFE8A23D).withOpacity(_isDark ? 0.18 : 0.12),
+        Icons.warning_amber_rounded,
+      );
     }
     if (actionType.contains('sale')) {
-      return (const Color(0xFF4B8DFF), const Color(0xFF4B8DFF).withOpacity(_isDark ? 0.18 : 0.12), Icons.point_of_sale_rounded);
+      return (
+        const Color(0xFF4B8DFF),
+        const Color(0xFF4B8DFF).withOpacity(_isDark ? 0.18 : 0.12),
+        Icons.point_of_sale_rounded,
+      );
     }
-    return (const Color(0xFF4B8DFF), const Color(0xFF4B8DFF).withOpacity(_isDark ? 0.18 : 0.12), Icons.history_rounded);
+    return (
+      const Color(0xFF4B8DFF),
+      const Color(0xFF4B8DFF).withOpacity(_isDark ? 0.18 : 0.12),
+      Icons.history_rounded,
+    );
   }
 
   Widget _buildActionBadge(String actionType) {
@@ -641,8 +724,10 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       final baseTrailing = trailing;
       final sign = quantityChange > 0 ? '+' : '';
       trailing = '$sign$quantityChange • $trailing';
-      trailing = '$sign${_formatQuantity(quantityChange.abs())} â€¢ $baseTrailing';
-      trailing = '$sign${_formatQuantity(quantityChange.abs())} - $baseTrailing';
+      trailing =
+          '$sign${_formatQuantity(quantityChange.abs())} â€¢ $baseTrailing';
+      trailing =
+          '$sign${_formatQuantity(quantityChange.abs())} - $baseTrailing';
     } else if (oldPrice != null || newPrice != null) {
       trailing = 'Rs. ${newPrice?.toStringAsFixed(2) ?? '0.00'} • $trailing';
     }
@@ -680,7 +765,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                     children: [
                       Expanded(
                         child: Text(
-                          (movement['product_name'] ?? 'Unknown product').toString(),
+                          (movement['product_name'] ?? 'Unknown product')
+                              .toString(),
                           style: TextStyle(
                             color: _textPrimary,
                             fontWeight: FontWeight.w800,
@@ -799,7 +885,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return pieces.isEmpty ? 'Tap to view full details.' : pieces.join(' • ');
   }
 
-  List<MapEntry<String, String>> _movementRowsSafe(Map<String, dynamic> movement) {
+  List<MapEntry<String, String>> _movementRowsSafe(
+    Map<String, dynamic> movement,
+  ) {
     final actionType = (movement['action_type'] ?? '').toString();
     final hideProductRow =
         actionType == 'stock_receive' || actionType == 'stock_adjust_set';
@@ -809,7 +897,10 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return <MapEntry<String, String>>[
       MapEntry('Action', _movementTitle(actionType)),
       if (!hideProductRow)
-        MapEntry('Product', (movement['product_name'] ?? 'Unknown product').toString()),
+        MapEntry(
+          'Product',
+          (movement['product_name'] ?? 'Unknown product').toString(),
+        ),
       MapEntry('Barcode', (movement['barcode'] ?? '-').toString()),
       MapEntry('When', _formatDateTime(movement['created_at']?.toString())),
       if ((movement['performed_by'] ?? '').toString().trim().isNotEmpty)
@@ -817,18 +908,28 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       if ((movement['supplier_name'] ?? '').toString().trim().isNotEmpty)
         MapEntry('Supplier', movement['supplier_name'].toString()),
       if (movement['supplier_cost'] != null)
-        MapEntry('Supplier Cost', 'Rs. ${_asDouble(movement['supplier_cost']).toStringAsFixed(2)}'),
+        MapEntry(
+          'Supplier Cost',
+          'Rs. ${_asDouble(movement['supplier_cost']).toStringAsFixed(2)}',
+        ),
+      if ((movement['batch_number'] ?? '').toString().trim().isNotEmpty)
+        MapEntry('Batch', movement['batch_number'].toString()),
+      if ((movement['expiry_date'] ?? '').toString().trim().isNotEmpty)
+        MapEntry(
+          'Expiry Date',
+          _formatDateOnly(movement['expiry_date']?.toString()),
+        ),
       if (stockBefore != null || stockAfter != null)
         MapEntry(
           'Stock',
           '${stockBefore == null ? '-' : _formatQuantity(stockBefore)} -> '
-          '${stockAfter == null ? '-' : _formatQuantity(stockAfter)}',
+              '${stockAfter == null ? '-' : _formatQuantity(stockAfter)}',
         ),
       if (movement['old_price'] != null || movement['new_price'] != null)
         MapEntry(
           'Price',
           'Rs. ${_asDouble(movement['old_price']).toStringAsFixed(2)} -> '
-          'Rs. ${_asDouble(movement['new_price']).toStringAsFixed(2)}',
+              'Rs. ${_asDouble(movement['new_price']).toStringAsFixed(2)}',
         ),
     ];
   }
@@ -862,6 +963,16 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
 
     if (performedBy.isNotEmpty) {
       pieces.add(performedBy);
+    }
+
+    final batchNumber = (movement['batch_number'] ?? '').toString().trim();
+    if (batchNumber.isNotEmpty) {
+      pieces.add('Batch $batchNumber');
+    }
+
+    final expiryDate = (movement['expiry_date'] ?? '').toString().trim();
+    if (expiryDate.isNotEmpty) {
+      pieces.add('Exp ${_formatDateOnly(expiryDate)}');
     }
 
     return pieces.isEmpty ? 'Tap to view full details.' : pieces.join(' - ');
@@ -914,6 +1025,16 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}  $hour:$minute $meridiem';
   }
 
+  String _formatDateOnly(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return '-';
+
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return raw;
+
+    final local = parsed.toLocal();
+    return '${local.day.toString().padLeft(2, '0')}/${local.month.toString().padLeft(2, '0')}/${local.year}';
+  }
+
   String _formatDateLabel(DateTime value) {
     return '${value.year}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
   }
@@ -923,7 +1044,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     final totalMovements = _movements.length;
     final stockMovements = _movements.where((m) {
       final action = (m['action_type'] ?? '').toString();
-      return action.startsWith('stock_') || action == 'sale' || action == 'refund';
+      return action.startsWith('stock_') ||
+          action == 'sale' ||
+          action == 'refund';
     }).length;
     final priceMovements = _movements.where((m) {
       final action = (m['action_type'] ?? '').toString();
@@ -942,9 +1065,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         ),
         child: SafeArea(
           child: _isLoading
-              ? Center(
-                  child: CircularProgressIndicator(color: _brand),
-                )
+              ? Center(child: CircularProgressIndicator(color: _brand))
               : RefreshIndicator(
                   color: _brand,
                   onRefresh: _refresh,
@@ -1007,11 +1128,18 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                             const SizedBox(width: 12),
                             if (widget.initialBarcode != null)
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 9,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: _brand.withOpacity(_isDark ? 0.18 : 0.12),
+                                  color: _brand.withOpacity(
+                                    _isDark ? 0.18 : 0.12,
+                                  ),
                                   borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(color: _brand.withOpacity(0.28)),
+                                  border: Border.all(
+                                    color: _brand.withOpacity(0.28),
+                                  ),
                                 ),
                                 child: Text(
                                   widget.initialBarcode!,
@@ -1041,7 +1169,10 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                           color: _brand,
                                         ),
                                       )
-                                    : Icon(Icons.refresh_rounded, color: _brand),
+                                    : Icon(
+                                        Icons.refresh_rounded,
+                                        color: _brand,
+                                      ),
                               ),
                             ),
                           ],
@@ -1097,18 +1228,28 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                       controller: _searchController,
                                       style: TextStyle(color: _textPrimary),
                                       decoration: InputDecoration(
-                                        hintText: 'Search by product, barcode, or reason',
-                                        prefixIcon: const Icon(Icons.search_rounded),
-                                        suffixIcon: _searchController.text.trim().isEmpty
+                                        hintText:
+                                            'Search by product, barcode, or reason',
+                                        prefixIcon: const Icon(
+                                          Icons.search_rounded,
+                                        ),
+                                        suffixIcon:
+                                            _searchController.text
+                                                .trim()
+                                                .isEmpty
                                             ? null
                                             : IconButton(
                                                 onPressed: () async {
                                                   _searchDebounce?.cancel();
                                                   _searchController.clear();
                                                   setState(() {});
-                                                  await _loadHistory(showLoader: false);
+                                                  await _loadHistory(
+                                                    showLoader: false,
+                                                  );
                                                 },
-                                                icon: const Icon(Icons.close_rounded),
+                                                icon: const Icon(
+                                                  Icons.close_rounded,
+                                                ),
                                               ),
                                       ),
                                       onChanged: _handleSearchChanged,
@@ -1122,21 +1263,49 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                               spacing: 8,
                               runSpacing: 8,
                               children: [
-                                _buildFilterChip(label: 'All', filter: InventoryHistoryFilter.all),
-                                _buildFilterChip(label: 'Receives', filter: InventoryHistoryFilter.receives),
-                                _buildFilterChip(label: 'Adjustments', filter: InventoryHistoryFilter.adjustments),
-                                _buildFilterChip(label: 'Counts', filter: InventoryHistoryFilter.counts),
-                                _buildFilterChip(label: 'Sales', filter: InventoryHistoryFilter.sales),
-                                _buildFilterChip(label: 'Refunds', filter: InventoryHistoryFilter.refunds),
-                                _buildFilterChip(label: 'Price Changes', filter: InventoryHistoryFilter.priceChanges),
-                                _buildFilterChip(label: 'Min Stock', filter: InventoryHistoryFilter.minStock),
+                                _buildFilterChip(
+                                  label: 'All',
+                                  filter: InventoryHistoryFilter.all,
+                                ),
+                                _buildFilterChip(
+                                  label: 'Receives',
+                                  filter: InventoryHistoryFilter.receives,
+                                ),
+                                _buildFilterChip(
+                                  label: 'Adjustments',
+                                  filter: InventoryHistoryFilter.adjustments,
+                                ),
+                                _buildFilterChip(
+                                  label: 'Counts',
+                                  filter: InventoryHistoryFilter.counts,
+                                ),
+                                _buildFilterChip(
+                                  label: 'Sales',
+                                  filter: InventoryHistoryFilter.sales,
+                                ),
+                                _buildFilterChip(
+                                  label: 'Refunds',
+                                  filter: InventoryHistoryFilter.refunds,
+                                ),
+                                _buildFilterChip(
+                                  label: 'Price Changes',
+                                  filter: InventoryHistoryFilter.priceChanges,
+                                ),
+                                _buildFilterChip(
+                                  label: 'Min Stock',
+                                  filter: InventoryHistoryFilter.minStock,
+                                ),
                                 _buildDateChip(),
-                                if (_selectedDate != null) _buildClearDateChip(),
+                                if (_selectedDate != null)
+                                  _buildClearDateChip(),
                               ],
                             ),
                             const SizedBox(height: 14),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 12,
+                              ),
                               decoration: BoxDecoration(
                                 color: _panelSoft,
                                 borderRadius: BorderRadius.circular(16),
@@ -1144,7 +1313,11 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                               ),
                               child: Row(
                                 children: [
-                                  Icon(Icons.info_outline_rounded, color: _textSecondary, size: 18),
+                                  Icon(
+                                    Icons.info_outline_rounded,
+                                    color: _textSecondary,
+                                    size: 18,
+                                  ),
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
@@ -1206,7 +1379,11 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                 ),
                                 child: Column(
                                   children: [
-                                    Icon(Icons.history_toggle_off_rounded, color: _muted, size: 36),
+                                    Icon(
+                                      Icons.history_toggle_off_rounded,
+                                      color: _muted,
+                                      size: 36,
+                                    ),
                                     const SizedBox(height: 10),
                                     Text(
                                       'No inventory history records match the current search or filter.',
@@ -1237,6 +1414,3 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     );
   }
 }
-
-
-

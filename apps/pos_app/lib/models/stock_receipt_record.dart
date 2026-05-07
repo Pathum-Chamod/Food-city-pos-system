@@ -16,6 +16,9 @@ class StockReceiptRecord {
   final String invoiceNumber;
   final String deliveryNoteNumber;
   final String grnReference;
+  final int? expiryBatchId;
+  final String batchNumber;
+  final String expiryDate;
   final String cashierName;
   final String createdAt;
   final String backendStatus;
@@ -35,6 +38,9 @@ class StockReceiptRecord {
     required this.invoiceNumber,
     required this.deliveryNoteNumber,
     required this.grnReference,
+    required this.expiryBatchId,
+    required this.batchNumber,
+    required this.expiryDate,
     required this.cashierName,
     required this.createdAt,
     required this.backendStatus,
@@ -56,6 +62,9 @@ class StockReceiptRecord {
       invoiceNumber: (map['invoice_number'] ?? '').toString(),
       deliveryNoteNumber: (map['delivery_note_number'] ?? '').toString(),
       grnReference: (map['grn_reference'] ?? '').toString(),
+      expiryBatchId: (map['expiry_batch_id'] as num?)?.toInt(),
+      batchNumber: (map['batch_number'] ?? '').toString(),
+      expiryDate: (map['expiry_date'] ?? '').toString(),
       cashierName: (map['cashier_name'] ?? '').toString(),
       createdAt: (map['created_at'] ?? '').toString(),
       backendStatus: (map['backend_status'] ?? '').toString(),
@@ -78,6 +87,9 @@ class StockReceiptRecord {
       'invoice_number': invoiceNumber,
       'delivery_note_number': deliveryNoteNumber,
       'grn_reference': grnReference,
+      'expiry_batch_id': expiryBatchId,
+      'batch_number': batchNumber,
+      'expiry_date': expiryDate,
       'cashier_name': cashierName,
       'created_at': createdAt,
       'backend_status': backendStatus,

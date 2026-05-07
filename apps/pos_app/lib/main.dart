@@ -11,6 +11,7 @@ import 'providers/auth_provider.dart';
 import 'providers/app_theme_provider.dart';
 import 'navigation/pos_route_names.dart';
 import 'screens/cashier_summary_screen.dart';
+import 'screens/expiry_alerts_screen.dart';
 import 'screens/held_carts_screen.dart';
 import 'screens/inventory_screen.dart';
 import 'screens/login_screen.dart';
@@ -25,7 +26,7 @@ import 'widgets/hardware_setup_dialog.dart';
 void main() async {
   // Ensure Flutter bindings are initialized before calling native code
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // Initialize the local SQLite DB and inject mock data
   await DatabaseHelper.instance.database;
   await DatabaseHelper.instance.insertMockDataIfEmpty();
@@ -130,7 +131,10 @@ class _PosAppState extends State<PosApp> {
     final hasShift = keyboard.isShiftPressed;
     final hasAlt = keyboard.isAltPressed;
 
-    if (hasShift && !hasControl && !hasAlt && key == LogicalKeyboardKey.escape) {
+    if (hasShift &&
+        !hasControl &&
+        !hasAlt &&
+        key == LogicalKeyboardKey.escape) {
       _runGlobalShortcut(_showLogoutConfirmation);
       return true;
     }
@@ -185,6 +189,10 @@ class _PosAppState extends State<PosApp> {
         _runGlobalShortcut(_openSalesReport);
         return true;
       }
+      if (!hasShift && key == LogicalKeyboardKey.keyE) {
+        _runGlobalShortcut(_openExpiryAlerts);
+        return true;
+      }
       if (!hasShift && key == LogicalKeyboardKey.keyU) {
         _runGlobalShortcut(_openUserManagement);
         return true;
@@ -211,13 +219,14 @@ class _PosAppState extends State<PosApp> {
       final theme = Theme.of(context);
       final isDark = theme.brightness == Brightness.dark;
       final bg = isDark ? const Color(0xFF0F1C31) : Colors.white;
-      final surface =
-          isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
-      final border =
-          isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+      final surface = isDark
+          ? const Color(0xFF14243C)
+          : const Color(0xFFF8FAFD);
+      final border = isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
       final textPrimary = isDark ? Colors.white : const Color(0xFF14263B);
-      final textSecondary =
-          isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+      final textSecondary = isDark
+          ? const Color(0xFF9DB0C8)
+          : const Color(0xFF667A92);
       const danger = Color(0xFFFF6B7A);
       final userName = auth.currentUser?.name ?? 'current user';
 
@@ -242,10 +251,8 @@ class _PosAppState extends State<PosApp> {
         },
         pageBuilder: (dialogContext, animation, secondaryAnimation) {
           var isClosing = false;
-          var isWaitingForEscapeRelease =
-              HardwareKeyboard.instance.isLogicalKeyPressed(
-            LogicalKeyboardKey.escape,
-          );
+          var isWaitingForEscapeRelease = HardwareKeyboard.instance
+              .isLogicalKeyPressed(LogicalKeyboardKey.escape);
 
           void close(bool value) {
             if (isClosing) return;
@@ -272,7 +279,8 @@ class _PosAppState extends State<PosApp> {
               }
 
               if (event is! KeyDownEvent) return KeyEventResult.ignored;
-              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+              final isEnterKey =
+                  event.logicalKey == LogicalKeyboardKey.enter ||
                   event.logicalKey == LogicalKeyboardKey.numpadEnter;
 
               if (isEnterKey) {
@@ -522,7 +530,8 @@ class _PosAppState extends State<PosApp> {
     final context = AppSnackBar.navigatorKey.currentContext;
     if (context == null) return Future<void>.value();
 
-    final cashierName = context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+    final cashierName =
+        context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
     return _pushOrRevealRoute(
       routeName: PosRouteNames.cashierSummary,
       builder: (context) => CashierSummaryScreen(cashierName: cashierName),
@@ -534,6 +543,15 @@ class _PosAppState extends State<PosApp> {
       return _pushOrRevealRoute(
         routeName: PosRouteNames.salesReport,
         builder: (context) => const SalesReportScreen(),
+      );
+    });
+  }
+
+  Future<void> _openExpiryAlerts() {
+    return _runProtectedManagerAction(() {
+      return _pushOrRevealRoute(
+        routeName: PosRouteNames.expiryAlerts,
+        builder: (context) => const ExpiryAlertsScreen(),
       );
     });
   }
@@ -560,7 +578,8 @@ class _PosAppState extends State<PosApp> {
           context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
       return _pushOrRevealRoute(
         routeName: PosRouteNames.supplierManagement,
-        builder: (context) => SupplierManagementScreen(cashierName: cashierName),
+        builder: (context) =>
+            SupplierManagementScreen(cashierName: cashierName),
       );
     });
   }
@@ -587,19 +606,23 @@ class _PosAppState extends State<PosApp> {
           final isDark = theme.brightness == Brightness.dark;
           const brand = Color(0xFF2AAA8A);
           final bg = isDark ? const Color(0xFF081221) : Colors.white;
-          final surface =
-              isDark ? const Color(0xFF0F1B2D) : const Color(0xFFF6F9FC);
-          final surfaceAlt =
-              isDark ? const Color(0xFF14233A) : const Color(0xFFEFF4FB);
-          final border =
-              isDark ? const Color(0xFF23344E) : const Color(0xFFD9E3F0);
-          final textPrimary =
-              isDark ? Colors.white : const Color(0xFF122033);
-          final textSecondary =
-              isDark ? const Color(0xFFAAB8CB) : const Color(0xFF607089);
+          final surface = isDark
+              ? const Color(0xFF0F1B2D)
+              : const Color(0xFFF6F9FC);
+          final surfaceAlt = isDark
+              ? const Color(0xFF14233A)
+              : const Color(0xFFEFF4FB);
+          final border = isDark
+              ? const Color(0xFF23344E)
+              : const Color(0xFFD9E3F0);
+          final textPrimary = isDark ? Colors.white : const Color(0xFF122033);
+          final textSecondary = isDark
+              ? const Color(0xFFAAB8CB)
+              : const Color(0xFF607089);
           final screenSize = MediaQuery.of(dialogContext).size;
-          final dialogWidth =
-              screenSize.width >= 1240 ? 1180.0 : screenSize.width - 48;
+          final dialogWidth = screenSize.width >= 1240
+              ? 1180.0
+              : screenSize.width - 48;
 
           Widget keyChip(String label) {
             return Container(
@@ -679,63 +702,70 @@ class _PosAppState extends State<PosApp> {
           }
 
           final posFlowSection = section('POS Flow', [
-              shortcutRow('Barcode + Enter', 'Add item to cart'),
-              shortcutRow('Enter', 'Checkout when input is empty and cart has items'),
-              shortcutRow('Esc', 'Return to barcode/search flow'),
-              shortcutRow('Home', 'Return to POS screen/barcode flow'),
-            ]);
+            shortcutRow('Barcode + Enter', 'Add item to cart'),
+            shortcutRow(
+              'Enter',
+              'Checkout when input is empty and cart has items',
+            ),
+            shortcutRow('Esc', 'Return to barcode/search flow'),
+            shortcutRow('Home', 'Return to POS screen/barcode flow'),
+          ]);
           final priceModesSection = section('Price Modes', [
-              shortcutRow('F1', 'Selling price mode'),
-              shortcutRow('F2', 'Wholesale price mode'),
-              shortcutRow('F3', 'Sale price mode'),
-              shortcutRow('Double F1/F2/F3', 'Switch whole cart to that price mode'),
-            ]);
+            shortcutRow('F1', 'Selling price mode'),
+            shortcutRow('F2', 'Wholesale price mode'),
+            shortcutRow('F3', 'Sale price mode'),
+            shortcutRow(
+              'Double F1/F2/F3',
+              'Switch whole cart to that price mode',
+            ),
+          ]);
           final cartActionsSection = section('Cart Actions', [
-              shortcutRow('Up / Down', 'Select cart item'),
-              shortcutRow('Page Up', 'Select top cart item'),
-              shortcutRow('Page Down', 'Select bottom cart item'),
-              shortcutRow('+ / -', 'Increase or decrease selected item quantity'),
-              shortcutRow('Delete', 'Remove selected item'),
-              shortcutRow('Q', 'Edit selected item quantity'),
-              shortcutRow('D', 'Apply discount to selected item'),
-              shortcutRow('Ctrl + D', 'Clear selected item discount'),
-              shortcutRow('Ctrl + L', 'Clear whole cart'),
-            ]);
+            shortcutRow('Up / Down', 'Select cart item'),
+            shortcutRow('Page Up', 'Select top cart item'),
+            shortcutRow('Page Down', 'Select bottom cart item'),
+            shortcutRow('+ / -', 'Increase or decrease selected item quantity'),
+            shortcutRow('Delete', 'Remove selected item'),
+            shortcutRow('Q', 'Edit selected item quantity'),
+            shortcutRow('D', 'Apply discount to selected item'),
+            shortcutRow('Ctrl + D', 'Clear selected item discount'),
+            shortcutRow('Ctrl + L', 'Clear whole cart'),
+          ]);
           final posActionsSection = section('POS Actions', [
-              shortcutRow('F4', 'Hold current cart'),
-              shortcutRow('F5', 'Open held carts'),
-              shortcutRow('F6', 'Apply cart discount'),
-              shortcutRow('F7', 'Focus product search'),
-              shortcutRow('Shift + Esc', 'Open logout confirmation'),
-            ]);
+            shortcutRow('F4', 'Hold current cart'),
+            shortcutRow('F5', 'Open held carts'),
+            shortcutRow('F6', 'Apply cart discount'),
+            shortcutRow('F7', 'Focus product search'),
+            shortcutRow('Shift + Esc', 'Open logout confirmation'),
+          ]);
           final heldBillsSection = section('Held Bills', [
-              shortcutRow('1 - 9', 'Select visible held bill'),
-              shortcutRow('Double 1 - 9', 'Resume selected held bill to cart'),
-              shortcutRow('Up / Down', 'Move held bill selection'),
-              shortcutRow('Page Up', 'Select top held bill'),
-              shortcutRow('Page Down', 'Select bottom held bill'),
-              shortcutRow('Enter', 'Resume selected held bill'),
-              shortcutRow('Delete', 'Delete selected held bill'),
-            ]);
+            shortcutRow('1 - 9', 'Select visible held bill'),
+            shortcutRow('Double 1 - 9', 'Resume selected held bill to cart'),
+            shortcutRow('Up / Down', 'Move held bill selection'),
+            shortcutRow('Page Up', 'Select top held bill'),
+            shortcutRow('Page Down', 'Select bottom held bill'),
+            shortcutRow('Enter', 'Resume selected held bill'),
+            shortcutRow('Delete', 'Delete selected held bill'),
+          ]);
           final modulesSection = section('Modules', [
-              shortcutRow('F8', 'Transaction history'),
-              shortcutRow('F9', 'Inventory'),
-              shortcutRow('F11', 'Supplier operations'),
-              shortcutRow('F12', 'Store sales report'),
-              shortcutRow('Ctrl + I', 'Inventory'),
-              shortcutRow('Ctrl + H', 'Held carts'),
-              shortcutRow('Ctrl + R', 'Sales report'),
-              shortcutRow('Ctrl + U', 'User management'),
-              shortcutRow('Ctrl + S', 'Cashier summary'),
-              shortcutRow('Ctrl + Shift + H', 'Hardware setup'),
-              shortcutRow('Ctrl + ?', 'Open this shortcut legend'),
-            ]);
+            shortcutRow('F8', 'Transaction history'),
+            shortcutRow('F9', 'Inventory'),
+            shortcutRow('F11', 'Supplier operations'),
+            shortcutRow('F12', 'Store sales report'),
+            shortcutRow('Ctrl + I', 'Inventory'),
+            shortcutRow('Ctrl + E', 'Expiry alerts'),
+            shortcutRow('Ctrl + H', 'Held carts'),
+            shortcutRow('Ctrl + R', 'Sales report'),
+            shortcutRow('Ctrl + U', 'User management'),
+            shortcutRow('Ctrl + S', 'Cashier summary'),
+            shortcutRow('Ctrl + Shift + H', 'Hardware setup'),
+            shortcutRow('Ctrl + ?', 'Open this shortcut legend'),
+          ]);
           final popupRulesSection = section('Popup Rules', [
-              shortcutRow('Tab', 'Move to next field'),
-              shortcutRow('Shift + Tab', 'Move to previous field'),
-              shortcutRow('Enter', 'Submit the current step'),
-              shortcutRow('Esc', 'Close or cancel the current popup'),
-            ]);
+            shortcutRow('Tab', 'Move to next field'),
+            shortcutRow('Shift + Tab', 'Move to previous field'),
+            shortcutRow('Enter', 'Submit the current step'),
+            shortcutRow('Esc', 'Close or cancel the current popup'),
+          ]);
 
           final landscapeColumns = <List<Widget>>[
             [posFlowSection, posActionsSection, heldBillsSection],
@@ -743,7 +773,12 @@ class _PosAppState extends State<PosApp> {
             [cartActionsSection, popupRulesSection],
           ];
           final mediumColumns = <List<Widget>>[
-            [posFlowSection, posActionsSection, heldBillsSection, popupRulesSection],
+            [
+              posFlowSection,
+              posActionsSection,
+              heldBillsSection,
+              popupRulesSection,
+            ],
             [priceModesSection, cartActionsSection, modulesSection],
           ];
           final allSections = <Widget>[
@@ -803,98 +838,109 @@ class _PosAppState extends State<PosApp> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
                         children: [
-                          Container(
-                            width: 46,
-                            height: 46,
-                            decoration: BoxDecoration(
-                              color: brand.withOpacity(0.14),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: const Icon(
-                              Icons.keyboard_rounded,
-                              color: brand,
-                            ),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Keyboard Shortcuts',
-                                  style: TextStyle(
-                                    color: textPrimary,
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.w900,
-                                  ),
+                          Row(
+                            children: [
+                              Container(
+                                width: 46,
+                                height: 46,
+                                decoration: BoxDecoration(
+                                  color: brand.withOpacity(0.14),
+                                  borderRadius: BorderRadius.circular(14),
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Fast POS actions grouped by workflow.',
-                                  style: TextStyle(
-                                    color: textSecondary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                                child: const Icon(
+                                  Icons.keyboard_rounded,
+                                  color: brand,
                                 ),
-                              ],
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: 'Close',
-                            onPressed: _closeShortcutLegend,
-                            style: IconButton.styleFrom(
-                              backgroundColor: surfaceAlt,
-                              foregroundColor: textSecondary,
-                            ),
-                            icon: const Icon(Icons.close_rounded),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      Flexible(
-                        child: SingleChildScrollView(
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              Widget sectionColumn(List<Widget> column) {
-                                return Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    for (var i = 0; i < column.length; i++) ...[
-                                      if (i > 0) const SizedBox(height: 12),
-                                      column[i],
-                                    ],
+                                    Text(
+                                      'Keyboard Shortcuts',
+                                      style: TextStyle(
+                                        color: textPrimary,
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      'Fast POS actions grouped by workflow.',
+                                      style: TextStyle(
+                                        color: textSecondary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                   ],
-                                );
-                              }
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'Close',
+                                onPressed: _closeShortcutLegend,
+                                style: IconButton.styleFrom(
+                                  backgroundColor: surfaceAlt,
+                                  foregroundColor: textSecondary,
+                                ),
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          Flexible(
+                            child: SingleChildScrollView(
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  Widget sectionColumn(List<Widget> column) {
+                                    return Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        for (
+                                          var i = 0;
+                                          i < column.length;
+                                          i++
+                                        ) ...[
+                                          if (i > 0) const SizedBox(height: 12),
+                                          column[i],
+                                        ],
+                                      ],
+                                    );
+                                  }
 
-                              final columns = constraints.maxWidth >= 1040
-                                  ? landscapeColumns
-                                  : constraints.maxWidth >= 720
+                                  final columns = constraints.maxWidth >= 1040
+                                      ? landscapeColumns
+                                      : constraints.maxWidth >= 720
                                       ? mediumColumns
                                       : <List<Widget>>[allSections];
 
-                              if (columns.length == 1) {
-                                return sectionColumn(columns.first);
-                              }
+                                  if (columns.length == 1) {
+                                    return sectionColumn(columns.first);
+                                  }
 
-                              return Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  for (var i = 0; i < columns.length; i++) ...[
-                                    if (i > 0) const SizedBox(width: 12),
-                                    Expanded(child: sectionColumn(columns[i])),
-                                  ],
-                                ],
-                              );
-                            },
+                                  return Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      for (
+                                        var i = 0;
+                                        i < columns.length;
+                                        i++
+                                      ) ...[
+                                        if (i > 0) const SizedBox(width: 12),
+                                        Expanded(
+                                          child: sectionColumn(columns[i]),
+                                        ),
+                                      ],
+                                    ],
+                                  );
+                                },
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    ],
+                        ],
                       ),
                     ),
                   ),
@@ -921,7 +967,8 @@ class _PosAppState extends State<PosApp> {
     final canReplaceCart = await _confirmReplaceCurrentCartIfNeeded(cart);
     if (!canReplaceCart) return;
 
-    final cashierName = context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+    final cashierName =
+        context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
 
     var foundRoute = false;
     navigator.popUntil((route) {
@@ -996,15 +1043,16 @@ class _PosAppState extends State<PosApp> {
     final rawItems = restored['items'];
     final items = rawItems is List
         ? rawItems
-            .whereType<Map>()
-            .map((item) => Map<String, dynamic>.from(item))
-            .toList()
+              .whereType<Map>()
+              .map((item) => Map<String, dynamic>.from(item))
+              .toList()
         : <Map<String, dynamic>>[];
 
     if (items.isEmpty) {
       AppSnackBar.show(
         context,
-        message: 'Held cart could not be restored because its saved items are invalid.',
+        message:
+            'Held cart could not be restored because its saved items are invalid.',
         backgroundColor: const Color(0xFFFF6B7A),
       );
       return;
@@ -1015,7 +1063,8 @@ class _PosAppState extends State<PosApp> {
       isRefundMode: (restored['is_refund_mode'] ?? false) == true,
       discountType: (restored['discount_type'] ?? 'none').toString(),
       discountValue: ((restored['discount_value'] as num?) ?? 0).toDouble(),
-      selectedPriceType: (restored['selected_price_type'] ?? 'selling').toString(),
+      selectedPriceType: (restored['selected_price_type'] ?? 'selling')
+          .toString(),
     );
 
     await _goHome();
@@ -1031,33 +1080,28 @@ class _PosAppState extends State<PosApp> {
     final isDark = brightness == Brightness.dark;
     const brand = Color(0xFF2AAA8A);
 
-    final scheme = ColorScheme.fromSeed(
-      seedColor: brand,
-      brightness: brightness,
-    ).copyWith(
-      primary: brand,
-      secondary: const Color(0xFF4B8DFF),
-      error: const Color(0xFFFF6B7A),
-    );
+    final scheme =
+        ColorScheme.fromSeed(seedColor: brand, brightness: brightness).copyWith(
+          primary: brand,
+          secondary: const Color(0xFF4B8DFF),
+          error: const Color(0xFFFF6B7A),
+        );
 
     return ThemeData(
       useMaterial3: true,
       brightness: brightness,
       colorScheme: scheme,
-      scaffoldBackgroundColor:
-          isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB),
+      scaffoldBackgroundColor: isDark
+          ? const Color(0xFF07111F)
+          : const Color(0xFFF4F7FB),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       dialogTheme: DialogThemeData(
         backgroundColor: isDark ? const Color(0xFF0F1C31) : Colors.white,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
@@ -1136,6 +1180,9 @@ class _PosAppState extends State<PosApp> {
             },
             const SingleActivator(LogicalKeyboardKey.keyR, control: true): () {
               _runGlobalShortcutFromIntent(_openSalesReport);
+            },
+            const SingleActivator(LogicalKeyboardKey.keyE, control: true): () {
+              _runGlobalShortcutFromIntent(_openExpiryAlerts);
             },
             const SingleActivator(LogicalKeyboardKey.keyU, control: true): () {
               _runGlobalShortcutFromIntent(_openUserManagement);

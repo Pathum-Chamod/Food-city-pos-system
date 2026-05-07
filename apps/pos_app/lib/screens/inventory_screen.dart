@@ -1,6 +1,5 @@
 import 'dart:io';
 
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:csv/csv.dart';
@@ -25,13 +24,7 @@ class InventoryScreen extends StatefulWidget {
   State<InventoryScreen> createState() => _InventoryScreenState();
 }
 
-enum InventoryFilter {
-  all,
-  inStock,
-  lowStock,
-  outOfStock,
-  inactive,
-}
+enum InventoryFilter { all, inStock, lowStock, outOfStock, inactive }
 
 class _InventoryApprovalResult {
   const _InventoryApprovalResult({
@@ -128,14 +121,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
-
-
   Future<T?> _showInventoryPopup<T>({
     required IconData icon,
     required String title,
     String? subtitle,
-    required Widget Function(BuildContext dialogContext, StateSetter setPopupState)
-        bodyBuilder,
+    required Widget Function(
+      BuildContext dialogContext,
+      StateSetter setPopupState,
+    )
+    bodyBuilder,
     double maxWidth = 760,
     double maxHeightFactor = 0.88,
   }) {
@@ -206,7 +200,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                         height: 1.1,
                                       ),
                                     ),
-                                    if (subtitle != null && subtitle.trim().isNotEmpty) ...[
+                                    if (subtitle != null &&
+                                        subtitle.trim().isNotEmpty) ...[
                                       const SizedBox(height: 6),
                                       Text(
                                         subtitle,
@@ -414,13 +409,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
         final columns = maxWidth >= 880
             ? 5
             : maxWidth >= 680
-                ? 3
-                : maxWidth >= 460
-                    ? 2
-                    : 1;
+            ? 3
+            : maxWidth >= 460
+            ? 2
+            : 1;
         final spacing = 10.0;
-        final tileWidth =
-            ((maxWidth - (spacing * (columns - 1))) / columns).clamp(0.0, 220.0);
+        final tileWidth = ((maxWidth - (spacing * (columns - 1))) / columns)
+            .clamp(0.0, 220.0);
 
         return Wrap(
           spacing: spacing,
@@ -533,7 +528,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
             autofocus: true,
             onKeyEvent: (node, event) {
               if (event is! KeyDownEvent) return KeyEventResult.ignored;
-              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+              final isEnterKey =
+                  event.logicalKey == LogicalKeyboardKey.enter ||
                   event.logicalKey == LogicalKeyboardKey.numpadEnter;
               if (!isEnterKey) return KeyEventResult.ignored;
               choose(dialogContext, true);
@@ -577,8 +573,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       Expanded(
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor:
-                                isDestructive ? _dangerColor : _brandColor,
+                            backgroundColor: isDestructive
+                                ? _dangerColor
+                                : _brandColor,
                             foregroundColor: Colors.white,
                           ),
                           onPressed: () => choose(dialogContext, true),
@@ -605,7 +602,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
     return null;
   }
 
-  String? _validatePositiveInt(String rawValue, {required String label, bool allowZero = false}) {
+  String? _validatePositiveInt(
+    String rawValue, {
+    required String label,
+    bool allowZero = false,
+  }) {
     final value = int.tryParse(rawValue.trim());
     if (value == null) return 'Enter a valid $label.';
     if (allowZero) {
@@ -799,6 +800,65 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+  Widget _buildExpiryTrackingCard({
+    required bool trackExpiry,
+    required TextEditingController alertDaysController,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: _softDecoration(color: _panelSoft, radius: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Track expiry batches',
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Use this for milk, snacks, cosmetics, and other products that need date checking during stock receive.',
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontWeight: FontWeight.w600,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Switch(value: trackExpiry, onChanged: onChanged),
+            ],
+          ),
+          if (trackExpiry) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: alertDaysController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: const InputDecoration(
+                labelText: 'Alert before days',
+                helperText:
+                    'Example: 30 means show this product 30 days before expiry.',
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Future<void> _downloadBulkImportTemplate() async {
     try {
       final path = await FilePicker.platform.saveFile(
@@ -875,7 +935,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     if (!indexByHeader.containsKey('barcode') ||
         !indexByHeader.containsKey('name') ||
         !indexByHeader.containsKey('selling_price')) {
-      throw Exception('CSV must include barcode, name, and selling_price columns.');
+      throw Exception(
+        'CSV must include barcode, name, and selling_price columns.',
+      );
     }
 
     String readValue(List<dynamic> row, String key) {
@@ -885,7 +947,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
 
     final existingByBarcode = {
-      for (final product in _products) product.barcode.trim().toLowerCase(): product,
+      for (final product in _products)
+        product.barcode.trim().toLowerCase(): product,
     };
     final seenBarcodes = <String>{};
     final preview = <_BulkImportPreviewRow>[];
@@ -899,7 +962,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
       final rowNumber = i + 1;
       final barcode = readValue(row, 'barcode');
       final name = readValue(row, 'name');
-      final category = readValue(row, 'category').isEmpty ? 'General' : readValue(row, 'category');
+      final category = readValue(row, 'category').isEmpty
+          ? 'General'
+          : readValue(row, 'category');
       final costPriceRaw = readValue(row, 'cost_price');
       final sellingPriceRaw = readValue(row, 'selling_price');
       final wholesalePriceRaw = readValue(row, 'wholesale_price');
@@ -914,8 +979,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
       final normalizedBarcode = barcode.trim().toLowerCase();
       if (barcode.trim().isEmpty) errors.add('Barcode is required');
       if (name.trim().isEmpty) errors.add('Name is required');
-      if (sellingPriceRaw.trim().isEmpty) errors.add('Selling price is required');
-      if (normalizedBarcode.isNotEmpty && seenBarcodes.contains(normalizedBarcode)) {
+      if (sellingPriceRaw.trim().isEmpty)
+        errors.add('Selling price is required');
+      if (normalizedBarcode.isNotEmpty &&
+          seenBarcodes.contains(normalizedBarcode)) {
         errors.add('Duplicate barcode in file');
       }
 
@@ -927,7 +994,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
       final quantityType = _parseImportQuantityType(quantityTypeRaw);
       final unitLabel = _normalizeUnitLabelInput(unitLabelRaw, quantityType);
-
 
       double? costPrice;
       if (costPriceRaw.trim().isEmpty) {
@@ -1001,28 +1067,32 @@ class _InventoryScreenState extends State<InventoryScreen> {
         seenBarcodes.add(normalizedBarcode);
       }
 
-      final isExisting = normalizedBarcode.isNotEmpty && existingByBarcode.containsKey(normalizedBarcode);
+      final isExisting =
+          normalizedBarcode.isNotEmpty &&
+          existingByBarcode.containsKey(normalizedBarcode);
 
-      preview.add(_BulkImportPreviewRow(
-        rowNumber: rowNumber,
-        isExisting: isExisting,
-        errors: errors,
-        data: {
-          'barcode': barcode.trim(),
-          'name': name.trim(),
-          'category': category.trim(),
-          'cost_price': costPrice ?? 0.0,
-          'selling_price': sellingPrice ?? 0.0,
-          'wholesale_price': wholesalePrice,
-          'sale_price': salePrice,
-          'sale_enabled': saleEnabled,
-          'quantity_type': quantityType.dbValue,
-          'unit_label': unitLabel,
-          'stock': stock ?? 0,
-          'opening_stock': stock ?? 0,
-          'min_stock_level': minStock ?? 0,
-        },
-      ));
+      preview.add(
+        _BulkImportPreviewRow(
+          rowNumber: rowNumber,
+          isExisting: isExisting,
+          errors: errors,
+          data: {
+            'barcode': barcode.trim(),
+            'name': name.trim(),
+            'category': category.trim(),
+            'cost_price': costPrice ?? 0.0,
+            'selling_price': sellingPrice ?? 0.0,
+            'wholesale_price': wholesalePrice,
+            'sale_price': salePrice,
+            'sale_enabled': saleEnabled,
+            'quantity_type': quantityType.dbValue,
+            'unit_label': unitLabel,
+            'stock': stock ?? 0,
+            'opening_stock': stock ?? 0,
+            'min_stock_level': minStock ?? 0,
+          },
+        ),
+      );
     }
 
     return preview;
@@ -1112,7 +1182,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 final userId = ((user['id'] as num?) ?? 0).toInt();
                 final userName = (user['name'] ?? 'Manager').toString();
                 final role = (user['role'] ?? '').toString().toLowerCase();
-                final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+                final isActive =
+                    ((user['is_active'] as num?) ?? 1).toInt() == 1;
                 final hasFullAccess =
                     ((user['has_full_access'] as num?) ?? 0).toInt() == 1 ||
                     (user['has_full_access'] == true);
@@ -1129,7 +1200,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 if (!canApprove) {
                   setDialogState(() {
                     isVerifying = false;
-                    errorText = 'PIN does not belong to a manager or full-access user.';
+                    errorText =
+                        'PIN does not belong to a manager or full-access user.';
                   });
                   return;
                 }
@@ -1252,11 +1324,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   List<Product> get _filteredProducts {
-
     final query = _searchQuery.trim().toLowerCase();
 
     return _products.where((product) {
-      final matchesSearch = query.isEmpty ||
+      final matchesSearch =
+          query.isEmpty ||
           product.name.toLowerCase().contains(query) ||
           product.barcode.toLowerCase().contains(query) ||
           product.category.toLowerCase().contains(query);
@@ -1278,17 +1350,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }).toList();
   }
 
-  int get _lowStockCount => _products.where((p) => p.isActive && p.isLowStock).length;
-  int get _outOfStockCount => _products.where((p) => p.isActive && p.isOutOfStock).length;
+  int get _lowStockCount =>
+      _products.where((p) => p.isActive && p.isLowStock).length;
+  int get _outOfStockCount =>
+      _products.where((p) => p.isActive && p.isOutOfStock).length;
   int get _activeProductCount => _products.where((p) => p.isActive).length;
   double get _stockValue => _products.fold<double>(
-        0,
-        (sum, product) => sum + (product.costPrice * product.stock),
-      );
+    0,
+    (sum, product) => sum + (product.costPrice * product.stock),
+  );
 
-  Future<Product?> _pickProduct({
-    required String title,
-  }) async {
+  Future<Product?> _pickProduct({required String title}) async {
     IconData pickerIcon = Icons.inventory_2_outlined;
     String pickerSubtitle = 'Choose an inventory item to continue.';
     String hintTitle = 'Search active products';
@@ -1330,14 +1402,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
         return StatefulBuilder(
           builder: (context, setInnerState) {
             final normalizedQuery = localQuery.trim().toLowerCase();
-            final visibleProducts = _products.where((product) {
-              if (!product.isActive) return false;
-              if (normalizedQuery.isEmpty) return true;
-              return product.name.toLowerCase().contains(normalizedQuery) ||
-                  product.barcode.toLowerCase().contains(normalizedQuery) ||
-                  product.category.toLowerCase().contains(normalizedQuery);
-            }).toList()
-              ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+            final visibleProducts =
+                _products.where((product) {
+                  if (!product.isActive) return false;
+                  if (normalizedQuery.isEmpty) return true;
+                  return product.name.toLowerCase().contains(normalizedQuery) ||
+                      product.barcode.toLowerCase().contains(normalizedQuery) ||
+                      product.category.toLowerCase().contains(normalizedQuery);
+                }).toList()..sort(
+                  (a, b) =>
+                      a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+                );
 
             void updateQuery(String value) {
               setPopupState(() {
@@ -1405,7 +1480,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   child: visibleProducts.isEmpty
                       ? Container(
                           width: double.infinity,
-                          decoration: _softDecoration(color: _panelSoft, radius: 22),
+                          decoration: _softDecoration(
+                            color: _panelSoft,
+                            radius: 22,
+                          ),
                           padding: const EdgeInsets.all(28),
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -1439,20 +1517,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         )
                       : ListView.separated(
                           itemCount: visibleProducts.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 10),
                           itemBuilder: (context, index) {
                             final product = visibleProducts[index];
                             final stockAccent = product.isOutOfStock
                                 ? _dangerColor
                                 : product.isLowStock
-                                    ? _warningColor
-                                    : _brandColor;
+                                ? _warningColor
+                                : _brandColor;
 
                             return Material(
                               color: Colors.transparent,
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(20),
-                                onTap: () => Navigator.pop(dialogContext, product),
+                                onTap: () =>
+                                    Navigator.pop(dialogContext, product),
                                 child: Container(
                                   padding: const EdgeInsets.all(16),
                                   decoration: BoxDecoration(
@@ -1464,7 +1544,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                     children: [
                                       Expanded(
                                         child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
                                             Text(
                                               product.name,
@@ -1492,7 +1573,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                                     '|',
                                                     style: TextStyle(
                                                       color: _textSecondary,
-                                                      fontWeight: FontWeight.w700,
+                                                      fontWeight:
+                                                          FontWeight.w700,
                                                     ),
                                                   ),
                                                 Text(
@@ -1514,7 +1596,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                                     'Stock ${_formatProductQuantity(product, product.stock)}',
                                                     style: TextStyle(
                                                       color: stockAccent,
-                                                      fontWeight: FontWeight.w700,
+                                                      fontWeight:
+                                                          FontWeight.w700,
                                                     ),
                                                   ),
                                               ],
@@ -1525,40 +1608,50 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                       const SizedBox(width: 12),
                                       if (showPrice || showStockStatusChip)
                                         Column(
-                                          crossAxisAlignment: CrossAxisAlignment.end,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.end,
                                           children: [
                                             if (showPrice)
                                               Text(
-                                                _formatCurrency(product.sellingPrice),
+                                                _formatCurrency(
+                                                  product.sellingPrice,
+                                                ),
                                                 style: TextStyle(
                                                   color: _brandColor,
                                                   fontWeight: FontWeight.w900,
                                                   fontSize: 14,
                                                 ),
                                               ),
-                                            if (showPrice && showStockStatusChip)
+                                            if (showPrice &&
+                                                showStockStatusChip)
                                               const SizedBox(height: 8),
                                             if (showStockStatusChip)
                                               Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                  horizontal: 10,
-                                                  vertical: 5,
-                                                ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 5,
+                                                    ),
                                                 decoration: BoxDecoration(
-                                                  color: stockAccent.withOpacity(
-                                                    _isDark ? 0.16 : 0.10,
-                                                  ),
-                                                  borderRadius: BorderRadius.circular(999),
+                                                  color: stockAccent
+                                                      .withOpacity(
+                                                        _isDark ? 0.16 : 0.10,
+                                                      ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                        999,
+                                                      ),
                                                   border: Border.all(
-                                                    color: stockAccent.withOpacity(0.22),
+                                                    color: stockAccent
+                                                        .withOpacity(0.22),
                                                   ),
                                                 ),
                                                 child: Text(
                                                   product.isOutOfStock
                                                       ? 'Out of stock'
                                                       : product.isLowStock
-                                                          ? 'Low stock'
-                                                          : 'In stock',
+                                                      ? 'Low stock'
+                                                      : 'In stock',
                                                   style: TextStyle(
                                                     color: stockAccent,
                                                     fontWeight: FontWeight.w800,
@@ -1684,7 +1777,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
     ); */
   }
 
-
   Future<void> _openAddProductFlow() async {
     final approval = await _requireManagerApproval(
       actionLabel: 'add a new product',
@@ -1703,7 +1795,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final openingStockController = _selectedTextController('0');
     final minStockController = _selectedTextController('0');
     final unitLabelController = _selectedTextController('pcs');
+    final expiryAlertDaysController = _selectedTextController('30');
     bool saleEnabled = false;
+    bool trackExpiry = false;
     ProductQuantityType quantityType = ProductQuantityType.unit;
 
     final saved = await _showInventoryPopup<bool>(
@@ -1762,19 +1856,24 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   Expanded(
                     child: TextField(
                       controller: costPriceController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(labelText: 'Cost price'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Cost price',
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: TextField(
                       controller: sellingPriceController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration:
-                          const InputDecoration(labelText: 'Selling price'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Selling price',
+                      ),
                     ),
                   ),
                 ],
@@ -1785,8 +1884,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   Expanded(
                     child: TextField(
                       controller: wholesalePriceController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                       decoration: const InputDecoration(
                         labelText: 'Wholesale price (optional)',
                       ),
@@ -1796,10 +1896,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   Expanded(
                     child: TextField(
                       controller: salePriceController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration:
-                          const InputDecoration(labelText: 'Sale price (optional)'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Sale price (optional)',
+                      ),
                     ),
                   ),
                 ],
@@ -1853,7 +1955,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     child: TextField(
                       controller: openingStockController,
                       keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Opening stock'),
+                      decoration: const InputDecoration(
+                        labelText: 'Opening stock',
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -1865,6 +1969,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 14),
+              _buildExpiryTrackingCard(
+                trackExpiry: trackExpiry,
+                alertDaysController: expiryAlertDaysController,
+                onChanged: (value) {
+                  setPopupState(() {
+                    trackExpiry = value;
+                  });
+                },
               ),
               const SizedBox(height: 20),
               Row(
@@ -1905,7 +2019,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         if (barcodeExists) {
                           AppSnackBar.show(
                             dialogContext,
-                            message: 'A product with this barcode already exists.',
+                            message:
+                                'A product with this barcode already exists.',
                           );
                           return;
                         }
@@ -1924,7 +2039,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           label: 'selling price',
                         );
                         if (sellingError != null) {
-                          AppSnackBar.show(dialogContext, message: sellingError);
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: sellingError,
+                          );
                           return;
                         }
 
@@ -1947,11 +2065,28 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           allowZero: true,
                         );
                         if (minStockError != null) {
-                          AppSnackBar.show(dialogContext, message: minStockError);
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: minStockError,
+                          );
                           return;
                         }
 
-                        final rawWholesale = wholesalePriceController.text.trim();
+                        final expiryAlertError = _validatePositiveInt(
+                          expiryAlertDaysController.text,
+                          label: 'expiry alert days',
+                          allowZero: false,
+                        );
+                        if (trackExpiry && expiryAlertError != null) {
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: expiryAlertError,
+                          );
+                          return;
+                        }
+
+                        final rawWholesale = wholesalePriceController.text
+                            .trim();
                         if (rawWholesale.isNotEmpty) {
                           final wholesaleError = _validateNonNegativeMoney(
                             rawWholesale,
@@ -1978,8 +2113,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           }
                         }
 
-                        final sellingPrice =
-                            double.parse(sellingPriceController.text.trim());
+                        final sellingPrice = double.parse(
+                          sellingPriceController.text.trim(),
+                        );
                         if (sellingPrice <= 0) {
                           AppSnackBar.show(
                             dialogContext,
@@ -1988,22 +2124,31 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           return;
                         }
 
-                        final costPrice =
-                            double.parse(costPriceController.text.trim());
+                        final costPrice = double.parse(
+                          costPriceController.text.trim(),
+                        );
                         final wholesalePrice = rawWholesale.isEmpty
                             ? sellingPrice
                             : double.parse(rawWholesale);
-                        final salePrice =
-                            rawSale.isEmpty ? null : double.parse(rawSale);
-                        final openingStock =
-                            int.parse(openingStockController.text.trim());
-                        final minStock = int.parse(minStockController.text.trim());
+                        final salePrice = rawSale.isEmpty
+                            ? null
+                            : double.parse(rawSale);
+                        final openingStock = int.parse(
+                          openingStockController.text.trim(),
+                        );
+                        final minStock = int.parse(
+                          minStockController.text.trim(),
+                        );
+                        final expiryAlertDays = trackExpiry
+                            ? int.parse(expiryAlertDaysController.text.trim())
+                            : 30;
                         final normalizedUnitLabel = _normalizeUnitLabelInput(
                           unitLabelController.text,
                           quantityType,
                         );
 
-                        if (saleEnabled && (salePrice == null || salePrice <= 0)) {
+                        if (saleEnabled &&
+                            (salePrice == null || salePrice <= 0)) {
                           AppSnackBar.show(
                             dialogContext,
                             message:
@@ -2020,22 +2165,24 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         );
                         if (!confirmed) return;
 
-                        final success =
-                            await DatabaseHelper.instance.createProductLocal(
-                          barcode: barcode,
-                          name: name,
-                          category: category.isEmpty ? 'General' : category,
-                          costPrice: costPrice,
-                          sellingPrice: sellingPrice,
-                          quantityType: quantityType,
-                          unitLabel: normalizedUnitLabel,
-                          wholesalePrice: wholesalePrice,
-                          salePrice: salePrice,
-                          saleEnabled: saleEnabled,
-                          openingStock: openingStock,
-                          minStockLevel: minStock,
-                          changedBy: changedBy,
-                        );
+                        final success = await DatabaseHelper.instance
+                            .createProductLocal(
+                              barcode: barcode,
+                              name: name,
+                              category: category.isEmpty ? 'General' : category,
+                              costPrice: costPrice,
+                              sellingPrice: sellingPrice,
+                              quantityType: quantityType,
+                              unitLabel: normalizedUnitLabel,
+                              wholesalePrice: wholesalePrice,
+                              salePrice: salePrice,
+                              saleEnabled: saleEnabled,
+                              openingStock: openingStock,
+                              minStockLevel: minStock,
+                              trackExpiry: trackExpiry,
+                              expiryAlertDays: expiryAlertDays,
+                              changedBy: changedBy,
+                            );
 
                         if (!dialogContext.mounted) return;
                         Navigator.pop(dialogContext, success);
@@ -2063,6 +2210,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       openingStockController,
       minStockController,
       unitLabelController,
+      expiryAlertDaysController,
     ]);
 
     if (saved == true) {
@@ -2072,7 +2220,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
       _showMessage('Could not create product.', isError: true);
     }
   }
-
 
   void _exitBulkDeleteMode() {
     if (!mounted) return;
@@ -2093,7 +2240,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     setState(() {
       _isBulkDeleteMode = true;
       _selectedProductBarcodes.clear();
-      _bulkDeletePerformedByLabel = _buildPerformedByLabel(approval.approverName);
+      _bulkDeletePerformedByLabel = _buildPerformedByLabel(
+        approval.approverName,
+      );
     });
   }
 
@@ -2110,7 +2259,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
   bool get _allVisibleProductsSelected {
     final visible = _filteredProducts;
     return visible.isNotEmpty &&
-        visible.every((product) => _selectedProductBarcodes.contains(product.barcode));
+        visible.every(
+          (product) => _selectedProductBarcodes.contains(product.barcode),
+        );
   }
 
   void _toggleSelectAllVisibleProducts() {
@@ -2192,7 +2343,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
       product.minStockLevel.toString(),
     );
     final unitLabelController = _selectedTextController(product.unitLabel);
+    final expiryAlertDaysController = _selectedTextController(
+      product.expiryAlertDays.toString(),
+    );
     bool saleEnabled = product.saleEnabled;
+    bool trackExpiry = product.trackExpiry;
     ProductQuantityType quantityType = product.quantityType;
 
     final saved = await _showInventoryPopup<bool>(
@@ -2266,19 +2421,24 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   Expanded(
                     child: TextField(
                       controller: costPriceController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(labelText: 'Cost price'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Cost price',
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: TextField(
                       controller: sellingPriceController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration:
-                          const InputDecoration(labelText: 'Selling price'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Selling price',
+                      ),
                     ),
                   ),
                 ],
@@ -2289,18 +2449,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   Expanded(
                     child: TextField(
                       controller: wholesalePriceController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration:
-                          const InputDecoration(labelText: 'Wholesale price'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Wholesale price',
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: TextField(
                       controller: salePriceController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                       decoration: const InputDecoration(
                         labelText: 'Sale price (optional)',
                       ),
@@ -2354,8 +2517,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
               TextField(
                 controller: minStockController,
                 keyboardType: TextInputType.number,
-                decoration:
-                    const InputDecoration(labelText: 'Minimum stock level'),
+                decoration: const InputDecoration(
+                  labelText: 'Minimum stock level',
+                ),
+              ),
+              const SizedBox(height: 14),
+              _buildExpiryTrackingCard(
+                trackExpiry: trackExpiry,
+                alertDaysController: expiryAlertDaysController,
+                onChanged: (value) {
+                  setPopupState(() {
+                    trackExpiry = value;
+                  });
+                },
               ),
               const SizedBox(height: 20),
               Row(
@@ -2395,7 +2569,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           label: 'selling price',
                         );
                         if (sellingError != null) {
-                          AppSnackBar.show(dialogContext, message: sellingError);
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: sellingError,
+                          );
                           return;
                         }
 
@@ -2405,11 +2582,28 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           allowZero: true,
                         );
                         if (minStockError != null) {
-                          AppSnackBar.show(dialogContext, message: minStockError);
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: minStockError,
+                          );
                           return;
                         }
 
-                        final rawWholesale = wholesalePriceController.text.trim();
+                        final expiryAlertError = _validatePositiveInt(
+                          expiryAlertDaysController.text,
+                          label: 'expiry alert days',
+                          allowZero: false,
+                        );
+                        if (trackExpiry && expiryAlertError != null) {
+                          AppSnackBar.show(
+                            dialogContext,
+                            message: expiryAlertError,
+                          );
+                          return;
+                        }
+
+                        final rawWholesale = wholesalePriceController.text
+                            .trim();
                         if (rawWholesale.isNotEmpty) {
                           final wholesaleError = _validateNonNegativeMoney(
                             rawWholesale,
@@ -2436,8 +2630,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           }
                         }
 
-                        final sellingPrice =
-                            double.parse(sellingPriceController.text.trim());
+                        final sellingPrice = double.parse(
+                          sellingPriceController.text.trim(),
+                        );
                         if (sellingPrice <= 0) {
                           AppSnackBar.show(
                             dialogContext,
@@ -2446,20 +2641,28 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           return;
                         }
 
-                        final costPrice =
-                            double.parse(costPriceController.text.trim());
+                        final costPrice = double.parse(
+                          costPriceController.text.trim(),
+                        );
                         final wholesalePrice = rawWholesale.isEmpty
                             ? sellingPrice
                             : double.parse(rawWholesale);
-                        final salePrice =
-                            rawSale.isEmpty ? null : double.parse(rawSale);
-                        final minStock = int.parse(minStockController.text.trim());
+                        final salePrice = rawSale.isEmpty
+                            ? null
+                            : double.parse(rawSale);
+                        final minStock = int.parse(
+                          minStockController.text.trim(),
+                        );
+                        final expiryAlertDays = trackExpiry
+                            ? int.parse(expiryAlertDaysController.text.trim())
+                            : product.expiryAlertDays;
                         final normalizedUnitLabel = _normalizeUnitLabelInput(
                           unitLabelController.text,
                           quantityType,
                         );
 
-                        if (saleEnabled && (salePrice == null || salePrice <= 0)) {
+                        if (saleEnabled &&
+                            (salePrice == null || salePrice <= 0)) {
                           AppSnackBar.show(
                             dialogContext,
                             message:
@@ -2468,11 +2671,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           return;
                         }
 
-                        final normalizedCategory =
-                            category.isEmpty ? 'General' : category;
+                        final normalizedCategory = category.isEmpty
+                            ? 'General'
+                            : category;
                         final normalizedWholesale = double.parse(
                           ((wholesalePrice <= 0 ? sellingPrice : wholesalePrice)
-                                  .toStringAsFixed(2)),
+                              .toStringAsFixed(2)),
                         );
                         final normalizedSalePrice = salePrice == null
                             ? null
@@ -2484,20 +2688,29 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             quantityType == product.quantityType &&
                             normalizedUnitLabel == product.unitLabel &&
                             double.parse(costPrice.toStringAsFixed(2)) ==
-                                double.parse(product.costPrice.toStringAsFixed(2)) &&
+                                double.parse(
+                                  product.costPrice.toStringAsFixed(2),
+                                ) &&
                             double.parse(sellingPrice.toStringAsFixed(2)) ==
-                                double.parse(product.sellingPrice.toStringAsFixed(2)) &&
+                                double.parse(
+                                  product.sellingPrice.toStringAsFixed(2),
+                                ) &&
                             normalizedWholesale ==
-                                double.parse(product.wholesalePrice.toStringAsFixed(2)) &&
+                                double.parse(
+                                  product.wholesalePrice.toStringAsFixed(2),
+                                ) &&
                             ((normalizedSalePrice == null &&
                                     product.salePrice == null) ||
                                 (normalizedSalePrice != null &&
                                     product.salePrice != null &&
                                     normalizedSalePrice ==
-                                        double.parse(product.salePrice!
-                                            .toStringAsFixed(2)))) &&
+                                        double.parse(
+                                          product.salePrice!.toStringAsFixed(2),
+                                        ))) &&
                             saleEnabled == product.saleEnabled &&
-                            minStock == product.minStockLevel;
+                            minStock == product.minStockLevel &&
+                            trackExpiry == product.trackExpiry &&
+                            expiryAlertDays == product.expiryAlertDays;
 
                         if (noChanges) {
                           AppSnackBar.show(
@@ -2517,19 +2730,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
                         final success = await DatabaseHelper.instance
                             .updateProductDetailsLocal(
-                          barcode: product.barcode,
-                          name: name,
-                          category: category.isEmpty ? 'General' : category,
-                          costPrice: costPrice,
-                          sellingPrice: sellingPrice,
-                          quantityType: quantityType,
-                          unitLabel: normalizedUnitLabel,
-                          wholesalePrice: wholesalePrice,
-                          salePrice: salePrice,
-                          saleEnabled: saleEnabled,
-                          minStockLevel: minStock,
-                          changedBy: changedBy,
-                        );
+                              barcode: product.barcode,
+                              name: name,
+                              category: category.isEmpty ? 'General' : category,
+                              costPrice: costPrice,
+                              sellingPrice: sellingPrice,
+                              quantityType: quantityType,
+                              unitLabel: normalizedUnitLabel,
+                              wholesalePrice: wholesalePrice,
+                              salePrice: salePrice,
+                              saleEnabled: saleEnabled,
+                              minStockLevel: minStock,
+                              trackExpiry: trackExpiry,
+                              expiryAlertDays: expiryAlertDays,
+                              changedBy: changedBy,
+                            );
 
                         if (!dialogContext.mounted) return;
                         Navigator.pop(dialogContext, success);
@@ -2555,6 +2770,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       salePriceController,
       minStockController,
       unitLabelController,
+      expiryAlertDaysController,
     ]);
 
     if (saved == true) {
@@ -2576,8 +2792,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     final confirmed = await _confirmAction(
       title: 'Delete Product',
-      message:
-          'Delete ${product.name} from inventory? This cannot be undone.',
+      message: 'Delete ${product.name} from inventory? This cannot be undone.',
       confirmText: 'Delete',
       isDestructive: true,
     );
@@ -2614,7 +2829,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Future<void> _openBulkUploadFlow() async {
     final approval = await _requireManagerApproval(
       actionLabel: 'bulk upload products',
-      description: 'Approved bulk product upload requested by $_currentUserName',
+      description:
+          'Approved bulk product upload requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
@@ -2676,10 +2892,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
         }
 
         final validRows = previewRows.where((row) => row.isValid).toList();
-        final createCount =
-            validRows.where((row) => !row.isExisting).length;
-        final updateCount =
-            validRows.where((row) => row.isExisting).length;
+        final createCount = validRows.where((row) => !row.isExisting).length;
+        final updateCount = validRows.where((row) => row.isExisting).length;
         final failedCount = previewRows.where((row) => !row.isValid).length;
 
         return Column(
@@ -2792,139 +3006,139 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         child: CircularProgressIndicator(color: _brandColor),
                       )
                     : previewRows.isEmpty
-                        ? Center(
-                            child: Padding(
-                              padding: const EdgeInsets.all(24),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.table_rows_outlined,
-                                    size: 42,
-                                    color: _mutedIcon,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    'Nothing to preview yet',
-                                    style: TextStyle(
-                                      color: _textPrimary,
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 18,
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.table_rows_outlined,
+                                size: 42,
+                                color: _mutedIcon,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                'Nothing to preview yet',
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 18,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Choose a CSV file to review rows before importing.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: previewRows.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          final row = previewRows[index];
+                          final data = row.data;
+                          final accent = row.isValid
+                              ? (row.isExisting
+                                    ? Colors.deepPurple
+                                    : _accentBlue)
+                              : _dangerColor;
+                          final badgeText = row.isValid
+                              ? (row.isExisting ? 'UPDATE' : 'CREATE')
+                              : 'ERROR';
+
+                          return Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: _panelSoft,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(
+                                color: accent.withOpacity(0.20),
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        'Row ${row.rowNumber} • ${data['name']}',
+                                        style: TextStyle(
+                                          color: _textPrimary,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
                                     ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: accent.withOpacity(0.12),
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
+                                        border: Border.all(
+                                          color: accent.withOpacity(0.20),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        badgeText,
+                                        style: TextStyle(
+                                          color: accent,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  '${data['barcode']} • ${data['category']}',
+                                  style: TextStyle(
+                                    color: _textSecondary,
+                                    fontWeight: FontWeight.w600,
                                   ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'Choose a CSV file to review rows before importing.',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: _textSecondary,
-                                      fontWeight: FontWeight.w600,
-                                      height: 1.4,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Sell Rs. ${(data['selling_price'] as num).toStringAsFixed(2)} | ${(data['quantity_type'] ?? 'unit').toString()} (${data['unit_label']}) | Stock ${data['stock']} | Min ${data['min_stock_level']}',
+                                  style: TextStyle(
+                                    color: _textSecondary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                if (!row.isValid) ...[
+                                  const SizedBox(height: 10),
+                                  ...row.errors.map(
+                                    (error) => Padding(
+                                      padding: const EdgeInsets.only(bottom: 4),
+                                      child: Text(
+                                        '• $error',
+                                        style: TextStyle(
+                                          color: _dangerColor,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ],
-                              ),
+                              ],
                             ),
-                          )
-                        : ListView.separated(
-                            itemCount: previewRows.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 8),
-                            itemBuilder: (context, index) {
-                              final row = previewRows[index];
-                              final data = row.data;
-                              final accent = row.isValid
-                                  ? (row.isExisting
-                                      ? Colors.deepPurple
-                                      : _accentBlue)
-                                  : _dangerColor;
-                              final badgeText = row.isValid
-                                  ? (row.isExisting ? 'UPDATE' : 'CREATE')
-                                  : 'ERROR';
-
-                              return Container(
-                                padding: const EdgeInsets.all(14),
-                                decoration: BoxDecoration(
-                                  color: _panelSoft,
-                                  borderRadius: BorderRadius.circular(18),
-                                  border: Border.all(
-                                    color: accent.withOpacity(0.20),
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            'Row ${row.rowNumber} • ${data['name']}',
-                                            style: TextStyle(
-                                              color: _textPrimary,
-                                              fontWeight: FontWeight.w800,
-                                            ),
-                                          ),
-                                        ),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 4,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: accent.withOpacity(0.12),
-                                            borderRadius:
-                                                BorderRadius.circular(999),
-                                            border: Border.all(
-                                              color: accent.withOpacity(0.20),
-                                            ),
-                                          ),
-                                          child: Text(
-                                            badgeText,
-                                            style: TextStyle(
-                                              color: accent,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.w900,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      '${data['barcode']} • ${data['category']}',
-                                      style: TextStyle(
-                                        color: _textSecondary,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      'Sell Rs. ${(data['selling_price'] as num).toStringAsFixed(2)} | ${(data['quantity_type'] ?? 'unit').toString()} (${data['unit_label']}) | Stock ${data['stock']} | Min ${data['min_stock_level']}',
-                                      style: TextStyle(
-                                        color: _textSecondary,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                    if (!row.isValid) ...[
-                                      const SizedBox(height: 10),
-                                      ...row.errors.map(
-                                        (error) => Padding(
-                                          padding:
-                                              const EdgeInsets.only(bottom: 4),
-                                          child: Text(
-                                            '• $error',
-                                            style: TextStyle(
-                                              color: _dangerColor,
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
+                          );
+                        },
+                      ),
               ),
             ),
             const SizedBox(height: 14),
@@ -2958,11 +3172,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             try {
                               final result = await DatabaseHelper.instance
                                   .bulkUpsertProductsLocal(
-                                rows: validRows
-                                    .map((row) => row.data)
-                                    .toList(),
-                                changedBy: changedBy,
-                              );
+                                    rows: validRows
+                                        .map((row) => row.data)
+                                        .toList(),
+                                    changedBy: changedBy,
+                                  );
                               if (!dialogContext.mounted) return;
                               Navigator.pop(
                                 dialogContext,
@@ -2977,8 +3191,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               if (!dialogContext.mounted) return;
                               AppSnackBar.show(
                                 dialogContext,
-                                message:
-                                    e.toString().replaceFirst('Exception: ', ''),
+                                message: e.toString().replaceFirst(
+                                  'Exception: ',
+                                  '',
+                                ),
                               );
                             }
                           },
@@ -3008,7 +3224,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openReceiveFlow({Product? initialProduct}) async {
-    final product = initialProduct ??
+    final product =
+        initialProduct ??
         await _pickProduct(title: 'Select a product to receive');
     if (product == null || !mounted) return;
 
@@ -3023,9 +3240,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
       return;
     }
 
-    final suppliers = await DatabaseHelper.instance.getMappedSuppliersForProduct(
-      product.barcode,
-    );
+    final suppliers = await DatabaseHelper.instance
+        .getMappedSuppliersForProduct(product.barcode);
     if (suppliers.isEmpty) {
       _showMessage(
         'Mapped suppliers for this product could not be loaded. Check supplier mappings and try again.',
@@ -3059,12 +3275,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
       preferredCost > 0 ? preferredCost.toStringAsFixed(2) : '',
     );
     final noteController = TextEditingController();
+    final batchController = TextEditingController();
     final isWeighted = product.quantityType == ProductQuantityType.weight;
     final quantityLabel = isWeighted
         ? 'Received ${product.unitLabel.trim().isEmpty ? 'weight' : product.unitLabel.trim()}'
         : 'Received quantity';
     int? selectedSupplierId = preferredMapping.supplierId;
     bool setAsPrimary = false;
+    DateTime? expiryDate;
 
     final saved = await _showInventoryPopup<bool>(
       icon: Icons.inventory_2_rounded,
@@ -3075,9 +3293,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
         final selectedSupplier = selectedSupplierId == null
             ? null
             : suppliers
-                .where((supplier) => supplier.id == selectedSupplierId)
-                .cast<PosSupplier?>()
-                .firstOrNull;
+                  .where((supplier) => supplier.id == selectedSupplierId)
+                  .cast<PosSupplier?>()
+                  .firstOrNull;
         final selectedMapping = selectedSupplierId == null
             ? null
             : mappingBySupplierId[selectedSupplierId];
@@ -3113,6 +3331,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
             }
           }
 
+          if (product.trackExpiry && expiryDate == null) {
+            AppSnackBar.show(
+              dialogContext,
+              message: 'Select an expiry date for this received batch.',
+            );
+            return;
+          }
+
           final supplier = suppliers.firstWhere(
             (item) => item.id == selectedSupplierId,
           );
@@ -3130,7 +3356,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
             product.quantityType,
           );
           final unitCost = rawCost.isEmpty ? null : double.parse(rawCost);
-          final resolvedCost = unitCost ??
+          final resolvedCost =
+              unitCost ??
               (activeMapping.defaultUnitCost > 0
                   ? activeMapping.defaultUnitCost
                   : product.costPrice);
@@ -3138,7 +3365,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final confirmed = await _confirmAction(
             title: 'Confirm Stock Receive',
             message:
-                'Receive ${_formatProductQuantity(product, qty)} of ${product.name} from ${supplier.name}? This will increase stock immediately.',
+                'Receive ${_formatProductQuantity(product, qty)} of ${product.name} from ${supplier.name}${expiryDate == null ? '' : ' expiring on ${_formatDateOnly(expiryDate!)}'}? This will increase stock immediately.',
             confirmText: 'Receive',
           );
           if (!confirmed) return;
@@ -3167,6 +3394,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
             supplierName: supplier.name,
             cost: resolvedCost,
             referenceNote: noteController.text.trim(),
+            batchNumber: batchController.text.trim(),
+            expiryDate: expiryDate,
             cashierName: changedBy,
             backendStatus: 'local',
           );
@@ -3234,10 +3463,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     selectedSupplierId = value;
                     setAsPrimary = value != preferredMapping.supplierId;
                     final mappedCost = mapping?.defaultUnitCost ?? 0;
-                    final resolvedCost =
-                        mappedCost > 0 ? mappedCost : product.costPrice;
-                    final costText =
-                        resolvedCost > 0 ? resolvedCost.toStringAsFixed(2) : '';
+                    final resolvedCost = mappedCost > 0
+                        ? mappedCost
+                        : product.costPrice;
+                    final costText = resolvedCost > 0
+                        ? resolvedCost.toStringAsFixed(2)
+                        : '';
                     costController.value = TextEditingValue(
                       text: costText,
                       selection: TextSelection(
@@ -3312,7 +3543,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       ),
                       inputFormatters: [
                         isWeighted
-                            ? FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
+                            ? FilteringTextInputFormatter.allow(
+                                RegExp(r'[0-9.]'),
+                              )
                             : FilteringTextInputFormatter.digitsOnly,
                       ],
                       decoration: InputDecoration(
@@ -3329,16 +3562,113 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     child: TextField(
                       controller: costController,
                       textInputAction: TextInputAction.done,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration:
-                          const InputDecoration(labelText: 'Unit cost (optional)'),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Unit cost (optional)',
+                      ),
                       onSubmitted: (_) => submitReceive(),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 14),
+              if (product.trackExpiry) ...[
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: _softDecoration(color: _panelSoft, radius: 18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: _warningSoft,
+                              borderRadius: BorderRadius.circular(13),
+                            ),
+                            child: Icon(
+                              Icons.event_available_rounded,
+                              color: _warningColor,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Expiry batch',
+                                  style: TextStyle(
+                                    color: _textPrimary,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  'This product is expiry-tracked. The expiry date is required for this receive entry.',
+                                  style: TextStyle(
+                                    color: _textSecondary,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: batchController,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: 'Batch number (optional)',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final now = DateTime.now();
+                                final picked = await showDatePicker(
+                                  context: dialogContext,
+                                  initialDate:
+                                      expiryDate ??
+                                      now.add(const Duration(days: 30)),
+                                  firstDate: now.subtract(
+                                    const Duration(days: 365),
+                                  ),
+                                  lastDate: now.add(const Duration(days: 3650)),
+                                );
+                                if (picked == null) return;
+                                setPopupState(() {
+                                  expiryDate = picked;
+                                });
+                              },
+                              icon: const Icon(Icons.calendar_month_rounded),
+                              label: Text(
+                                expiryDate == null
+                                    ? 'Pick Expiry Date'
+                                    : _formatDateOnly(expiryDate!),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: _softDecoration(color: _panelSoft, radius: 18),
@@ -3373,7 +3703,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     const SizedBox(width: 12),
                     Switch(
                       value: setAsPrimary,
-                      onChanged: selectedSupplierId == null ||
+                      onChanged:
+                          selectedSupplierId == null ||
                               selectedSupplierId == preferredMapping.supplierId
                           ? null
                           : (value) {
@@ -3420,6 +3751,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       qtyController,
       costController,
       noteController,
+      batchController,
     ]);
     qtyFocusNode.dispose();
 
@@ -3432,15 +3764,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _showSupplierInfoSheet(Product product) async {
-    final preferredMapping =
-        await DatabaseHelper.instance.getPreferredSupplierMapping(product.barcode);
+    final preferredMapping = await DatabaseHelper.instance
+        .getPreferredSupplierMapping(product.barcode);
     final suppliers = await DatabaseHelper.instance.getSuppliers();
     final currentSupplier = preferredMapping == null
         ? null
         : suppliers
-            .where((supplier) => supplier.id == preferredMapping.supplierId)
-            .cast<PosSupplier?>()
-            .firstOrNull;
+              .where((supplier) => supplier.id == preferredMapping.supplierId)
+              .cast<PosSupplier?>()
+              .firstOrNull;
     final receipts = preferredMapping == null
         ? []
         : await DatabaseHelper.instance.getStockReceipts(
@@ -3551,7 +3883,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         children: [
                           _buildPopupMetricCard(
                             title: 'Default cost',
-                            value: preferredMapping != null &&
+                            value:
+                                preferredMapping != null &&
                                     preferredMapping.defaultUnitCost > 0
                                 ? 'Rs. ${preferredMapping.defaultUnitCost.toStringAsFixed(2)}'
                                 : 'Not set',
@@ -3573,6 +3906,32 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                 (lastReceipt.createdAt ?? '').toString(),
                               ),
                               icon: Icons.schedule_outlined,
+                              accent: _warningColor,
+                            ),
+                          if (lastReceipt != null &&
+                              (lastReceipt.batchNumber ?? '')
+                                  .toString()
+                                  .trim()
+                                  .isNotEmpty)
+                            _buildPopupMetricCard(
+                              title: 'Last batch',
+                              value: (lastReceipt.batchNumber ?? '')
+                                  .toString()
+                                  .trim(),
+                              icon: Icons.sell_outlined,
+                              accent: _accentBlue,
+                            ),
+                          if (lastReceipt != null &&
+                              (lastReceipt.expiryDate ?? '')
+                                  .toString()
+                                  .trim()
+                                  .isNotEmpty)
+                            _buildPopupMetricCard(
+                              title: 'Last expiry',
+                              value: _formatReceiptDateOnly(
+                                (lastReceipt.expiryDate ?? '').toString(),
+                              ),
+                              icon: Icons.event_available_outlined,
                               accent: _warningColor,
                             ),
                         ],
@@ -3600,21 +3959,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     onPressed: () async {
                       final supplier = await _pickSupplierForProduct(product);
                       if (supplier == null || !mounted) return;
-                      await DatabaseHelper.instance.upsertSupplierProductMapping(
-                        SupplierProductMapping(
-                          barcode: product.barcode,
-                          productName: product.name,
-                          supplierId: supplier.id,
-                          supplierName: supplier.name,
-                          isPreferred: true,
-                          defaultUnitCost: product.costPrice,
-                          minimumOrderQuantity: 1,
-                          packSize: 1,
-                          leadTimeDays: 0,
-                          note: '',
-                          updatedAt: DateTime.now().toIso8601String(),
-                        ),
-                      );
+                      await DatabaseHelper.instance
+                          .upsertSupplierProductMapping(
+                            SupplierProductMapping(
+                              barcode: product.barcode,
+                              productName: product.name,
+                              supplierId: supplier.id,
+                              supplierName: supplier.name,
+                              isPreferred: true,
+                              defaultUnitCost: product.costPrice,
+                              minimumOrderQuantity: 1,
+                              packSize: 1,
+                              leadTimeDays: 0,
+                              note: '',
+                              updatedAt: DateTime.now().toIso8601String(),
+                            ),
+                          );
                       if (!mounted) return;
                       _showMessage('Supplier saved for ${product.name}.');
                       await _loadData(showLoader: false);
@@ -3637,8 +3997,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         await Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) =>
-                                SupplierReceiveHistoryScreen(supplier: currentSupplier),
+                            builder: (_) => SupplierReceiveHistoryScreen(
+                              supplier: currentSupplier,
+                            ),
                           ),
                         );
                         if (!mounted) return;
@@ -3659,7 +4020,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Future<PosSupplier?> _pickSupplierForProduct(Product product) async {
     final suppliers = await DatabaseHelper.instance.getSuppliers();
     if (suppliers.isEmpty) {
-      _showMessage('No suppliers available. Add a supplier first.', isError: true);
+      _showMessage(
+        'No suppliers available. Add a supplier first.',
+        isError: true,
+      );
       return null;
     }
 
@@ -3743,7 +4107,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                           ? 'Phone not available'
                                           : 'Phone: ${supplier.phone.trim()}',
                                     ),
-                                    onTap: () => Navigator.pop(context, supplier),
+                                    onTap: () =>
+                                        Navigator.pop(context, supplier),
                                   );
                                 },
                               ),
@@ -3760,7 +4125,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openAdjustFlow({Product? initialProduct}) async {
-    final product = initialProduct ??
+    final product =
+        initialProduct ??
         await _pickProduct(title: 'Select a product to adjust');
     if (product == null || !mounted) return;
 
@@ -3779,8 +4145,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final isWeighted = product.quantityType == ProductQuantityType.weight;
     final quantityLabel = isWeighted
         ? product.unitLabel.trim().isEmpty
-            ? 'weight'
-            : product.unitLabel.trim()
+              ? 'weight'
+              : product.unitLabel.trim()
         : 'quantity';
     String adjustmentType = 'add';
 
@@ -3794,7 +4160,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
         Future<void> submitAdjustment() async {
           final qtyError = _validateQuantityInput(
             qtyController.text,
-            label: adjustmentType == 'set' ? 'final stock quantity' : 'quantity',
+            label: adjustmentType == 'set'
+                ? 'final stock quantity'
+                : 'quantity',
             allowZero: adjustmentType == 'set',
             quantityType: product.quantityType,
           );
@@ -3832,8 +4200,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final actionLabel = adjustmentType == 'add'
               ? 'increase stock'
               : adjustmentType == 'remove'
-                  ? 'decrease stock'
-                  : 'set exact stock';
+              ? 'decrease stock'
+              : 'set exact stock';
           final confirmed = await _confirmAction(
             title: 'Confirm Stock Adjustment',
             message:
@@ -3855,7 +4223,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
         }
 
         final previewQty =
-            _tryParseQuantityInput(qtyController.text, product.quantityType) ?? 0.0;
+            _tryParseQuantityInput(qtyController.text, product.quantityType) ??
+            0.0;
         double resultingStock = product.stock;
         switch (adjustmentType) {
           case 'add':
@@ -3899,8 +4268,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 decoration: const InputDecoration(labelText: 'Adjustment type'),
                 items: const [
                   DropdownMenuItem(value: 'add', child: Text('Add Stock')),
-                  DropdownMenuItem(value: 'remove', child: Text('Remove Stock')),
-                  DropdownMenuItem(value: 'set', child: Text('Set Exact Stock')),
+                  DropdownMenuItem(
+                    value: 'remove',
+                    child: Text('Remove Stock'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'set',
+                    child: Text('Set Exact Stock'),
+                  ),
                 ],
                 onChanged: (value) {
                   if (value == null) return;
@@ -3964,10 +4339,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       },
     );
 
-    _disposeControllersNextFrame([
-      qtyController,
-      reasonController,
-    ]);
+    _disposeControllersNextFrame([qtyController, reasonController]);
     adjustmentTypeFocusNode.dispose();
     qtyFocusNode.dispose();
 
@@ -3988,7 +4360,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
-    final controller = _selectedTextController(product.minStockLevel.toString());
+    final controller = _selectedTextController(
+      product.minStockLevel.toString(),
+    );
 
     final changed = await _showInventoryPopup<bool>(
       icon: Icons.warning_amber_rounded,
@@ -4015,12 +4389,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
           );
           if (!confirmed) return;
 
-          final success =
-              await DatabaseHelper.instance.updateProductMinStockLevelLocal(
-            product.barcode,
-            value,
-            changedBy: changedBy,
-          );
+          final success = await DatabaseHelper.instance
+              .updateProductMinStockLevelLocal(
+                product.barcode,
+                value,
+                changedBy: changedBy,
+              );
           if (!dialogContext.mounted) return;
           Navigator.pop(dialogContext, success);
         }
@@ -4102,7 +4476,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openPriceChangeFlow({Product? initialProduct}) async {
-    final product = initialProduct ??
+    final product =
+        initialProduct ??
         await _pickProduct(title: 'Select a product to change price');
     if (product == null || !mounted) return;
 
@@ -4114,8 +4489,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
-    final valueController =
-        _selectedTextController(product.sellingPrice.toStringAsFixed(2));
+    final valueController = _selectedTextController(
+      product.sellingPrice.toStringAsFixed(2),
+    );
     final noteController = TextEditingController();
     final priceTypeFocusNode = FocusNode();
     final valueFocusNode = FocusNode();
@@ -4248,7 +4624,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 autofocus: true,
                 decoration: const InputDecoration(labelText: 'Price field'),
                 items: const [
-                  DropdownMenuItem(value: 'selling', child: Text('Selling Price')),
+                  DropdownMenuItem(
+                    value: 'selling',
+                    child: Text('Selling Price'),
+                  ),
                   DropdownMenuItem(
                     value: 'wholesale',
                     child: Text('Wholesale Price'),
@@ -4269,8 +4648,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 controller: valueController,
                 focusNode: valueFocusNode,
                 textInputAction: TextInputAction.done,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(labelText: 'New price'),
                 onSubmitted: (_) => submitPriceChange(),
               ),
@@ -4322,8 +4702,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
               TextField(
                 controller: noteController,
                 maxLines: 2,
-                decoration:
-                    const InputDecoration(labelText: 'Reason / note (optional)'),
+                decoration: const InputDecoration(
+                  labelText: 'Reason / note (optional)',
+                ),
               ),
               const SizedBox(height: 20),
               Row(
@@ -4350,10 +4731,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       },
     );
 
-    _disposeControllersNextFrame([
-      valueController,
-      noteController,
-    ]);
+    _disposeControllersNextFrame([valueController, noteController]);
     priceTypeFocusNode.dispose();
     valueFocusNode.dispose();
 
@@ -4364,8 +4742,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
       _showMessage('Could not update price.', isError: true);
     }
   }
-
-
 
   Future<void> _openStockTakeScreen({String? barcode}) async {
     final approval = await _requireManagerApproval(
@@ -4486,10 +4862,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     Colors.deepPurple,
                   ),
                 if (product.hasSalePrice)
-                  _buildPriceAvailabilityChip(
-                    'Sale active',
-                    _warningColor,
-                  ),
+                  _buildPriceAvailabilityChip('Sale active', _warningColor),
               ],
             ),
             const SizedBox(height: 14),
@@ -4884,7 +5257,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
       icon = Icons.restart_alt_rounded;
     }
 
-
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -5039,8 +5411,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
         'Rs. ${_asDouble(oldPrice).toStringAsFixed(2)} -> Rs. ${_asDouble(newPrice).toStringAsFixed(2)}',
       );
     } else if (stockBefore != null || stockAfter != null) {
-      final beforeLabel = stockBefore == null ? '-' : _formatQuantity(_asDouble(stockBefore));
-      final afterLabel = stockAfter == null ? '-' : _formatQuantity(_asDouble(stockAfter));
+      final beforeLabel = stockBefore == null
+          ? '-'
+          : _formatQuantity(_asDouble(stockBefore));
+      final afterLabel = stockAfter == null
+          ? '-'
+          : _formatQuantity(_asDouble(stockAfter));
       pieces.add('$beforeLabel -> $afterLabel');
     }
 
@@ -5059,7 +5435,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final quantityChange = (movement['quantity_change'] as num?)?.toDouble();
     final newPrice = (movement['new_price'] as num?)?.toDouble();
     final baseTrailing = _formatDateTime(movement['created_at']?.toString());
-
 
     if (newPrice != null) {
       return 'Rs. ${newPrice.toStringAsFixed(2)} - $baseTrailing';
@@ -5092,6 +5467,24 @@ class _InventoryScreenState extends State<InventoryScreen> {
     return '$day/$month/$year  $hour:$minute';
   }
 
+  String _formatDateOnly(DateTime value) {
+    final day = value.day.toString().padLeft(2, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    final year = value.year.toString();
+    return '$day/$month/$year';
+  }
+
+  String _formatReceiptDateOnly(String raw) {
+    if (raw.trim().isEmpty) return '';
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return raw;
+
+    final local = parsed.toLocal();
+    final day = local.day.toString().padLeft(2, '0');
+    final month = local.month.toString().padLeft(2, '0');
+    final year = local.year.toString();
+    return '$day/$month/$year';
+  }
 
   Widget _buildActionIconButton({
     required IconData icon,
@@ -5148,7 +5541,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _isBulkDeleteMode ? 'Bulk Delete Inventory' : 'Inventory Workspace',
+                  _isBulkDeleteMode
+                      ? 'Bulk Delete Inventory'
+                      : 'Inventory Workspace',
                   style: TextStyle(
                     color: _textPrimary,
                     fontSize: 28,
@@ -5189,7 +5584,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Widget _buildProductRow(Product product) {
-    final isSelectedForDelete = _selectedProductBarcodes.contains(product.barcode);
+    final isSelectedForDelete = _selectedProductBarcodes.contains(
+      product.barcode,
+    );
     final statusColor = product.isOutOfStock
         ? _dangerColor
         : (product.isLowStock ? _warningColor : _brandColor);
@@ -5357,7 +5754,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           width: 112,
                           child: statPill(
                             label: 'Stock',
-                            value: _formatProductQuantity(product, product.stock),
+                            value: _formatProductQuantity(
+                              product,
+                              product.stock,
+                            ),
                             accent: _textPrimary,
                           ),
                         ),
@@ -5378,11 +5778,20 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       children: [
                         if (product.wholesalePrice > 0 &&
                             product.wholesalePrice != product.sellingPrice)
-                          _buildPriceAvailabilityChip('Wholesale active', const Color(0xFF8B5CF6)),
+                          _buildPriceAvailabilityChip(
+                            'Wholesale active',
+                            const Color(0xFF8B5CF6),
+                          ),
                         if (product.hasSalePrice)
-                          _buildPriceAvailabilityChip('Sale active', _warningColor),
+                          _buildPriceAvailabilityChip(
+                            'Sale active',
+                            _warningColor,
+                          ),
                         if (!product.isActive)
-                          _buildPriceAvailabilityChip('Inactive item', _textSecondary),
+                          _buildPriceAvailabilityChip(
+                            'Inactive item',
+                            _textSecondary,
+                          ),
                       ],
                     ),
                   ],
@@ -5398,7 +5807,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         miniAction(
                           icon: Icons.inventory_2_rounded,
                           tooltip: 'Receive stock',
-                          onTap: () => _openReceiveFlow(initialProduct: product),
+                          onTap: () =>
+                              _openReceiveFlow(initialProduct: product),
                           iconColor: _brandColor,
                         ),
                         const SizedBox(width: 8),
@@ -5412,13 +5822,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         miniAction(
                           icon: Icons.sell_outlined,
                           tooltip: 'Change price',
-                          onTap: () => _openPriceChangeFlow(initialProduct: product),
+                          onTap: () =>
+                              _openPriceChangeFlow(initialProduct: product),
                           iconColor: const Color(0xFF8B5CF6),
                         ),
                         const SizedBox(width: 8),
                         PopupMenuButton<String>(
                           tooltip: 'More actions',
-                          onSelected: (value) => _handleProductMenuAction(value, product),
+                          onSelected: (value) =>
+                              _handleProductMenuAction(value, product),
                           itemBuilder: (context) => const [
                             PopupMenuItem<String>(
                               value: 'edit',
@@ -5544,9 +5956,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               controller: _searchController,
                               style: TextStyle(color: _textPrimary),
                               decoration: InputDecoration(
-                                hintText: 'Search by name, barcode, or category',
+                                hintText:
+                                    'Search by name, barcode, or category',
                                 hintStyle: TextStyle(color: _textSecondary),
-                                prefixIcon: Icon(Icons.search_rounded, color: _mutedIcon),
+                                prefixIcon: Icon(
+                                  Icons.search_rounded,
+                                  color: _mutedIcon,
+                                ),
                                 suffixIcon: _searchQuery.isEmpty
                                     ? null
                                     : IconButton(
@@ -5556,7 +5972,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                             _searchQuery = '';
                                           });
                                         },
-                                        icon: Icon(Icons.close_rounded, color: _mutedIcon),
+                                        icon: Icon(
+                                          Icons.close_rounded,
+                                          color: _mutedIcon,
+                                        ),
                                       ),
                                 filled: true,
                                 fillColor: _inputFill,
@@ -5570,7 +5989,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(16),
-                                  borderSide: BorderSide(color: _brandColor, width: 1.4),
+                                  borderSide: BorderSide(
+                                    color: _brandColor,
+                                    width: 1.4,
+                                  ),
                                 ),
                               ),
                               onChanged: (value) {
@@ -5594,11 +6016,26 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         spacing: 8,
                         runSpacing: 8,
                         children: [
-                          _buildFilterChip(label: 'All', filter: InventoryFilter.all),
-                          _buildFilterChip(label: 'In Stock', filter: InventoryFilter.inStock),
-                          _buildFilterChip(label: 'Low Stock', filter: InventoryFilter.lowStock),
-                          _buildFilterChip(label: 'Out of Stock', filter: InventoryFilter.outOfStock),
-                          _buildFilterChip(label: 'Inactive', filter: InventoryFilter.inactive),
+                          _buildFilterChip(
+                            label: 'All',
+                            filter: InventoryFilter.all,
+                          ),
+                          _buildFilterChip(
+                            label: 'In Stock',
+                            filter: InventoryFilter.inStock,
+                          ),
+                          _buildFilterChip(
+                            label: 'Low Stock',
+                            filter: InventoryFilter.lowStock,
+                          ),
+                          _buildFilterChip(
+                            label: 'Out of Stock',
+                            filter: InventoryFilter.outOfStock,
+                          ),
+                          _buildFilterChip(
+                            label: 'Inactive',
+                            filter: InventoryFilter.inactive,
+                          ),
                         ],
                       ),
                       const SizedBox(height: 14),
@@ -5617,9 +6054,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             onTap: () => _openBulkUploadFlow(),
                           ),
                           _buildQuickActionButton(
-                            title: _isBulkDeleteMode ? 'Exit Bulk Delete' : 'Bulk Delete',
-                            icon: _isBulkDeleteMode ? Icons.close_rounded : Icons.delete_outline_rounded,
-                            onTap: _isBulkDeleteMode ? _exitBulkDeleteMode : _enterBulkDeleteMode,
+                            title: _isBulkDeleteMode
+                                ? 'Exit Bulk Delete'
+                                : 'Bulk Delete',
+                            icon: _isBulkDeleteMode
+                                ? Icons.close_rounded
+                                : Icons.delete_outline_rounded,
+                            onTap: _isBulkDeleteMode
+                                ? _exitBulkDeleteMode
+                                : _enterBulkDeleteMode,
                           ),
                           _buildQuickActionButton(
                             title: 'Receive Stock',
@@ -5651,7 +6094,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           decoration: BoxDecoration(
                             color: _dangerSoft,
                             borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: _dangerColor.withOpacity(0.24)),
+                            border: Border.all(
+                              color: _dangerColor.withOpacity(0.24),
+                            ),
                           ),
                           child: Row(
                             children: [
@@ -5668,13 +6113,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               ),
                               const SizedBox(width: 10),
                               OutlinedButton(
-                                onPressed: visibleProducts.isEmpty ? null : _toggleSelectAllVisibleProducts,
-                                child: Text(_allVisibleProductsSelected ? 'Clear All' : 'Select All'),
+                                onPressed: visibleProducts.isEmpty
+                                    ? null
+                                    : _toggleSelectAllVisibleProducts,
+                                child: Text(
+                                  _allVisibleProductsSelected
+                                      ? 'Clear All'
+                                      : 'Select All',
+                                ),
                               ),
                               const SizedBox(width: 8),
                               ElevatedButton(
-                                onPressed: _selectedProductBarcodes.isEmpty ? null : _confirmBulkDeleteSelected,
-                                style: ElevatedButton.styleFrom(backgroundColor: _dangerColor),
+                                onPressed: _selectedProductBarcodes.isEmpty
+                                    ? null
+                                    : _confirmBulkDeleteSelected,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _dangerColor,
+                                ),
                                 child: const Text('Delete Selected'),
                               ),
                             ],
@@ -5736,7 +6191,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           ),
                           child: Column(
                             children: [
-                              Icon(Icons.inventory_2_outlined, size: 40, color: _mutedIcon),
+                              Icon(
+                                Icons.inventory_2_outlined,
+                                size: 40,
+                                color: _mutedIcon,
+                              ),
                               const SizedBox(height: 12),
                               Text(
                                 'No products match the current filter.',
@@ -5818,12 +6277,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
       ),
     );
   }
-
 }
 
 extension _FirstOrNullExtension<E> on Iterable<E> {
   E? get firstOrNull => isEmpty ? null : first;
 }
-
-
-

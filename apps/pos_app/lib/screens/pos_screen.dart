@@ -22,6 +22,7 @@ import '../widgets/app_snackbar.dart';
 import 'cart_discount_dialog.dart';
 import 'cashier_summary_screen.dart';
 import 'checkout_payment_dialog.dart';
+import 'expiry_alerts_screen.dart';
 import 'held_carts_screen.dart';
 import 'inventory_screen.dart';
 import 'login_screen.dart';
@@ -99,6 +100,7 @@ class _PosScreenState extends State<PosScreen> {
   ProductPriceType? _lastPriceModePreviousType;
   DateTime? _lastPriceModeTapAt;
   bool _isPriceModePromptOpen = false;
+  final Set<String> _expiryWarningShownBarcodes = <String>{};
 
   final ScrollController _cartScrollController = ScrollController();
   int _lastCartItemCount = 0;
@@ -190,7 +192,8 @@ class _PosScreenState extends State<PosScreen> {
     if (route != null && !route.isCurrent) return false;
 
     final keyboard = HardwareKeyboard.instance;
-    final hasModifier = keyboard.isAltPressed ||
+    final hasModifier =
+        keyboard.isAltPressed ||
         keyboard.isControlPressed ||
         keyboard.isMetaPressed;
 
@@ -279,9 +282,10 @@ class _PosScreenState extends State<PosScreen> {
       }
 
       final character = event.character;
-      final isPlusKey = character == '+' ||
-          event.logicalKey == LogicalKeyboardKey.numpadAdd;
-      final isMinusKey = character == '-' ||
+      final isPlusKey =
+          character == '+' || event.logicalKey == LogicalKeyboardKey.numpadAdd;
+      final isMinusKey =
+          character == '-' ||
           event.logicalKey == LogicalKeyboardKey.minus ||
           event.logicalKey == LogicalKeyboardKey.numpadSubtract;
       final canUseLetterCartShortcut =
@@ -339,7 +343,8 @@ class _PosScreenState extends State<PosScreen> {
       }
     }
 
-    final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+    final isEnterKey =
+        event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
     if (isEnterKey &&
         _activeModalCount == 0 &&
@@ -888,7 +893,8 @@ class _PosScreenState extends State<PosScreen> {
     final previousAt = _lastBarcodeInputAt;
     final isGrowingInput =
         previousValue.isEmpty ||
-        (value.length > previousValue.length && value.startsWith(previousValue));
+        (value.length > previousValue.length &&
+            value.startsWith(previousValue));
 
     if (!isGrowingInput) {
       _barcodeInputStartedAt = now;
@@ -957,241 +963,247 @@ class _PosScreenState extends State<PosScreen> {
           var printers = List<String>.from(initialPrinters);
           var isBusy = false;
 
-        Future<void> refreshLists(StateSetter setState) async {
-          setState(() {
-            isBusy = true;
-          });
+          Future<void> refreshLists(StateSetter setState) async {
+            setState(() {
+              isBusy = true;
+            });
 
-          final nextPrinters = await printer.getInstalledPrinters();
+            final nextPrinters = await printer.getInstalledPrinters();
 
-          if (!context.mounted) return;
+            if (!context.mounted) return;
 
-          setState(() {
-            printers = nextPrinters;
-            isBusy = false;
-          });
-        }
+            setState(() {
+              printers = nextPrinters;
+              isBusy = false;
+            });
+          }
 
-        Future<void> selectPrinter(
-          String printerName,
-          StateSetter setState,
-        ) async {
-          setState(() {
-            isBusy = true;
-          });
+          Future<void> selectPrinter(
+            String printerName,
+            StateSetter setState,
+          ) async {
+            setState(() {
+              isBusy = true;
+            });
 
-          final ok = await printer.selectPrinter(printerName);
+            final ok = await printer.selectPrinter(printerName);
 
-          if (!context.mounted) return;
+            if (!context.mounted) return;
 
-          setState(() {
-            isBusy = false;
-          });
+            setState(() {
+              isBusy = false;
+            });
 
-          _showInfoMessage(
-            ok
-                ? 'Receipt printer set to $printerName'
-                : 'Could not set printer $printerName',
-            backgroundColor: ok ? _successColor : _dangerColor,
-          );
-        }
+            _showInfoMessage(
+              ok
+                  ? 'Receipt printer set to $printerName'
+                  : 'Could not set printer $printerName',
+              backgroundColor: ok ? _successColor : _dangerColor,
+            );
+          }
 
-        Future<void> runTestPrint(StateSetter setState) async {
-          setState(() {
-            isBusy = true;
-          });
+          Future<void> runTestPrint(StateSetter setState) async {
+            setState(() {
+              isBusy = true;
+            });
 
-          final response = await printer.printTestSlip();
+            final response = await printer.printTestSlip();
 
-          if (!context.mounted) return;
+            if (!context.mounted) return;
 
-          setState(() {
-            isBusy = false;
-          });
+            setState(() {
+              isBusy = false;
+            });
 
-          _showInfoMessage(
-            response.message,
-            backgroundColor: response.isSuccess ? _successColor : _dangerColor,
-          );
-        }
+            _showInfoMessage(
+              response.message,
+              backgroundColor: response.isSuccess
+                  ? _successColor
+                  : _dangerColor,
+            );
+          }
 
-        Future<void> saveTestPdf(StateSetter setState) async {
-          setState(() {
-            isBusy = true;
-          });
+          Future<void> saveTestPdf(StateSetter setState) async {
+            setState(() {
+              isBusy = true;
+            });
 
-          final response = await ReceiptPdfService.instance.saveReceiptPdf(
-            transactionId: 0,
-            cashierName: 'Hardware Test',
-            paymentMethod: 'cash',
-            items: const [
-              {
-                'name': 'Printer Test Item',
-                'qty': 1,
-                'unitPrice': 0.0,
-                'lineTotal': 0.0,
-              },
-            ],
-            subtotal: 0.0,
-            discountAmount: 0.0,
-            total: 0.0,
-            storeName: 'FOOD CITY',
-            storeAddress: 'Windows PDF Test',
-            storePhone: '',
-            footerNote: 'If you can read this, PDF receipt export works.',
-          );
+            final response = await ReceiptPdfService.instance.saveReceiptPdf(
+              transactionId: 0,
+              cashierName: 'Hardware Test',
+              paymentMethod: 'cash',
+              items: const [
+                {
+                  'name': 'Printer Test Item',
+                  'qty': 1,
+                  'unitPrice': 0.0,
+                  'lineTotal': 0.0,
+                },
+              ],
+              subtotal: 0.0,
+              discountAmount: 0.0,
+              total: 0.0,
+              storeName: 'FOOD CITY',
+              storeAddress: 'Windows PDF Test',
+              storePhone: '',
+              footerNote: 'If you can read this, PDF receipt export works.',
+            );
 
-          if (!context.mounted) return;
+            if (!context.mounted) return;
 
-          setState(() {
-            isBusy = false;
-          });
+            setState(() {
+              isBusy = false;
+            });
 
-          _showInfoMessage(
-            response.message,
-            backgroundColor: response.isSuccess ? _successColor : _dangerColor,
-          );
-        }
+            _showInfoMessage(
+              response.message,
+              backgroundColor: response.isSuccess
+                  ? _successColor
+                  : _dangerColor,
+            );
+          }
 
           return StatefulBuilder(
             builder: (context, setState) {
               return AlertDialog(
-              title: const Text('Hardware Setup'),
-              content: SizedBox(
-                width: 580,
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          const Expanded(
-                            child: Text(
-                              'Receipt Printer',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 16,
+                title: const Text('Hardware Setup'),
+                content: SizedBox(
+                  width: 580,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            const Expanded(
+                              child: Text(
+                                'Receipt Printer',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 16,
+                                ),
                               ),
                             ),
-                          ),
-                          if (printer.isConnected)
-                            Chip(
-                              label: Text(
-                                printer.connectedPrinterName ?? 'Selected',
+                            if (printer.isConnected)
+                              Chip(
+                                label: Text(
+                                  printer.connectedPrinterName ?? 'Selected',
+                                ),
+                                backgroundColor: _successSoft,
+                                side: BorderSide(color: _successColor),
                               ),
-                              backgroundColor: _successSoft,
-                              side: BorderSide(color: _successColor),
+                            TextButton.icon(
+                              onPressed: isBusy
+                                  ? null
+                                  : () => refreshLists(setState),
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Refresh'),
                             ),
-                          TextButton.icon(
-                            onPressed: isBusy
-                                ? null
-                                : () => refreshLists(setState),
-                            icon: const Icon(Icons.refresh),
-                            label: const Text('Refresh'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      if (printers.isEmpty)
-                        Text(
-                          'No Windows printers found. Install or share the receipt printer first.',
-                          style: TextStyle(color: _dangerColor),
-                        )
-                      else
-                        ...printers.map(
-                          (printerName) => ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(printerName),
-                            subtitle: Text(
-                              printerName == printer.connectedPrinterName
-                                  ? 'Currently selected printer'
-                                  : 'Installed Windows printer',
-                            ),
-                            trailing:
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        if (printers.isEmpty)
+                          Text(
+                            'No Windows printers found. Install or share the receipt printer first.',
+                            style: TextStyle(color: _dangerColor),
+                          )
+                        else
+                          ...printers.map(
+                            (printerName) => ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(printerName),
+                              subtitle: Text(
                                 printerName == printer.connectedPrinterName
-                                ? OutlinedButton(
-                                    onPressed: isBusy
-                                        ? null
-                                        : () async {
-                                            setState(() {
-                                              isBusy = true;
-                                            });
-                                            await printer.disconnect(
-                                              clearSaved: true,
-                                            );
-                                            if (!context.mounted) return;
-                                            setState(() {
-                                              isBusy = false;
-                                            });
-                                            _showInfoMessage(
-                                              'Receipt printer cleared.',
-                                              backgroundColor: _warningColor,
-                                            );
-                                          },
-                                    child: const Text('Clear'),
-                                  )
-                                : ElevatedButton(
-                                    onPressed: isBusy
-                                        ? null
-                                        : () => selectPrinter(
-                                            printerName,
-                                            setState,
-                                          ),
-                                    child: const Text('Use'),
-                                  ),
-                          ),
-                        ),
-                      const SizedBox(height: 12),
-                      if (printer.isConnected)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
-                            children: [
-                              OutlinedButton.icon(
-                                onPressed: isBusy
-                                    ? null
-                                    : () => runTestPrint(setState),
-                                icon: const Icon(Icons.print),
-                                label: const Text('Print Test Slip'),
+                                    ? 'Currently selected printer'
+                                    : 'Installed Windows printer',
                               ),
-                              OutlinedButton.icon(
-                                onPressed: isBusy
-                                    ? null
-                                    : () => saveTestPdf(setState),
-                                icon: const Icon(Icons.picture_as_pdf_outlined),
-                                label: const Text('Save Test PDF'),
-                              ),
-                            ],
+                              trailing:
+                                  printerName == printer.connectedPrinterName
+                                  ? OutlinedButton(
+                                      onPressed: isBusy
+                                          ? null
+                                          : () async {
+                                              setState(() {
+                                                isBusy = true;
+                                              });
+                                              await printer.disconnect(
+                                                clearSaved: true,
+                                              );
+                                              if (!context.mounted) return;
+                                              setState(() {
+                                                isBusy = false;
+                                              });
+                                              _showInfoMessage(
+                                                'Receipt printer cleared.',
+                                                backgroundColor: _warningColor,
+                                              );
+                                            },
+                                      child: const Text('Clear'),
+                                    )
+                                  : ElevatedButton(
+                                      onPressed: isBusy
+                                          ? null
+                                          : () => selectPrinter(
+                                              printerName,
+                                              setState,
+                                            ),
+                                      child: const Text('Use'),
+                                    ),
+                            ),
                           ),
-                        ),
-                      if (!printer.isConnected)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: OutlinedButton.icon(
-                            onPressed: isBusy
-                                ? null
-                                : () => saveTestPdf(setState),
-                            icon: const Icon(Icons.picture_as_pdf_outlined),
-                            label: const Text('Save Test PDF'),
-                          ),
-                        ),
-                      if (isBusy) ...[
                         const SizedBox(height: 12),
-                        const LinearProgressIndicator(),
+                        if (printer.isConnected)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: [
+                                OutlinedButton.icon(
+                                  onPressed: isBusy
+                                      ? null
+                                      : () => runTestPrint(setState),
+                                  icon: const Icon(Icons.print),
+                                  label: const Text('Print Test Slip'),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: isBusy
+                                      ? null
+                                      : () => saveTestPdf(setState),
+                                  icon: const Icon(
+                                    Icons.picture_as_pdf_outlined,
+                                  ),
+                                  label: const Text('Save Test PDF'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        if (!printer.isConnected)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: OutlinedButton.icon(
+                              onPressed: isBusy
+                                  ? null
+                                  : () => saveTestPdf(setState),
+                              icon: const Icon(Icons.picture_as_pdf_outlined),
+                              label: const Text('Save Test PDF'),
+                            ),
+                          ),
+                        if (isBusy) ...[
+                          const SizedBox(height: 12),
+                          const LinearProgressIndicator(),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: isBusy ? null : () => Navigator.pop(context),
-                  child: const Text('Close'),
-                ),
-              ],
+                actions: [
+                  TextButton(
+                    onPressed: isBusy ? null : () => Navigator.pop(context),
+                    child: const Text('Close'),
+                  ),
+                ],
               );
             },
           );
@@ -1372,18 +1384,17 @@ class _PosScreenState extends State<PosScreen> {
   CartItem? _selectedCartItem(CartProvider cart, {bool showMessage = true}) {
     if (cart.items.isEmpty) {
       if (showMessage) {
-        _showInfoMessage(
-          'Cart is empty.',
-          backgroundColor: _warningColor,
-        );
+        _showInfoMessage('Cart is empty.', backgroundColor: _warningColor);
       }
       return null;
     }
 
-    final index = ((_selectedCartIndex ?? cart.items.length - 1).clamp(
-      0,
-      cart.items.length - 1,
-    )) as int;
+    final index =
+        ((_selectedCartIndex ?? cart.items.length - 1).clamp(
+              0,
+              cart.items.length - 1,
+            ))
+            as int;
     _selectedCartIndex = index;
     _showTemporaryCartSelection();
     return cart.items[index];
@@ -1546,7 +1557,10 @@ class _PosScreenState extends State<PosScreen> {
       } else {
         _showTemporaryCartSelection();
       }
-      _showInfoMessage('Item removed from cart.', backgroundColor: _warningColor);
+      _showInfoMessage(
+        'Item removed from cart.',
+        backgroundColor: _warningColor,
+      );
     } else {
       _showTemporaryCartSelection();
     }
@@ -1577,7 +1591,8 @@ class _PosScreenState extends State<PosScreen> {
             autofocus: true,
             onKeyEvent: (node, event) {
               if (event is! KeyDownEvent) return KeyEventResult.ignored;
-              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+              final isEnterKey =
+                  event.logicalKey == LogicalKeyboardKey.enter ||
                   event.logicalKey == LogicalKeyboardKey.numpadEnter;
 
               if (isEnterKey) {
@@ -1737,7 +1752,10 @@ class _PosScreenState extends State<PosScreen> {
 
   Future<void> _confirmClearCart(CartProvider cart) async {
     if (cart.items.isEmpty) {
-      _showInfoMessage('Cart is already empty.', backgroundColor: _warningColor);
+      _showInfoMessage(
+        'Cart is already empty.',
+        backgroundColor: _warningColor,
+      );
       _focusBarcodeField();
       return;
     }
@@ -1831,7 +1849,8 @@ class _PosScreenState extends State<PosScreen> {
 
     final now = DateTime.now();
     final previousType = cart.selectedPriceType;
-    final isDoubleTap = _lastPriceModeTapType == newType &&
+    final isDoubleTap =
+        _lastPriceModeTapType == newType &&
         _lastPriceModeTapAt != null &&
         now.difference(_lastPriceModeTapAt!) <= _priceModeDoubleTapWindow;
 
@@ -1901,7 +1920,8 @@ class _PosScreenState extends State<PosScreen> {
             autofocus: true,
             onKeyEvent: (node, event) {
               if (event is! KeyDownEvent) return KeyEventResult.ignored;
-              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+              final isEnterKey =
+                  event.logicalKey == LogicalKeyboardKey.enter ||
                   event.logicalKey == LogicalKeyboardKey.numpadEnter;
               if (!isEnterKey) return KeyEventResult.ignored;
               choose(dialogContext, true);
@@ -2022,7 +2042,10 @@ class _PosScreenState extends State<PosScreen> {
                         Expanded(
                           child: ElevatedButton.icon(
                             onPressed: () => choose(dialogContext, true),
-                            icon: const Icon(Icons.swap_horiz_rounded, size: 16),
+                            icon: const Icon(
+                              Icons.swap_horiz_rounded,
+                              size: 16,
+                            ),
                             label: const Text('Switch Cart'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: color,
@@ -2205,141 +2228,144 @@ class _PosScreenState extends State<PosScreen> {
                   vertical: 24,
                 ),
                 child: AnimatedPadding(
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOut,
-                padding: EdgeInsets.only(
-                  bottom: MediaQuery.of(dialogContext).viewInsets.bottom,
-                ),
-                child: Container(
-                  constraints: const BoxConstraints(maxWidth: 440),
-                  padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
-                  decoration: _panelDecoration(color: _panelColor),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 42,
-                              height: 42,
-                              decoration: BoxDecoration(
-                                color: _brandSoft,
-                                borderRadius: BorderRadius.circular(14),
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOut,
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(dialogContext).viewInsets.bottom,
+                  ),
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 440),
+                    padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
+                    decoration: _panelDecoration(color: _panelColor),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: _brandSoft,
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Icon(
+                                  Icons.scale_rounded,
+                                  color: _brandColor,
+                                  size: 22,
+                                ),
                               ),
-                              child: Icon(
-                                Icons.scale_rounded,
-                                color: _brandColor,
-                                size: 22,
-                              ),
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    title,
-                                    style: TextStyle(
-                                      color: _textPrimary,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w900,
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      style: TextStyle(
+                                        color: _textPrimary,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w900,
+                                      ),
                                     ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      product.name,
+                                      style: TextStyle(
+                                        color: _textSecondary,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: _panelSoft,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: _borderColor),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _formatPriceCaption(product, unitPrice),
+                                  style: TextStyle(
+                                    color: _textPrimary,
+                                    fontWeight: FontWeight.w800,
                                   ),
-                                  const SizedBox(height: 4),
+                                ),
+                                if (maxQuantity != null) ...[
+                                  const SizedBox(height: 6),
                                   Text(
-                                    product.name,
+                                    'Available: ${_formatStockText(product, maxQuantity)}',
                                     style: TextStyle(
                                       color: _textSecondary,
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
                                 ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 18),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: _panelSoft,
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: _borderColor),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _formatPriceCaption(product, unitPrice),
-                                style: TextStyle(
-                                  color: _textPrimary,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              if (maxQuantity != null) ...[
-                                const SizedBox(height: 6),
-                                Text(
-                                  'Available: ${_formatStockText(product, maxQuantity)}',
-                                  style: TextStyle(
-                                    color: _textSecondary,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
                               ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: controller,
+                            autofocus: true,
+                            textInputAction: TextInputAction.done,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            inputFormatters: [
+                              _DecimalQuantityInputFormatter(maxDecimals: 3),
+                            ],
+                            decoration: InputDecoration(
+                              labelText: 'Quantity (${product.unitLabel})',
+                              hintText: 'Enter ${product.unitLabel} amount',
+                              errorText: quantityError,
+                            ),
+                            onChanged: (_) {
+                              if (quantityError == null) return;
+                              setLocalState(() {
+                                quantityError = null;
+                              });
+                            },
+                            onSubmitted: (_) => submit(),
+                          ),
+                          const SizedBox(height: 18),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () =>
+                                      Navigator.of(dialogContext).pop(),
+                                  child: const Text('Cancel'),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: submit,
+                                  icon: const Icon(
+                                    Icons.check_rounded,
+                                    size: 16,
+                                  ),
+                                  label: Text(confirmLabel),
+                                ),
+                              ),
                             ],
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        TextField(
-                          controller: controller,
-                          autofocus: true,
-                          textInputAction: TextInputAction.done,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          inputFormatters: [
-                            _DecimalQuantityInputFormatter(maxDecimals: 3),
-                          ],
-                          decoration: InputDecoration(
-                            labelText: 'Quantity (${product.unitLabel})',
-                            hintText: 'Enter ${product.unitLabel} amount',
-                            errorText: quantityError,
-                          ),
-                          onChanged: (_) {
-                            if (quantityError == null) return;
-                            setLocalState(() {
-                              quantityError = null;
-                            });
-                          },
-                          onSubmitted: (_) => submit(),
-                        ),
-                        const SizedBox(height: 18),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton(
-                                onPressed: () =>
-                                    Navigator.of(dialogContext).pop(),
-                                child: const Text('Cancel'),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: submit,
-                                icon: const Icon(Icons.check_rounded, size: 16),
-                                label: Text(confirmLabel),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
                 ),
               ),
             );
@@ -2425,139 +2451,142 @@ class _PosScreenState extends State<PosScreen> {
                   vertical: 24,
                 ),
                 child: AnimatedPadding(
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOut,
-                padding: EdgeInsets.only(
-                  bottom: MediaQuery.of(dialogContext).viewInsets.bottom,
-                ),
-                child: Container(
-                  constraints: const BoxConstraints(maxWidth: 440),
-                  padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
-                  decoration: _panelDecoration(color: _panelColor),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 42,
-                              height: 42,
-                              decoration: BoxDecoration(
-                                color: _brandSoft,
-                                borderRadius: BorderRadius.circular(14),
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOut,
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(dialogContext).viewInsets.bottom,
+                  ),
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 440),
+                    padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
+                    decoration: _panelDecoration(color: _panelColor),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: _brandSoft,
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Icon(
+                                  Icons.edit_note_rounded,
+                                  color: _brandColor,
+                                  size: 22,
+                                ),
                               ),
-                              child: Icon(
-                                Icons.edit_note_rounded,
-                                color: _brandColor,
-                                size: 22,
-                              ),
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    title,
-                                    style: TextStyle(
-                                      color: _textPrimary,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w900,
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      style: TextStyle(
+                                        color: _textPrimary,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w900,
+                                      ),
                                     ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      product.name,
+                                      style: TextStyle(
+                                        color: _textSecondary,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: _panelSoft,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: _borderColor),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _formatPriceCaption(product, unitPrice),
+                                  style: TextStyle(
+                                    color: _textPrimary,
+                                    fontWeight: FontWeight.w800,
                                   ),
-                                  const SizedBox(height: 4),
+                                ),
+                                if (maxQuantity != null) ...[
+                                  const SizedBox(height: 6),
                                   Text(
-                                    product.name,
+                                    'Available: ${_formatStockTextWithCartUnit(product, maxQuantity)}',
                                     style: TextStyle(
                                       color: _textSecondary,
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
                                 ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 18),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: _panelSoft,
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: _borderColor),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _formatPriceCaption(product, unitPrice),
-                                style: TextStyle(
-                                  color: _textPrimary,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              if (maxQuantity != null) ...[
-                                const SizedBox(height: 6),
-                                Text(
-                                  'Available: ${_formatStockTextWithCartUnit(product, maxQuantity)}',
-                                  style: TextStyle(
-                                    color: _textSecondary,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
                               ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: controller,
+                            autofocus: true,
+                            textInputAction: TextInputAction.done,
+                            keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
+                            decoration: InputDecoration(
+                              labelText: 'Quantity (pcs)',
+                              hintText: 'Enter piece count',
+                              errorText: quantityError,
+                            ),
+                            onChanged: (_) {
+                              if (quantityError == null) return;
+                              setLocalState(() {
+                                quantityError = null;
+                              });
+                            },
+                            onSubmitted: (_) => submit(),
+                          ),
+                          const SizedBox(height: 18),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  onPressed: () =>
+                                      Navigator.of(dialogContext).pop(),
+                                  child: const Text('Cancel'),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: submit,
+                                  icon: const Icon(
+                                    Icons.check_rounded,
+                                    size: 16,
+                                  ),
+                                  label: Text(confirmLabel),
+                                ),
+                              ),
                             ],
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        TextField(
-                          controller: controller,
-                          autofocus: true,
-                          textInputAction: TextInputAction.done,
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.digitsOnly,
-                          ],
-                          decoration: InputDecoration(
-                            labelText: 'Quantity (pcs)',
-                            hintText: 'Enter piece count',
-                            errorText: quantityError,
-                          ),
-                          onChanged: (_) {
-                            if (quantityError == null) return;
-                            setLocalState(() {
-                              quantityError = null;
-                            });
-                          },
-                          onSubmitted: (_) => submit(),
-                        ),
-                        const SizedBox(height: 18),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton(
-                                onPressed: () =>
-                                    Navigator.of(dialogContext).pop(),
-                                child: const Text('Cancel'),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: submit,
-                                icon: const Icon(Icons.check_rounded, size: 16),
-                                label: Text(confirmLabel),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
                 ),
               ),
             );
@@ -2581,6 +2610,18 @@ class _PosScreenState extends State<PosScreen> {
         backgroundColor: _dangerColor,
       );
       return;
+    }
+
+    if (!cart.isRefundMode &&
+        !_expiryWarningShownBarcodes.contains(product.barcode) &&
+        await DatabaseHelper.instance.hasExpiredBatchForBarcode(
+          product.barcode,
+        )) {
+      _expiryWarningShownBarcodes.add(product.barcode);
+      _showInfoMessage(
+        '${product.name} has expired stock recorded. Check the shelf item before selling.',
+        backgroundColor: _warningColor,
+      );
     }
 
     final currentQtyInCart = _getQuantityInCart(cart, product.barcode);
@@ -2994,7 +3035,8 @@ class _PosScreenState extends State<PosScreen> {
       builder: (successContext) => Focus(
         autofocus: true,
         onKeyEvent: (node, event) {
-          final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+          final isEnterKey =
+              event.logicalKey == LogicalKeyboardKey.enter ||
               event.logicalKey == LogicalKeyboardKey.numpadEnter;
           if (event is KeyDownEvent && isEnterKey) {
             dismissSuccess(successContext, 'next');
@@ -3005,7 +3047,10 @@ class _PosScreenState extends State<PosScreen> {
         },
         child: Dialog(
           backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 24,
+          ),
           child: Container(
             constraints: const BoxConstraints(maxWidth: 460),
             padding: const EdgeInsets.all(24),
@@ -3074,8 +3119,7 @@ class _PosScreenState extends State<PosScreen> {
                   children: [
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: () =>
-                            dismissSuccess(successContext, 'next'),
+                        onPressed: () => dismissSuccess(successContext, 'next'),
                         child: const Text('Next Customer'),
                       ),
                     ),
@@ -3193,173 +3237,174 @@ class _PosScreenState extends State<PosScreen> {
                 vertical: 24,
               ),
               child: StatefulBuilder(
-            builder: (context, setLocalState) {
-              return Container(
-                constraints: const BoxConstraints(maxWidth: 520),
-                padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
-                decoration: _panelDecoration(color: _panelColor),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 46,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: _borderColor,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
+                builder: (context, setLocalState) {
+                  return Container(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+                    decoration: _panelDecoration(color: _panelColor),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          width: 50,
-                          height: 50,
-                          decoration: BoxDecoration(
-                            color: _brandSoft,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                              color: _brandColor.withOpacity(0.24),
+                        Center(
+                          child: Container(
+                            width: 46,
+                            height: 5,
+                            decoration: BoxDecoration(
+                              color: _borderColor,
+                              borderRadius: BorderRadius.circular(999),
                             ),
                           ),
-                          child: Icon(
-                            Icons.pause_circle_outline_rounded,
-                            color: _brandColor,
-                            size: 26,
-                          ),
                         ),
-                        const SizedBox(width: 14),
-                        Expanded(
+                        const SizedBox(height: 18),
+                        Row(
+                          children: [
+                            Container(
+                              width: 50,
+                              height: 50,
+                              decoration: BoxDecoration(
+                                color: _brandSoft,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: _brandColor.withOpacity(0.24),
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.pause_circle_outline_rounded,
+                                color: _brandColor,
+                                size: 26,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Hold Cart',
+                                    style: TextStyle(
+                                      color: _textPrimary,
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Save this bill and resume it later from Held Bills.',
+                                    style: TextStyle(
+                                      color: _textSecondary,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            InkWell(
+                              borderRadius: BorderRadius.circular(14),
+                              onTap: () => Navigator.pop(dialogContext),
+                              child: Ink(
+                                width: 42,
+                                height: 42,
+                                decoration: _softDecoration(color: _panelSoft),
+                                child: Icon(
+                                  Icons.close_rounded,
+                                  color: _textSecondary,
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 18),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: _panelSoft,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: _borderColor),
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Hold Cart',
-                                style: TextStyle(
-                                  color: _textPrimary,
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Save this bill and resume it later from Held Bills.',
+                                'CART NAME',
                                 style: TextStyle(
                                   color: _textSecondary,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.4,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 0.6,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: controller,
+                                autofocus: true,
+                                onChanged: (_) => setLocalState(() {}),
+                                textInputAction: TextInputAction.done,
+                                onSubmitted: (_) {
+                                  Navigator.pop(
+                                    dialogContext,
+                                    controller.text.trim(),
+                                  );
+                                },
+                                decoration: InputDecoration(
+                                  hintText:
+                                      'Example: Customer 1 / Counter Hold',
+                                  prefixIcon: Container(
+                                    margin: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: _brandSoft,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Icon(
+                                      Icons.edit_note_rounded,
+                                      color: _brandColor,
+                                      size: 18,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ],
                           ),
                         ),
-                        InkWell(
-                          borderRadius: BorderRadius.circular(14),
-                          onTap: () => Navigator.pop(dialogContext),
-                          child: Ink(
-                            width: 42,
-                            height: 42,
-                            decoration: _softDecoration(color: _panelSoft),
-                            child: Icon(
-                              Icons.close_rounded,
-                              color: _textSecondary,
-                              size: 20,
+                        const SizedBox(height: 18),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => Navigator.pop(dialogContext),
+                                child: const Text('Cancel'),
+                              ),
                             ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _panelSoft,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: _borderColor),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'CART NAME',
-                            style: TextStyle(
-                              color: _textSecondary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 0.6,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          TextField(
-                            controller: controller,
-                            autofocus: true,
-                            onChanged: (_) => setLocalState(() {}),
-                            textInputAction: TextInputAction.done,
-                            onSubmitted: (_) {
-                              Navigator.pop(
-                                dialogContext,
-                                controller.text.trim(),
-                              );
-                            },
-                            decoration: InputDecoration(
-                              hintText: 'Example: Customer 1 / Counter Hold',
-                              prefixIcon: Container(
-                                margin: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: _brandSoft,
-                                  borderRadius: BorderRadius.circular(10),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: () {
+                                  Navigator.pop(
+                                    dialogContext,
+                                    controller.text.trim(),
+                                  );
+                                },
+                                icon: const Icon(
+                                  Icons.pause_circle_outline_rounded,
+                                  size: 16,
                                 ),
-                                child: Icon(
-                                  Icons.edit_note_rounded,
-                                  color: _brandColor,
-                                  size: 18,
+                                label: const Text('Hold Bill'),
+                                style: ElevatedButton.styleFrom(
+                                  minimumSize: const Size.fromHeight(52),
                                 ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.pop(dialogContext),
-                            child: const Text('Cancel'),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () {
-                              Navigator.pop(
-                                dialogContext,
-                                controller.text.trim(),
-                              );
-                            },
-                            icon: const Icon(
-                              Icons.pause_circle_outline_rounded,
-                              size: 16,
-                            ),
-                            label: const Text('Hold Bill'),
-                            style: ElevatedButton.styleFrom(
-                              minimumSize: const Size.fromHeight(52),
-                            ),
-                          ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
-              );
-            },
-          ),
+                  );
+                },
+              ),
             ),
           );
         },
@@ -3428,7 +3473,8 @@ class _PosScreenState extends State<PosScreen> {
             autofocus: true,
             onKeyEvent: (node, event) {
               if (event is! KeyDownEvent) return KeyEventResult.ignored;
-              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+              final isEnterKey =
+                  event.logicalKey == LogicalKeyboardKey.enter ||
                   event.logicalKey == LogicalKeyboardKey.numpadEnter;
               if (!isEnterKey) return KeyEventResult.ignored;
               choose(dialogContext, true);
@@ -3551,7 +3597,10 @@ class _PosScreenState extends State<PosScreen> {
                         Expanded(
                           child: ElevatedButton.icon(
                             onPressed: () => choose(dialogContext, true),
-                            icon: const Icon(Icons.shopping_bag_outlined, size: 16),
+                            icon: const Icon(
+                              Icons.shopping_bag_outlined,
+                              size: 16,
+                            ),
                             label: const Text('Continue'),
                             style: ElevatedButton.styleFrom(
                               minimumSize: const Size.fromHeight(52),
@@ -3673,9 +3722,9 @@ class _PosScreenState extends State<PosScreen> {
     final restoredRawItems = restored['items'];
     final restoredItems = restoredRawItems is List
         ? restoredRawItems
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList()
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList()
         : <Map<String, dynamic>>[];
 
     final restoredSelectedPriceType =
@@ -3737,6 +3786,15 @@ class _PosScreenState extends State<PosScreen> {
           ),
         );
         break;
+      case 'expiry_alerts':
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.expiryAlerts),
+            builder: (context) => const ExpiryAlertsScreen(),
+          ),
+        );
+        break;
       case 'supplier_ops':
         await _openSupplierOperations();
         break;
@@ -3744,8 +3802,9 @@ class _PosScreenState extends State<PosScreen> {
         await Navigator.push(
           context,
           MaterialPageRoute(
-            settings:
-                const RouteSettings(name: PosRouteNames.transactionHistory),
+            settings: const RouteSettings(
+              name: PosRouteNames.transactionHistory,
+            ),
             builder: (context) => const TransactionHistoryScreen(),
           ),
         );
@@ -3790,6 +3849,8 @@ class _PosScreenState extends State<PosScreen> {
         return Icons.print_rounded;
       case 'inventory':
         return Icons.inventory_2_outlined;
+      case 'expiry_alerts':
+        return Icons.event_busy_outlined;
       case 'supplier_ops':
         return Icons.local_shipping_outlined;
       case 'transaction_history':
@@ -4053,10 +4114,7 @@ class _PosScreenState extends State<PosScreen> {
                               setState(() {});
                               _focusBarcodeField();
                             },
-                            icon: const Icon(
-                              Icons.close_rounded,
-                              size: 18,
-                            ),
+                            icon: const Icon(Icons.close_rounded, size: 18),
                           ),
                         ),
                       ),
@@ -4146,6 +4204,7 @@ class _PosScreenState extends State<PosScreen> {
               icon: Icons.admin_panel_settings_outlined,
               items: [
                 const MapEntry('inventory', 'Inventory'),
+                const MapEntry('expiry_alerts', 'Expiry Alerts'),
                 const MapEntry('user_management', 'User Management'),
                 const MapEntry('supplier_ops', 'Supplier Operations'),
                 const MapEntry('sales_report', 'Store Sales Report'),
@@ -4467,11 +4526,8 @@ class _PosScreenState extends State<PosScreen> {
     return ListView.separated(
       padding: EdgeInsets.zero,
       itemCount: _filteredProducts.length,
-      separatorBuilder: (_, __) => Divider(
-        height: 1,
-        thickness: 1,
-        color: _borderColor,
-      ),
+      separatorBuilder: (_, __) =>
+          Divider(height: 1, thickness: 1, color: _borderColor),
       itemBuilder: (context, index) {
         final product = _filteredProducts[index];
         return _buildProductCard(product, cart);
@@ -4653,7 +4709,10 @@ class _PosScreenState extends State<PosScreen> {
                                 ? 'Out'
                                 : (isLowStock
                                       ? 'Low ${_formatStockText(product, product.stock)}'
-                                      : _formatStockText(product, product.stock)),
+                                      : _formatStockText(
+                                          product,
+                                          product.stock,
+                                        )),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             textAlign: TextAlign.center,
@@ -4850,7 +4909,8 @@ class _PosScreenState extends State<PosScreen> {
                           item,
                           index: index,
                           isSelected:
-                              _isCartSelectionVisible && _selectedCartIndex == index,
+                              _isCartSelectionVisible &&
+                              _selectedCartIndex == index,
                         );
                       },
                       separatorBuilder: (_, __) => const SizedBox(height: 6),
@@ -5036,299 +5096,299 @@ class _PosScreenState extends State<PosScreen> {
               : null,
         ),
         child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  item.product.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: _textPrimary,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 12.5,
-                    height: 1.15,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              IconButton(
-                tooltip: item.discountAmount > 0
-                    ? 'Edit item discount'
-                    : 'Discount this item',
-                onPressed: () => _applyItemDiscount(cart, item),
-                icon: Icon(
-                  Icons.discount_outlined,
-                  color: item.discountAmount > 0
-                      ? _warningColor
-                      : _textSecondary,
-                  size: 16,
-                ),
-                constraints: const BoxConstraints.tightFor(
-                  width: 24,
-                  height: 24,
-                ),
-                padding: EdgeInsets.zero,
-              ),
-              IconButton(
-                tooltip: 'Remove item',
-                onPressed: () {
-                  cart.removeItem(item);
-                  _focusBarcodeField();
-                },
-                icon: Icon(
-                  Icons.delete_outline_rounded,
-                  color: _dangerColor,
-                  size: 16,
-                ),
-                constraints: const BoxConstraints.tightFor(
-                  width: 24,
-                  height: 24,
-                ),
-                padding: EdgeInsets.zero,
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            _formatPriceCaption(item.product, item.unitPrice),
-            style: TextStyle(
-              color: _textSecondary,
-              fontWeight: FontWeight.w700,
-              fontSize: 10.5,
-            ),
-          ),
-          if (item.discountAmount > 0) ...[
-            const SizedBox(height: 3),
-            Text(
-              item.discountType == 'percent'
-                  ? 'Discount: ${item.discountValue.toStringAsFixed(item.discountValue % 1 == 0 ? 0 : 2)}% (-Rs. ${item.discountAmount.toStringAsFixed(2)})'
-                  : 'Discount: Rs. ${item.discountValue.toStringAsFixed(2)} (-Rs. ${item.discountAmount.toStringAsFixed(2)})',
-              style: TextStyle(
-                color: _dangerColor,
-                fontWeight: FontWeight.w700,
-                fontSize: 9.8,
-              ),
-            ),
-          ],
-          const SizedBox(height: 7),
-          Row(
-            children: [
-              if (item.product.isWeighted)
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    final otherQtyInCart = _sanitizeQuantity(
-                      _getQuantityInCart(cart, item.product.barcode) -
-                          item.quantity,
-                    );
-                    final maxQuantity = cart.isRefundMode
-                        ? null
-                        : _sanitizeQuantity(currentStock - otherQtyInCart);
-
-                    if (!cart.isRefundMode &&
-                        maxQuantity != null &&
-                        maxQuantity <= _quantityEpsilon) {
-                      _showInfoMessage(
-                        'No stock is available to increase ${item.product.name}.',
-                        backgroundColor: _dangerColor,
-                      );
-                      return;
-                    }
-
-                    final updatedQuantity = await _promptWeightedQuantity(
-                      product: item.product,
-                      title: 'Edit ${item.product.unitLabel} quantity',
-                      confirmLabel: 'Update',
-                      initialQuantity: item.quantity,
-                      unitPrice: item.unitPrice,
-                      maxQuantity: maxQuantity,
-                    );
-
-                    if (updatedQuantity == null) {
-                      _focusBarcodeField();
-                      return;
-                    }
-
-                    cart.updateQuantity(item, updatedQuantity);
-                    _focusBarcodeField();
-                  },
-                  icon: const Icon(Icons.scale_rounded, size: 14),
-                  label: Text(
-                    _formatQuantityWithUnit(
-                      item.quantity,
-                      item.product.unitLabel,
-                    ),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(0, 34),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                    foregroundColor: _textPrimary,
-                    backgroundColor: _inputFill,
-                    side: BorderSide(color: _borderColor),
-                  ),
-                )
-              else
-                GestureDetector(
-                  onTap: () async {
-                    final otherQtyInCart = _sanitizeQuantity(
-                      _getQuantityInCart(cart, item.product.barcode) -
-                          item.quantity,
-                    );
-                    final maxQuantity = cart.isRefundMode
-                        ? null
-                        : _sanitizeQuantity(currentStock - otherQtyInCart);
-
-                    if (!cart.isRefundMode &&
-                        maxQuantity != null &&
-                        maxQuantity <= _quantityEpsilon) {
-                      _showInfoMessage(
-                        'No stock is available to increase ${item.product.name}.',
-                        backgroundColor: _dangerColor,
-                      );
-                      return;
-                    }
-
-                    final updatedQuantity = await _promptUnitQuantity(
-                      product: item.product,
-                      title: 'Edit quantity',
-                      confirmLabel: 'Update',
-                      initialQuantity: item.quantity,
-                      unitPrice: item.unitPrice,
-                      maxQuantity: maxQuantity,
-                    );
-
-                    if (updatedQuantity == null) {
-                      _focusBarcodeField();
-                      return;
-                    }
-
-                    cart.updateQuantity(item, updatedQuantity);
-                    _focusBarcodeField();
-                  },
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: _inputFill,
-                      borderRadius: BorderRadius.circular(11),
-                      border: Border.all(color: _borderColor),
-                    ),
-                    child: Row(
-                      children: [
-                        IconButton(
-                          onPressed: () {
-                            cart.decreaseQuantity(item);
-                            _focusBarcodeField();
-                          },
-                          icon: const Icon(Icons.remove_rounded, size: 14),
-                          constraints: const BoxConstraints.tightFor(
-                            width: 28,
-                            height: 28,
-                          ),
-                          padding: EdgeInsets.zero,
-                        ),
-                        SizedBox(
-                          width: 24,
-                          child: Text(
-                            _formatQuantity(item.quantity),
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: _textPrimary,
-                              fontWeight: FontWeight.w900,
-                              fontSize: 11.5,
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () {
-                            if (!cart.isRefundMode &&
-                                _quantityExceeds(
-                                  item.quantity + 1.0,
-                                  currentStock,
-                                )) {
-                              _showInfoMessage(
-                                'Cannot exceed available stock for ${item.product.name}.',
-                                backgroundColor: _dangerColor,
-                              );
-                              return;
-                            }
-
-                            cart.increaseQuantity(item);
-                            _focusBarcodeField();
-                          },
-                          icon: const Icon(Icons.add_rounded, size: 14),
-                          constraints: const BoxConstraints.tightFor(
-                            width: 28,
-                            height: 28,
-                          ),
-                          padding: EdgeInsets.zero,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Stock: ${_formatStockTextWithCartUnit(item.product, currentStock)}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: _textSecondary,
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  if (item.discountAmount > 0)
-                    Text(
-                      'Rs. ${item.baseTotal.toStringAsFixed(2)}',
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 10,
-                        decoration: TextDecoration.lineThrough,
-                      ),
-                    ),
-                  Text(
-                    'Rs. ${item.total.toStringAsFixed(2)}',
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    item.product.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: _textPrimary,
-                      fontWeight: FontWeight.w900,
+                      fontWeight: FontWeight.w800,
                       fontSize: 12.5,
+                      height: 1.15,
                     ),
                   ),
-                ],
-              ),
-            ],
-          ),
-          if (item.discountAmount > 0) ...[
-            const SizedBox(height: 6),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: () {
-                  cart.clearItemDiscount(item);
-                  _focusBarcodeField();
-                },
-                style: TextButton.styleFrom(
-                  minimumSize: const Size(0, 28),
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
                 ),
-                child: const Text('Clear Item Discount'),
+                const SizedBox(width: 6),
+                IconButton(
+                  tooltip: item.discountAmount > 0
+                      ? 'Edit item discount'
+                      : 'Discount this item',
+                  onPressed: () => _applyItemDiscount(cart, item),
+                  icon: Icon(
+                    Icons.discount_outlined,
+                    color: item.discountAmount > 0
+                        ? _warningColor
+                        : _textSecondary,
+                    size: 16,
+                  ),
+                  constraints: const BoxConstraints.tightFor(
+                    width: 24,
+                    height: 24,
+                  ),
+                  padding: EdgeInsets.zero,
+                ),
+                IconButton(
+                  tooltip: 'Remove item',
+                  onPressed: () {
+                    cart.removeItem(item);
+                    _focusBarcodeField();
+                  },
+                  icon: Icon(
+                    Icons.delete_outline_rounded,
+                    color: _dangerColor,
+                    size: 16,
+                  ),
+                  constraints: const BoxConstraints.tightFor(
+                    width: 24,
+                    height: 24,
+                  ),
+                  padding: EdgeInsets.zero,
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _formatPriceCaption(item.product, item.unitPrice),
+              style: TextStyle(
+                color: _textSecondary,
+                fontWeight: FontWeight.w700,
+                fontSize: 10.5,
               ),
             ),
+            if (item.discountAmount > 0) ...[
+              const SizedBox(height: 3),
+              Text(
+                item.discountType == 'percent'
+                    ? 'Discount: ${item.discountValue.toStringAsFixed(item.discountValue % 1 == 0 ? 0 : 2)}% (-Rs. ${item.discountAmount.toStringAsFixed(2)})'
+                    : 'Discount: Rs. ${item.discountValue.toStringAsFixed(2)} (-Rs. ${item.discountAmount.toStringAsFixed(2)})',
+                style: TextStyle(
+                  color: _dangerColor,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 9.8,
+                ),
+              ),
+            ],
+            const SizedBox(height: 7),
+            Row(
+              children: [
+                if (item.product.isWeighted)
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final otherQtyInCart = _sanitizeQuantity(
+                        _getQuantityInCart(cart, item.product.barcode) -
+                            item.quantity,
+                      );
+                      final maxQuantity = cart.isRefundMode
+                          ? null
+                          : _sanitizeQuantity(currentStock - otherQtyInCart);
+
+                      if (!cart.isRefundMode &&
+                          maxQuantity != null &&
+                          maxQuantity <= _quantityEpsilon) {
+                        _showInfoMessage(
+                          'No stock is available to increase ${item.product.name}.',
+                          backgroundColor: _dangerColor,
+                        );
+                        return;
+                      }
+
+                      final updatedQuantity = await _promptWeightedQuantity(
+                        product: item.product,
+                        title: 'Edit ${item.product.unitLabel} quantity',
+                        confirmLabel: 'Update',
+                        initialQuantity: item.quantity,
+                        unitPrice: item.unitPrice,
+                        maxQuantity: maxQuantity,
+                      );
+
+                      if (updatedQuantity == null) {
+                        _focusBarcodeField();
+                        return;
+                      }
+
+                      cart.updateQuantity(item, updatedQuantity);
+                      _focusBarcodeField();
+                    },
+                    icon: const Icon(Icons.scale_rounded, size: 14),
+                    label: Text(
+                      _formatQuantityWithUnit(
+                        item.quantity,
+                        item.product.unitLabel,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 34),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      foregroundColor: _textPrimary,
+                      backgroundColor: _inputFill,
+                      side: BorderSide(color: _borderColor),
+                    ),
+                  )
+                else
+                  GestureDetector(
+                    onTap: () async {
+                      final otherQtyInCart = _sanitizeQuantity(
+                        _getQuantityInCart(cart, item.product.barcode) -
+                            item.quantity,
+                      );
+                      final maxQuantity = cart.isRefundMode
+                          ? null
+                          : _sanitizeQuantity(currentStock - otherQtyInCart);
+
+                      if (!cart.isRefundMode &&
+                          maxQuantity != null &&
+                          maxQuantity <= _quantityEpsilon) {
+                        _showInfoMessage(
+                          'No stock is available to increase ${item.product.name}.',
+                          backgroundColor: _dangerColor,
+                        );
+                        return;
+                      }
+
+                      final updatedQuantity = await _promptUnitQuantity(
+                        product: item.product,
+                        title: 'Edit quantity',
+                        confirmLabel: 'Update',
+                        initialQuantity: item.quantity,
+                        unitPrice: item.unitPrice,
+                        maxQuantity: maxQuantity,
+                      );
+
+                      if (updatedQuantity == null) {
+                        _focusBarcodeField();
+                        return;
+                      }
+
+                      cart.updateQuantity(item, updatedQuantity);
+                      _focusBarcodeField();
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: _inputFill,
+                        borderRadius: BorderRadius.circular(11),
+                        border: Border.all(color: _borderColor),
+                      ),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            onPressed: () {
+                              cart.decreaseQuantity(item);
+                              _focusBarcodeField();
+                            },
+                            icon: const Icon(Icons.remove_rounded, size: 14),
+                            constraints: const BoxConstraints.tightFor(
+                              width: 28,
+                              height: 28,
+                            ),
+                            padding: EdgeInsets.zero,
+                          ),
+                          SizedBox(
+                            width: 24,
+                            child: Text(
+                              _formatQuantity(item.quantity),
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: _textPrimary,
+                                fontWeight: FontWeight.w900,
+                                fontSize: 11.5,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () {
+                              if (!cart.isRefundMode &&
+                                  _quantityExceeds(
+                                    item.quantity + 1.0,
+                                    currentStock,
+                                  )) {
+                                _showInfoMessage(
+                                  'Cannot exceed available stock for ${item.product.name}.',
+                                  backgroundColor: _dangerColor,
+                                );
+                                return;
+                              }
+
+                              cart.increaseQuantity(item);
+                              _focusBarcodeField();
+                            },
+                            icon: const Icon(Icons.add_rounded, size: 14),
+                            constraints: const BoxConstraints.tightFor(
+                              width: 28,
+                              height: 28,
+                            ),
+                            padding: EdgeInsets.zero,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Stock: ${_formatStockTextWithCartUnit(item.product, currentStock)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (item.discountAmount > 0)
+                      Text(
+                        'Rs. ${item.baseTotal.toStringAsFixed(2)}',
+                        style: TextStyle(
+                          color: _textSecondary,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 10,
+                          decoration: TextDecoration.lineThrough,
+                        ),
+                      ),
+                    Text(
+                      'Rs. ${item.total.toStringAsFixed(2)}',
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            if (item.discountAmount > 0) ...[
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () {
+                    cart.clearItemDiscount(item);
+                    _focusBarcodeField();
+                  },
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 28),
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                  ),
+                  child: const Text('Clear Item Discount'),
+                ),
+              ),
+            ],
           ],
-        ],
-      ),
+        ),
       ),
     );
   }
@@ -5476,10 +5536,7 @@ class _PosScreenState extends State<PosScreen> {
           ],
           OutlinedButton.icon(
             onPressed: cart.items.isEmpty ? null : () => _holdCurrentCart(cart),
-            icon: const Icon(
-              Icons.pause_circle_outline_rounded,
-              size: 14,
-            ),
+            icon: const Icon(Icons.pause_circle_outline_rounded, size: 14),
             label: const Text('Hold Cart'),
             style: OutlinedButton.styleFrom(
               minimumSize: const Size.fromHeight(34),
@@ -5642,9 +5699,7 @@ class _PosScreenState extends State<PosScreen> {
             ),
             const SizedBox(height: 12),
             Expanded(
-              child: SingleChildScrollView(
-                child: _buildSummarySection(cart),
-              ),
+              child: SingleChildScrollView(child: _buildSummarySection(cart)),
             ),
           ],
         ),
@@ -5652,10 +5707,7 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  Widget _buildCheckoutStat({
-    required String label,
-    required String value,
-  }) {
+  Widget _buildCheckoutStat({required String label, required String value}) {
     return Expanded(
       child: Column(
         children: [
@@ -5772,9 +5824,7 @@ class _PosScreenState extends State<PosScreen> {
                   curve: Curves.easeOutCubic,
                   width: _isLookupOpen ? 14 : 0,
                 ),
-                Expanded(
-                  child: _buildCartPanel(cart, includeSummary: false),
-                ),
+                Expanded(child: _buildCartPanel(cart, includeSummary: false)),
                 const SizedBox(width: 14),
                 SizedBox(
                   width: _checkoutRailWidth,
