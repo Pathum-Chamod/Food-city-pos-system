@@ -73,8 +73,8 @@ class _PosScreenState extends State<PosScreen> {
   static const double _quantityEpsilon = 0.000001;
   static const double _minSupportedWidth = 1180;
   static const double _minSupportedHeight = 680;
-  static const double _cartPanelWidth = 430;
-  static const double _productTileExtent = 218;
+  static const double _catalogRailWidth = 410;
+  static const double _checkoutRailWidth = 340;
   static const Duration _priceModeDoubleTapWindow = Duration(milliseconds: 650);
   static const Duration _cartSelectionVisibleDuration = Duration(seconds: 2);
   List<Product> _products = [];
@@ -82,6 +82,7 @@ class _PosScreenState extends State<PosScreen> {
   bool _isProcessingCheckout = false;
   bool _isPaymentDialogOpen = false;
   bool _isRefreshingProducts = false;
+  bool _isLookupOpen = false;
   int _activeModalCount = 0;
   bool _showWelcomeOverlay = false;
   bool _renderWelcomeOverlay = false;
@@ -253,11 +254,7 @@ class _PosScreenState extends State<PosScreen> {
       }
 
       if (event.logicalKey == LogicalKeyboardKey.f7) {
-        _searchFocusNode.requestFocus();
-        _searchController.selection = TextSelection(
-          baseOffset: 0,
-          extentOffset: _searchController.text.length,
-        );
+        _toggleItemLookup();
         return true;
       }
 
@@ -592,6 +589,25 @@ class _PosScreenState extends State<PosScreen> {
     _cartSelectionHideTimer?.cancel();
     _cartSelectionHideTimer = null;
     _isCartSelectionVisible = false;
+  }
+
+  void _toggleItemLookup() {
+    setState(() {
+      _isLookupOpen = !_isLookupOpen;
+    });
+
+    if (_isLookupOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_isLookupOpen) return;
+        _searchFocusNode.requestFocus();
+        _searchController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _searchController.text.length,
+        );
+      });
+    } else {
+      _focusBarcodeField();
+    }
   }
 
   void _syncCartAutoScroll(CartProvider cart) {
@@ -1344,13 +1360,6 @@ class _PosScreenState extends State<PosScreen> {
       return _formatQuantityWithUnit(quantity, product.unitLabel);
     }
     return _formatQuantity(quantity);
-  }
-
-  String _formatCartBadgeText(Product product, num quantity) {
-    final label = product.isWeighted
-        ? _formatQuantityWithUnit(quantity, product.unitLabel)
-        : _formatQuantity(quantity);
-    return '$label in cart';
   }
 
   String _formatStockTextWithCartUnit(Product product, num quantity) {
@@ -4288,7 +4297,7 @@ class _PosScreenState extends State<PosScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Product Catalog',
+                      'Item Lookup',
                       style: TextStyle(
                         color: _textPrimary,
                         fontSize: 20,
@@ -4297,7 +4306,7 @@ class _PosScreenState extends State<PosScreen> {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      'Search or scan to bill faster.',
+                      'Search, scan, or tap products.',
                       style: TextStyle(
                         color: _textSecondary,
                         fontWeight: FontWeight.w600,
@@ -4308,21 +4317,10 @@ class _PosScreenState extends State<PosScreen> {
                 ),
                 const Spacer(),
                 _buildIconSurfaceButton(
-                  tooltip: 'Refresh products from backend',
-                  icon: _isRefreshingProducts
-                      ? Icons.sync_rounded
-                      : Icons.refresh_rounded,
-                  onPressed: _isRefreshingProducts
-                      ? () {}
-                      : () {
-                          _refreshProductsFromBackendAndReload(
-                            showSuccessMessage: true,
-                          );
-                          if (PosFeatureFlags.enableShiftManagement) {
-                            _loadShiftSummary();
-                          }
-                        },
-                  iconColor: _isRefreshingProducts ? _brandColor : _textPrimary,
+                  tooltip: 'Hide item lookup (F7)',
+                  icon: Icons.keyboard_double_arrow_left_rounded,
+                  onPressed: _toggleItemLookup,
+                  iconColor: _brandColor,
                 ),
               ],
             ),
@@ -4374,17 +4372,41 @@ class _PosScreenState extends State<PosScreen> {
                 ),
                 suffixIcon: _searchQuery.isEmpty
                     ? null
-                    : IconButton(
-                        tooltip: 'Clear search',
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() {
-                            _searchQuery = '';
-                          });
-                          _focusBarcodeField();
-                        },
-                        icon: const Icon(Icons.close_rounded),
+                    : Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Center(
+                          widthFactor: 1,
+                          heightFactor: 1,
+                          child: IconButton(
+                            tooltip: 'Clear search',
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: 34,
+                              height: 34,
+                            ),
+                            style: IconButton.styleFrom(
+                              backgroundColor: _panelSoft,
+                              foregroundColor: _mutedIcon,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {
+                                _searchQuery = '';
+                              });
+                              _focusBarcodeField();
+                            },
+                            icon: const Icon(Icons.close_rounded, size: 18),
+                          ),
+                        ),
                       ),
+                suffixIconConstraints: const BoxConstraints(
+                  minWidth: 48,
+                  minHeight: 42,
+                ),
               ),
             ),
             const SizedBox(height: 8),
@@ -4398,19 +4420,6 @@ class _PosScreenState extends State<PosScreen> {
                     fontSize: 12,
                   ),
                 ),
-                const Spacer(),
-                if (_searchQuery.trim().isNotEmpty)
-                  Flexible(
-                    child: Text(
-                      'Filter: "${_searchQuery.trim()}"',
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _brandColor,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
               ],
             ),
             const SizedBox(height: 12),
@@ -4455,31 +4464,17 @@ class _PosScreenState extends State<PosScreen> {
       );
     }
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        int crossAxisCount = 3;
-        if (width >= 1460) {
-          crossAxisCount = 6;
-        } else if (width >= 1080) {
-          crossAxisCount = 5;
-        } else if (width >= 820) {
-          crossAxisCount = 4;
-        }
-
-        return GridView.builder(
-          itemCount: _filteredProducts.length,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossAxisCount,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            mainAxisExtent: _productTileExtent,
-          ),
-          itemBuilder: (context, index) {
-            final product = _filteredProducts[index];
-            return _buildProductCard(product, cart);
-          },
-        );
+    return ListView.separated(
+      padding: EdgeInsets.zero,
+      itemCount: _filteredProducts.length,
+      separatorBuilder: (_, __) => Divider(
+        height: 1,
+        thickness: 1,
+        color: _borderColor,
+      ),
+      itemBuilder: (context, index) {
+        final product = _filteredProducts[index];
+        return _buildProductCard(product, cart);
       },
     );
   }
@@ -4544,7 +4539,6 @@ class _PosScreenState extends State<PosScreen> {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(18),
         onTap: () => _handleProductTap(product, cart),
         onLongPress: () async {
           await _runProtectedManagerAction(() async {
@@ -4561,157 +4555,151 @@ class _PosScreenState extends State<PosScreen> {
             );
           });
         },
-        child: Ink(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: isOutOfStock ? _panelColor.withOpacity(0.72) : _panelSoft,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: isOutOfStock
-                  ? _dangerColor.withOpacity(0.35)
-                  : _borderColor,
-            ),
-            boxShadow: _isDark
-                ? [
-                    BoxShadow(
-                      color: _shadowColor.withOpacity(0.36),
-                      blurRadius: 16,
-                      offset: const Offset(0, 8),
-                    ),
-                  ]
-                : const [],
-          ),
-          child: Column(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: toneSoft,
-                      borderRadius: BorderRadius.circular(11),
-                    ),
-                    child: Icon(
-                      isOutOfStock
-                          ? Icons.remove_shopping_cart_rounded
-                          : Icons.inventory_2_rounded,
-                      color: tone,
-                      size: 18,
-                    ),
-                  ),
-                  const Spacer(),
-                  if (cartQty > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _brandSoft,
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: _brandColor.withOpacity(0.25),
-                        ),
-                      ),
-                      child: Text(
-                        _formatCartBadgeText(product, cartQty),
-                        style: TextStyle(
-                          color: _brandColor,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Text(
-                product.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: _textPrimary,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 14,
-                  height: 1.2,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                product.isWeighted
-                    ? 'Rs. ${displayPrice.toStringAsFixed(2)} / ${product.unitLabel}'
-                    : 'Rs. ${displayPrice.toStringAsFixed(2)}',
-                style: TextStyle(
-                  color: isOutOfStock ? _textSecondary : _brandColor,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 0.05,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                decoration: BoxDecoration(
-                  color: _screenBackgroundAlt.withOpacity(
-                    _isDark ? 0.55 : 0.80,
-                  ),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: _borderColor),
-                ),
-                child: Text(
-                  product.barcode,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: _textSecondary,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: toneSoft,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: tone.withOpacity(0.28)),
-                ),
-                child: Row(
+              SizedBox(
+                width: 38,
+                height: 38,
+                child: Stack(
+                  clipBehavior: Clip.none,
                   children: [
-                    Icon(
-                      isOutOfStock
-                          ? Icons.error_outline_rounded
-                          : (isLowStock
-                                ? Icons.warning_amber_rounded
-                                : Icons.check_circle_outline_rounded),
-                      size: 14,
-                      color: tone,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        isOutOfStock
-                            ? 'Out of stock'
-                            : (isLowStock
-                                  ? 'Low stock - ${_formatStockText(product, product.stock)}'
-                                  : 'Stock - ${_formatStockText(product, product.stock)}'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
+                    Positioned.fill(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: toneSoft,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(
+                          isOutOfStock
+                              ? Icons.remove_shopping_cart_rounded
+                              : Icons.inventory_2_rounded,
                           color: tone,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
+                          size: 18,
                         ),
                       ),
+                    ),
+                    if (cartQty > 0)
+                      Positioned(
+                        right: -4,
+                        top: -4,
+                        child: Container(
+                          constraints: const BoxConstraints(minWidth: 18),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _brandColor,
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: _panelAlt, width: 1.4),
+                          ),
+                          child: Text(
+                            _formatQuantity(cartQty),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                              height: 1.0,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      product.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12.5,
+                        height: 1.16,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ClipRect(
+                            child: Text(
+                              product.barcode,
+                              maxLines: 1,
+                              overflow: TextOverflow.clip,
+                              softWrap: false,
+                              style: TextStyle(
+                                color: _textSecondary,
+                                fontSize: 9.2,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          width: 68,
+                          child: Text(
+                            isOutOfStock
+                                ? 'Out'
+                                : (isLowStock
+                                      ? 'Low ${_formatStockText(product, product.stock)}'
+                                      : _formatStockText(product, product.stock)),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: tone,
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          width: 104,
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerRight,
+                              child: Text(
+                                product.isWeighted
+                                    ? 'Rs. ${displayPrice.toStringAsFixed(2)} / ${product.unitLabel}'
+                                    : 'Rs. ${displayPrice.toStringAsFixed(2)}',
+                                maxLines: 1,
+                                textAlign: TextAlign.right,
+                                style: TextStyle(
+                                  color: isOutOfStock
+                                      ? _textSecondary
+                                      : _brandColor,
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w900,
+                                  height: 1.15,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
+              ),
+              const SizedBox(width: 6),
+              Icon(
+                Icons.add_rounded,
+                color: isOutOfStock ? _mutedIcon : tone,
+                size: 18,
               ),
             ],
           ),
@@ -4720,7 +4708,7 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  Widget _buildCartPanel(CartProvider cart) {
+  Widget _buildCartPanel(CartProvider cart, {bool includeSummary = true}) {
     final modeColor = cart.isRefundMode ? _dangerColor : _accentBlue;
     final modeSoft = cart.isRefundMode ? _dangerSoft : _accentBlueSoft;
 
@@ -4739,7 +4727,7 @@ class _PosScreenState extends State<PosScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Sale Cart',
+                        cart.isRefundMode ? 'Refund Bill' : 'Current Bill',
                         style: TextStyle(
                           color: _textPrimary,
                           fontSize: 18,
@@ -4748,7 +4736,7 @@ class _PosScreenState extends State<PosScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '${cart.items.length} ${cart.items.length == 1 ? 'line' : 'lines'} in current bill',
+                        '${cart.items.length} ${cart.items.length == 1 ? 'line' : 'lines'} ready for checkout',
                         style: TextStyle(
                           color: _textSecondary,
                           fontWeight: FontWeight.w600,
@@ -4844,7 +4832,7 @@ class _PosScreenState extends State<PosScreen> {
           ),
           Expanded(
             child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 12),
+              margin: EdgeInsets.fromLTRB(12, 0, 12, includeSummary ? 0 : 12),
               decoration: BoxDecoration(
                 color: _panelAlt,
                 borderRadius: BorderRadius.circular(18),
@@ -4870,10 +4858,11 @@ class _PosScreenState extends State<PosScreen> {
                     ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-            child: _buildSummarySection(cart),
-          ),
+          if (includeSummary)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+              child: _buildSummarySection(cart),
+            ),
         ],
       ),
     );
@@ -5447,89 +5436,73 @@ class _PosScreenState extends State<PosScreen> {
           ),
           const SizedBox(height: 8),
           if (!cart.isRefundMode) ...[
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: cart.items.isEmpty
-                        ? null
-                        : () => _applyDiscount(cart),
-                    icon: const Icon(Icons.percent_rounded, size: 14),
-                    label: Text(
-                      cart.cartLevelDiscountAmount > 0
-                          ? 'Edit Discount'
-                          : 'Apply Discount',
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      textStyle: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
+            OutlinedButton.icon(
+              onPressed: cart.items.isEmpty ? null : () => _applyDiscount(cart),
+              icon: const Icon(Icons.percent_rounded, size: 14),
+              label: Text(
+                cart.cartLevelDiscountAmount > 0
+                    ? 'Edit Discount'
+                    : 'Apply Discount',
+              ),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(34),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                textStyle: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
                 ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: cart.cartLevelDiscountAmount > 0
-                        ? () {
-                            cart.clearDiscount();
-                            _focusBarcodeField();
-                          }
-                        : null,
-                    icon: const Icon(Icons.close_rounded, size: 14),
-                    label: const Text('Clear Discount'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      textStyle: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
+              onPressed: cart.cartLevelDiscountAmount > 0
+                  ? () {
+                      cart.clearDiscount();
+                      _focusBarcodeField();
+                    }
+                  : null,
+              icon: const Icon(Icons.close_rounded, size: 14),
+              label: const Text('Clear Discount'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(34),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                textStyle: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
                 ),
-              ],
+              ),
             ),
             const SizedBox(height: 6),
           ],
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: cart.items.isEmpty
-                      ? null
-                      : () => _holdCurrentCart(cart),
-                  icon: const Icon(
-                    Icons.pause_circle_outline_rounded,
-                    size: 14,
-                  ),
-                  label: const Text('Hold Cart'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    textStyle: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
+          OutlinedButton.icon(
+            onPressed: cart.items.isEmpty ? null : () => _holdCurrentCart(cart),
+            icon: const Icon(
+              Icons.pause_circle_outline_rounded,
+              size: 14,
+            ),
+            label: const Text('Hold Cart'),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(34),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              textStyle: const TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _openHeldCarts(cart),
-                  icon: const Icon(Icons.shopping_bag_outlined, size: 14),
-                  label: const Text('Held Carts'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    textStyle: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          OutlinedButton.icon(
+            onPressed: () => _openHeldCarts(cart),
+            icon: const Icon(Icons.shopping_bag_outlined, size: 14),
+            label: const Text('Held Carts'),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(34),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              textStyle: const TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
               ),
-            ],
+            ),
           ),
           const SizedBox(height: 6),
           OutlinedButton.icon(
@@ -5542,6 +5515,7 @@ class _PosScreenState extends State<PosScreen> {
             icon: const Icon(Icons.delete_sweep_rounded, size: 14),
             label: const Text('Clear Cart'),
             style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(34),
               padding: const EdgeInsets.symmetric(vertical: 8),
               textStyle: const TextStyle(
                 fontWeight: FontWeight.w800,
@@ -5574,6 +5548,134 @@ class _PosScreenState extends State<PosScreen> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(15),
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCheckoutRail(CartProvider cart) {
+    final modeColor = cart.isRefundMode ? _dangerColor : _brandColor;
+    final modeSoft = cart.isRefundMode ? _dangerSoft : _brandSoft;
+
+    return Container(
+      decoration: _panelDecoration(color: _panelColor),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: modeSoft,
+                    borderRadius: BorderRadius.circular(13),
+                    border: Border.all(color: modeColor.withOpacity(0.20)),
+                  ),
+                  child: Icon(
+                    cart.isRefundMode
+                        ? Icons.restart_alt_rounded
+                        : Icons.point_of_sale_rounded,
+                    color: modeColor,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Checkout',
+                        style: TextStyle(
+                          color: _textPrimary,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        cart.isRefundMode
+                            ? 'Review refund and complete.'
+                            : 'Tender, hold, discount, and pay.',
+                        style: TextStyle(
+                          color: _textSecondary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 11.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _panelAlt,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: _borderColor),
+              ),
+              child: Row(
+                children: [
+                  _buildCheckoutStat(
+                    label: 'Lines',
+                    value: cart.items.length.toString(),
+                  ),
+                  Container(width: 1, height: 32, color: _borderColor),
+                  _buildCheckoutStat(
+                    label: 'Items',
+                    value: _formatQuantity(
+                      cart.items.fold<double>(
+                        0,
+                        (sum, item) => sum + item.quantity,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: SingleChildScrollView(
+                child: _buildSummarySection(cart),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCheckoutStat({
+    required String label,
+    required String value,
+  }) {
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: _textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(
+              color: _textSecondary,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],
@@ -5649,9 +5751,35 @@ class _PosScreenState extends State<PosScreen> {
           Expanded(
             child: Row(
               children: [
-                Expanded(child: _buildCatalogPanel(cart)),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  width: _isLookupOpen ? _catalogRailWidth : 0,
+                  child: ClipRect(
+                    child: OverflowBox(
+                      alignment: Alignment.centerLeft,
+                      minWidth: _catalogRailWidth,
+                      maxWidth: _catalogRailWidth,
+                      child: SizedBox(
+                        width: _catalogRailWidth,
+                        child: _buildCatalogPanel(cart),
+                      ),
+                    ),
+                  ),
+                ),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  width: _isLookupOpen ? 14 : 0,
+                ),
+                Expanded(
+                  child: _buildCartPanel(cart, includeSummary: false),
+                ),
                 const SizedBox(width: 14),
-                SizedBox(width: _cartPanelWidth, child: _buildCartPanel(cart)),
+                SizedBox(
+                  width: _checkoutRailWidth,
+                  child: _buildCheckoutRail(cart),
+                ),
               ],
             ),
           ),
