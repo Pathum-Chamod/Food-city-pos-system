@@ -314,6 +314,8 @@ def mirror_inventory_movement_to_pos(
             resolved_product_name = str((row["name"] if row else "Unknown product") or "Unknown product")
 
         safe_reference_type = str(reference_type or "backend_history").strip() or "backend_history"
+        mirror_created_at = created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         existing = cursor.execute(
             """
             SELECT id
@@ -327,6 +329,55 @@ def mirror_inventory_movement_to_pos(
             (barcode, action_type, safe_reference_type, reference_id),
         ).fetchone()
         if existing:
+            return
+
+        # Prevent POS-origin movements from being mirrored back as duplicate
+        # Product History records.
+        #
+        # Example:
+        # 1) POS receives stock and immediately writes a local inventory movement.
+        # 2) POS sync sends the same receive to this local server.
+        # 3) The server updates local_admin.db and mirrors the backend history into
+        #    the POS DB again.
+        #
+        # The normal reference_id/reference_type duplicate check above will not catch
+        # that case because the local POS row and backend mirror row have different
+        # references. This second check compares the real movement details instead.
+        equivalent_existing = cursor.execute(
+            """
+            SELECT id
+            FROM inventory_movements
+            WHERE barcode = ?
+              AND action_type = ?
+              AND COALESCE(CAST(quantity_change AS REAL), -999999999.0) =
+                  COALESCE(CAST(? AS REAL), -999999999.0)
+              AND COALESCE(CAST(stock_before AS REAL), -999999999.0) =
+                  COALESCE(CAST(? AS REAL), -999999999.0)
+              AND COALESCE(CAST(stock_after AS REAL), -999999999.0) =
+                  COALESCE(CAST(? AS REAL), -999999999.0)
+              AND (
+                    COALESCE(
+                        ABS(
+                            strftime('%s', REPLACE(created_at, 'T', ' ')) -
+                            strftime('%s', REPLACE(?, 'T', ' '))
+                        ),
+                        999999999
+                    ) <= 120
+                    OR created_at = ?
+                  )
+            LIMIT 1
+            """,
+            (
+                barcode,
+                action_type,
+                quantity_change,
+                stock_before,
+                stock_after,
+                mirror_created_at,
+                mirror_created_at,
+            ),
+        ).fetchone()
+        if equivalent_existing:
             return
 
         cursor.execute(
@@ -363,7 +414,7 @@ def mirror_inventory_movement_to_pos(
                 reference_id,
                 safe_reference_type,
                 str(performed_by or "Admin App").strip() or "Admin App",
-                created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                mirror_created_at,
             ),
         )
         conn.commit()
