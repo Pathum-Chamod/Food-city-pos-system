@@ -15,6 +15,9 @@ import 'screens/expiry_alerts_screen.dart';
 import 'screens/held_carts_screen.dart';
 import 'screens/inventory_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/presentation_transaction_history_screen.dart';
+import 'screens/presentation_settings_screen.dart';
+import 'screens/presentation_cashier_summary_screen.dart';
 import 'screens/sales_report_screen.dart';
 import 'screens/supplier_management_screen.dart';
 import 'screens/transaction_history_screen.dart';
@@ -195,6 +198,10 @@ class _PosAppState extends State<PosApp> {
       }
       if (!hasShift && key == LogicalKeyboardKey.keyU) {
         _runGlobalShortcut(_openUserManagement);
+        return true;
+      }
+      if (hasShift && key == LogicalKeyboardKey.keyP) {
+        _runGlobalShortcut(_openPresentationSettings);
         return true;
       }
       if (!hasShift && key == LogicalKeyboardKey.keyS) {
@@ -502,6 +509,15 @@ class _PosAppState extends State<PosApp> {
     if (context == null) return;
 
     final auth = context.read<AuthProvider>();
+    if (auth.isPresentationLogin) {
+      AppSnackBar.show(
+        context,
+        message: 'This module is not available in Presentation Login.',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+
     if (auth.hasManagementAccess) {
       await action();
       return;
@@ -520,6 +536,14 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _openTransactionHistory() {
+    final context = AppSnackBar.navigatorKey.currentContext;
+    if (context != null && context.read<AuthProvider>().isPresentationLogin) {
+      return _pushOrRevealRoute(
+        routeName: PosRouteNames.transactionHistory,
+        builder: (context) => const PresentationTransactionHistoryScreen(),
+      );
+    }
+
     return _pushOrRevealRoute(
       routeName: PosRouteNames.transactionHistory,
       builder: (context) => const TransactionHistoryScreen(),
@@ -529,6 +553,13 @@ class _PosAppState extends State<PosApp> {
   Future<void> _openCashierSummary() {
     final context = AppSnackBar.navigatorKey.currentContext;
     if (context == null) return Future<void>.value();
+
+    if (context.read<AuthProvider>().isPresentationLogin) {
+      return _pushOrRevealRoute(
+        routeName: PosRouteNames.cashierSummary,
+        builder: (context) => const PresentationCashierSummaryScreen(),
+      );
+    }
 
     final cashierName =
         context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
@@ -567,6 +598,26 @@ class _PosAppState extends State<PosApp> {
       if (context == null) return;
       await context.read<AuthProvider>().refreshCurrentUser();
     });
+  }
+
+  Future<void> _openPresentationSettings() {
+    final context = AppSnackBar.navigatorKey.currentContext;
+    if (context == null) return Future<void>.value();
+
+    final auth = context.read<AuthProvider>();
+    if (!auth.hasFullAccess) {
+      AppSnackBar.show(
+        context,
+        message: 'Only owner/full-access login can open Presentation Settings.',
+        backgroundColor: Colors.orange,
+      );
+      return Future<void>.value();
+    }
+
+    return _pushOrRevealRoute(
+      routeName: PosRouteNames.presentationSettings,
+      builder: (context) => const PresentationSettingsScreen(),
+    );
   }
 
   Future<void> _openSupplierManagement() {
@@ -757,6 +808,7 @@ class _PosAppState extends State<PosApp> {
             shortcutRow('Ctrl + R', 'Sales report'),
             shortcutRow('Ctrl + U', 'User management'),
             shortcutRow('Ctrl + S', 'Cashier summary'),
+            shortcutRow('Ctrl + Shift + P', 'Presentation settings'),
             shortcutRow('Ctrl + Shift + H', 'Hardware setup'),
             shortcutRow('Ctrl + ?', 'Open this shortcut legend'),
           ]);
@@ -1189,6 +1241,13 @@ class _PosAppState extends State<PosApp> {
             },
             const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
               _runGlobalShortcutFromIntent(_openCashierSummary);
+            },
+            const SingleActivator(
+              LogicalKeyboardKey.keyP,
+              control: true,
+              shift: true,
+            ): () {
+              _runGlobalShortcutFromIntent(_openPresentationSettings);
             },
             const SingleActivator(
               LogicalKeyboardKey.keyH,

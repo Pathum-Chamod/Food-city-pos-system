@@ -1,7 +1,7 @@
 class User {
   final int? id;
   final String name;
-  final String role; // manager | cashier
+  final String role; // manager | cashier | viewer
   final String pin;
   final bool isActive;
   final bool hasFullAccess;
@@ -25,8 +25,17 @@ class User {
     this.updatedBy,
   });
 
-  bool get isManager => role.toLowerCase() == 'manager';
-  bool get isCashier => role.toLowerCase() == 'cashier';
+  String get normalizedRole => role.trim().toLowerCase();
+
+  bool get isManager => normalizedRole == 'manager';
+  bool get isCashier => normalizedRole == 'cashier';
+
+  /// Special login used for client demos / presentation privacy mode.
+  /// This user can still run normal POS sales, but financial pages use a
+  /// filtered presentation view instead of full real history.
+  bool get isViewer => normalizedRole == 'viewer' || normalizedRole == 'presentation';
+  bool get isPresentationLogin => isViewer;
+
   bool get hasManagementAccess => isManager || hasFullAccess;
 
   User copyWith({

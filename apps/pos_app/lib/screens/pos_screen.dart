@@ -15,6 +15,7 @@ import '../providers/app_theme_provider.dart';
 import '../services/database_helper.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
+import '../services/presentation_mode_service.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
 import '../widgets/premium_dialog.dart';
@@ -26,6 +27,8 @@ import 'expiry_alerts_screen.dart';
 import 'held_carts_screen.dart';
 import 'inventory_screen.dart';
 import 'login_screen.dart';
+import 'presentation_transaction_history_screen.dart';
+import 'presentation_cashier_summary_screen.dart';
 import 'sales_report_screen.dart';
 import 'supplier_management_screen.dart';
 import 'shift_management_screen.dart';
@@ -403,6 +406,10 @@ class _PosScreenState extends State<PosScreen> {
     final explicit = widget.welcomeUserName?.trim();
     if (explicit != null && explicit.isNotEmpty) {
       return explicit;
+    }
+
+    if (auth.isPresentationLogin) {
+      return 'Cashier';
     }
 
     final authName = auth.currentUser?.name.trim();
@@ -1221,7 +1228,31 @@ class _PosScreenState extends State<PosScreen> {
   ) async {
     final auth = context.read<AuthProvider>();
 
+    if (auth.isPresentationLogin) {
+      _showInfoMessage(
+        'This module is not available in Presentation Login.',
+        backgroundColor: _warningColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
     if (auth.hasManagementAccess) {
+      await onApproved();
+      return;
+    }
+
+    await AdminDialogs.showPinDialog(context, () async {
+      await onApproved();
+    });
+  }
+
+  Future<void> _runProtectedDiscountAction(
+    Future<void> Function() onApproved,
+  ) async {
+    final auth = context.read<AuthProvider>();
+
+    if (auth.isPresentationLogin || auth.hasManagementAccess) {
       await onApproved();
       return;
     }
@@ -2683,7 +2714,34 @@ class _PosScreenState extends State<PosScreen> {
     _focusBarcodeField();
   }
 
+  Future<int> _resolvePresentationDisplayId(int saleId) async {
+    final auth = context.read<AuthProvider>();
+    if (!auth.isPresentationLogin) return saleId;
+
+    final displayId = await PresentationModeService.instance.getDisplayIdForRealSaleId(
+      realSaleId: saleId,
+      presentationSessionStartedAt: auth.presentationSessionStartedAt,
+    );
+
+    return displayId ?? saleId;
+  }
+
   Future<void> _showReceiptForTransaction(int saleId) async {
+    final auth = context.read<AuthProvider>();
+
+    if (auth.isPresentationLogin) {
+      final displayId = await _resolvePresentationDisplayId(saleId);
+      if (!mounted) return;
+
+      await PresentationTransactionHistoryScreen.showReceiptDialogForTransaction(
+        context,
+        saleId,
+        displayId: displayId,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
     await TransactionHistoryScreen.showReceiptDialogForTransaction(
       context,
       saleId,
@@ -2708,7 +2766,7 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    await _runProtectedManagerAction(() async {
+    await _runProtectedDiscountAction(() async {
       _activeModalCount += 1;
       Map<String, dynamic>? result;
 
@@ -2746,7 +2804,7 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    await _runProtectedManagerAction(() async {
+    await _runProtectedDiscountAction(() async {
       _activeModalCount += 1;
       Map<String, dynamic>? result;
 
@@ -2870,12 +2928,25 @@ class _PosScreenState extends State<PosScreen> {
 
       if (!mounted) return;
 
+      final auth = context.read<AuthProvider>();
+      final presentationDisplayId = auth.isPresentationLogin
+          ? await _resolvePresentationDisplayId(saleId)
+          : saleId;
+
       final printer = ReceiptPrinterService.instance;
       if (printer.isConnected) {
-        await TransactionHistoryScreen.printReceiptForTransaction(
-          context,
-          saleId,
-        );
+        if (auth.isPresentationLogin) {
+          await PresentationTransactionHistoryScreen.printReceiptForTransaction(
+            context,
+            saleId,
+            displayId: presentationDisplayId,
+          );
+        } else {
+          await TransactionHistoryScreen.printReceiptForTransaction(
+            context,
+            saleId,
+          );
+        }
       }
 
       final action = await _showTransactionSuccessFlow(
@@ -2883,6 +2954,7 @@ class _PosScreenState extends State<PosScreen> {
         isRefund: isRefund,
         displayTotal: displayTotal,
         saleId: saleId,
+        displaySaleId: presentationDisplayId,
       );
 
       if (action == 'receipt') {
@@ -3013,11 +3085,13 @@ class _PosScreenState extends State<PosScreen> {
     required bool isRefund,
     required double displayTotal,
     required int saleId,
+    int? displaySaleId,
   }) async {
     final dialogContext = overlayContext ?? context;
     final title = isRefund ? 'Refund Completed' : 'Payment Successful';
     final tone = isRefund ? _dangerColor : _brandColor;
     final toneSoft = isRefund ? _dangerSoft : _brandSoft;
+    final visibleSaleId = displaySaleId ?? saleId;
     var successDismissed = false;
 
     void dismissSuccess(BuildContext successContext, String action) {
@@ -3092,7 +3166,7 @@ class _PosScreenState extends State<PosScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Transaction #$saleId completed successfully.',
+                            'Transaction #$visibleSaleId completed successfully.',
                             style: TextStyle(
                               color: _textSecondary,
                               fontSize: 13,
@@ -3143,8 +3217,78 @@ class _PosScreenState extends State<PosScreen> {
     return result;
   }
 
+  Future<void> _openTransactionHistory() async {
+    if (context.read<AuthProvider>().isPresentationLogin) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          settings: const RouteSettings(name: PosRouteNames.transactionHistory),
+          builder: (context) => const PresentationTransactionHistoryScreen(),
+        ),
+      );
+
+      if (!mounted) return;
+      if (PosFeatureFlags.enableShiftManagement) {
+        await _loadShiftSummary();
+      }
+      _focusBarcodeField();
+      return;
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        settings: const RouteSettings(name: PosRouteNames.transactionHistory),
+        builder: (context) => const TransactionHistoryScreen(),
+      ),
+    );
+
+    if (!mounted) return;
+    if (PosFeatureFlags.enableShiftManagement) {
+      await _loadShiftSummary();
+    }
+    _focusBarcodeField();
+  }
+
+  Future<void> _openCashierSummary() async {
+    if (context.read<AuthProvider>().isPresentationLogin) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          settings: const RouteSettings(name: PosRouteNames.cashierSummary),
+          builder: (context) => const PresentationCashierSummaryScreen(),
+        ),
+      );
+
+      if (!mounted) return;
+      _focusBarcodeField();
+      return;
+    }
+
+    final cashierName = context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        settings: const RouteSettings(name: PosRouteNames.cashierSummary),
+        builder: (context) => CashierSummaryScreen(cashierName: cashierName),
+      ),
+    );
+
+    if (!mounted) return;
+    _focusBarcodeField();
+  }
+
   Future<void> _openUserManagement() async {
     final auth = context.read<AuthProvider>();
+
+    if (auth.isPresentationLogin) {
+      _showInfoMessage(
+        'User Management is not available in Presentation Login.',
+        backgroundColor: _warningColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
 
     if (!auth.hasManagementAccess) {
       _showInfoMessage(
@@ -3170,6 +3314,15 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _openSupplierOperations() async {
+    if (context.read<AuthProvider>().isPresentationLogin) {
+      _showInfoMessage(
+        'Supplier Operations is not available in Presentation Login.',
+        backgroundColor: _warningColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
     await _runProtectedManagerAction(() async {
       final cashierName =
           context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
@@ -3192,6 +3345,15 @@ class _PosScreenState extends State<PosScreen> {
 
   Future<void> _openShiftManagement() async {
     if (!PosFeatureFlags.enableShiftManagement) return;
+
+    if (context.read<AuthProvider>().isPresentationLogin) {
+      _showInfoMessage(
+        'Shift Management is not available in Presentation Login.',
+        backgroundColor: _warningColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
 
     final cashierName =
         context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
@@ -3763,54 +3925,45 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _handleHeaderMenuAction(String value, CartProvider cart) async {
     switch (value) {
       case 'cashier_summary':
-        final cashierName =
-            context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            settings: const RouteSettings(name: PosRouteNames.cashierSummary),
-            builder: (context) =>
-                CashierSummaryScreen(cashierName: cashierName),
-          ),
-        );
+        await _openCashierSummary();
         break;
       case 'hardware_setup':
+        if (context.read<AuthProvider>().isPresentationLogin) {
+          _showInfoMessage(
+            'Hardware Setup is not available in Presentation Login.',
+            backgroundColor: _warningColor,
+          );
+          break;
+        }
         await _showHardwareSetupDialog();
         break;
       case 'inventory':
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            settings: const RouteSettings(name: PosRouteNames.inventory),
-            builder: (context) => const InventoryScreen(),
-          ),
-        );
+        await _runProtectedManagerAction(() async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              settings: const RouteSettings(name: PosRouteNames.inventory),
+              builder: (context) => const InventoryScreen(),
+            ),
+          );
+        });
         break;
       case 'expiry_alerts':
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            settings: const RouteSettings(name: PosRouteNames.expiryAlerts),
-            builder: (context) => const ExpiryAlertsScreen(),
-          ),
-        );
+        await _runProtectedManagerAction(() async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              settings: const RouteSettings(name: PosRouteNames.expiryAlerts),
+              builder: (context) => const ExpiryAlertsScreen(),
+            ),
+          );
+        });
         break;
       case 'supplier_ops':
         await _openSupplierOperations();
         break;
       case 'transaction_history':
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            settings: const RouteSettings(
-              name: PosRouteNames.transactionHistory,
-            ),
-            builder: (context) => const TransactionHistoryScreen(),
-          ),
-        );
-        if (PosFeatureFlags.enableShiftManagement) {
-          await _loadShiftSummary();
-        }
+        await _openTransactionHistory();
         break;
       case 'refresh_products':
         await _refreshProductsFromBackendAndReload(showSuccessMessage: true);
@@ -3822,13 +3975,15 @@ class _PosScreenState extends State<PosScreen> {
         await _openUserManagement();
         break;
       case 'sales_report':
-        await Navigator.push(
-          context,
-          MaterialPageRoute(
-            settings: const RouteSettings(name: PosRouteNames.salesReport),
-            builder: (context) => const SalesReportScreen(),
-          ),
-        );
+        await _runProtectedManagerAction(() async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              settings: const RouteSettings(name: PosRouteNames.salesReport),
+              builder: (context) => const SalesReportScreen(),
+            ),
+          );
+        });
         break;
       case 'shift_management':
         await _openShiftManagement();
@@ -4162,7 +4317,8 @@ class _PosScreenState extends State<PosScreen> {
               );
             },
           ),
-          if (PosFeatureFlags.enableShiftManagement) ...[
+          if (PosFeatureFlags.enableShiftManagement &&
+              !auth.isPresentationLogin) ...[
             const SizedBox(width: 10),
             _buildStatusPill(
               icon: _currentShiftSummary == null
@@ -4193,7 +4349,8 @@ class _PosScreenState extends State<PosScreen> {
             items: [
               const MapEntry('cashier_summary', 'Cashier Summary'),
               const MapEntry('transaction_history', 'Transaction History'),
-              const MapEntry('hardware_setup', 'Hardware Setup'),
+              if (!auth.isPresentationLogin)
+                const MapEntry('hardware_setup', 'Hardware Setup'),
             ],
             onSelected: (value) => _handleHeaderMenuAction(value, cart),
           ),
@@ -4214,64 +4371,66 @@ class _PosScreenState extends State<PosScreen> {
               onSelected: (value) => _handleHeaderMenuAction(value, cart),
             ),
           ],
-          const SizedBox(width: 10),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 180),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: _softDecoration(color: _panelSoft),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircleAvatar(
-                    radius: 15,
-                    backgroundColor: _brandSoft,
-                    child: Text(
-                      (auth.currentUser?.name ?? 'U').trim().isEmpty
-                          ? 'U'
-                          : (auth.currentUser?.name ?? 'U')
-                                .trim()[0]
-                                .toUpperCase(),
-                      style: TextStyle(
-                        color: _brandColor,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 12,
+          if (!auth.isPresentationLogin) ...[
+            const SizedBox(width: 10),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 180),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: _softDecoration(color: _panelSoft),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircleAvatar(
+                      radius: 15,
+                      backgroundColor: _brandSoft,
+                      child: Text(
+                        (auth.currentUser?.name ?? 'U').trim().isEmpty
+                            ? 'U'
+                            : (auth.currentUser?.name ?? 'U')
+                                  .trim()[0]
+                                  .toUpperCase(),
+                        style: TextStyle(
+                          color: _brandColor,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          auth.currentUser?.name ?? 'Not Logged In',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: _textPrimary,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 12,
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            auth.currentUser?.name ?? 'Not Logged In',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 12,
+                            ),
                           ),
-                        ),
-                        Text(
-                          auth.hasManagementAccess ? 'manager' : 'cashier',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: _textSecondary,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 10,
+                          Text(
+                            auth.hasManagementAccess ? 'manager' : 'cashier',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _textSecondary,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 10,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
+          ],
           const SizedBox(width: 10),
           _buildIconSurfaceButton(
             tooltip: 'Logout',
