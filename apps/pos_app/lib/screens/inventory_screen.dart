@@ -4551,10 +4551,20 @@ class _InventoryScreenState extends State<InventoryScreen> {
             return;
           }
 
+          final oldSelectedPrice = priceType == 'cost'
+              ? product.costPrice
+              : priceType == 'wholesale'
+                  ? product.wholesalePrice
+                  : priceType == 'sale'
+                      ? (product.salePrice ?? product.sellingPrice)
+                      : product.sellingPrice;
+
           final confirmed = await _confirmAction(
             title: 'Confirm Price Change',
-            message:
-                'Update ${product.name} ${priceType.toUpperCase()} price to Rs. ${newPrice.toStringAsFixed(2)}?',
+            message: priceType == 'selling' &&
+                    (oldSelectedPrice - newPrice).abs() > 0.000001
+                ? 'Update ${product.name} SELLING price to Rs. ${newPrice.toStringAsFixed(2)}?\n\nThe old price Rs. ${oldSelectedPrice.toStringAsFixed(2)} will be saved as an allowed old label price for checkout.'
+                : 'Update ${product.name} ${priceType.toUpperCase()} price to Rs. ${newPrice.toStringAsFixed(2)}?',
             confirmText: 'Update',
           );
           if (!confirmed) return;
@@ -4654,6 +4664,30 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 decoration: const InputDecoration(labelText: 'New price'),
                 onSubmitted: (_) => submitPriceChange(),
               ),
+              if (priceType == 'selling') ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: _softDecoration(color: _panelSoft, radius: 18),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.price_check_rounded, color: _brandColor),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'When selling price changes, the previous selling price is saved as an allowed old label price. Cashiers can select it at checkout when an item/shelf still shows the old price.',
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontWeight: FontWeight.w700,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               if (priceType == 'sale') ...[
                 const SizedBox(height: 14),
                 Container(

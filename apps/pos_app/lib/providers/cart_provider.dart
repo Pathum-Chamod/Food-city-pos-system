@@ -5,18 +5,37 @@ class CartItem {
   final Product product;
   double quantity;
   double unitPrice;
+  double systemUnitPrice;
   ProductPriceType priceType;
   String discountType;
   double discountValue;
+  String priceOverrideType;
+  String priceOverrideReason;
+  double priceOverrideOriginalPrice;
+  int? priceHistoryId;
+  String? priceOverrideApprovedBy;
 
   CartItem({
     required this.product,
     required this.unitPrice,
     required this.priceType,
+    double? systemUnitPrice,
     this.quantity = 1.0,
     this.discountType = 'none',
     this.discountValue = 0.0,
-  });
+    this.priceOverrideType = 'none',
+    this.priceOverrideReason = '',
+    double? priceOverrideOriginalPrice,
+    this.priceHistoryId,
+    this.priceOverrideApprovedBy,
+  })  : systemUnitPrice = systemUnitPrice ?? unitPrice,
+        priceOverrideOriginalPrice = priceOverrideOriginalPrice ?? unitPrice;
+
+  bool get hasPriceOverride => priceOverrideType != 'none';
+
+  double get priceOverrideDifference {
+    return unitPrice - systemUnitPrice;
+  }
 
   double get baseTotal => unitPrice * quantity;
 
@@ -120,6 +139,12 @@ class CartProvider with ChangeNotifier {
       for (final item in _items) {
         item.priceType = value;
         item.unitPrice = item.product.resolvePrice(value);
+        item.systemUnitPrice = item.unitPrice;
+        item.priceOverrideType = 'none';
+        item.priceOverrideReason = '';
+        item.priceOverrideOriginalPrice = item.unitPrice;
+        item.priceHistoryId = null;
+        item.priceOverrideApprovedBy = null;
       }
     }
 
@@ -161,6 +186,44 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  void applyPriceOverride(
+    CartItem target, {
+    required double overridePrice,
+    required String overrideType,
+    required String reason,
+    int? priceHistoryId,
+    String? approvedBy,
+  }) {
+    if (_isRefundMode) return;
+
+    final index = _items.indexOf(target);
+    if (index == -1) return;
+
+    final safePrice = overridePrice < 0 ? 0.0 : overridePrice;
+    final normalizedType = _normalizePriceOverrideType(overrideType);
+
+    _items[index].priceOverrideOriginalPrice = _items[index].systemUnitPrice;
+    _items[index].unitPrice = safePrice;
+    _items[index].priceOverrideType = normalizedType;
+    _items[index].priceOverrideReason = reason.trim();
+    _items[index].priceHistoryId = priceHistoryId;
+    _items[index].priceOverrideApprovedBy = approvedBy?.trim();
+    notifyListeners();
+  }
+
+  void clearPriceOverride(CartItem target) {
+    final index = _items.indexOf(target);
+    if (index == -1) return;
+
+    _items[index].unitPrice = _items[index].systemUnitPrice;
+    _items[index].priceOverrideType = 'none';
+    _items[index].priceOverrideReason = '';
+    _items[index].priceOverrideOriginalPrice = _items[index].systemUnitPrice;
+    _items[index].priceHistoryId = null;
+    _items[index].priceOverrideApprovedBy = null;
+    notifyListeners();
+  }
+
   void clearDiscount() {
     _discountType = 'none';
     _discountValue = 0.0;
@@ -172,6 +235,13 @@ class CartProvider with ChangeNotifier {
     return 'none';
   }
 
+  String _normalizePriceOverrideType(String value) {
+    final normalized = value.trim().toLowerCase();
+    if (normalized == 'old_label') return 'old_label';
+    if (normalized == 'manual') return 'manual';
+    return 'none';
+  }
+
   void addToCart(Product product, {double quantity = 1.0}) {
     final safeQuantity = quantity <= _quantityEpsilon ? 0.0 : quantity;
     if (safeQuantity <= 0) return;
@@ -179,7 +249,8 @@ class CartProvider with ChangeNotifier {
     final index = _items.indexWhere(
       (item) =>
           item.product.barcode == product.barcode &&
-          item.priceType == _selectedPriceType,
+          item.priceType == _selectedPriceType &&
+          !item.hasPriceOverride,
     );
 
     if (index >= 0) {
@@ -313,16 +384,37 @@ class CartProvider with ChangeNotifier {
         item['price_type_used']?.toString(),
       );
 
-      final unitPriceUsed =
-          (item['unit_price_used'] as num?)?.toDouble() ??
+      final systemUnitPrice =
+          (item['system_unit_price'] as num?)?.toDouble() ??
           product.resolvePrice(itemPriceType);
+      final unitPriceUsed =
+          (item['unit_price_used'] as num?)?.toDouble() ?? systemUnitPrice;
 
       _items.add(
         CartItem(
           product: product,
           quantity: quantity,
           unitPrice: unitPriceUsed,
+          systemUnitPrice: systemUnitPrice,
           priceType: itemPriceType,
+          priceOverrideType: isRefundMode
+              ? 'none'
+              : _normalizePriceOverrideType(
+                  item['price_override_type']?.toString() ?? 'none',
+                ),
+          priceOverrideReason: isRefundMode
+              ? ''
+              : (item['price_override_reason'] ?? '').toString(),
+          priceOverrideOriginalPrice: isRefundMode
+              ? systemUnitPrice
+              : ((item['price_override_original_price'] as num?)?.toDouble() ??
+                    systemUnitPrice),
+          priceHistoryId: isRefundMode
+              ? null
+              : (item['price_history_id'] as num?)?.toInt(),
+          priceOverrideApprovedBy: isRefundMode
+              ? null
+              : item['price_override_approved_by']?.toString(),
           discountType: isRefundMode
               ? 'none'
               : _normalizeDiscountType(
@@ -345,6 +437,13 @@ class CartProvider with ChangeNotifier {
             'product': item.product.toMap(),
             'quantity': item.quantity,
             'unit_price_used': item.unitPrice,
+            'system_unit_price': item.systemUnitPrice,
+            'price_override_type': item.priceOverrideType,
+            'price_override_reason': item.priceOverrideReason,
+            'price_override_original_price': item.priceOverrideOriginalPrice,
+            'price_override_difference': item.priceOverrideDifference,
+            'price_history_id': item.priceHistoryId,
+            'price_override_approved_by': item.priceOverrideApprovedBy,
             'price_type_used': item.priceType.dbValue,
             'base_line_total': item.baseTotal,
             'item_discount_type': item.discountType,

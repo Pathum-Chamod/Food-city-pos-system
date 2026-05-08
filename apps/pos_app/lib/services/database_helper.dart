@@ -14,6 +14,7 @@ import '../models/stock_receipt_record.dart';
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static const double _quantityEpsilon = 0.000001;
+  static const int _maxActiveLabelPricesPerProduct = 2;
   static Database? _database;
 
   DatabaseHelper._init();
@@ -41,7 +42,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 23,
+        version: 24,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -164,6 +165,31 @@ class DatabaseHelper {
     }
 
     return 0.0;
+  }
+
+  Future<void> _createProductPriceHistoryTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS product_price_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        price_type TEXT NOT NULL DEFAULT 'selling',
+        label_price REAL NOT NULL,
+        old_price REAL NOT NULL DEFAULT 0,
+        new_price REAL NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT,
+        reason TEXT,
+        effective_from TEXT NOT NULL,
+        effective_to TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_product_price_history_barcode ON product_price_history(barcode, price_type, is_active)',
+    );
   }
 
   Future<void> _createSupplierTables(Database db) async {
@@ -409,6 +435,13 @@ class DatabaseHelper {
         unit_price REAL NOT NULL,
         marked_price REAL NOT NULL DEFAULT 0,
         price_category_used TEXT NOT NULL DEFAULT 'selling',
+        system_unit_price REAL NOT NULL DEFAULT 0,
+        price_override_type TEXT NOT NULL DEFAULT 'none',
+        price_override_reason TEXT NOT NULL DEFAULT '',
+        price_override_original_price REAL NOT NULL DEFAULT 0,
+        price_override_difference REAL NOT NULL DEFAULT 0,
+        price_history_id INTEGER,
+        price_override_approved_by TEXT,
         cost_price_snapshot REAL NOT NULL DEFAULT 0,
         quantity INTEGER NOT NULL,
         base_line_total REAL NOT NULL DEFAULT 0,
@@ -422,6 +455,8 @@ class DatabaseHelper {
         FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE
       )
     ''');
+
+    await _createProductPriceHistoryTable(db);
 
     await db.execute('''
       CREATE TABLE inventory_movements (
@@ -1179,6 +1214,65 @@ class DatabaseHelper {
       await _addColumnIfMissing(db, 'stock_receipts', 'expiry_date', 'TEXT');
       await _createExpiryTables(db);
     }
+
+    if (oldVersion < 24) {
+      await _createProductPriceHistoryTable(db);
+
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'system_unit_price',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_override_type',
+        "TEXT NOT NULL DEFAULT 'none'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_override_reason',
+        "TEXT NOT NULL DEFAULT ''",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_override_original_price',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_override_difference',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(db, 'sale_items', 'price_history_id', 'INTEGER');
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_override_approved_by',
+        'TEXT',
+      );
+
+      await db.execute('''
+        UPDATE sale_items
+        SET system_unit_price = CASE
+              WHEN COALESCE(system_unit_price, 0) <= 0 THEN COALESCE(unit_price, 0)
+              ELSE system_unit_price
+            END,
+            price_override_original_price = CASE
+              WHEN COALESCE(price_override_original_price, 0) <= 0
+              THEN COALESCE(unit_price, 0)
+              ELSE price_override_original_price
+            END,
+            price_override_type = COALESCE(NULLIF(price_override_type, ''), 'none'),
+            price_override_reason = COALESCE(price_override_reason, ''),
+            price_override_difference = COALESCE(unit_price, 0) - COALESCE(system_unit_price, COALESCE(unit_price, 0))
+      ''');
+    }
+
   }
 
   Future<void> _addColumnIfMissing(
@@ -1205,6 +1299,19 @@ class DatabaseHelper {
     if (value == null) return fallback;
     if (value is num) return value.toInt();
     return int.tryParse(value.toString()) ?? fallback;
+  }
+
+  int? _parseOptionalInt(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString());
+  }
+
+  String _normalizePriceOverrideType(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    if (normalized == 'old_label') return 'old_label';
+    if (normalized == 'manual') return 'manual';
+    return 'none';
   }
 
   String _normalizeProductQuantityType(dynamic value) {
@@ -2096,6 +2203,25 @@ class DatabaseHelper {
           final productName =
               productMap['name']?.toString() ?? 'Unknown product';
           final unitPrice = _resolveCartItemUnitPrice(item);
+          final systemUnitPrice = _parseDouble(
+            item['system_unit_price'],
+            fallback: unitPrice,
+          );
+          final priceOverrideType = _normalizePriceOverrideType(
+            item['price_override_type']?.toString(),
+          );
+          final priceOverrideReason =
+              (item['price_override_reason'] ?? '').toString().trim();
+          final priceOverrideOriginalPrice = _parseDouble(
+            item['price_override_original_price'],
+            fallback: systemUnitPrice,
+          );
+          final priceOverrideDifference = _roundMoney(
+            unitPrice - systemUnitPrice,
+          );
+          final priceHistoryId = _parseOptionalInt(item['price_history_id']);
+          final priceOverrideApprovedBy =
+              item['price_override_approved_by']?.toString().trim();
           final priceTypeUsed = _resolveCartItemPriceType(item);
           final markedPrice = _parseDouble(productMap['selling_price']) > 0
               ? _parseDouble(productMap['selling_price'])
@@ -2140,6 +2266,13 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'system_unit_price': systemUnitPrice,
+            'price_override_type': priceOverrideType,
+            'price_override_reason': priceOverrideReason,
+            'price_override_original_price': priceOverrideOriginalPrice,
+            'price_override_difference': priceOverrideDifference,
+            'price_history_id': priceHistoryId,
+            'price_override_approved_by': priceOverrideApprovedBy,
             'marked_price': markedPrice,
             'price_category_used': priceTypeUsed,
             'cost_price_snapshot': costPriceSnapshot,
@@ -2269,6 +2402,21 @@ class DatabaseHelper {
           final barcode = item['barcode'] as String;
           final productName = item['product_name'] as String;
           final unitPrice = item['unit_price'] as double;
+          final systemUnitPrice =
+              (item['system_unit_price'] as num?)?.toDouble() ?? unitPrice;
+          final priceOverrideType = (item['price_override_type'] ?? 'none')
+              .toString();
+          final priceOverrideReason = (item['price_override_reason'] ?? '')
+              .toString();
+          final priceOverrideOriginalPrice =
+              (item['price_override_original_price'] as num?)?.toDouble() ??
+              systemUnitPrice;
+          final priceOverrideDifference =
+              (item['price_override_difference'] as num?)?.toDouble() ??
+              (unitPrice - systemUnitPrice);
+          final priceHistoryId = item['price_history_id'] as int?;
+          final priceOverrideApprovedBy =
+              item['price_override_approved_by']?.toString();
           final markedPrice = item['marked_price'] as double;
           final priceTypeUsed = (item['price_category_used'] ?? 'selling')
               .toString();
@@ -2334,6 +2482,13 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'system_unit_price': systemUnitPrice,
+            'price_override_type': priceOverrideType,
+            'price_override_reason': priceOverrideReason,
+            'price_override_original_price': priceOverrideOriginalPrice,
+            'price_override_difference': priceOverrideDifference,
+            'price_history_id': priceHistoryId,
+            'price_override_approved_by': priceOverrideApprovedBy,
             'marked_price': markedPrice,
             'price_category_used': priceTypeUsed,
             'cost_price_snapshot': costPriceSnapshot,
@@ -2354,6 +2509,21 @@ class DatabaseHelper {
           final barcode = item['barcode'] as String;
           final productName = item['product_name'] as String;
           final unitPrice = item['unit_price'] as double;
+          final systemUnitPrice =
+              (item['system_unit_price'] as num?)?.toDouble() ?? unitPrice;
+          final priceOverrideType = (item['price_override_type'] ?? 'none')
+              .toString();
+          final priceOverrideReason = (item['price_override_reason'] ?? '')
+              .toString();
+          final priceOverrideOriginalPrice =
+              (item['price_override_original_price'] as num?)?.toDouble() ??
+              systemUnitPrice;
+          final priceOverrideDifference =
+              (item['price_override_difference'] as num?)?.toDouble() ??
+              (unitPrice - systemUnitPrice);
+          final priceHistoryId = item['price_history_id'] as int?;
+          final priceOverrideApprovedBy =
+              item['price_override_approved_by']?.toString();
           final markedPrice =
               (item['marked_price'] as num?)?.toDouble() ?? unitPrice;
           final priceCategoryUsed = (item['price_category_used'] ?? 'selling')
@@ -2416,6 +2586,13 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'system_unit_price': systemUnitPrice,
+            'price_override_type': priceOverrideType,
+            'price_override_reason': priceOverrideReason,
+            'price_override_original_price': priceOverrideOriginalPrice,
+            'price_override_difference': priceOverrideDifference,
+            'price_history_id': priceHistoryId,
+            'price_override_approved_by': priceOverrideApprovedBy,
             'marked_price': markedPrice,
             'price_category_used': priceCategoryUsed,
             'cost_price_snapshot': costPriceSnapshot,
@@ -2451,6 +2628,21 @@ class DatabaseHelper {
               final barcode = item['barcode'] as String;
               final productName = item['product_name'] as String;
               final unitPrice = (item['unit_price'] as num).toDouble();
+              final systemUnitPrice =
+                  (item['system_unit_price'] as num?)?.toDouble() ?? unitPrice;
+              final priceOverrideType = (item['price_override_type'] ?? 'none')
+                  .toString();
+              final priceOverrideReason =
+                  (item['price_override_reason'] ?? '').toString();
+              final priceOverrideOriginalPrice =
+                  (item['price_override_original_price'] as num?)?.toDouble() ??
+                  systemUnitPrice;
+              final priceOverrideDifference =
+                  (item['price_override_difference'] as num?)?.toDouble() ??
+                  (unitPrice - systemUnitPrice);
+              final priceHistoryId = item['price_history_id'];
+              final priceOverrideApprovedBy =
+                  item['price_override_approved_by']?.toString();
               final priceCategoryUsed =
                   (item['price_category_used'] ?? 'selling').toString();
               final costPriceSnapshot =
@@ -2471,6 +2663,13 @@ class DatabaseHelper {
                 },
                 'quantity': quantity,
                 'unit_price_used': unitPrice,
+                'system_unit_price': systemUnitPrice,
+                'price_override_type': priceOverrideType,
+                'price_override_reason': priceOverrideReason,
+                'price_override_original_price': priceOverrideOriginalPrice,
+                'price_override_difference': priceOverrideDifference,
+                'price_history_id': priceHistoryId,
+                'price_override_approved_by': priceOverrideApprovedBy,
                 'price_type_used': priceCategoryUsed,
                 'cost_price_snapshot': costPriceSnapshot,
                 'base_line_total': baseLineTotal,
@@ -2848,6 +3047,23 @@ class DatabaseHelper {
           createdAt: now,
         );
 
+        if (normalizedPriceType == 'selling' &&
+            oldPrice > 0 &&
+            (oldPrice - newPrice).abs() > 0.000001) {
+          await _upsertProductLabelPriceHistory(
+            txn,
+            barcode: barcode,
+            productName: productName,
+            labelPrice: oldPrice,
+            oldPrice: oldPrice,
+            newPrice: newPrice,
+            priceType: normalizedPriceType,
+            changedBy: changedBy,
+            reason: reason,
+            createdAt: now,
+          );
+        }
+
         final syncData = jsonEncode({
           'barcode': barcode,
           'new_price': newPrice,
@@ -2872,6 +3088,143 @@ class DatabaseHelper {
       debugPrint('Error updating price: $e');
       return false;
     }
+  }
+
+  Future<void> _upsertProductLabelPriceHistory(
+    DatabaseExecutor executor, {
+    required String barcode,
+    required String productName,
+    required double labelPrice,
+    required double oldPrice,
+    required double newPrice,
+    required String priceType,
+    String? changedBy,
+    String? reason,
+    required String createdAt,
+  }) async {
+    final normalizedPriceType = _normalizePriceType(priceType);
+    final roundedLabelPrice = _roundMoney(labelPrice);
+    final existing = await executor.query(
+      'product_price_history',
+      columns: ['id'],
+      where:
+          'barcode = ? AND price_type = ? AND ABS(label_price - ?) < 0.000001 AND is_active = 1',
+      whereArgs: [barcode, normalizedPriceType, roundedLabelPrice],
+      limit: 1,
+    );
+
+    final row = {
+      'barcode': barcode,
+      'product_name': productName,
+      'price_type': normalizedPriceType,
+      'label_price': roundedLabelPrice,
+      'old_price': _roundMoney(oldPrice),
+      'new_price': _roundMoney(newPrice),
+      'is_active': 1,
+      'created_by': changedBy?.trim(),
+      'reason': reason?.trim(),
+      'effective_from': createdAt,
+      'updated_at': createdAt,
+    };
+
+    if (existing.isEmpty) {
+      await executor.insert('product_price_history', {
+        ...row,
+        'created_at': createdAt,
+      });
+    } else {
+      await executor.update(
+        'product_price_history',
+        row,
+        where: 'id = ?',
+        whereArgs: [existing.first['id']],
+      );
+    }
+
+    await _limitActiveProductLabelPrices(
+      executor,
+      barcode: barcode,
+      priceType: normalizedPriceType,
+    );
+  }
+
+  Future<void> _limitActiveProductLabelPrices(
+    DatabaseExecutor executor, {
+    required String barcode,
+    required String priceType,
+    int keepLatest = _maxActiveLabelPricesPerProduct,
+  }) async {
+    final safeLimit = keepLatest < 0 ? 0 : keepLatest;
+    final normalizedPriceType = _normalizePriceType(priceType);
+    final activeRows = await executor.query(
+      'product_price_history',
+      columns: ['id'],
+      where: 'barcode = ? AND price_type = ? AND is_active = 1',
+      whereArgs: [barcode, normalizedPriceType],
+      orderBy: 'datetime(updated_at) DESC, datetime(created_at) DESC, id DESC',
+    );
+
+    if (activeRows.length <= safeLimit) return;
+
+    final idsToDeactivate = <int>[];
+    for (final row in activeRows.skip(safeLimit)) {
+      final id = (row['id'] as num?)?.toInt();
+      if (id != null) {
+        idsToDeactivate.add(id);
+      }
+    }
+
+    if (idsToDeactivate.isEmpty) return;
+
+    final now = DateTime.now().toIso8601String();
+    final placeholders = List.filled(idsToDeactivate.length, '?').join(',');
+
+    await executor.update(
+      'product_price_history',
+      {
+        'is_active': 0,
+        'effective_to': now,
+        'updated_at': now,
+      },
+      where: 'id IN ($placeholders)',
+      whereArgs: idsToDeactivate,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getActiveLabelPricesForProduct(
+    String barcode, {
+    String priceType = 'selling',
+    int limit = _maxActiveLabelPricesPerProduct,
+  }) async {
+    final db = await database;
+    final normalizedPriceType = _normalizePriceType(priceType);
+    final safeLimit = limit < 0 ? 0 : limit;
+
+    final rows = await db.query(
+      'product_price_history',
+      where: 'barcode = ? AND price_type = ? AND is_active = 1',
+      whereArgs: [barcode, normalizedPriceType],
+      orderBy: 'datetime(updated_at) DESC, datetime(created_at) DESC, id DESC',
+      limit: safeLimit == 0 ? null : safeLimit,
+    );
+
+    return rows.map((row) => Map<String, dynamic>.from(row)).toList();
+  }
+
+  Future<bool> deactivateLabelPrice(int id) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    final updated = await db.update(
+      'product_price_history',
+      {
+        'is_active': 0,
+        'effective_to': now,
+        'updated_at': now,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    return updated > 0;
   }
 
   Future<Map<String, dynamic>?> findUserByPin(String pin) async {
@@ -3732,6 +4085,13 @@ class DatabaseHelper {
         si.barcode,
         si.product_name,
         si.unit_price,
+        si.system_unit_price,
+        si.price_override_type,
+        si.price_override_reason,
+        si.price_override_original_price,
+        si.price_override_difference,
+        si.price_history_id,
+        si.price_override_approved_by,
         CASE
           WHEN COALESCE(si.marked_price, 0) > 0 THEN si.marked_price
           WHEN COALESCE(p.selling_price, 0) > 0 THEN p.selling_price
@@ -3764,6 +4124,13 @@ class DatabaseHelper {
             'barcode': row['barcode'],
             'product_name': row['product_name'],
             'unit_price': row['unit_price'],
+            'system_unit_price': row['system_unit_price'],
+            'price_override_type': row['price_override_type'],
+            'price_override_reason': row['price_override_reason'],
+            'price_override_original_price': row['price_override_original_price'],
+            'price_override_difference': row['price_override_difference'],
+            'price_history_id': row['price_history_id'],
+            'price_override_approved_by': row['price_override_approved_by'],
             'marked_price': row['marked_price'],
             'price_category_used': row['price_category_used'],
             'cost_price_snapshot': row['cost_price_snapshot'],

@@ -15,7 +15,6 @@ import '../providers/app_theme_provider.dart';
 import '../services/database_helper.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
-import '../services/presentation_mode_service.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
 import '../widgets/premium_dialog.dart';
@@ -27,8 +26,6 @@ import 'expiry_alerts_screen.dart';
 import 'held_carts_screen.dart';
 import 'inventory_screen.dart';
 import 'login_screen.dart';
-import 'presentation_transaction_history_screen.dart';
-import 'presentation_cashier_summary_screen.dart';
 import 'sales_report_screen.dart';
 import 'supplier_management_screen.dart';
 import 'shift_management_screen.dart';
@@ -323,6 +320,12 @@ class _PosScreenState extends State<PosScreen> {
         return true;
       }
 
+      if (canUseLetterCartShortcut &&
+          event.logicalKey == LogicalKeyboardKey.keyP) {
+        unawaited(_applyLabelPriceToSelectedCartItem(cart));
+        return true;
+      }
+
       if (event.logicalKey == LogicalKeyboardKey.escape) {
         if (_searchFocusNode.hasFocus) {
           if (_searchController.text.isNotEmpty) {
@@ -406,10 +409,6 @@ class _PosScreenState extends State<PosScreen> {
     final explicit = widget.welcomeUserName?.trim();
     if (explicit != null && explicit.isNotEmpty) {
       return explicit;
-    }
-
-    if (auth.isPresentationLogin) {
-      return 'Cashier';
     }
 
     final authName = auth.currentUser?.name.trim();
@@ -1228,31 +1227,7 @@ class _PosScreenState extends State<PosScreen> {
   ) async {
     final auth = context.read<AuthProvider>();
 
-    if (auth.isPresentationLogin) {
-      _showInfoMessage(
-        'This module is not available in Presentation Login.',
-        backgroundColor: _warningColor,
-      );
-      _focusBarcodeField();
-      return;
-    }
-
     if (auth.hasManagementAccess) {
-      await onApproved();
-      return;
-    }
-
-    await AdminDialogs.showPinDialog(context, () async {
-      await onApproved();
-    });
-  }
-
-  Future<void> _runProtectedDiscountAction(
-    Future<void> Function() onApproved,
-  ) async {
-    final auth = context.read<AuthProvider>();
-
-    if (auth.isPresentationLogin || auth.hasManagementAccess) {
       await onApproved();
       return;
     }
@@ -1328,11 +1303,16 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  void _showInfoMessage(String message, {Color? backgroundColor}) {
+  void _showInfoMessage(
+    String message, {
+    Color? backgroundColor,
+    Duration duration = const Duration(seconds: 2),
+  }) {
     AppSnackBar.show(
       context,
       message: message,
       backgroundColor: backgroundColor ?? _panelSoft,
+      duration: duration,
     );
   }
 
@@ -1761,6 +1741,392 @@ class _PosScreenState extends State<PosScreen> {
     if (item == null) return;
 
     await _applyItemDiscount(cart, item);
+  }
+
+
+  Future<void> _applyLabelPriceToSelectedCartItem(CartProvider cart) async {
+    final item = _selectedCartItem(cart);
+    if (item == null) return;
+
+    await _applyLabelPrice(cart, item);
+  }
+
+  Future<void> _applyLabelPrice(CartProvider cart, CartItem item) async {
+    if (cart.isRefundMode) {
+      _showInfoMessage(
+        'Label price changes are not available in refund mode.',
+        backgroundColor: _warningColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    final labelPrices = await DatabaseHelper.instance.getActiveLabelPricesForProduct(
+      item.product.barcode,
+    );
+
+    if (!mounted) return;
+
+    final result = await _showLabelPriceDialog(
+      item: item,
+      labelPrices: labelPrices,
+    );
+
+    if (!mounted || result == null) {
+      _focusBarcodeField();
+      return;
+    }
+
+    final type = (result['type'] ?? '').toString();
+    if (type == 'current') {
+      cart.clearPriceOverride(item);
+      _showTemporaryCartSelection();
+      _showInfoMessage('Current product price restored.', backgroundColor: _brandColor);
+      _focusBarcodeField();
+      return;
+    }
+
+    final overridePrice = ((result['price'] as num?) ?? item.unitPrice).toDouble();
+    final reason = (result['reason'] ?? '').toString().trim();
+    final historyId = (result['price_history_id'] as num?)?.toInt();
+
+    if (type == 'manual') {
+      var approved = false;
+      await _runProtectedManagerAction(() async {
+        approved = true;
+      });
+
+      if (!mounted || !approved) {
+        _focusBarcodeField();
+        return;
+      }
+
+      cart.applyPriceOverride(
+        item,
+        overridePrice: overridePrice,
+        overrideType: 'manual',
+        reason: reason.isEmpty ? 'Manual price override' : reason,
+        approvedBy: context.read<AuthProvider>().currentUser?.name,
+      );
+      _showTemporaryCartSelection();
+      _showInfoMessage(
+        'Manual price applied: Rs. ${overridePrice.toStringAsFixed(2)}',
+        backgroundColor: _warningColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    if (type == 'old_label') {
+      cart.applyPriceOverride(
+        item,
+        overridePrice: overridePrice,
+        overrideType: 'old_label',
+        reason: reason.isEmpty ? 'Old label price / shelf mismatch' : reason,
+        priceHistoryId: historyId,
+      );
+      _showTemporaryCartSelection();
+      _showInfoMessage(
+        'Old label price applied: Rs. ${overridePrice.toStringAsFixed(2)}',
+        backgroundColor: _brandColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    _focusBarcodeField();
+  }
+
+  Future<Map<String, dynamic>?> _showLabelPriceDialog({
+    required CartItem item,
+    required List<Map<String, dynamic>> labelPrices,
+  }) async {
+    final manualPriceController = TextEditingController();
+    final reasonController = TextEditingController(
+      text: item.priceOverrideReason.isNotEmpty
+          ? item.priceOverrideReason
+          : 'Old label price / shelf mismatch',
+    );
+
+    _activeModalCount += 1;
+
+    try {
+      final result = await showPremiumDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (dialogContext) {
+          final currentPrice = item.systemUnitPrice;
+          final activeLabelPrices = labelPrices.where((row) {
+            final labelPrice = ((row['label_price'] as num?) ?? 0).toDouble();
+            return labelPrice > 0 &&
+                (labelPrice - currentPrice).abs() > 0.000001;
+          }).take(2).toList();
+
+          void closeWithCurrentPrice() {
+            Navigator.of(dialogContext).pop({
+              'type': 'current',
+              'price': currentPrice,
+              'reason': '',
+            });
+          }
+
+          void closeWithOldLabelPrice(Map<String, dynamic> row) {
+            final labelPrice = ((row['label_price'] as num?) ?? 0).toDouble();
+            Navigator.of(dialogContext).pop({
+              'type': 'old_label',
+              'price': labelPrice,
+              'reason': reasonController.text.trim(),
+              'price_history_id': row['id'],
+            });
+          }
+
+          void closeWithManualPrice() {
+            final manualPrice = double.tryParse(
+              manualPriceController.text.trim(),
+            );
+
+            if (manualPrice == null || manualPrice <= 0) {
+              AppSnackBar.show(
+                dialogContext,
+                message: 'Enter a valid manual price.',
+                backgroundColor: _warningColor,
+              );
+              return;
+            }
+
+            Navigator.of(dialogContext).pop({
+              'type': 'manual',
+              'price': manualPrice,
+              'reason': reasonController.text.trim().isEmpty
+                  ? 'Manual price override'
+                  : reasonController.text.trim(),
+            });
+          }
+
+          Widget priceOption({
+            required String title,
+            required String subtitle,
+            required double price,
+            required IconData icon,
+            required Color color,
+            required VoidCallback onTap,
+          }) {
+            return Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(18),
+                onTap: onTap,
+                child: Ink(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(_isDark ? 0.14 : 0.08),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: color.withOpacity(0.28)),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(_isDark ? 0.20 : 0.12),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Icon(icon, color: color, size: 22),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              style: TextStyle(
+                                color: _textPrimary,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              subtitle,
+                              style: TextStyle(
+                                color: _textSecondary,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        'Rs. ${price.toStringAsFixed(2)}',
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
+            ),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 620),
+              padding: const EdgeInsets.all(22),
+              decoration: _panelDecoration(color: _panelColor),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            color: _brandSoft,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: _brandColor.withOpacity(0.24),
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.price_check_rounded,
+                            color: _brandColor,
+                            size: 28,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Label Price / Old Price',
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${item.product.name} • ${item.product.barcode}',
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    priceOption(
+                      title: 'Current system price',
+                      subtitle: 'Use the latest selling price from product master.',
+                      price: currentPrice,
+                      icon: Icons.sell_rounded,
+                      color: _accentBlue,
+                      onTap: closeWithCurrentPrice,
+                    ),
+                    if (activeLabelPrices.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      for (final row in activeLabelPrices) ...[
+                        priceOption(
+                          title: 'Old label price',
+                          subtitle: 'Allowed previous shelf/item label price.',
+                          price: ((row['label_price'] as num?) ?? 0).toDouble(),
+                          icon: Icons.local_offer_outlined,
+                          color: _brandColor,
+                          onTap: () => closeWithOldLabelPrice(row),
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                    ] else ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: _softDecoration(color: _panelSoft),
+                        child: Text(
+                          'No old label prices are saved for this product yet. You can enter a manual price with manager approval.',
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontWeight: FontWeight.w700,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: reasonController,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Reason',
+                        hintText: 'Example: Old label price / shelf mismatch',
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: manualPriceController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      textInputAction: TextInputAction.done,
+                      decoration: const InputDecoration(
+                        labelText: 'Manual price',
+                        hintText: 'Requires manager approval',
+                      ),
+                      onSubmitted: (_) => closeWithManualPrice(),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(dialogContext),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: closeWithManualPrice,
+                            icon: const Icon(Icons.admin_panel_settings_rounded),
+                            label: const Text('Apply Manual'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+
+      return result;
+    } finally {
+      Future<void>.delayed(const Duration(milliseconds: 300), () {
+        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+        manualPriceController.dispose();
+        reasonController.dispose();
+      });
+    }
   }
 
   void _clearSelectedItemDiscount(CartProvider cart) {
@@ -2652,6 +3018,7 @@ class _PosScreenState extends State<PosScreen> {
       _showInfoMessage(
         '${product.name} has expired stock recorded. Check the shelf item before selling.',
         backgroundColor: _warningColor,
+        duration: const Duration(seconds: 4),
       );
     }
 
@@ -2714,34 +3081,7 @@ class _PosScreenState extends State<PosScreen> {
     _focusBarcodeField();
   }
 
-  Future<int> _resolvePresentationDisplayId(int saleId) async {
-    final auth = context.read<AuthProvider>();
-    if (!auth.isPresentationLogin) return saleId;
-
-    final displayId = await PresentationModeService.instance.getDisplayIdForRealSaleId(
-      realSaleId: saleId,
-      presentationSessionStartedAt: auth.presentationSessionStartedAt,
-    );
-
-    return displayId ?? saleId;
-  }
-
   Future<void> _showReceiptForTransaction(int saleId) async {
-    final auth = context.read<AuthProvider>();
-
-    if (auth.isPresentationLogin) {
-      final displayId = await _resolvePresentationDisplayId(saleId);
-      if (!mounted) return;
-
-      await PresentationTransactionHistoryScreen.showReceiptDialogForTransaction(
-        context,
-        saleId,
-        displayId: displayId,
-      );
-      _focusBarcodeField();
-      return;
-    }
-
     await TransactionHistoryScreen.showReceiptDialogForTransaction(
       context,
       saleId,
@@ -2766,7 +3106,7 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    await _runProtectedDiscountAction(() async {
+    await _runProtectedManagerAction(() async {
       _activeModalCount += 1;
       Map<String, dynamic>? result;
 
@@ -2804,7 +3144,7 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    await _runProtectedDiscountAction(() async {
+    await _runProtectedManagerAction(() async {
       _activeModalCount += 1;
       Map<String, dynamic>? result;
 
@@ -2928,25 +3268,12 @@ class _PosScreenState extends State<PosScreen> {
 
       if (!mounted) return;
 
-      final auth = context.read<AuthProvider>();
-      final presentationDisplayId = auth.isPresentationLogin
-          ? await _resolvePresentationDisplayId(saleId)
-          : saleId;
-
       final printer = ReceiptPrinterService.instance;
       if (printer.isConnected) {
-        if (auth.isPresentationLogin) {
-          await PresentationTransactionHistoryScreen.printReceiptForTransaction(
-            context,
-            saleId,
-            displayId: presentationDisplayId,
-          );
-        } else {
-          await TransactionHistoryScreen.printReceiptForTransaction(
-            context,
-            saleId,
-          );
-        }
+        await TransactionHistoryScreen.printReceiptForTransaction(
+          context,
+          saleId,
+        );
       }
 
       final action = await _showTransactionSuccessFlow(
@@ -2954,7 +3281,6 @@ class _PosScreenState extends State<PosScreen> {
         isRefund: isRefund,
         displayTotal: displayTotal,
         saleId: saleId,
-        displaySaleId: presentationDisplayId,
       );
 
       if (action == 'receipt') {
@@ -3085,13 +3411,11 @@ class _PosScreenState extends State<PosScreen> {
     required bool isRefund,
     required double displayTotal,
     required int saleId,
-    int? displaySaleId,
   }) async {
     final dialogContext = overlayContext ?? context;
     final title = isRefund ? 'Refund Completed' : 'Payment Successful';
     final tone = isRefund ? _dangerColor : _brandColor;
     final toneSoft = isRefund ? _dangerSoft : _brandSoft;
-    final visibleSaleId = displaySaleId ?? saleId;
     var successDismissed = false;
 
     void dismissSuccess(BuildContext successContext, String action) {
@@ -3166,7 +3490,7 @@ class _PosScreenState extends State<PosScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Transaction #$visibleSaleId completed successfully.',
+                            'Transaction #$saleId completed successfully.',
                             style: TextStyle(
                               color: _textSecondary,
                               fontSize: 13,
@@ -3217,78 +3541,8 @@ class _PosScreenState extends State<PosScreen> {
     return result;
   }
 
-  Future<void> _openTransactionHistory() async {
-    if (context.read<AuthProvider>().isPresentationLogin) {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          settings: const RouteSettings(name: PosRouteNames.transactionHistory),
-          builder: (context) => const PresentationTransactionHistoryScreen(),
-        ),
-      );
-
-      if (!mounted) return;
-      if (PosFeatureFlags.enableShiftManagement) {
-        await _loadShiftSummary();
-      }
-      _focusBarcodeField();
-      return;
-    }
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        settings: const RouteSettings(name: PosRouteNames.transactionHistory),
-        builder: (context) => const TransactionHistoryScreen(),
-      ),
-    );
-
-    if (!mounted) return;
-    if (PosFeatureFlags.enableShiftManagement) {
-      await _loadShiftSummary();
-    }
-    _focusBarcodeField();
-  }
-
-  Future<void> _openCashierSummary() async {
-    if (context.read<AuthProvider>().isPresentationLogin) {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          settings: const RouteSettings(name: PosRouteNames.cashierSummary),
-          builder: (context) => const PresentationCashierSummaryScreen(),
-        ),
-      );
-
-      if (!mounted) return;
-      _focusBarcodeField();
-      return;
-    }
-
-    final cashierName = context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        settings: const RouteSettings(name: PosRouteNames.cashierSummary),
-        builder: (context) => CashierSummaryScreen(cashierName: cashierName),
-      ),
-    );
-
-    if (!mounted) return;
-    _focusBarcodeField();
-  }
-
   Future<void> _openUserManagement() async {
     final auth = context.read<AuthProvider>();
-
-    if (auth.isPresentationLogin) {
-      _showInfoMessage(
-        'User Management is not available in Presentation Login.',
-        backgroundColor: _warningColor,
-      );
-      _focusBarcodeField();
-      return;
-    }
 
     if (!auth.hasManagementAccess) {
       _showInfoMessage(
@@ -3314,15 +3568,6 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _openSupplierOperations() async {
-    if (context.read<AuthProvider>().isPresentationLogin) {
-      _showInfoMessage(
-        'Supplier Operations is not available in Presentation Login.',
-        backgroundColor: _warningColor,
-      );
-      _focusBarcodeField();
-      return;
-    }
-
     await _runProtectedManagerAction(() async {
       final cashierName =
           context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
@@ -3345,15 +3590,6 @@ class _PosScreenState extends State<PosScreen> {
 
   Future<void> _openShiftManagement() async {
     if (!PosFeatureFlags.enableShiftManagement) return;
-
-    if (context.read<AuthProvider>().isPresentationLogin) {
-      _showInfoMessage(
-        'Shift Management is not available in Presentation Login.',
-        backgroundColor: _warningColor,
-      );
-      _focusBarcodeField();
-      return;
-    }
 
     final cashierName =
         context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
@@ -3925,45 +4161,54 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _handleHeaderMenuAction(String value, CartProvider cart) async {
     switch (value) {
       case 'cashier_summary':
-        await _openCashierSummary();
+        final cashierName =
+            context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.cashierSummary),
+            builder: (context) =>
+                CashierSummaryScreen(cashierName: cashierName),
+          ),
+        );
         break;
       case 'hardware_setup':
-        if (context.read<AuthProvider>().isPresentationLogin) {
-          _showInfoMessage(
-            'Hardware Setup is not available in Presentation Login.',
-            backgroundColor: _warningColor,
-          );
-          break;
-        }
         await _showHardwareSetupDialog();
         break;
       case 'inventory':
-        await _runProtectedManagerAction(() async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-              settings: const RouteSettings(name: PosRouteNames.inventory),
-              builder: (context) => const InventoryScreen(),
-            ),
-          );
-        });
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.inventory),
+            builder: (context) => const InventoryScreen(),
+          ),
+        );
         break;
       case 'expiry_alerts':
-        await _runProtectedManagerAction(() async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-              settings: const RouteSettings(name: PosRouteNames.expiryAlerts),
-              builder: (context) => const ExpiryAlertsScreen(),
-            ),
-          );
-        });
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.expiryAlerts),
+            builder: (context) => const ExpiryAlertsScreen(),
+          ),
+        );
         break;
       case 'supplier_ops':
         await _openSupplierOperations();
         break;
       case 'transaction_history':
-        await _openTransactionHistory();
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(
+              name: PosRouteNames.transactionHistory,
+            ),
+            builder: (context) => const TransactionHistoryScreen(),
+          ),
+        );
+        if (PosFeatureFlags.enableShiftManagement) {
+          await _loadShiftSummary();
+        }
         break;
       case 'refresh_products':
         await _refreshProductsFromBackendAndReload(showSuccessMessage: true);
@@ -3975,15 +4220,13 @@ class _PosScreenState extends State<PosScreen> {
         await _openUserManagement();
         break;
       case 'sales_report':
-        await _runProtectedManagerAction(() async {
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-              settings: const RouteSettings(name: PosRouteNames.salesReport),
-              builder: (context) => const SalesReportScreen(),
-            ),
-          );
-        });
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.salesReport),
+            builder: (context) => const SalesReportScreen(),
+          ),
+        );
         break;
       case 'shift_management':
         await _openShiftManagement();
@@ -4317,8 +4560,7 @@ class _PosScreenState extends State<PosScreen> {
               );
             },
           ),
-          if (PosFeatureFlags.enableShiftManagement &&
-              !auth.isPresentationLogin) ...[
+          if (PosFeatureFlags.enableShiftManagement) ...[
             const SizedBox(width: 10),
             _buildStatusPill(
               icon: _currentShiftSummary == null
@@ -4349,8 +4591,7 @@ class _PosScreenState extends State<PosScreen> {
             items: [
               const MapEntry('cashier_summary', 'Cashier Summary'),
               const MapEntry('transaction_history', 'Transaction History'),
-              if (!auth.isPresentationLogin)
-                const MapEntry('hardware_setup', 'Hardware Setup'),
+              const MapEntry('hardware_setup', 'Hardware Setup'),
             ],
             onSelected: (value) => _handleHeaderMenuAction(value, cart),
           ),
@@ -4371,66 +4612,64 @@ class _PosScreenState extends State<PosScreen> {
               onSelected: (value) => _handleHeaderMenuAction(value, cart),
             ),
           ],
-          if (!auth.isPresentationLogin) ...[
-            const SizedBox(width: 10),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 180),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: _softDecoration(color: _panelSoft),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CircleAvatar(
-                      radius: 15,
-                      backgroundColor: _brandSoft,
-                      child: Text(
-                        (auth.currentUser?.name ?? 'U').trim().isEmpty
-                            ? 'U'
-                            : (auth.currentUser?.name ?? 'U')
-                                  .trim()[0]
-                                  .toUpperCase(),
-                        style: TextStyle(
-                          color: _brandColor,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 12,
+          const SizedBox(width: 10),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 180),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: _softDecoration(color: _panelSoft),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    radius: 15,
+                    backgroundColor: _brandSoft,
+                    child: Text(
+                      (auth.currentUser?.name ?? 'U').trim().isEmpty
+                          ? 'U'
+                          : (auth.currentUser?.name ?? 'U')
+                                .trim()[0]
+                                .toUpperCase(),
+                      style: TextStyle(
+                        color: _brandColor,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          auth.currentUser?.name ?? 'Not Logged In',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _textPrimary,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12,
+                          ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            auth.currentUser?.name ?? 'Not Logged In',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: _textPrimary,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 12,
-                            ),
+                        Text(
+                          auth.hasManagementAccess ? 'manager' : 'cashier',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 10,
                           ),
-                          Text(
-                            auth.hasManagementAccess ? 'manager' : 'cashier',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: _textSecondary,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 10,
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-          ],
+          ),
           const SizedBox(width: 10),
           _buildIconSurfaceButton(
             tooltip: 'Logout',
@@ -5293,6 +5532,26 @@ class _PosScreenState extends State<PosScreen> {
                   padding: EdgeInsets.zero,
                 ),
                 IconButton(
+                  tooltip: item.hasPriceOverride
+                      ? 'Edit label price'
+                      : 'Apply label price',
+                  onPressed: cart.isRefundMode
+                      ? null
+                      : () => _applyLabelPrice(cart, item),
+                  icon: Icon(
+                    Icons.price_change_outlined,
+                    color: item.hasPriceOverride
+                        ? _brandColor
+                        : _textSecondary,
+                    size: 16,
+                  ),
+                  constraints: const BoxConstraints.tightFor(
+                    width: 24,
+                    height: 24,
+                  ),
+                  padding: EdgeInsets.zero,
+                ),
+                IconButton(
                   tooltip: 'Remove item',
                   onPressed: () {
                     cart.removeItem(item);
@@ -5320,6 +5579,19 @@ class _PosScreenState extends State<PosScreen> {
                 fontSize: 10.5,
               ),
             ),
+            if (item.hasPriceOverride) ...[
+              const SizedBox(height: 3),
+              Text(
+                item.priceOverrideType == 'old_label'
+                    ? 'Old label price • System Rs. ${item.systemUnitPrice.toStringAsFixed(2)}'
+                    : 'Manual price • System Rs. ${item.systemUnitPrice.toStringAsFixed(2)}',
+                style: TextStyle(
+                  color: _brandColor,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 9.8,
+                ),
+              ),
+            ],
             if (item.discountAmount > 0) ...[
               const SizedBox(height: 3),
               Text(
