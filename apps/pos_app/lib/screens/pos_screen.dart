@@ -13,6 +13,7 @@ import '../providers/auth_provider.dart';
 import '../providers/cart_provider.dart';
 import '../providers/app_theme_provider.dart';
 import '../services/database_helper.dart';
+import '../services/customer_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import '../services/sync_service.dart';
@@ -22,6 +23,8 @@ import '../widgets/app_snackbar.dart';
 import 'cart_discount_dialog.dart';
 import 'cashier_summary_screen.dart';
 import 'checkout_payment_dialog.dart';
+import 'customer_picker_dialog.dart';
+import 'customer_management_screen.dart';
 import 'expiry_alerts_screen.dart';
 import 'held_carts_screen.dart';
 import 'inventory_screen.dart';
@@ -201,6 +204,11 @@ class _PosScreenState extends State<PosScreen> {
     if (_activeModalCount == 0 &&
         (keyboard.isControlPressed || keyboard.isMetaPressed) &&
         !keyboard.isAltPressed) {
+      if (event.logicalKey == LogicalKeyboardKey.keyB) {
+        unawaited(_openCustomerPicker(cart));
+        return true;
+      }
+
       if (event.logicalKey == LogicalKeyboardKey.keyD) {
         _clearSelectedItemDiscount(cart);
         return true;
@@ -819,6 +827,170 @@ class _PosScreenState extends State<PosScreen> {
       color: color ?? _panelSoft,
       borderRadius: radius ?? BorderRadius.circular(20),
       border: Border.all(color: _borderColor),
+    );
+  }
+
+
+  Future<void> _openCustomerPicker(CartProvider cart) async {
+    if (_activeModalCount > 0) return;
+
+    _activeModalCount += 1;
+    try {
+      final result = await showCustomerPickerDialog(
+        context: context,
+        selectedCustomer: cart.selectedCustomer,
+        actorUserId: context.read<AuthProvider>().currentUser?.id,
+        allowClear: true,
+      );
+
+      if (!mounted || result == null) return;
+
+      if (result.cleared || result.customer == null) {
+        cart.clearCustomer();
+        _showInfoMessage(
+          'Using Walk-in Customer.',
+          backgroundColor: _accentBlue,
+        );
+      } else {
+        cart.selectCustomer(result.customer!);
+        _showInfoMessage(
+          'Customer selected: ${result.customer!.displayName}',
+          backgroundColor: _brandColor,
+        );
+      }
+    } finally {
+      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+      if (mounted) {
+        _focusBarcodeField();
+      }
+    }
+  }
+
+  Future<void> _openCustomerManagement() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        settings: const RouteSettings(name: PosRouteNames.customerManagement),
+        builder: (context) => const CustomerManagementScreen(),
+      ),
+    );
+
+    if (!mounted) return;
+    _focusBarcodeField();
+  }
+
+  Widget _buildCustomerMiniPanel(CartProvider cart) {
+    final customer = cart.selectedCustomer;
+    final hasCustomer = customer != null;
+    final tone = hasCustomer ? _brandColor : _accentBlue;
+    final toneSoft = tone.withOpacity(_isDark ? 0.16 : 0.10);
+
+    Widget miniIconButton({
+      required IconData icon,
+      required VoidCallback onPressed,
+      Color? color,
+    }) {
+      return SizedBox(
+        width: 34,
+        height: 34,
+        child: IconButton(
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+          visualDensity: VisualDensity.compact,
+          splashRadius: 18,
+          onPressed: onPressed,
+          icon: Icon(icon, size: 18, color: color),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: _panelSoft,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _borderColor),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: toneSoft,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: tone.withOpacity(0.24)),
+            ),
+            child: Icon(
+              hasCustomer ? Icons.person_rounded : Icons.storefront_rounded,
+              color: tone,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => _openCustomerPicker(cart),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      hasCustomer ? customer!.displayName : 'Walk-in Customer',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      hasCustomer
+                          ? cart.customerDisplaySubtitle
+                          : 'Ctrl + B to search / add customer',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          miniIconButton(
+            icon: hasCustomer
+                ? Icons.swap_horiz_rounded
+                : Icons.person_search_rounded,
+            onPressed: () => _openCustomerPicker(cart),
+          ),
+          if (hasCustomer)
+            miniIconButton(
+              icon: Icons.close_rounded,
+              color: _dangerColor,
+              onPressed: () {
+                cart.clearCustomer();
+                _showInfoMessage(
+                  'Customer removed. Using Walk-in Customer.',
+                  backgroundColor: _accentBlue,
+                );
+                _focusBarcodeField();
+              },
+            ),
+          miniIconButton(
+            icon: Icons.manage_accounts_rounded,
+            onPressed: _openCustomerManagement,
+          ),
+        ],
+      ),
     );
   }
 
@@ -3258,6 +3430,11 @@ class _PosScreenState extends State<PosScreen> {
         discountAmount: discountAmount,
       );
 
+      await CustomerService.instance.attachCustomerToSale(
+        saleId: saleId,
+        customer: cart.selectedCustomer,
+      );
+
       cart.clearCart();
 
       await SyncService().syncNow();
@@ -3609,7 +3786,12 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _holdCurrentCart(CartProvider cart) async {
     if (cart.items.isEmpty) return;
 
-    final controller = TextEditingController();
+    final selectedCustomer = cart.selectedCustomer;
+    final defaultCartName = selectedCustomer == null
+        ? ''
+        : selectedCustomer.displayName.trim();
+
+    final controller = TextEditingController(text: defaultCartName);
     _activeModalCount += 1;
 
     String? cartName;
@@ -3750,7 +3932,9 @@ class _PosScreenState extends State<PosScreen> {
                                 },
                                 decoration: InputDecoration(
                                   hintText:
-                                      'Example: Customer 1 / Counter Hold',
+                                      selectedCustomer == null
+                                          ? 'Example: Customer 1 / Counter Hold'
+                                          : 'Customer name is already filled. Press Enter or edit if needed.',
                                   prefixIcon: Container(
                                     margin: const EdgeInsets.all(10),
                                     decoration: BoxDecoration(
@@ -3822,14 +4006,26 @@ class _PosScreenState extends State<PosScreen> {
         context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
 
     try {
+      final resolvedCartName = cartName.trim().isEmpty
+          ? (cart.selectedCustomer?.displayName.trim().isNotEmpty == true
+              ? cart.selectedCustomer!.displayName.trim()
+              : 'Held Cart')
+          : cartName.trim();
+
       await DatabaseHelper.instance.saveHeldCart(
-        cartName: cartName,
+        cartName: resolvedCartName,
         cashierName: cashierName,
         isRefundMode: cart.isRefundMode,
         discountType: cart.discountType,
         discountValue: cart.discountValue,
         items: cart.getCartItemsAsMap(),
         selectedPriceType: cart.selectedPriceType.dbValue,
+      );
+
+      await CustomerService.instance.saveCustomerSnapshotToLatestHeldCart(
+        cartName: resolvedCartName,
+        cashierName: cashierName,
+        customer: cart.selectedCustomer,
       );
 
       cart.clearCart();
@@ -4142,12 +4338,16 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
+    final restoredCustomer =
+        CustomerService.instance.customerFromHeldCartRow(restored);
+
     cart.loadHeldCart(
       items: preparedItems,
       isRefundMode: (restored['is_refund_mode'] ?? false) == true,
       discountType: (restored['discount_type'] ?? 'none').toString(),
       discountValue: ((restored['discount_value'] as num?) ?? 0).toDouble(),
       selectedPriceType: restoredSelectedPriceType,
+      selectedCustomer: restoredCustomer,
     );
 
     _showInfoMessage('Held cart resumed.', backgroundColor: _successColor);
@@ -6101,6 +6301,8 @@ class _PosScreenState extends State<PosScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 12),
+            _buildCustomerMiniPanel(cart),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),

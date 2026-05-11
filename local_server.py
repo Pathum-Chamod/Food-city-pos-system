@@ -212,6 +212,391 @@ def now_sql():
     return "datetime('now','localtime')"
 
 
+def normalize_customer_phone(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if text.startswith("+94"):
+        text = "0" + text[3:]
+    elif text.startswith("94") and len(text) == 11:
+        text = "0" + text[2:]
+    return "".join(ch for ch in text if ch.isdigit())
+
+
+def normalize_customer_type(value):
+    normalized = str(value or "regular").strip().lower()
+    if normalized in {"vip", "wholesale", "staff"}:
+        return normalized
+    return "regular"
+
+
+def create_customer_tables(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_code TEXT UNIQUE,
+            name TEXT NOT NULL,
+            phone TEXT,
+            phone_normalized TEXT,
+            email TEXT,
+            address TEXT,
+            customer_type TEXT NOT NULL DEFAULT 'regular',
+            notes TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by INTEGER,
+            updated_by INTEGER
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone_normalized)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_code ON customers(customer_code)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_active ON customers(is_active)")
+
+
+def ensure_customer_sales_columns(cursor):
+    create_customer_tables(cursor)
+    ensure_column(cursor, "sales", "customer_id", "customer_id INTEGER")
+    ensure_column(cursor, "sales", "customer_name_snapshot", "customer_name_snapshot TEXT")
+    ensure_column(cursor, "sales", "customer_phone_snapshot", "customer_phone_snapshot TEXT")
+    ensure_column(cursor, "sales", "customer_code_snapshot", "customer_code_snapshot TEXT")
+
+
+def generate_customer_code(customer_id):
+    return f"CUS-{parse_int(customer_id, 0):06d}"
+
+
+def clean_optional_text(value):
+    text = str(value or "").strip()
+    return text if text else None
+
+
+def fetch_customers(cursor, params):
+    create_customer_tables(cursor)
+
+    search = str(params.get("search", [""])[0] or params.get("query", [""])[0] or "").strip()
+    active_only = normalize_bool(params.get("active_only", ["1"])[0], True)
+    include_inactive = normalize_bool(params.get("include_inactive", ["0"])[0], False)
+    limit = parse_int(params.get("limit", ["100"])[0], 100)
+    if limit <= 0:
+        limit = 100
+    if limit > 500:
+        limit = 500
+
+    where = []
+    args = []
+
+    if active_only and not include_inactive:
+        where.append("COALESCE(is_active, 1) = 1")
+
+    if search:
+        phone_search = normalize_customer_phone(search)
+        like = f"%{search.lower()}%"
+        where.append(
+            """
+            (
+                LOWER(name) LIKE ?
+                OR LOWER(COALESCE(customer_code, '')) LIKE ?
+                OR LOWER(COALESCE(email, '')) LIKE ?
+                OR LOWER(COALESCE(address, '')) LIKE ?
+                OR COALESCE(phone, '') LIKE ?
+                OR COALESCE(phone_normalized, '') LIKE ?
+            )
+            """
+        )
+        args.extend([
+            like,
+            like,
+            like,
+            like,
+            f"%{search}%",
+            f"%{phone_search or search}%",
+        ])
+
+    query = """
+        SELECT
+            id,
+            customer_code,
+            name,
+            phone,
+            phone_normalized,
+            email,
+            address,
+            customer_type,
+            notes,
+            COALESCE(is_active, 1) AS is_active,
+            created_at,
+            updated_at,
+            created_by,
+            updated_by
+        FROM customers
+    """
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    query += " ORDER BY COALESCE(is_active, 1) DESC, name COLLATE NOCASE ASC LIMIT ?"
+    args.append(limit)
+
+    return [dict(row) for row in cursor.execute(query, args).fetchall()]
+
+
+def get_customer_by_id(cursor, customer_id):
+    create_customer_tables(cursor)
+    row = cursor.execute(
+        """
+        SELECT
+            id,
+            customer_code,
+            name,
+            phone,
+            phone_normalized,
+            email,
+            address,
+            customer_type,
+            notes,
+            COALESCE(is_active, 1) AS is_active,
+            created_at,
+            updated_at,
+            created_by,
+            updated_by
+        FROM customers
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (parse_int(customer_id, 0),),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def find_customer_by_phone(cursor, phone_normalized, excluding_id=None):
+    create_customer_tables(cursor)
+    phone_normalized = normalize_customer_phone(phone_normalized)
+    if not phone_normalized:
+        return None
+
+    query = "SELECT * FROM customers WHERE phone_normalized = ?"
+    args = [phone_normalized]
+    if excluding_id is not None:
+        query += " AND id != ?"
+        args.append(parse_int(excluding_id, 0))
+    query += " LIMIT 1"
+
+    row = cursor.execute(query, args).fetchone()
+    return dict(row) if row else None
+
+
+def create_customer(cursor, body):
+    create_customer_tables(cursor)
+
+    name = str(body.get("name", "") or "").strip()
+    if not name:
+        return False, "Customer name is required", None
+
+    phone = clean_optional_text(body.get("phone"))
+    phone_normalized = normalize_customer_phone(phone)
+    if phone_normalized:
+        existing = find_customer_by_phone(cursor, phone_normalized)
+        if existing:
+            return False, f"A customer with this phone already exists: {existing.get('name')}", existing
+
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        """
+        INSERT INTO customers (
+            customer_code,
+            name,
+            phone,
+            phone_normalized,
+            email,
+            address,
+            customer_type,
+            notes,
+            is_active,
+            created_at,
+            updated_at,
+            created_by,
+            updated_by
+        )
+        VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        """,
+        (
+            name,
+            phone,
+            phone_normalized or None,
+            clean_optional_text(body.get("email")),
+            clean_optional_text(body.get("address")),
+            normalize_customer_type(body.get("customer_type")),
+            clean_optional_text(body.get("notes")),
+            now,
+            now,
+            parse_int(body.get("created_by"), 0) or None,
+            parse_int(body.get("created_by"), 0) or None,
+        ),
+    )
+
+    customer_id = cursor.lastrowid
+    code = generate_customer_code(customer_id)
+    cursor.execute(
+        "UPDATE customers SET customer_code = ?, updated_at = ? WHERE id = ?",
+        (code, now, customer_id),
+    )
+    return True, "success", get_customer_by_id(cursor, customer_id)
+
+
+def update_customer(cursor, body):
+    create_customer_tables(cursor)
+
+    customer_id = parse_int(body.get("id", body.get("customer_id", 0)), 0)
+    if customer_id <= 0:
+        return False, "Invalid customer", None
+
+    existing = get_customer_by_id(cursor, customer_id)
+    if not existing:
+        return False, "Customer not found", None
+
+    name = str(body.get("name", "") or "").strip()
+    if not name:
+        return False, "Customer name is required", None
+
+    phone = clean_optional_text(body.get("phone"))
+    phone_normalized = normalize_customer_phone(phone)
+    if phone_normalized:
+        duplicate = find_customer_by_phone(cursor, phone_normalized, excluding_id=customer_id)
+        if duplicate:
+            return False, f"A customer with this phone already exists: {duplicate.get('name')}", duplicate
+
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        """
+        UPDATE customers
+        SET name = ?,
+            phone = ?,
+            phone_normalized = ?,
+            email = ?,
+            address = ?,
+            customer_type = ?,
+            notes = ?,
+            is_active = ?,
+            updated_at = ?,
+            updated_by = ?
+        WHERE id = ?
+        """,
+        (
+            name,
+            phone,
+            phone_normalized or None,
+            clean_optional_text(body.get("email")),
+            clean_optional_text(body.get("address")),
+            normalize_customer_type(body.get("customer_type")),
+            clean_optional_text(body.get("notes")),
+            1 if normalize_bool(body.get("is_active"), True) else 0,
+            now,
+            parse_int(body.get("updated_by"), 0) or None,
+            customer_id,
+        ),
+    )
+    return True, "success", get_customer_by_id(cursor, customer_id)
+
+
+def set_customer_active_status(cursor, body, is_active):
+    create_customer_tables(cursor)
+
+    customer_id = parse_int(body.get("id", body.get("customer_id", 0)), 0)
+    if customer_id <= 0:
+        return False, "Invalid customer", None
+
+    existing = get_customer_by_id(cursor, customer_id)
+    if not existing:
+        return False, "Customer not found", None
+
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        """
+        UPDATE customers
+        SET is_active = ?,
+            updated_at = ?,
+            updated_by = ?
+        WHERE id = ?
+        """,
+        (
+            1 if is_active else 0,
+            now,
+            parse_int(body.get("updated_by"), 0) or None,
+            customer_id,
+        ),
+    )
+    return True, "success", get_customer_by_id(cursor, customer_id)
+
+
+def get_customer_summary(cursor, customer_id):
+    ensure_customer_sales_columns(cursor)
+    customer_id = parse_int(customer_id, 0)
+
+    row = cursor.execute(
+        """
+        SELECT
+            COUNT(*) AS transaction_count,
+            COALESCE(SUM(CASE
+                WHEN LOWER(COALESCE(transaction_type, 'sale')) = 'refund'
+                THEN -ABS(COALESCE(total_amount, 0))
+                ELSE ABS(COALESCE(total_amount, 0))
+            END), 0) AS net_total_spent,
+            COALESCE(SUM(CASE
+                WHEN LOWER(COALESCE(transaction_type, 'sale')) = 'refund'
+                THEN 1 ELSE 0
+            END), 0) AS refund_count,
+            COALESCE(SUM(CASE
+                WHEN LOWER(COALESCE(transaction_type, 'sale')) = 'refund'
+                THEN 0 ELSE 1
+            END), 0) AS sale_count,
+            MAX(created_at) AS last_purchase_at,
+            MIN(created_at) AS first_purchase_at
+        FROM sales
+        WHERE customer_id = ?
+        """,
+        (customer_id,),
+    ).fetchone()
+
+    sale_count = parse_int(row["sale_count"] if row else 0, 0)
+    net_total = parse_float(row["net_total_spent"] if row else 0, 0.0)
+
+    return {
+        "transaction_count": parse_int(row["transaction_count"] if row else 0, 0),
+        "sale_count": sale_count,
+        "refund_count": parse_int(row["refund_count"] if row else 0, 0),
+        "net_total_spent": round(net_total, 2),
+        "average_sale": round(net_total / sale_count, 2) if sale_count > 0 else 0.0,
+        "first_purchase_at": row["first_purchase_at"] if row else None,
+        "last_purchase_at": row["last_purchase_at"] if row else None,
+    }
+
+
+def get_customer_purchase_history(cursor, customer_id, limit=100):
+    ensure_customer_sales_columns(cursor)
+    customer_id = parse_int(customer_id, 0)
+    limit = parse_int(limit, 100)
+    if limit <= 0:
+        limit = 100
+    if limit > 500:
+        limit = 500
+
+    rows = cursor.execute(
+        """
+        SELECT *
+        FROM sales
+        WHERE customer_id = ?
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT ?
+        """,
+        (customer_id, limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+
 def get_product_row(cursor, barcode):
     return cursor.execute(
         """
@@ -2526,6 +2911,7 @@ def build_data_backup(cursor):
             'pos_db_present': os.path.exists(POS_DB_PATH),
         },
         'business_info': get_business_info(cursor),
+        'customers': fetch_customers(cursor, {'include_inactive': ['1'], 'limit': ['500']}),
         'products': fetch_products(cursor),
         'suppliers': query_rows('SELECT * FROM suppliers ORDER BY name COLLATE NOCASE ASC'),
         'stock_receipts': query_rows('SELECT * FROM stock_receipts ORDER BY datetime(created_at) DESC, id DESC'),
@@ -2875,6 +3261,7 @@ def init_db():
     ensure_column(c, "sales", "transaction_type", "transaction_type TEXT DEFAULT 'sale'")
     ensure_column(c, "sales", "items_count", "items_count INTEGER DEFAULT 0")
     ensure_column(c, "sales", "gross_profit", "gross_profit REAL DEFAULT 0")
+    ensure_customer_sales_columns(c)
 
     c.execute(
         """
@@ -3227,6 +3614,30 @@ class APIHandler(BaseHTTPRequestHandler):
             self._set_headers()
             self.wfile.write(json.dumps(result).encode())
 
+        elif action == "get_customers":
+            result = fetch_customers(c, params)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "customers": result}).encode()
+            )
+
+        elif action == "get_customer_summary":
+            customer_id = params.get("customer_id", params.get("id", ["0"]))[0]
+            summary = get_customer_summary(c, customer_id)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "summary": summary}).encode()
+            )
+
+        elif action == "get_customer_purchase_history":
+            customer_id = params.get("customer_id", params.get("id", ["0"]))[0]
+            limit = params.get("limit", ["100"])[0]
+            history = get_customer_purchase_history(c, customer_id, limit=limit)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "history": history}).encode()
+            )
+
         elif action == "get_inventory_history":
             barcode = params.get("barcode", [""])[0].strip()
 
@@ -3395,6 +3806,23 @@ class APIHandler(BaseHTTPRequestHandler):
                     gross_profit += (unit_price - unit_cost) * quantity
 
                 created_at = str(data.get("created_at", "") or "").strip() or datetime.now().astimezone().isoformat()
+                ensure_customer_sales_columns(c)
+                customer_id = parse_int(data.get("customer_id"), 0) or None
+                customer_name_snapshot = clean_optional_text(
+                    data.get("customer_name_snapshot")
+                    or data.get("customer_name")
+                    or data.get("selected_customer_name")
+                )
+                customer_phone_snapshot = clean_optional_text(
+                    data.get("customer_phone_snapshot")
+                    or data.get("customer_phone")
+                    or data.get("selected_customer_phone")
+                )
+                customer_code_snapshot = clean_optional_text(
+                    data.get("customer_code_snapshot")
+                    or data.get("customer_code")
+                    or data.get("selected_customer_code")
+                )
 
                 c.execute(
                     """
@@ -3411,9 +3839,13 @@ class APIHandler(BaseHTTPRequestHandler):
                         branch,
                         vendor,
                         items,
-                        created_at
+                        created_at,
+                        customer_id,
+                        customer_name_snapshot,
+                        customer_phone_snapshot,
+                        customer_code_snapshot
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         total_amount,
@@ -3429,6 +3861,10 @@ class APIHandler(BaseHTTPRequestHandler):
                         data.get("vendor", ""),
                         json.dumps(items),
                         created_at,
+                        customer_id,
+                        customer_name_snapshot,
+                        customer_phone_snapshot,
+                        customer_code_snapshot,
                     ),
                 )
                 sale_id = c.lastrowid
@@ -3855,6 +4291,47 @@ class APIHandler(BaseHTTPRequestHandler):
             finally:
                 _close_user_db_connections(conns)
 
+
+        elif action == "create_customer":
+            ok, message, customer = create_customer(c, body)
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message, "customer": customer}).encode())
+            else:
+                conn.commit()
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+
+        elif action == "update_customer":
+            ok, message, customer = update_customer(c, body)
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message, "customer": customer}).encode())
+            else:
+                conn.commit()
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+
+        elif action == "deactivate_customer":
+            ok, message, customer = set_customer_active_status(c, body, False)
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+
+        elif action == "reactivate_customer":
+            ok, message, customer = set_customer_active_status(c, body, True)
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+
         elif action == "add_product":
             ok, message = create_or_update_product(
                 c,
@@ -4105,6 +4582,7 @@ def main():
 ║     GET  ?action=get_owner_alerts        → Owner alerts  ║
 ║     GET  ?action=get_owner_sales_report  → Sales report  ║
 ║     GET  ?action=get_suppliers           → Suppliers     ║
+║     GET  ?action=get_customers           → Customers     ║
 ║     GET  ?action=get_inventory_history   → History       ║
 ║     POST ?action=pos_sync                → POS sync      ║
 ║     POST ?action=update_price            → Price update  ║

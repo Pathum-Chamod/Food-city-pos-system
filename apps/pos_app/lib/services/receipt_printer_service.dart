@@ -143,6 +143,9 @@ class ReceiptPrinterService {
     required int transactionId,
     required String cashierName,
     required String paymentMethod,
+    String? customerName,
+    String? customerPhone,
+    String? customerCode,
     required List<Map<String, dynamic>> items,
     required double subtotal,
     required double discountAmount,
@@ -179,6 +182,10 @@ class ReceiptPrinterService {
       final bytes = <int>[];
       final shouldShowSubtotal =
           (subtotal - total).abs() > 0.000001 || discountAmount > 0;
+      final customerNameText = (customerName ?? '').trim();
+      final customerPhoneText = (customerPhone ?? '').trim();
+      final customerCodeText = (customerCode ?? '').trim();
+      final hasCustomer = customerNameText.isNotEmpty;
 
       // Reset + basic formatting
       bytes.addAll(_escInit());
@@ -218,6 +225,15 @@ class ReceiptPrinterService {
       bytes.addAll(_text('${_labelValue('Date', dateStr)}\n'));
       bytes.addAll(_text('${_labelValue('Txn', '#$transactionId')}\n'));
       bytes.addAll(_text('${_labelValue('Cashier', cashierName)}\n'));
+      if (hasCustomer) {
+        bytes.addAll(_text('${_labelValue('Customer', customerNameText)}\n'));
+        if (customerCodeText.isNotEmpty) {
+          bytes.addAll(_text('${_labelValue('Cus. Code', customerCodeText)}\n'));
+        }
+        if (customerPhoneText.isNotEmpty) {
+          bytes.addAll(_text('${_labelValue('Phone', customerPhoneText)}\n'));
+        }
+      }
       bytes.addAll(_text('${_line('-')}\n'));
       bytes.addAll(_boldOn());
       bytes.addAll(_text('${_itemValueHeader()}\n'));

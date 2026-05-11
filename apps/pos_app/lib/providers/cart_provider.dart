@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:shared/shared.dart';
+import 'package:shared/models/customer.dart';
+import 'package:shared/models/product.dart';
 
 class CartItem {
   final Product product;
@@ -71,12 +72,35 @@ class CartProvider with ChangeNotifier {
   double _discountValue = 0.0;
 
   ProductPriceType _selectedPriceType = ProductPriceType.selling;
+  Customer? _selectedCustomer;
 
   List<CartItem> get items => List.unmodifiable(_items);
   bool get isRefundMode => _isRefundMode;
   String get discountType => _discountType;
   double get discountValue => _discountValue;
   ProductPriceType get selectedPriceType => _selectedPriceType;
+  Customer? get selectedCustomer => _selectedCustomer;
+  bool get hasSelectedCustomer => _selectedCustomer != null;
+
+  String get customerDisplayName {
+    final customer = _selectedCustomer;
+    if (customer == null) return 'Walk-in Customer';
+    return customer.displayName;
+  }
+
+  String get customerDisplaySubtitle {
+    final customer = _selectedCustomer;
+    if (customer == null) return 'No customer attached';
+    final parts = <String>[];
+    if (customer.displayCode.trim().isNotEmpty) {
+      parts.add(customer.displayCode);
+    }
+    if (customer.hasPhone) {
+      parts.add(customer.displayPhone);
+    }
+    parts.add(customer.typeLabel);
+    return parts.join(' • ');
+  }
 
   double get subtotal {
     return _items.fold(0.0, (sum, item) => sum + item.baseTotal);
@@ -118,12 +142,24 @@ class CartProvider with ChangeNotifier {
     return total < 0 ? 0 : total;
   }
 
+  void selectCustomer(Customer customer) {
+    _selectedCustomer = customer;
+    notifyListeners();
+  }
+
+  void clearCustomer() {
+    if (_selectedCustomer == null) return;
+    _selectedCustomer = null;
+    notifyListeners();
+  }
+
   void toggleRefundMode(bool value) {
     _isRefundMode = value;
     _items.clear();
     _selectedPriceType = ProductPriceType.selling;
     _discountType = 'none';
     _discountValue = 0.0;
+    _selectedCustomer = null;
     notifyListeners();
   }
 
@@ -342,6 +378,16 @@ class CartProvider with ChangeNotifier {
     _selectedPriceType = ProductPriceType.selling;
     _discountType = 'none';
     _discountValue = 0.0;
+    _selectedCustomer = null;
+    notifyListeners();
+  }
+
+  void clearCartItemsOnly() {
+    _items.clear();
+    _isRefundMode = false;
+    _selectedPriceType = ProductPriceType.selling;
+    _discountType = 'none';
+    _discountValue = 0.0;
     notifyListeners();
   }
 
@@ -351,12 +397,15 @@ class CartProvider with ChangeNotifier {
     String discountType = 'none',
     double discountValue = 0.0,
     String? selectedPriceType,
+    Customer? selectedCustomer,
   }) {
     _items.clear();
     _isRefundMode = isRefundMode;
     _selectedPriceType = isRefundMode
         ? ProductPriceType.selling
         : ProductPriceTypeX.fromDb(selectedPriceType);
+
+    _selectedCustomer = selectedCustomer;
 
     _discountType = isRefundMode ? 'none' : _normalizeDiscountType(discountType);
     _discountValue = isRefundMode ? 0.0 : (discountValue < 0 ? 0.0 : discountValue);

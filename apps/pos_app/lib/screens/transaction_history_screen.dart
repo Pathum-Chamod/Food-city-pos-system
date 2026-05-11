@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/database_helper.dart';
+import '../services/customer_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import '../widgets/app_snackbar.dart';
@@ -24,11 +25,32 @@ class TransactionHistoryScreen extends StatefulWidget {
         .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
+
+  static Future<Map<String, dynamic>?> _getTransactionSummaryWithCustomer(
+    int saleId,
+  ) async {
+    final summary = await DatabaseHelper.instance.getTransactionSummary(saleId);
+    if (summary == null) return null;
+
+    final resolved = Map<String, dynamic>.from(summary);
+    final customerSnapshot =
+        await CustomerService.instance.getSaleCustomerSnapshotMap(saleId);
+    resolved.addAll(customerSnapshot);
+    return resolved;
+  }
+
+  static String _readCustomerSnapshotText(
+    Map<String, dynamic> summary,
+    String key,
+  ) {
+    return (summary[key] ?? '').toString().trim();
+  }
+
   static Future<void> showReceiptDialogForTransaction(
     BuildContext context,
     int saleId,
   ) async {
-    final summary = await DatabaseHelper.instance.getTransactionSummary(saleId);
+    final summary = await _getTransactionSummaryWithCustomer(saleId);
     final items = await DatabaseHelper.instance.getTransactionItems(saleId);
 
     if (!context.mounted) return;
@@ -100,7 +122,7 @@ class TransactionHistoryScreen extends StatefulWidget {
       return false;
     }
 
-    final summary = await DatabaseHelper.instance.getTransactionSummary(saleId);
+    final summary = await _getTransactionSummaryWithCustomer(saleId);
     final items = await DatabaseHelper.instance.getTransactionItems(saleId);
 
     if (!context.mounted) return false;
@@ -130,6 +152,18 @@ class TransactionHistoryScreen extends StatefulWidget {
     final isRefund =
         (summary['transaction_type'] ?? 'sale').toString().toLowerCase() ==
         'refund';
+    final customerName = _readCustomerSnapshotText(
+      summary,
+      'customer_name_snapshot',
+    );
+    final customerPhone = _readCustomerSnapshotText(
+      summary,
+      'customer_phone_snapshot',
+    );
+    final customerCode = _readCustomerSnapshotText(
+      summary,
+      'customer_code_snapshot',
+    );
 
     final receiptItems = items.map((item) {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
@@ -182,6 +216,9 @@ class TransactionHistoryScreen extends StatefulWidget {
       transactionId: saleId,
       cashierName: cashierName,
       paymentMethod: paymentMethod,
+      customerName: customerName,
+      customerPhone: customerPhone,
+      customerCode: customerCode,
       items: receiptItems,
       subtotal: receiptSubtotal,
       discountAmount: receiptCartDiscountAmount,
@@ -208,7 +245,7 @@ class TransactionHistoryScreen extends StatefulWidget {
     BuildContext context,
     int saleId,
   ) async {
-    final summary = await DatabaseHelper.instance.getTransactionSummary(saleId);
+    final summary = await _getTransactionSummaryWithCustomer(saleId);
     final items = await DatabaseHelper.instance.getTransactionItems(saleId);
 
     if (!context.mounted) return false;
@@ -238,6 +275,18 @@ class TransactionHistoryScreen extends StatefulWidget {
     final isRefund =
         (summary['transaction_type'] ?? 'sale').toString().toLowerCase() ==
         'refund';
+    final customerName = _readCustomerSnapshotText(
+      summary,
+      'customer_name_snapshot',
+    );
+    final customerPhone = _readCustomerSnapshotText(
+      summary,
+      'customer_phone_snapshot',
+    );
+    final customerCode = _readCustomerSnapshotText(
+      summary,
+      'customer_code_snapshot',
+    );
 
     final receiptItems = items.map((item) {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
@@ -290,6 +339,9 @@ class TransactionHistoryScreen extends StatefulWidget {
       transactionId: saleId,
       cashierName: cashierName,
       paymentMethod: paymentMethod,
+      customerName: customerName,
+      customerPhone: customerPhone,
+      customerCode: customerCode,
       items: receiptItems,
       subtotal: receiptSubtotal,
       discountAmount: receiptCartDiscountAmount,
@@ -371,10 +423,26 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       limit: null,
     );
 
+    final enrichedTransactions = <Map<String, dynamic>>[];
+    for (final rawTransaction in transactions) {
+      final transaction = Map<String, dynamic>.from(rawTransaction);
+      final saleId = (transaction['id'] as num?)?.toInt() ??
+          int.tryParse((transaction['id'] ?? '').toString()) ??
+          0;
+
+      if (saleId > 0) {
+        final customerSnapshot =
+            await CustomerService.instance.getSaleCustomerSnapshotMap(saleId);
+        transaction.addAll(customerSnapshot);
+      }
+
+      enrichedTransactions.add(transaction);
+    }
+
     if (!mounted) return;
 
     setState(() {
-      _transactions = transactions;
+      _transactions = enrichedTransactions;
       _isLoading = false;
     });
   }
@@ -406,12 +474,21 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       final payment = (tx['payment_method'] ?? '').toString().toLowerCase();
       final type = (tx['transaction_type'] ?? '').toString().toLowerCase();
       final refundReason = (tx['refund_reason'] ?? '').toString().toLowerCase();
+      final customerName =
+          (tx['customer_name_snapshot'] ?? '').toString().toLowerCase();
+      final customerPhone =
+          (tx['customer_phone_snapshot'] ?? '').toString().toLowerCase();
+      final customerCode =
+          (tx['customer_code_snapshot'] ?? '').toString().toLowerCase();
       final createdAt = (tx['created_at'] ?? '').toString();
       return id.contains(q) ||
           cashier.contains(q) ||
           payment.contains(q) ||
           type.contains(q) ||
           refundReason.contains(q) ||
+          customerName.contains(q) ||
+          customerPhone.contains(q) ||
+          customerCode.contains(q) ||
           _matchesDateSearch(createdAt, q);
     }).toList();
   }
@@ -606,6 +683,21 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     }
   }
 
+  String _customerName(Map<String, dynamic> tx) {
+    return (tx['customer_name_snapshot'] ?? '').toString().trim();
+  }
+
+  String _customerSubtitle(Map<String, dynamic> tx) {
+    final parts = <String>[];
+    final code = (tx['customer_code_snapshot'] ?? '').toString().trim();
+    final phone = (tx['customer_phone_snapshot'] ?? '').toString().trim();
+
+    if (code.isNotEmpty) parts.add(code);
+    if (phone.isNotEmpty) parts.add(phone);
+
+    return parts.isEmpty ? 'Registered customer' : parts.join(' • ');
+  }
+
   Color _typeColor(_TxPalette palette, String type) {
     return type == 'refund' ? palette.danger : palette.brand;
   }
@@ -795,7 +887,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                   controller: _searchController,
                   decoration: InputDecoration(
                     hintText:
-                        'Search by transaction, cashier, payment, or type',
+                        'Search transaction, customer, phone, cashier, payment, or type',
                     prefixIcon: Icon(Icons.search_rounded, color: palette.brand),
                     suffixIcon: _searchController.text.isEmpty
                         ? null
@@ -957,6 +1049,8 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     final paymentMethod = (tx['payment_method'] ?? '').toString();
     final discountAmount =
         ((tx['discount_amount'] as num?) ?? 0).toDouble().abs();
+    final customerName = _customerName(tx);
+    final hasCustomer = customerName.isNotEmpty;
 
     return Material(
       color: Colors.transparent,
@@ -1030,6 +1124,12 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                           'Time',
                           _formatDateTime(createdAt),
                         ),
+                        if (hasCustomer)
+                          _buildMiniInfoCard(
+                            palette,
+                            'Customer',
+                            '$customerName\n${_customerSubtitle(tx)}',
+                          ),
                         if (type == 'sale' && discountAmount > 0)
                           _buildMiniInfoCard(
                             palette,
@@ -1285,6 +1385,13 @@ Future<String?> showTransactionReceiptDialog(
   final paymentMethod = (summary['payment_method'] ?? '').toString();
   final amountTendered = ((summary['amount_tendered'] as num?) ?? 0).toDouble();
   final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
+  final customerName =
+      (summary['customer_name_snapshot'] ?? '').toString().trim();
+  final customerPhone =
+      (summary['customer_phone_snapshot'] ?? '').toString().trim();
+  final customerCode =
+      (summary['customer_code_snapshot'] ?? '').toString().trim();
+  final hasCustomer = customerName.isNotEmpty;
 
   String formatPercent(num value) {
     final number = value.toDouble();
@@ -1508,6 +1615,11 @@ Future<String?> showTransactionReceiptDialog(
                                 isRefund ? 'Refund' : 'Sale',
                               ),
                               buildInfoChip(Icons.person_outline_rounded, cashier),
+                              if (hasCustomer)
+                                buildInfoChip(
+                                  Icons.badge_outlined,
+                                  customerName,
+                                ),
                               buildInfoChip(
                                 Icons.schedule_outlined,
                                 formatDateTime(createdAt),
@@ -1524,6 +1636,41 @@ Future<String?> showTransactionReceiptDialog(
                                 ),
                             ],
                           ),
+                          if (hasCustomer) ...[
+                            const SizedBox(height: 14),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: palette.soft,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: palette.border),
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.person_pin_circle_outlined,
+                                    color: palette.brand,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      [
+                                        'Customer: $customerName',
+                                        if (customerCode.isNotEmpty) customerCode,
+                                        if (customerPhone.isNotEmpty) customerPhone,
+                                      ].join(' • '),
+                                      style: TextStyle(
+                                        color: palette.textPrimary,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                           if (isRefund && refundReason.isNotEmpty) ...[
                             const SizedBox(height: 14),
                             Container(

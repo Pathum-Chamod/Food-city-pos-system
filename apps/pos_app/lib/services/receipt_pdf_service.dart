@@ -68,6 +68,9 @@ class ReceiptPdfService {
     String storeName = 'FOOD CITY',
     String storeAddress = 'No. 1, Main Street',
     String storePhone = '+94 11 000 0000',
+    String? customerName,
+    String? customerPhone,
+    String? customerCode,
     bool isRefund = false,
     String? footerNote,
   }) async {
@@ -87,6 +90,12 @@ class ReceiptPdfService {
           '${now.hour.toString().padLeft(2, '0')}:'
           '${now.minute.toString().padLeft(2, '0')}:'
           '${now.second.toString().padLeft(2, '0')}';
+      final cleanCustomerName = (customerName ?? '').trim();
+      final cleanCustomerPhone = (customerPhone ?? '').trim();
+      final cleanCustomerCode = (customerCode ?? '').trim();
+      final hasCustomer = cleanCustomerName.isNotEmpty ||
+          cleanCustomerPhone.isNotEmpty ||
+          cleanCustomerCode.isNotEmpty;
 
       pdf.addPage(
         pw.MultiPage(
@@ -133,6 +142,15 @@ class ReceiptPdfService {
                 _receiptLabelValue('Date', dateStr),
                 _receiptLabelValue('Txn', '#$transactionId'),
                 _receiptLabelValue('Cashier', cashierName),
+                if (hasCustomer) ...[
+                  _receiptThinDivider(),
+                  if (cleanCustomerName.isNotEmpty)
+                    _receiptLabelValue('Customer', cleanCustomerName),
+                  if (cleanCustomerCode.isNotEmpty)
+                    _receiptLabelValue('Cus. Code', cleanCustomerCode),
+                  if (cleanCustomerPhone.isNotEmpty)
+                    _receiptLabelValue('Phone', cleanCustomerPhone),
+                ],
                 _receiptDivider(),
                 _receiptItemHeader(),
                 _receiptThinDivider(),

@@ -4,8 +4,10 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared/models/customer.dart';
 
 import '../services/database_helper.dart';
+import '../services/customer_service.dart';
 import '../widgets/app_snackbar.dart';
 
 class HeldCartsScreen extends StatefulWidget {
@@ -259,6 +261,81 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     );
   }
 
+
+  Future<List<Map<String, dynamic>>> _attachCustomerSnapshots(
+    List<Map<String, dynamic>> carts,
+  ) async {
+    if (carts.isEmpty) return carts;
+
+    final enriched = <Map<String, dynamic>>[];
+    for (final cart in carts) {
+      final row = Map<String, dynamic>.from(cart);
+      final id = (row['id'] as num?)?.toInt();
+      if (id != null && id > 0) {
+        final snapshot = await _loadHeldCartCustomerSnapshot(id);
+        if (snapshot != null) {
+          row.addAll(snapshot);
+        }
+      }
+      enriched.add(row);
+    }
+
+    return enriched;
+  }
+
+  Future<Map<String, dynamic>?> _loadHeldCartCustomerSnapshot(int heldCartId) async {
+    if (heldCartId <= 0) return null;
+
+    try {
+      await CustomerService.instance.ensureCustomerStorage();
+      final db = await DatabaseHelper.instance.database;
+      final rows = await db.query(
+        'held_carts',
+        columns: const [
+          'customer_id',
+          'customer_name_snapshot',
+          'customer_phone_snapshot',
+          'customer_code_snapshot',
+        ],
+        where: 'id = ?',
+        whereArgs: [heldCartId],
+        limit: 1,
+      );
+
+      if (rows.isEmpty) return null;
+      return Map<String, dynamic>.from(rows.first);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Customer? _customerFromHeldCartRow(Map<String, dynamic> row) {
+    return CustomerService.instance.customerFromHeldCartRow(row);
+  }
+
+  Map<String, dynamic>? _findHeldCartRowById(int heldCartId) {
+    for (final cart in _heldCarts) {
+      final id = (cart['id'] as num?)?.toInt();
+      if (id == heldCartId) return cart;
+    }
+    return null;
+  }
+
+  Map<String, dynamic> _withRestoredCustomer(
+    Map<String, dynamic> restored,
+    Customer? customer,
+  ) {
+    if (customer == null) return restored;
+
+    final updated = Map<String, dynamic>.from(restored);
+    updated['selected_customer'] = customer.toMap();
+    updated['customer_id'] = customer.id;
+    updated['customer_name_snapshot'] = customer.displayName;
+    updated['customer_phone_snapshot'] = customer.hasPhone ? customer.phone : null;
+    updated['customer_code_snapshot'] = customer.displayCode;
+    return updated;
+  }
+
   Future<void> _loadHeldCarts() async {
     if (!mounted) return;
 
@@ -266,13 +343,15 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
       _isLoading = true;
     });
 
+    await CustomerService.instance.ensureCustomerStorage();
     final carts =
         await DatabaseHelper.instance.getHeldCartsForCashier(widget.cashierName);
+    final enrichedCarts = await _attachCustomerSnapshots(carts);
 
     if (!mounted) return;
 
     setState(() {
-      _heldCarts = carts;
+      _heldCarts = enrichedCarts;
       _isLoading = false;
       _syncSelectedCartIndex();
     });
@@ -299,6 +378,8 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     final query = _searchController.text.trim().toLowerCase();
     if (query.isEmpty) return _heldCarts;
 
+    final phoneQuery = CustomerService.instance.normalizePhone(query);
+
     return _heldCarts.where((cart) {
       final cartName = (cart['cart_name'] ?? 'Held Cart').toString().toLowerCase();
       final type = ((cart['is_refund_mode'] ?? false) == true ? 'refund' : 'sale');
@@ -306,12 +387,19 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
       final totalAmount = ((cart['total_amount'] as num?) ?? 0).toDouble();
       final totalText = totalAmount.toStringAsFixed(2);
       final updatedAt = _formatDateTime((cart['updated_at'] ?? '').toString()).toLowerCase();
+      final customerName = (cart['customer_name_snapshot'] ?? '').toString().toLowerCase();
+      final customerPhone = (cart['customer_phone_snapshot'] ?? '').toString().toLowerCase();
+      final customerCode = (cart['customer_code_snapshot'] ?? '').toString().toLowerCase();
 
       return cartName.contains(query) ||
           type.contains(query) ||
           itemCount.contains(query) ||
           totalText.contains(query) ||
-          updatedAt.contains(query);
+          updatedAt.contains(query) ||
+          customerName.contains(query) ||
+          customerPhone.contains(query) ||
+          (phoneQuery.isNotEmpty && customerPhone.contains(phoneQuery)) ||
+          customerCode.contains(query);
     }).toList();
   }
 
@@ -355,7 +443,7 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
 
   InputDecoration _searchDecoration() {
     return InputDecoration(
-      hintText: 'Search held bill by name, type, amount, or saved date',
+      hintText: 'Search held bill by name, customer, amount, or saved date',
       prefixIcon: Icon(Icons.search_rounded, color: _textMuted, size: 20),
       suffixIcon: _searchController.text.isEmpty
           ? null
@@ -397,6 +485,16 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
       _isResumingHeldCart = true;
     });
 
+    Customer? customerSnapshot = _customerFromHeldCartRow(
+      _findHeldCartRowById(heldCartId) ?? const <String, dynamic>{},
+    );
+    if (customerSnapshot == null) {
+      final row = await _loadHeldCartCustomerSnapshot(heldCartId);
+      if (row != null) {
+        customerSnapshot = _customerFromHeldCartRow(row);
+      }
+    }
+
     final Map<String, dynamic>? restored;
     try {
       restored = await DatabaseHelper.instance.resumeHeldCart(
@@ -430,7 +528,10 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
       return;
     }
 
-    Navigator.pop(context, restored);
+    Navigator.pop(
+      context,
+      _withRestoredCustomer(restored, customerSnapshot),
+    );
   }
 
   Future<bool> _showDeleteDialog(String cartName) async {
@@ -720,6 +821,7 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     final itemCount = _formatQuantity((cart['item_count'] as num?) ?? 0);
     final totalAmount = ((cart['total_amount'] as num?) ?? 0).toDouble();
     final updatedAt = (cart['updated_at'] ?? '').toString();
+    final customer = _customerFromHeldCartRow(cart);
 
     final modeColor = isRefundMode ? _danger : _brand;
     final modeSoft = isRefundMode ? _dangerSoft : _brandSoft;
@@ -831,6 +933,41 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                             ),
                           ),
                         ),
+                        if (customer != null) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: _brandSoft,
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: _brand.withOpacity(0.22)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.person_rounded,
+                                  size: 13,
+                                  color: _brand,
+                                ),
+                                const SizedBox(width: 5),
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 150),
+                                  child: Text(
+                                    customer.displayName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: _brand,
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         const SizedBox(width: 8),
                         InkWell(
                           borderRadius: BorderRadius.circular(12),
@@ -875,6 +1012,17 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                             fontSize: 13,
                           ),
                         ),
+                        if (customer != null && customer.hasPhone) ...[
+                          _buildMetaDot(),
+                          Text(
+                            customer.displayPhone,
+                            style: TextStyle(
+                              color: _textSecondary,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
                         _buildMetaDot(),
                         Text(
                           'Saved ${_formatDateTime(updatedAt)}',
