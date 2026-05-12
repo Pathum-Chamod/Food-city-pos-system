@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import 'product.dart';
+
 @immutable
 class Customer {
   const Customer({
@@ -18,6 +20,10 @@ class Customer {
     this.currentCreditBalance = 0.0,
     this.creditStatus = 'normal',
     this.creditNote,
+    this.pricingEnabled = false,
+    this.defaultPriceType = ProductPriceType.selling,
+    this.defaultDiscountPercent = 0.0,
+    this.pricingNote,
     required this.createdAt,
     required this.updatedAt,
     this.createdBy,
@@ -45,6 +51,12 @@ class Customer {
   final String creditStatus; // normal | watchlist | blocked
   final String? creditNote;
 
+  /// Customer-specific pricing fields.
+  final bool pricingEnabled;
+  final ProductPriceType defaultPriceType;
+  final double defaultDiscountPercent;
+  final String? pricingNote;
+
   final String createdAt;
   final String updatedAt;
   final int? createdBy;
@@ -55,6 +67,7 @@ class Customer {
   bool get hasAddress => (address ?? '').trim().isNotEmpty;
   bool get hasNotes => (notes ?? '').trim().isNotEmpty;
   bool get hasCreditNote => (creditNote ?? '').trim().isNotEmpty;
+  bool get hasPricingNote => (pricingNote ?? '').trim().isNotEmpty;
 
   String get displayCode {
     final trimmed = customerCode.trim();
@@ -114,6 +127,12 @@ class Customer {
 
   bool get isCreditBlocked => normalizedCreditStatus == 'blocked';
 
+  double get normalizedDefaultDiscountPercent {
+    if (defaultDiscountPercent < 0) return 0.0;
+    if (defaultDiscountPercent > 100) return 100.0;
+    return defaultDiscountPercent;
+  }
+
   double get availableCredit {
     final available = creditLimit - currentCreditBalance;
     return double.parse(available.toStringAsFixed(2));
@@ -141,6 +160,10 @@ class Customer {
     double? currentCreditBalance,
     String? creditStatus,
     String? creditNote,
+    bool? pricingEnabled,
+    ProductPriceType? defaultPriceType,
+    double? defaultDiscountPercent,
+    String? pricingNote,
     String? createdAt,
     String? updatedAt,
     int? createdBy,
@@ -159,10 +182,14 @@ class Customer {
       isActive: isActive ?? this.isActive,
       creditEnabled: creditEnabled ?? this.creditEnabled,
       creditLimit: creditLimit ?? this.creditLimit,
-      currentCreditBalance:
-          currentCreditBalance ?? this.currentCreditBalance,
+      currentCreditBalance: currentCreditBalance ?? this.currentCreditBalance,
       creditStatus: creditStatus ?? this.creditStatus,
       creditNote: creditNote ?? this.creditNote,
+      pricingEnabled: pricingEnabled ?? this.pricingEnabled,
+      defaultPriceType: defaultPriceType ?? this.defaultPriceType,
+      defaultDiscountPercent:
+          defaultDiscountPercent ?? this.defaultDiscountPercent,
+      pricingNote: pricingNote ?? this.pricingNote,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       createdBy: createdBy ?? this.createdBy,
@@ -187,6 +214,10 @@ class Customer {
       'current_credit_balance': currentCreditBalance,
       'credit_status': normalizedCreditStatus,
       'credit_note': creditNote,
+      'pricing_enabled': pricingEnabled ? 1 : 0,
+      'default_price_type': defaultPriceType.dbValue,
+      'default_discount_percent': normalizedDefaultDiscountPercent,
+      'pricing_note': pricingNote,
       'created_at': createdAt,
       'updated_at': updatedAt,
       'created_by': createdBy,
@@ -241,6 +272,12 @@ class Customer {
       currentCreditBalance: readDouble(map['current_credit_balance']),
       creditStatus: (map['credit_status'] ?? 'normal').toString(),
       creditNote: readNullableString(map['credit_note']),
+      pricingEnabled: readBool(map['pricing_enabled'], fallback: false),
+      defaultPriceType: ProductPriceTypeX.fromDb(
+        map['default_price_type']?.toString(),
+      ),
+      defaultDiscountPercent: readDouble(map['default_discount_percent']),
+      pricingNote: readNullableString(map['pricing_note']),
       createdAt: (map['created_at'] ?? now).toString(),
       updatedAt: (map['updated_at'] ?? now).toString(),
       createdBy: readNullableInt(map['created_by']),

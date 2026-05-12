@@ -231,6 +231,13 @@ def normalize_customer_type(value):
     return "regular"
 
 
+def normalize_price_type(value):
+    normalized = str(value or "selling").strip().lower()
+    if normalized in {"wholesale", "sale"}:
+        return normalized
+    return "selling"
+
+
 def create_customer_tables(cursor):
     cursor.execute(
         """
@@ -262,6 +269,77 @@ def create_customer_tables(cursor):
     ensure_column(cursor, "customers", "current_credit_balance", "current_credit_balance REAL NOT NULL DEFAULT 0")
     ensure_column(cursor, "customers", "credit_status", "credit_status TEXT NOT NULL DEFAULT 'normal'")
     ensure_column(cursor, "customers", "credit_note", "credit_note TEXT")
+    ensure_column(cursor, "customers", "pricing_enabled", "pricing_enabled INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "default_price_type", "default_price_type TEXT NOT NULL DEFAULT 'selling'")
+    ensure_column(cursor, "customers", "default_discount_percent", "default_discount_percent REAL NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "pricing_note", "pricing_note TEXT")
+
+
+def create_customer_product_prices_table(cursor):
+    create_customer_tables(cursor)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customer_product_prices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_id INTEGER NOT NULL,
+            barcode TEXT NOT NULL,
+            product_name_snapshot TEXT NOT NULL,
+            fixed_price REAL NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by INTEGER,
+            updated_by INTEGER,
+            UNIQUE(customer_id, barcode)
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_product_prices_customer ON customer_product_prices(customer_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_product_prices_barcode ON customer_product_prices(barcode)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_product_prices_active ON customer_product_prices(is_active)")
+
+
+def create_sale_items_table(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sale_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sale_id INTEGER NOT NULL,
+            barcode TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            unit_price REAL NOT NULL DEFAULT 0,
+            marked_price REAL NOT NULL DEFAULT 0,
+            price_category_used TEXT NOT NULL DEFAULT 'selling',
+            system_unit_price REAL NOT NULL DEFAULT 0,
+            price_override_type TEXT NOT NULL DEFAULT 'none',
+            price_override_reason TEXT NOT NULL DEFAULT '',
+            price_override_original_price REAL NOT NULL DEFAULT 0,
+            price_override_difference REAL NOT NULL DEFAULT 0,
+            price_history_id INTEGER,
+            price_override_approved_by TEXT,
+            cost_price_snapshot REAL NOT NULL DEFAULT 0,
+            quantity REAL NOT NULL DEFAULT 0,
+            base_line_total REAL NOT NULL DEFAULT 0,
+            item_discount_type TEXT NOT NULL DEFAULT 'none',
+            item_discount_value REAL NOT NULL DEFAULT 0,
+            explicit_item_discount_amount REAL NOT NULL DEFAULT 0,
+            cart_discount_amount REAL NOT NULL DEFAULT 0,
+            item_discount_amount REAL NOT NULL DEFAULT 0,
+            line_total REAL NOT NULL DEFAULT 0,
+            customer_pricing_applied INTEGER NOT NULL DEFAULT 0,
+            customer_pricing_type TEXT NOT NULL DEFAULT 'none',
+            customer_pricing_rule_id INTEGER,
+            customer_pricing_original_price REAL NOT NULL DEFAULT 0,
+            customer_pricing_final_price REAL NOT NULL DEFAULT 0,
+            customer_pricing_discount_amount REAL NOT NULL DEFAULT 0,
+            customer_pricing_note TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sale_items_barcode ON sale_items(barcode)")
 
 
 def ensure_customer_sales_columns(cursor):
@@ -344,6 +422,10 @@ def fetch_customers(cursor, params):
             customer_type,
             notes,
             COALESCE(is_active, 1) AS is_active,
+            COALESCE(pricing_enabled, 0) AS pricing_enabled,
+            COALESCE(default_price_type, 'selling') AS default_price_type,
+            COALESCE(default_discount_percent, 0) AS default_discount_percent,
+            pricing_note,
             created_at,
             updated_at,
             created_by,
@@ -373,6 +455,10 @@ def get_customer_by_id(cursor, customer_id):
             customer_type,
             notes,
             COALESCE(is_active, 1) AS is_active,
+            COALESCE(pricing_enabled, 0) AS pricing_enabled,
+            COALESCE(default_price_type, 'selling') AS default_price_type,
+            COALESCE(default_discount_percent, 0) AS default_discount_percent,
+            pricing_note,
             created_at,
             updated_at,
             created_by,
@@ -430,12 +516,16 @@ def create_customer(cursor, body):
             customer_type,
             notes,
             is_active,
+            pricing_enabled,
+            default_price_type,
+            default_discount_percent,
+            pricing_note,
             created_at,
             updated_at,
             created_by,
             updated_by
         )
-        VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name,
@@ -445,6 +535,10 @@ def create_customer(cursor, body):
             clean_optional_text(body.get("address")),
             normalize_customer_type(body.get("customer_type")),
             clean_optional_text(body.get("notes")),
+            1 if normalize_bool(body.get("pricing_enabled"), False) else 0,
+            normalize_price_type(body.get("default_price_type")),
+            max(0.0, min(parse_float(body.get("default_discount_percent"), 0.0), 100.0)),
+            clean_optional_text(body.get("pricing_note")),
             now,
             now,
             parse_int(body.get("created_by"), 0) or None,
@@ -495,6 +589,10 @@ def update_customer(cursor, body):
             customer_type = ?,
             notes = ?,
             is_active = ?,
+            pricing_enabled = ?,
+            default_price_type = ?,
+            default_discount_percent = ?,
+            pricing_note = ?,
             updated_at = ?,
             updated_by = ?
         WHERE id = ?
@@ -508,6 +606,22 @@ def update_customer(cursor, body):
             normalize_customer_type(body.get("customer_type")),
             clean_optional_text(body.get("notes")),
             1 if normalize_bool(body.get("is_active"), True) else 0,
+            1 if normalize_bool(body.get("pricing_enabled"), existing.get("pricing_enabled", 0) == 1) else 0,
+            normalize_price_type(body.get("default_price_type", existing.get("default_price_type", "selling"))),
+            max(
+                0.0,
+                min(
+                    parse_float(
+                        body.get(
+                            "default_discount_percent",
+                            existing.get("default_discount_percent", 0.0),
+                        ),
+                        0.0,
+                    ),
+                    100.0,
+                ),
+            ),
+            clean_optional_text(body.get("pricing_note", existing.get("pricing_note"))),
             now,
             parse_int(body.get("updated_by"), 0) or None,
             customer_id,
@@ -640,6 +754,17 @@ def upsert_customer_from_sync(cursor, data):
     current_balance = parse_float(data.get("current_credit_balance"), 0.0)
     credit_status = normalize_credit_status(data.get("credit_status"))
     credit_note = clean_optional_text(data.get("credit_note"))
+    pricing_enabled = 1 if normalize_bool(data.get("pricing_enabled"), False) else 0
+    default_price_type = (
+        normalize_price_type(data.get("default_price_type"))
+        if data.get("default_price_type") is not None
+        else None
+    )
+    default_discount_percent = max(
+        0.0,
+        min(parse_float(data.get("default_discount_percent"), 0.0), 100.0),
+    )
+    pricing_note = clean_optional_text(data.get("pricing_note"))
 
     if existing:
         resolved_id = parse_int(existing["id"], 0)
@@ -660,6 +785,10 @@ def upsert_customer_from_sync(cursor, data):
                 current_credit_balance = CASE WHEN ? IS NULL THEN current_credit_balance ELSE ? END,
                 credit_status = COALESCE(?, credit_status),
                 credit_note = COALESCE(?, credit_note),
+                pricing_enabled = CASE WHEN ? IS NULL THEN pricing_enabled ELSE ? END,
+                default_price_type = COALESCE(?, default_price_type),
+                default_discount_percent = CASE WHEN ? IS NULL THEN default_discount_percent ELSE ? END,
+                pricing_note = COALESCE(?, pricing_note),
                 updated_at = ?
             WHERE id = ?
             """,
@@ -678,6 +807,10 @@ def upsert_customer_from_sync(cursor, data):
                 data.get("current_credit_balance"), current_balance,
                 credit_status,
                 credit_note,
+                data.get("pricing_enabled"), pricing_enabled,
+                default_price_type or "selling",
+                data.get("default_discount_percent"), default_discount_percent,
+                pricing_note,
                 now,
                 resolved_id,
             ),
@@ -696,8 +829,9 @@ def upsert_customer_from_sync(cursor, data):
                 id, customer_code, name, phone, phone_normalized, email, address,
                 customer_type, notes, is_active, credit_enabled, credit_limit,
                 current_credit_balance, credit_status, credit_note,
+                pricing_enabled, default_price_type, default_discount_percent, pricing_note,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 customer_id,
@@ -715,6 +849,10 @@ def upsert_customer_from_sync(cursor, data):
                 current_balance,
                 credit_status,
                 credit_note,
+                pricing_enabled,
+                default_price_type,
+                default_discount_percent,
+                pricing_note,
                 now,
                 now,
             ),
@@ -727,8 +865,9 @@ def upsert_customer_from_sync(cursor, data):
             customer_code, name, phone, phone_normalized, email, address,
             customer_type, notes, is_active, credit_enabled, credit_limit,
             current_credit_balance, credit_status, credit_note,
+            pricing_enabled, default_price_type, default_discount_percent, pricing_note,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             customer_code,
@@ -745,6 +884,10 @@ def upsert_customer_from_sync(cursor, data):
             current_balance,
             credit_status,
             credit_note,
+            pricing_enabled,
+            default_price_type or "selling",
+            default_discount_percent,
+            pricing_note,
             now,
             now,
         ),
@@ -871,6 +1014,139 @@ def handle_credit_settings_sync(cursor, data):
         ),
     )
     return customer_id
+
+
+def handle_customer_pricing_settings_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    cursor.execute(
+        """
+        UPDATE customers
+        SET pricing_enabled = ?,
+            default_price_type = ?,
+            default_discount_percent = ?,
+            pricing_note = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            1 if normalize_bool(data.get("pricing_enabled"), False) else 0,
+            normalize_price_type(data.get("default_price_type")),
+            max(0.0, min(parse_float(data.get("default_discount_percent"), 0.0), 100.0)),
+            clean_optional_text(data.get("pricing_note")),
+            datetime.now().astimezone().isoformat(),
+            customer_id,
+        ),
+    )
+    return customer_id
+
+
+def handle_customer_product_price_sync(cursor, data):
+    create_customer_product_prices_table(cursor)
+    customer_id = parse_int(data.get("customer_id"), 0)
+    if customer_id <= 0:
+        customer_id = upsert_customer_from_sync(cursor, data)
+    if customer_id <= 0:
+        raise ValueError("Invalid customer for product price sync")
+
+    barcode = str(data.get("barcode") or "").strip()
+    if not barcode:
+        raise ValueError("Product barcode is required")
+
+    product_name = str(data.get("product_name_snapshot") or data.get("product_name") or barcode).strip()
+    fixed_price = max(0.0, parse_float(data.get("fixed_price"), 0.0))
+    is_active = 1 if normalize_bool(data.get("is_active"), True) else 0
+    note = clean_optional_text(data.get("note"))
+    now = datetime.now().astimezone().isoformat()
+    created_at = str(data.get("created_at") or now)
+    updated_at = str(data.get("updated_at") or now)
+    remote_id = parse_int(data.get("customer_product_price_id") or data.get("id"), 0)
+
+    existing = None
+    if remote_id > 0:
+        existing = cursor.execute(
+            "SELECT id FROM customer_product_prices WHERE id = ? LIMIT 1",
+            (remote_id,),
+        ).fetchone()
+    if existing is None:
+        existing = cursor.execute(
+            "SELECT id FROM customer_product_prices WHERE customer_id = ? AND barcode = ? LIMIT 1",
+            (customer_id, barcode),
+        ).fetchone()
+
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE customer_product_prices
+            SET customer_id = ?,
+                barcode = ?,
+                product_name_snapshot = ?,
+                fixed_price = ?,
+                is_active = ?,
+                note = ?,
+                updated_at = ?,
+                updated_by = ?
+            WHERE id = ?
+            """,
+            (
+                customer_id,
+                barcode,
+                product_name,
+                fixed_price,
+                is_active,
+                note,
+                updated_at,
+                parse_int(data.get("updated_by"), 0) or None,
+                resolved_id,
+            ),
+        )
+        return resolved_id
+
+    if remote_id > 0:
+        cursor.execute(
+            """
+            INSERT INTO customer_product_prices (
+                id, customer_id, barcode, product_name_snapshot, fixed_price,
+                is_active, note, created_at, updated_at, created_by, updated_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                remote_id,
+                customer_id,
+                barcode,
+                product_name,
+                fixed_price,
+                is_active,
+                note,
+                created_at,
+                updated_at,
+                parse_int(data.get("created_by"), 0) or None,
+                parse_int(data.get("updated_by"), 0) or None,
+            ),
+        )
+        return remote_id
+
+    cursor.execute(
+        """
+        INSERT INTO customer_product_prices (
+            customer_id, barcode, product_name_snapshot, fixed_price,
+            is_active, note, created_at, updated_at, created_by, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            customer_id,
+            barcode,
+            product_name,
+            fixed_price,
+            is_active,
+            note,
+            created_at,
+            updated_at,
+            parse_int(data.get("created_by"), 0) or None,
+            parse_int(data.get("updated_by"), 0) or None,
+        ),
+    )
+    return cursor.lastrowid
 
 
 def handle_credit_sale_update_sync(cursor, data):
@@ -2076,6 +2352,97 @@ def _extract_item_cost_snapshot(item):
             return parse_float(item.get(key), 0.0)
     product = item.get("product", {}) or {}
     return parse_float(product.get("cost_price"), 0.0)
+
+
+def _item_bool(value, default=False):
+    return 1 if normalize_bool(value, default) else 0
+
+
+def insert_sale_item_snapshots(cursor, sale_id, items, created_at):
+    create_sale_items_table(cursor)
+    cursor.execute("DELETE FROM sale_items WHERE sale_id = ?", (sale_id,))
+
+    for item in items:
+        product = item.get("product", {}) or {}
+        barcode = _extract_item_barcode(item)
+        product_name = _extract_item_name(item)
+        quantity = max(_extract_item_quantity(item), 0)
+        unit_price = parse_float(
+            item.get("unit_price_used", item.get("unit_price", item.get("price"))),
+            _extract_item_price(item),
+        )
+        system_unit_price = parse_float(item.get("system_unit_price"), unit_price)
+        marked_price = parse_float(product.get("selling_price", product.get("price")), unit_price)
+        base_line_total = parse_float(
+            item.get("base_line_total"),
+            unit_price * quantity,
+        )
+        item_discount = parse_float(item.get("item_discount_amount"), 0.0)
+        line_total = parse_float(
+            item.get("line_total"),
+            max(0.0, base_line_total - item_discount),
+        )
+        price_override_type = str(item.get("price_override_type") or "none").strip().lower()
+        if price_override_type not in {"none", "manual", "old_label"}:
+            price_override_type = "none"
+        customer_pricing_type = str(item.get("customer_pricing_type") or "none").strip().lower()
+        if customer_pricing_type not in {
+            "none",
+            "customer_product_price",
+            "customer_default_price_type",
+            "customer_default_discount",
+        }:
+            customer_pricing_type = "none"
+
+        cursor.execute(
+            """
+            INSERT INTO sale_items (
+                sale_id, barcode, product_name, unit_price, marked_price,
+                price_category_used, system_unit_price, price_override_type,
+                price_override_reason, price_override_original_price,
+                price_override_difference, price_history_id,
+                price_override_approved_by, cost_price_snapshot, quantity,
+                base_line_total, item_discount_type, item_discount_value,
+                explicit_item_discount_amount, cart_discount_amount,
+                item_discount_amount, line_total, customer_pricing_applied,
+                customer_pricing_type, customer_pricing_rule_id,
+                customer_pricing_original_price, customer_pricing_final_price,
+                customer_pricing_discount_amount, customer_pricing_note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sale_id,
+                barcode,
+                product_name,
+                unit_price,
+                marked_price,
+                normalize_price_type(item.get("price_type_used") or item.get("price_category_used")),
+                system_unit_price,
+                price_override_type,
+                clean_optional_text(item.get("price_override_reason")) or "",
+                parse_float(item.get("price_override_original_price"), system_unit_price),
+                parse_float(item.get("price_override_difference"), unit_price - system_unit_price),
+                parse_int(item.get("price_history_id"), 0) or None,
+                clean_optional_text(item.get("price_override_approved_by")),
+                _extract_item_cost_snapshot(item),
+                quantity,
+                base_line_total,
+                str(item.get("item_discount_type") or "none"),
+                parse_float(item.get("item_discount_value"), 0.0),
+                parse_float(item.get("explicit_item_discount_amount"), 0.0),
+                parse_float(item.get("cart_discount_amount"), 0.0),
+                item_discount,
+                line_total,
+                _item_bool(item.get("customer_pricing_applied"), False),
+                customer_pricing_type,
+                parse_int(item.get("customer_pricing_rule_id"), 0) or None,
+                parse_float(item.get("customer_pricing_original_price"), 0.0),
+                parse_float(item.get("customer_pricing_final_price"), 0.0),
+                parse_float(item.get("customer_pricing_discount_amount"), 0.0),
+                clean_optional_text(item.get("customer_pricing_note")),
+                created_at,
+            ),
+        )
 
 
 def _extract_item_sales_amount(item):
@@ -3446,6 +3813,8 @@ def build_data_backup(cursor):
     create_business_info_table(cursor)
     seed_business_info_if_needed(cursor)
     create_user_tables(cursor)
+    create_customer_product_prices_table(cursor)
+    create_sale_items_table(cursor)
 
     def query_rows(sql, args=()):
         return [dict(row) for row in cursor.execute(sql, args).fetchall()]
@@ -3466,6 +3835,8 @@ def build_data_backup(cursor):
         'stock_receipts': query_rows('SELECT * FROM stock_receipts ORDER BY datetime(created_at) DESC, id DESC'),
         'inventory_history': query_rows('SELECT * FROM inventory_history ORDER BY datetime(created_at) DESC, id DESC'),
         'sales': query_rows('SELECT * FROM sales ORDER BY datetime(created_at) DESC, id DESC'),
+        'sale_items': query_rows('SELECT * FROM sale_items ORDER BY sale_id DESC, id ASC'),
+        'customer_product_prices': query_rows('SELECT * FROM customer_product_prices ORDER BY customer_id ASC, product_name_snapshot COLLATE NOCASE ASC'),
         'customer_ledger': query_rows('SELECT * FROM customer_ledger ORDER BY datetime(created_at) DESC, id DESC'),
         'customer_payments': query_rows('SELECT * FROM customer_payments ORDER BY datetime(created_at) DESC, id DESC'),
         'owner_users': get_owner_users(cursor, {'search': [''], 'role': ['all'], 'status': ['all']}),
@@ -3814,6 +4185,8 @@ def init_db():
     ensure_column(c, "sales", "gross_profit", "gross_profit REAL DEFAULT 0")
     ensure_customer_sales_columns(c)
     create_customer_credit_tables(c)
+    create_customer_product_prices_table(c)
+    create_sale_items_table(c)
 
     c.execute(
         """
@@ -4173,6 +4546,21 @@ class APIHandler(BaseHTTPRequestHandler):
                 json.dumps({"status": "success", "customers": result}).encode()
             )
 
+        elif action == "get_customer_product_prices":
+            create_customer_product_prices_table(c)
+            customer_id = parse_int(params.get("customer_id", params.get("id", ["0"]))[0], 0)
+            active_only = normalize_bool(params.get("active_only", ["0"])[0], False)
+            query = "SELECT * FROM customer_product_prices WHERE customer_id = ?"
+            args = [customer_id]
+            if active_only:
+                query += " AND COALESCE(is_active, 1) = 1"
+            query += " ORDER BY COALESCE(is_active, 1) DESC, product_name_snapshot COLLATE NOCASE ASC"
+            result = [dict(row) for row in c.execute(query, args).fetchall()]
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "product_prices": result}).encode()
+            )
+
         elif action == "get_customer_summary":
             customer_id = params.get("customer_id", params.get("id", ["0"]))[0]
             summary = get_customer_summary(c, customer_id)
@@ -4465,6 +4853,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     ),
                 )
                 sale_id = c.lastrowid
+                insert_sale_item_snapshots(c, sale_id, items, created_at)
 
                 for item in items:
                     product = item.get("product", {})
@@ -4511,6 +4900,20 @@ class APIHandler(BaseHTTPRequestHandler):
                 customer_id = handle_credit_settings_sync(c, data)
                 conn.commit()
                 print(f"  ✅ CUSTOMER_CREDIT_SETTINGS synced: customer #{customer_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CUSTOMER_PRICING_SETTINGS":
+                customer_id = handle_customer_pricing_settings_sync(c, data)
+                conn.commit()
+                print(f"  CUSTOMER_PRICING_SETTINGS synced: customer #{customer_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"CUSTOMER_PRODUCT_PRICE_UPSERT", "CUSTOMER_PRODUCT_PRICE"}:
+                price_id = handle_customer_product_price_sync(c, data)
+                conn.commit()
+                print(f"  CUSTOMER_PRODUCT_PRICE synced: rule #{price_id}")
                 self._set_headers()
                 self.wfile.write(json.dumps({"status": "success"}).encode())
 
@@ -4979,6 +5382,18 @@ class APIHandler(BaseHTTPRequestHandler):
             conn.commit()
             self._set_headers()
             self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+
+        elif action == "update_customer_pricing_settings":
+            customer_id = handle_customer_pricing_settings_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+
+        elif action == "upsert_customer_product_price":
+            price_id = handle_customer_product_price_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": price_id}).encode())
 
         elif action == "receive_customer_payment":
             payment_id = handle_customer_payment_sync(c, body)

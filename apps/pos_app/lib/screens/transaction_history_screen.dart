@@ -26,7 +26,6 @@ class TransactionHistoryScreen extends StatefulWidget {
         .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
-
   static Future<Map<String, dynamic>?> _getTransactionSummaryWithCustomer(
     int saleId,
   ) async {
@@ -34,20 +33,25 @@ class TransactionHistoryScreen extends StatefulWidget {
     if (summary == null) return null;
 
     final resolved = Map<String, dynamic>.from(summary);
-    final customerSnapshot =
-        await CustomerService.instance.getSaleCustomerSnapshotMap(saleId);
+    final customerSnapshot = await CustomerService.instance
+        .getSaleCustomerSnapshotMap(saleId);
     resolved.addAll(customerSnapshot);
 
-    final creditInfo = await CustomerCreditService.instance.getCreditSaleInfo(saleId);
+    final creditInfo = await CustomerCreditService.instance.getCreditSaleInfo(
+      saleId,
+    );
     if (creditInfo != null) {
       resolved.addAll(creditInfo);
     }
 
-    final paymentMethod =
-        (resolved['payment_method'] ?? '').toString().toLowerCase();
-    final creditStatus =
-        (resolved['credit_status'] ?? '').toString().toLowerCase();
-    final isCreditSale = _readBool(resolved['is_credit_sale']) ||
+    final paymentMethod = (resolved['payment_method'] ?? '')
+        .toString()
+        .toLowerCase();
+    final creditStatus = (resolved['credit_status'] ?? '')
+        .toString()
+        .toLowerCase();
+    final isCreditSale =
+        _readBool(resolved['is_credit_sale']) ||
         paymentMethod == 'customer_credit' ||
         paymentMethod == 'customer_credit_refund' ||
         creditStatus == 'refund_posted';
@@ -56,8 +60,8 @@ class TransactionHistoryScreen extends StatefulWidget {
         (resolved['credit_limit_snapshot'] == null) &&
         customerId != null &&
         customerId > 0) {
-      final creditSummary =
-          await CustomerCreditService.instance.getCreditSummary(customerId);
+      final creditSummary = await CustomerCreditService.instance
+          .getCreditSummary(customerId);
       resolved['credit_limit_snapshot'] = creditSummary.creditLimit;
     }
 
@@ -77,6 +81,57 @@ class TransactionHistoryScreen extends StatefulWidget {
     if (value is num) return value.toInt() == 1;
     final text = value.toString().trim().toLowerCase();
     return text == '1' || text == 'true' || text == 'yes';
+  }
+
+  static String _customerPricingLabel(Map<String, dynamic> item) {
+    final type = (item['customer_pricing_type'] ?? 'none')
+        .toString()
+        .trim()
+        .toLowerCase();
+    switch (type) {
+      case 'customer_product_price':
+        return 'Customer Price';
+      case 'customer_default_price_type':
+        final priceType = (item['price_category_used'] ?? 'selling')
+            .toString()
+            .trim()
+            .toLowerCase();
+        if (priceType == 'wholesale') return 'Wholesale Price';
+        if (priceType == 'sale') return 'Sale Price';
+        return 'Selling Price';
+      case 'customer_default_discount':
+        return 'Customer Discount';
+      default:
+        return '';
+    }
+  }
+
+  static String _customerPricingDetail(Map<String, dynamic> item) {
+    final label = _customerPricingLabel(item);
+    if (label.isEmpty) return '';
+
+    final original = ((item['customer_pricing_original_price'] as num?) ?? 0)
+        .toDouble();
+    final finalPrice = ((item['customer_pricing_final_price'] as num?) ?? 0)
+        .toDouble();
+    final discount = ((item['customer_pricing_discount_amount'] as num?) ?? 0)
+        .toDouble();
+
+    final parts = <String>[label];
+    if (original > 0 && finalPrice > 0) {
+      parts.add('Original Rs. ${original.toStringAsFixed(2)}');
+      parts.add('Final Rs. ${finalPrice.toStringAsFixed(2)}');
+    }
+    if (discount > 0) {
+      parts.add('Saved Rs. ${discount.toStringAsFixed(2)} each');
+    }
+
+    final note = (item['customer_pricing_note'] ?? '').toString().trim();
+    if (note.isNotEmpty) {
+      parts.add(note);
+    }
+
+    return parts.join(' | ');
   }
 
   static Future<void> showReceiptDialogForTransaction(
@@ -105,16 +160,15 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     if (!context.mounted) return;
 
-    final type =
-        (summary['transaction_type'] ?? 'sale').toString().toLowerCase();
+    final type = (summary['transaction_type'] ?? 'sale')
+        .toString()
+        .toLowerCase();
 
     if (action == 'refund' && type == 'sale') {
       final refundSaleId = await Navigator.push<int>(
         context,
         MaterialPageRoute(
-          builder: (context) => RefundTransactionScreen(
-            originalSaleId: saleId,
-          ),
+          builder: (context) => RefundTransactionScreen(originalSaleId: saleId),
         ),
       );
 
@@ -124,10 +178,10 @@ class TransactionHistoryScreen extends StatefulWidget {
         try {
           final result = await CustomerCreditService.instance
               .postCreditRefundFromOriginalSale(
-            originalSaleId: saleId,
-            refundSaleId: refundSaleId,
-            performedBy: (summary['cashier_name'] ?? 'Unknown').toString(),
-          );
+                originalSaleId: saleId,
+                refundSaleId: refundSaleId,
+                performedBy: (summary['cashier_name'] ?? 'Unknown').toString(),
+              );
 
           if (context.mounted && result != null) {
             AppSnackBar.show(
@@ -174,7 +228,8 @@ class TransactionHistoryScreen extends StatefulWidget {
       if (context.mounted) {
         AppSnackBar.show(
           context,
-          message: 'Receipt printer is not selected. Open Hardware Setup first.',
+          message:
+              'Receipt printer is not selected. Open Hardware Setup first.',
           backgroundColor: Colors.orange,
         );
       }
@@ -197,16 +252,19 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     final paymentMethod = (summary['payment_method'] ?? 'cash').toString();
     final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
-    final subtotal =
-        ((summary['subtotal_amount'] as num?) ?? 0).toDouble().abs();
-    final discountAmount =
-        ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
+    final subtotal = ((summary['subtotal_amount'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+    final discountAmount = ((summary['discount_amount'] as num?) ?? 0)
+        .toDouble()
+        .abs();
     final discountType = (summary['discount_type'] ?? 'none').toString();
-    final discountValue =
-        ((summary['discount_value'] as num?) ?? 0).toDouble().abs();
+    final discountValue = ((summary['discount_value'] as num?) ?? 0)
+        .toDouble()
+        .abs();
     final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
-    final amountTendered =
-        ((summary['amount_tendered'] as num?) ?? 0).toDouble();
+    final amountTendered = ((summary['amount_tendered'] as num?) ?? 0)
+        .toDouble();
     final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
     final isRefund =
         (summary['transaction_type'] ?? 'sale').toString().toLowerCase() ==
@@ -224,52 +282,64 @@ class TransactionHistoryScreen extends StatefulWidget {
       'customer_code_snapshot',
     );
     final paymentMethodLower = paymentMethod.toLowerCase();
-    final creditStatus =
-        (summary['credit_status'] ?? '').toString().toLowerCase();
-    final isCreditSale = _readBool(summary['is_credit_sale']) ||
+    final creditStatus = (summary['credit_status'] ?? '')
+        .toString()
+        .toLowerCase();
+    final isCreditSale =
+        _readBool(summary['is_credit_sale']) ||
         paymentMethodLower == 'customer_credit' ||
         paymentMethodLower == 'customer_credit_refund' ||
         creditStatus == 'refund_posted';
     final creditPreviousBalance =
         ((summary['credit_previous_balance'] as num?) ?? 0).toDouble();
-    final creditNewBalance =
-        ((summary['credit_new_balance'] as num?) ?? 0).toDouble();
-    final creditBillAmount =
-        ((summary['credit_bill_amount'] as num?) ?? total).toDouble().abs();
-    final creditLimit =
-        ((summary['credit_limit_snapshot'] as num?) ?? 0).toDouble();
-    final creditApprovedBy =
-        (summary['credit_approved_by'] ?? '').toString().trim();
+    final creditNewBalance = ((summary['credit_new_balance'] as num?) ?? 0)
+        .toDouble();
+    final creditBillAmount = ((summary['credit_bill_amount'] as num?) ?? total)
+        .toDouble()
+        .abs();
+    final creditLimit = ((summary['credit_limit_snapshot'] as num?) ?? 0)
+        .toDouble();
+    final creditApprovedBy = (summary['credit_approved_by'] ?? '')
+        .toString()
+        .trim();
 
     final receiptItems = items.map((item) {
-      final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
+      final finalLineTotal = ((item['line_total'] as num?) ?? 0)
+          .toDouble()
+          .abs();
       final baseLineTotal =
-          ((item['base_line_total'] as num?) ?? finalLineTotal).toDouble().abs();
+          ((item['base_line_total'] as num?) ?? finalLineTotal)
+              .toDouble()
+              .abs();
       final storedExplicitItemDiscount =
           ((item['explicit_item_discount_amount'] as num?) ?? 0)
               .toDouble()
               .abs();
-      final storedCartDiscount =
-          ((item['cart_discount_amount'] as num?) ?? 0).toDouble().abs();
+      final storedCartDiscount = ((item['cart_discount_amount'] as num?) ?? 0)
+          .toDouble()
+          .abs();
       final storedCombinedItemDiscount =
           ((item['item_discount_amount'] as num?) ?? 0).toDouble().abs();
       final explicitItemDiscount = storedExplicitItemDiscount > 0
           ? storedExplicitItemDiscount
           : (storedCartDiscount <= 0 && discountType == 'none'
-              ? storedCombinedItemDiscount
-              : 0.0);
+                ? storedCombinedItemDiscount
+                : 0.0);
       return {
         'name': (item['product_name'] ?? 'Item').toString(),
         'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
         'markedPrice':
-            ((item['marked_price'] as num?) ?? (item['unit_price'] as num?) ?? 0)
+            ((item['marked_price'] as num?) ??
+                    (item['unit_price'] as num?) ??
+                    0)
                 .toDouble(),
         'priceType': (item['price_category_used'] ?? 'selling').toString(),
         'baseLineTotal': baseLineTotal,
         'itemDiscountType': (item['item_discount_type'] ?? 'none').toString(),
-        'itemDiscountValue':
-            ((item['item_discount_value'] as num?) ?? 0).toDouble().abs(),
+        'itemDiscountValue': ((item['item_discount_value'] as num?) ?? 0)
+            .toDouble()
+            .abs(),
         'itemDiscountAmount': explicitItemDiscount,
         'lineTotal': baseLineTotal - explicitItemDiscount,
       };
@@ -301,7 +371,9 @@ class TransactionHistoryScreen extends StatefulWidget {
       discountType: discountType,
       discountValue: discountValue,
       total: total,
-      amountTendered: paymentMethod.toLowerCase() == 'cash' ? amountTendered : null,
+      amountTendered: paymentMethod.toLowerCase() == 'cash'
+          ? amountTendered
+          : null,
       changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
       isRefund: isRefund,
       isCreditSale: isCreditSale,
@@ -343,16 +415,19 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     final paymentMethod = (summary['payment_method'] ?? 'cash').toString();
     final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
-    final subtotal =
-        ((summary['subtotal_amount'] as num?) ?? 0).toDouble().abs();
-    final discountAmount =
-        ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
+    final subtotal = ((summary['subtotal_amount'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+    final discountAmount = ((summary['discount_amount'] as num?) ?? 0)
+        .toDouble()
+        .abs();
     final discountType = (summary['discount_type'] ?? 'none').toString();
-    final discountValue =
-        ((summary['discount_value'] as num?) ?? 0).toDouble().abs();
+    final discountValue = ((summary['discount_value'] as num?) ?? 0)
+        .toDouble()
+        .abs();
     final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
-    final amountTendered =
-        ((summary['amount_tendered'] as num?) ?? 0).toDouble();
+    final amountTendered = ((summary['amount_tendered'] as num?) ?? 0)
+        .toDouble();
     final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
     final isRefund =
         (summary['transaction_type'] ?? 'sale').toString().toLowerCase() ==
@@ -370,52 +445,64 @@ class TransactionHistoryScreen extends StatefulWidget {
       'customer_code_snapshot',
     );
     final paymentMethodLower = paymentMethod.toLowerCase();
-    final creditStatus =
-        (summary['credit_status'] ?? '').toString().toLowerCase();
-    final isCreditSale = _readBool(summary['is_credit_sale']) ||
+    final creditStatus = (summary['credit_status'] ?? '')
+        .toString()
+        .toLowerCase();
+    final isCreditSale =
+        _readBool(summary['is_credit_sale']) ||
         paymentMethodLower == 'customer_credit' ||
         paymentMethodLower == 'customer_credit_refund' ||
         creditStatus == 'refund_posted';
     final creditPreviousBalance =
         ((summary['credit_previous_balance'] as num?) ?? 0).toDouble();
-    final creditNewBalance =
-        ((summary['credit_new_balance'] as num?) ?? 0).toDouble();
-    final creditBillAmount =
-        ((summary['credit_bill_amount'] as num?) ?? total).toDouble().abs();
-    final creditLimit =
-        ((summary['credit_limit_snapshot'] as num?) ?? 0).toDouble();
-    final creditApprovedBy =
-        (summary['credit_approved_by'] ?? '').toString().trim();
+    final creditNewBalance = ((summary['credit_new_balance'] as num?) ?? 0)
+        .toDouble();
+    final creditBillAmount = ((summary['credit_bill_amount'] as num?) ?? total)
+        .toDouble()
+        .abs();
+    final creditLimit = ((summary['credit_limit_snapshot'] as num?) ?? 0)
+        .toDouble();
+    final creditApprovedBy = (summary['credit_approved_by'] ?? '')
+        .toString()
+        .trim();
 
     final receiptItems = items.map((item) {
-      final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
+      final finalLineTotal = ((item['line_total'] as num?) ?? 0)
+          .toDouble()
+          .abs();
       final baseLineTotal =
-          ((item['base_line_total'] as num?) ?? finalLineTotal).toDouble().abs();
+          ((item['base_line_total'] as num?) ?? finalLineTotal)
+              .toDouble()
+              .abs();
       final storedExplicitItemDiscount =
           ((item['explicit_item_discount_amount'] as num?) ?? 0)
               .toDouble()
               .abs();
-      final storedCartDiscount =
-          ((item['cart_discount_amount'] as num?) ?? 0).toDouble().abs();
+      final storedCartDiscount = ((item['cart_discount_amount'] as num?) ?? 0)
+          .toDouble()
+          .abs();
       final storedCombinedItemDiscount =
           ((item['item_discount_amount'] as num?) ?? 0).toDouble().abs();
       final explicitItemDiscount = storedExplicitItemDiscount > 0
           ? storedExplicitItemDiscount
           : (storedCartDiscount <= 0 && discountType == 'none'
-              ? storedCombinedItemDiscount
-              : 0.0);
+                ? storedCombinedItemDiscount
+                : 0.0);
       return {
         'name': (item['product_name'] ?? 'Item').toString(),
         'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
         'markedPrice':
-            ((item['marked_price'] as num?) ?? (item['unit_price'] as num?) ?? 0)
+            ((item['marked_price'] as num?) ??
+                    (item['unit_price'] as num?) ??
+                    0)
                 .toDouble(),
         'priceType': (item['price_category_used'] ?? 'selling').toString(),
         'baseLineTotal': baseLineTotal,
         'itemDiscountType': (item['item_discount_type'] ?? 'none').toString(),
-        'itemDiscountValue':
-            ((item['item_discount_value'] as num?) ?? 0).toDouble().abs(),
+        'itemDiscountValue': ((item['item_discount_value'] as num?) ?? 0)
+            .toDouble()
+            .abs(),
         'itemDiscountAmount': explicitItemDiscount,
         'lineTotal': baseLineTotal - explicitItemDiscount,
       };
@@ -447,7 +534,9 @@ class TransactionHistoryScreen extends StatefulWidget {
       discountType: discountType,
       discountValue: discountValue,
       total: total,
-      amountTendered: paymentMethod.toLowerCase() == 'cash' ? amountTendered : null,
+      amountTendered: paymentMethod.toLowerCase() == 'cash'
+          ? amountTendered
+          : null,
       changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
       isRefund: isRefund,
       isCreditSale: isCreditSale,
@@ -504,8 +593,8 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     final selectedDay = _dateFilter == 'today'
         ? _normalizedDay(DateTime.now())
         : _dateFilter == 'specific'
-            ? _selectedDate
-            : null;
+        ? _selectedDate
+        : null;
     final start = selectedDay == null
         ? null
         : DateTime(selectedDay.year, selectedDay.month, selectedDay.day);
@@ -531,13 +620,14 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     final enrichedTransactions = <Map<String, dynamic>>[];
     for (final rawTransaction in transactions) {
       final transaction = Map<String, dynamic>.from(rawTransaction);
-      final saleId = (transaction['id'] as num?)?.toInt() ??
+      final saleId =
+          (transaction['id'] as num?)?.toInt() ??
           int.tryParse((transaction['id'] ?? '').toString()) ??
           0;
 
       if (saleId > 0) {
-        final customerSnapshot =
-            await CustomerService.instance.getSaleCustomerSnapshotMap(saleId);
+        final customerSnapshot = await CustomerService.instance
+            .getSaleCustomerSnapshotMap(saleId);
         transaction.addAll(customerSnapshot);
       }
 
@@ -579,12 +669,15 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       final payment = (tx['payment_method'] ?? '').toString().toLowerCase();
       final type = (tx['transaction_type'] ?? '').toString().toLowerCase();
       final refundReason = (tx['refund_reason'] ?? '').toString().toLowerCase();
-      final customerName =
-          (tx['customer_name_snapshot'] ?? '').toString().toLowerCase();
-      final customerPhone =
-          (tx['customer_phone_snapshot'] ?? '').toString().toLowerCase();
-      final customerCode =
-          (tx['customer_code_snapshot'] ?? '').toString().toLowerCase();
+      final customerName = (tx['customer_name_snapshot'] ?? '')
+          .toString()
+          .toLowerCase();
+      final customerPhone = (tx['customer_phone_snapshot'] ?? '')
+          .toString()
+          .toLowerCase();
+      final customerCode = (tx['customer_code_snapshot'] ?? '')
+          .toString()
+          .toLowerCase();
       final createdAt = (tx['created_at'] ?? '').toString();
       return id.contains(q) ||
           cashier.contains(q) ||
@@ -797,10 +890,8 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   }
 
   bool _isCreditSale(Map<String, dynamic> tx) {
-    final paymentMethod =
-        (tx['payment_method'] ?? '').toString().toLowerCase();
-    final creditStatus =
-        (tx['credit_status'] ?? '').toString().toLowerCase();
+    final paymentMethod = (tx['payment_method'] ?? '').toString().toLowerCase();
+    final creditStatus = (tx['credit_status'] ?? '').toString().toLowerCase();
 
     return TransactionHistoryScreen._readBool(tx['is_credit_sale']) ||
         paymentMethod == 'customer_credit' ||
@@ -841,9 +932,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       },
       selectedColor: palette.brandSoft,
       backgroundColor: palette.soft,
-      side: BorderSide(
-        color: selected ? palette.brand : palette.border,
-      ),
+      side: BorderSide(color: selected ? palette.brand : palette.border),
       labelStyle: TextStyle(
         color: selected ? palette.brand : palette.textSecondary,
         fontWeight: FontWeight.w700,
@@ -1009,7 +1098,10 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                   decoration: InputDecoration(
                     hintText:
                         'Search transaction, customer, phone, cashier, payment, or type',
-                    prefixIcon: Icon(Icons.search_rounded, color: palette.brand),
+                    prefixIcon: Icon(
+                      Icons.search_rounded,
+                      color: palette.brand,
+                    ),
                     suffixIcon: _searchController.text.isEmpty
                         ? null
                         : IconButton(
@@ -1138,11 +1230,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     );
   }
 
-  Widget _buildMiniInfoCard(
-    _TxPalette palette,
-    String title,
-    String value,
-  ) {
+  Widget _buildMiniInfoCard(_TxPalette palette, String title, String value) {
     return Container(
       width: 160,
       padding: const EdgeInsets.all(14),
@@ -1188,15 +1276,16 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     final createdAt = (tx['created_at'] ?? '').toString();
     final originalSaleId = tx['original_sale_id'];
     final paymentMethod = (tx['payment_method'] ?? '').toString();
-    final discountAmount =
-        ((tx['discount_amount'] as num?) ?? 0).toDouble().abs();
+    final discountAmount = ((tx['discount_amount'] as num?) ?? 0)
+        .toDouble()
+        .abs();
     final customerName = _customerName(tx);
     final hasCustomer = customerName.isNotEmpty;
     final isCreditSale = _isCreditSale(tx);
-    final creditPreviousBalance =
-        ((tx['credit_previous_balance'] as num?) ?? 0).toDouble();
-    final creditNewBalance =
-        ((tx['credit_new_balance'] as num?) ?? 0).toDouble();
+    final creditPreviousBalance = ((tx['credit_previous_balance'] as num?) ?? 0)
+        .toDouble();
+    final creditNewBalance = ((tx['credit_new_balance'] as num?) ?? 0)
+        .toDouble();
 
     return Material(
       color: Colors.transparent,
@@ -1431,9 +1520,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
             ),
           ),
           child: _isLoading
-              ? Center(
-                  child: CircularProgressIndicator(color: palette.brand),
-                )
+              ? Center(child: CircularProgressIndicator(color: palette.brand))
               : ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
@@ -1532,15 +1619,16 @@ Future<String?> showTransactionReceiptDialog(
   }
 
   final palette = _TxPalette.of(context);
-  final transactionType =
-      (summary['transaction_type'] ?? 'sale').toString().toLowerCase();
+  final transactionType = (summary['transaction_type'] ?? 'sale')
+      .toString()
+      .toLowerCase();
   final isRefund = transactionType == 'refund';
-  final subtotal =
-      ((summary['subtotal_amount'] as num?) ?? 0).toDouble().abs();
+  final subtotal = ((summary['subtotal_amount'] as num?) ?? 0).toDouble().abs();
   final discountType = (summary['discount_type'] ?? 'none').toString();
   final discountValue = ((summary['discount_value'] as num?) ?? 0).toDouble();
-  final discountAmount =
-      ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
+  final discountAmount = ((summary['discount_amount'] as num?) ?? 0)
+      .toDouble()
+      .abs();
   final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
   final cashier = (summary['cashier_name'] ?? 'Unknown').toString();
   final createdAt = (summary['created_at'] ?? '').toString();
@@ -1550,25 +1638,31 @@ Future<String?> showTransactionReceiptDialog(
   final paymentMethod = (summary['payment_method'] ?? '').toString();
   final amountTendered = ((summary['amount_tendered'] as num?) ?? 0).toDouble();
   final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
-  final customerName =
-      (summary['customer_name_snapshot'] ?? '').toString().trim();
-  final customerPhone =
-      (summary['customer_phone_snapshot'] ?? '').toString().trim();
-  final customerCode =
-      (summary['customer_code_snapshot'] ?? '').toString().trim();
+  final customerName = (summary['customer_name_snapshot'] ?? '')
+      .toString()
+      .trim();
+  final customerPhone = (summary['customer_phone_snapshot'] ?? '')
+      .toString()
+      .trim();
+  final customerCode = (summary['customer_code_snapshot'] ?? '')
+      .toString()
+      .trim();
   final hasCustomer = customerName.isNotEmpty;
-  final isCreditSale = TransactionHistoryScreen._readBool(summary['is_credit_sale']) ||
+  final isCreditSale =
+      TransactionHistoryScreen._readBool(summary['is_credit_sale']) ||
       paymentMethod.toLowerCase() == 'customer_credit';
   final creditPreviousBalance =
       ((summary['credit_previous_balance'] as num?) ?? 0).toDouble();
-  final creditNewBalance =
-      ((summary['credit_new_balance'] as num?) ?? 0).toDouble();
-  final creditBillAmount =
-      ((summary['credit_bill_amount'] as num?) ?? total).toDouble().abs();
-  final creditLimit =
-      ((summary['credit_limit_snapshot'] as num?) ?? 0).toDouble();
-  final creditApprovedBy =
-      (summary['credit_approved_by'] ?? '').toString().trim();
+  final creditNewBalance = ((summary['credit_new_balance'] as num?) ?? 0)
+      .toDouble();
+  final creditBillAmount = ((summary['credit_bill_amount'] as num?) ?? total)
+      .toDouble()
+      .abs();
+  final creditLimit = ((summary['credit_limit_snapshot'] as num?) ?? 0)
+      .toDouble();
+  final creditApprovedBy = (summary['credit_approved_by'] ?? '')
+      .toString()
+      .trim();
 
   String formatPercent(num value) {
     final number = value.toDouble();
@@ -1588,21 +1682,27 @@ Future<String?> showTransactionReceiptDialog(
 
   final receiptItems = items.map((item) {
     final rawLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
-    final baseLineTotal =
-        ((item['base_line_total'] as num?) ?? rawLineTotal).toDouble().abs();
+    final baseLineTotal = ((item['base_line_total'] as num?) ?? rawLineTotal)
+        .toDouble()
+        .abs();
     final storedExplicitItemDiscount =
-        ((item['explicit_item_discount_amount'] as num?) ?? 0)
-            .toDouble()
-            .abs();
-    final storedCartDiscount =
-        ((item['cart_discount_amount'] as num?) ?? 0).toDouble().abs();
+        ((item['explicit_item_discount_amount'] as num?) ?? 0).toDouble().abs();
+    final storedCartDiscount = ((item['cart_discount_amount'] as num?) ?? 0)
+        .toDouble()
+        .abs();
     final storedCombinedItemDiscount =
         ((item['item_discount_amount'] as num?) ?? 0).toDouble().abs();
     final explicitItemDiscount = storedExplicitItemDiscount > 0
         ? storedExplicitItemDiscount
         : (storedCartDiscount <= 0 && discountType == 'none'
-            ? storedCombinedItemDiscount
-            : 0.0);
+              ? storedCombinedItemDiscount
+              : 0.0);
+    final customerPricingApplied = TransactionHistoryScreen._readBool(
+      item['customer_pricing_applied'],
+    );
+    final customerPricingDetail = customerPricingApplied
+        ? TransactionHistoryScreen._customerPricingDetail(item)
+        : '';
     return {
       'name': (item['product_name'] ?? 'Unknown').toString(),
       'barcode': (item['barcode'] ?? '').toString(),
@@ -1613,10 +1713,12 @@ Future<String?> showTransactionReceiptDialog(
               .toDouble(),
       'baseLineTotal': baseLineTotal,
       'itemDiscountType': (item['item_discount_type'] ?? 'none').toString(),
-      'itemDiscountValue':
-          ((item['item_discount_value'] as num?) ?? 0).toDouble().abs(),
+      'itemDiscountValue': ((item['item_discount_value'] as num?) ?? 0)
+          .toDouble()
+          .abs(),
       'itemDiscountAmount': explicitItemDiscount,
       'lineTotal': baseLineTotal - explicitItemDiscount,
+      'customerPricingDetail': customerPricingDetail,
     };
   }).toList();
   final receiptItemDiscountTotal = receiptItems.fold<double>(
@@ -1657,7 +1759,11 @@ Future<String?> showTransactionReceiptDialog(
     );
   }
 
-  Widget receiptColumnValue(String text, {bool alignRight = false, Color? color}) {
+  Widget receiptColumnValue(
+    String text, {
+    bool alignRight = false,
+    Color? color,
+  }) {
     return Expanded(
       child: Text(
         text,
@@ -1704,7 +1810,10 @@ Future<String?> showTransactionReceiptDialog(
           constraints: const BoxConstraints(maxWidth: 760),
           child: Dialog(
             backgroundColor: Colors.transparent,
-            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
+            ),
             child: Container(
               decoration: BoxDecoration(
                 color: palette.surfaceAlt,
@@ -1791,7 +1900,10 @@ Future<String?> showTransactionReceiptDialog(
                                     : Icons.point_of_sale_outlined,
                                 isRefund ? 'Refund' : 'Sale',
                               ),
-                              buildInfoChip(Icons.person_outline_rounded, cashier),
+                              buildInfoChip(
+                                Icons.person_outline_rounded,
+                                cashier,
+                              ),
                               if (hasCustomer)
                                 buildInfoChip(
                                   Icons.badge_outlined,
@@ -1837,8 +1949,10 @@ Future<String?> showTransactionReceiptDialog(
                                     child: Text(
                                       [
                                         'Customer: $customerName',
-                                        if (customerCode.isNotEmpty) customerCode,
-                                        if (customerPhone.isNotEmpty) customerPhone,
+                                        if (customerCode.isNotEmpty)
+                                          customerCode,
+                                        if (customerPhone.isNotEmpty)
+                                          customerPhone,
                                       ].join(' • '),
                                       style: TextStyle(
                                         color: palette.textPrimary,
@@ -1894,11 +2008,14 @@ Future<String?> showTransactionReceiptDialog(
                               width: double.infinity,
                               padding: const EdgeInsets.all(14),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFFFB65C)
-                                    .withOpacity(palette.isDark ? 0.16 : 0.10),
+                                color: const Color(
+                                  0xFFFFB65C,
+                                ).withOpacity(palette.isDark ? 0.16 : 0.10),
                                 borderRadius: BorderRadius.circular(16),
                                 border: Border.all(
-                                  color: const Color(0xFFFFB65C).withOpacity(0.28),
+                                  color: const Color(
+                                    0xFFFFB65C,
+                                  ).withOpacity(0.28),
                                 ),
                               ),
                               child: Column(
@@ -1924,12 +2041,16 @@ Future<String?> showTransactionReceiptDialog(
                                   const SizedBox(height: 10),
                                   Text(
                                     'Previous Balance: Rs. ${creditPreviousBalance.toStringAsFixed(2)}',
-                                    style: TextStyle(color: palette.textSecondary),
+                                    style: TextStyle(
+                                      color: palette.textSecondary,
+                                    ),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
                                     '${isRefund ? 'This Refund' : 'This Bill'}: Rs. ${creditBillAmount.toStringAsFixed(2)}',
-                                    style: TextStyle(color: palette.textSecondary),
+                                    style: TextStyle(
+                                      color: palette.textSecondary,
+                                    ),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
@@ -1943,14 +2064,18 @@ Future<String?> showTransactionReceiptDialog(
                                     const SizedBox(height: 4),
                                     Text(
                                       'Credit Limit: Rs. ${creditLimit.toStringAsFixed(2)}',
-                                      style: TextStyle(color: palette.textSecondary),
+                                      style: TextStyle(
+                                        color: palette.textSecondary,
+                                      ),
                                     ),
                                   ],
                                   if (creditApprovedBy.isNotEmpty) ...[
                                     const SizedBox(height: 4),
                                     Text(
                                       'Approved By: $creditApprovedBy',
-                                      style: TextStyle(color: palette.textSecondary),
+                                      style: TextStyle(
+                                        color: palette.textSecondary,
+                                      ),
                                     ),
                                   ],
                                 ],
@@ -1963,11 +2088,12 @@ Future<String?> showTransactionReceiptDialog(
                           ...receiptItems.map((item) {
                             final name = (item['name'] ?? 'Unknown').toString();
                             final barcode = (item['barcode'] ?? '').toString();
-                            final qty =
-                                ((item['quantity'] as num?) ?? 0).toDouble();
-                            final qtyLabel = TransactionHistoryScreen._formatQuantity(qty);
-                            final unitPrice =
-                                ((item['unitPrice'] as num?) ?? 0).toDouble();
+                            final qty = ((item['quantity'] as num?) ?? 0)
+                                .toDouble();
+                            final qtyLabel =
+                                TransactionHistoryScreen._formatQuantity(qty);
+                            final unitPrice = ((item['unitPrice'] as num?) ?? 0)
+                                .toDouble();
                             final markedPrice =
                                 ((item['markedPrice'] as num?) ?? unitPrice)
                                     .toDouble();
@@ -1984,13 +2110,18 @@ Future<String?> showTransactionReceiptDialog(
                                     .toDouble();
                             final finalLineTotal =
                                 ((item['lineTotal'] as num?) ?? 0).toDouble();
+                            final customerPricingDetail =
+                                (item['customerPricingDetail'] ?? '')
+                                    .toString()
+                                    .trim();
                             final discountPercent = discountPercentLabel(
                               amount: itemDiscount,
                               base: baseLineTotal,
                               type: itemDiscountType,
                               value: itemDiscountValue,
                             );
-                            final unitPriceText = !isRefund &&
+                            final unitPriceText =
+                                !isRefund &&
                                     itemDiscount > 0 &&
                                     discountPercent.isNotEmpty
                                 ? 'Rs. ${unitPrice.toStringAsFixed(2)} (-$discountPercent%)'
@@ -2009,7 +2140,8 @@ Future<String?> showTransactionReceiptDialog(
                                 children: [
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           name,
@@ -2034,8 +2166,14 @@ Future<String?> showTransactionReceiptDialog(
                                           children: [
                                             receiptColumnHeader('Unit price'),
                                             receiptColumnHeader('Mark price'),
-                                            receiptColumnHeader('Qty', alignRight: true),
-                                            receiptColumnHeader('Total', alignRight: true),
+                                            receiptColumnHeader(
+                                              'Qty',
+                                              alignRight: true,
+                                            ),
+                                            receiptColumnHeader(
+                                              'Total',
+                                              alignRight: true,
+                                            ),
                                           ],
                                         ),
                                         const SizedBox(height: 6),
@@ -2043,7 +2181,8 @@ Future<String?> showTransactionReceiptDialog(
                                           children: [
                                             receiptColumnValue(
                                               unitPriceText,
-                                              color: !isRefund && itemDiscount > 0
+                                              color:
+                                                  !isRefund && itemDiscount > 0
                                                   ? palette.danger
                                                   : palette.textPrimary,
                                             ),
@@ -2060,6 +2199,55 @@ Future<String?> showTransactionReceiptDialog(
                                             ),
                                           ],
                                         ),
+                                        if (customerPricingDetail
+                                            .isNotEmpty) ...[
+                                          const SizedBox(height: 10),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 10,
+                                              vertical: 8,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: palette.brand.withValues(
+                                                alpha: palette.isDark
+                                                    ? 0.16
+                                                    : 0.09,
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              border: Border.all(
+                                                color: palette.brand.withValues(
+                                                  alpha: 0.24,
+                                                ),
+                                              ),
+                                            ),
+                                            child: Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Icon(
+                                                  Icons.local_offer_outlined,
+                                                  color: palette.brand,
+                                                  size: 15,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Text(
+                                                    customerPricingDetail,
+                                                    style: TextStyle(
+                                                      color:
+                                                          palette.textPrimary,
+                                                      fontWeight:
+                                                          FontWeight.w800,
+                                                      fontSize: 12,
+                                                      height: 1.25,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
                                       ],
                                     ),
                                   ),
@@ -2103,7 +2291,9 @@ Future<String?> showTransactionReceiptDialog(
                               style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w900,
-                                color: isRefund ? palette.danger : palette.success,
+                                color: isRefund
+                                    ? palette.danger
+                                    : palette.success,
                               ),
                             ),
                           ),
@@ -2117,7 +2307,8 @@ Future<String?> showTransactionReceiptDialog(
                       children: [
                         Expanded(
                           child: OutlinedButton.icon(
-                            onPressed: () => Navigator.pop(dialogContext, 'pdf'),
+                            onPressed: () =>
+                                Navigator.pop(dialogContext, 'pdf'),
                             icon: const Icon(Icons.picture_as_pdf_outlined),
                             label: const Text('Save PDF'),
                           ),
@@ -2125,7 +2316,8 @@ Future<String?> showTransactionReceiptDialog(
                         const SizedBox(width: 12),
                         Expanded(
                           child: OutlinedButton.icon(
-                            onPressed: () => Navigator.pop(dialogContext, 'reprint'),
+                            onPressed: () =>
+                                Navigator.pop(dialogContext, 'reprint'),
                             icon: const Icon(Icons.print_outlined),
                             label: const Text('Reprint'),
                           ),
@@ -2134,7 +2326,8 @@ Future<String?> showTransactionReceiptDialog(
                         if (!isRefund)
                           Expanded(
                             child: OutlinedButton(
-                              onPressed: () => Navigator.pop(dialogContext, 'refund'),
+                              onPressed: () =>
+                                  Navigator.pop(dialogContext, 'refund'),
                               child: const Text('Refund Items'),
                             ),
                           ),
@@ -2175,8 +2368,7 @@ class _TxPalette {
       isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
   Color get surfaceAlt =>
       isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
-  Color get soft =>
-      isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get soft => isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
   Color get border =>
       isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
   Color get textPrimary =>

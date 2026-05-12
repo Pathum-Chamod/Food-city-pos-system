@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared/models/customer.dart';
+import 'package:shared/models/product.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'database_helper.dart';
@@ -32,6 +35,15 @@ class CustomerService {
         customer_type TEXT NOT NULL DEFAULT 'regular',
         notes TEXT,
         is_active INTEGER NOT NULL DEFAULT 1,
+        credit_enabled INTEGER NOT NULL DEFAULT 0,
+        credit_limit REAL NOT NULL DEFAULT 0,
+        current_credit_balance REAL NOT NULL DEFAULT 0,
+        credit_status TEXT NOT NULL DEFAULT 'normal',
+        credit_note TEXT,
+        pricing_enabled INTEGER NOT NULL DEFAULT 0,
+        default_price_type TEXT NOT NULL DEFAULT 'selling',
+        default_discount_percent REAL NOT NULL DEFAULT 0,
+        pricing_note TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         created_by INTEGER,
@@ -58,9 +70,44 @@ class CustomerService {
     await _addColumnIfMissing(db, 'sales', 'customer_code_snapshot', 'TEXT');
 
     await _addColumnIfMissing(db, 'held_carts', 'customer_id', 'INTEGER');
-    await _addColumnIfMissing(db, 'held_carts', 'customer_name_snapshot', 'TEXT');
-    await _addColumnIfMissing(db, 'held_carts', 'customer_phone_snapshot', 'TEXT');
-    await _addColumnIfMissing(db, 'held_carts', 'customer_code_snapshot', 'TEXT');
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'customer_name_snapshot',
+      'TEXT',
+    );
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'customer_phone_snapshot',
+      'TEXT',
+    );
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'customer_code_snapshot',
+      'TEXT',
+    );
+
+    await _addColumnIfMissing(
+      db,
+      customersTable,
+      'pricing_enabled',
+      "INTEGER NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      customersTable,
+      'default_price_type',
+      "TEXT NOT NULL DEFAULT 'selling'",
+    );
+    await _addColumnIfMissing(
+      db,
+      customersTable,
+      'default_discount_percent',
+      "REAL NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(db, customersTable, 'pricing_note', 'TEXT');
   }
 
   Future<void> _addColumnIfMissing(
@@ -95,6 +142,13 @@ class CustomerService {
     if (normalized == 'wholesale') return 'wholesale';
     if (normalized == 'staff') return 'staff';
     return 'regular';
+  }
+
+  String _normalizePriceType(String value) {
+    final normalized = value.trim().toLowerCase();
+    if (normalized == 'wholesale') return 'wholesale';
+    if (normalized == 'sale') return 'sale';
+    return 'selling';
   }
 
   String? _cleanOptional(String? value) {
@@ -312,6 +366,73 @@ class CustomerService {
     );
   }
 
+  Future<void> updateCustomerPricingSettings({
+    required int customerId,
+    required bool pricingEnabled,
+    required String defaultPriceType,
+    required double defaultDiscountPercent,
+    String? pricingNote,
+    int? updatedBy,
+  }) async {
+    if (customerId <= 0) {
+      throw Exception('Invalid customer.');
+    }
+
+    final existing = await getCustomerById(customerId);
+    if (existing == null) {
+      throw Exception('Customer not found.');
+    }
+
+    final db = await _db;
+    final safeDiscount = defaultDiscountPercent.clamp(0.0, 100.0).toDouble();
+
+    await db.update(
+      customersTable,
+      {
+        'pricing_enabled': pricingEnabled ? 1 : 0,
+        'default_price_type': _normalizePriceType(defaultPriceType),
+        'default_discount_percent': safeDiscount,
+        'pricing_note': _cleanOptional(pricingNote),
+        'updated_at': DateTime.now().toIso8601String(),
+        'updated_by': updatedBy,
+      },
+      where: 'id = ?',
+      whereArgs: [customerId],
+    );
+
+    final updated = await getCustomerById(customerId);
+    if (updated != null) {
+      await db.insert('sync_queue', {
+        'type': 'CUSTOMER_PRICING_SETTINGS',
+        'data': jsonEncode({
+          'customer_id': updated.id,
+          'customer_code': updated.customerCode,
+          'customer_name': updated.name,
+          'customer_phone': updated.phone,
+          'customer_phone_normalized': updated.phoneNormalized,
+          'customer_email': updated.email,
+          'customer_address': updated.address,
+          'customer_type': updated.customerType,
+          'customer_notes': updated.notes,
+          'customer_is_active': updated.isActive ? 1 : 0,
+          'credit_enabled': updated.creditEnabled ? 1 : 0,
+          'credit_limit': updated.creditLimit,
+          'current_credit_balance': updated.currentCreditBalance,
+          'credit_status': updated.creditStatus,
+          'credit_note': updated.creditNote,
+          'pricing_enabled': updated.pricingEnabled ? 1 : 0,
+          'default_price_type': updated.defaultPriceType.dbValue,
+          'default_discount_percent': updated.defaultDiscountPercent,
+          'pricing_note': updated.pricingNote,
+          'updated_by': updatedBy,
+          'updated_at': updated.updatedAt,
+        }),
+        'status': 'pending',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    }
+  }
+
   Future<void> deactivateCustomer({
     required int customerId,
     int? updatedBy,
@@ -372,7 +493,6 @@ class CustomerService {
     );
   }
 
-
   Future<Map<String, dynamic>> getSaleCustomerSnapshotMap(int saleId) async {
     if (saleId <= 0) return const <String, dynamic>{};
 
@@ -394,9 +514,15 @@ class CustomerService {
 
     final row = Map<String, dynamic>.from(rows.first);
     final customerId = (row['customer_id'] as num?)?.toInt();
-    final customerName = (row['customer_name_snapshot'] ?? '').toString().trim();
-    final customerPhone = (row['customer_phone_snapshot'] ?? '').toString().trim();
-    final customerCode = (row['customer_code_snapshot'] ?? '').toString().trim();
+    final customerName = (row['customer_name_snapshot'] ?? '')
+        .toString()
+        .trim();
+    final customerPhone = (row['customer_phone_snapshot'] ?? '')
+        .toString()
+        .trim();
+    final customerCode = (row['customer_code_snapshot'] ?? '')
+        .toString()
+        .trim();
 
     if ((customerId == null || customerId <= 0) &&
         customerName.isEmpty &&
@@ -491,9 +617,7 @@ class CustomerService {
     return rows.map((row) => Map<String, dynamic>.from(row)).toList();
   }
 
-  Future<List<Map<String, dynamic>>> getTopCustomers({
-    int limit = 20,
-  }) async {
+  Future<List<Map<String, dynamic>>> getTopCustomers({int limit = 20}) async {
     final db = await _db;
     final rows = await db.rawQuery(
       '''

@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:shared/models/customer.dart';
 import 'package:shared/models/customer_credit_summary.dart';
+import 'package:shared/models/product.dart';
 
 import '../services/customer_credit_service.dart';
+import '../services/customer_pricing_service.dart';
 import '../services/customer_service.dart';
 import '../widgets/app_snackbar.dart';
 import 'customer_credit_settings_dialog.dart';
 import 'customer_form_dialog.dart';
 import 'customer_ledger_screen.dart';
+import 'customer_product_prices_screen.dart';
+import 'customer_pricing_settings_dialog.dart';
 import 'customer_payment_dialog.dart';
 import 'transaction_history_screen.dart';
 
@@ -25,6 +29,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   CustomerCreditSummary? _creditSummary;
   Map<String, dynamic> _summary = {};
   List<Map<String, dynamic>> _history = [];
+  int _activeProductPriceCount = 0;
   bool _isLoading = true;
 
   static const Color _brand = Color(0xFF2AAA8A);
@@ -66,6 +71,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       );
       final creditSummary = await CustomerCreditService.instance
           .getCreditSummary(widget.customerId);
+      final activeProductPriceCount = await CustomerPricingService.instance
+          .countProductPricesForCustomer(widget.customerId);
 
       if (!mounted) return;
       setState(() {
@@ -73,6 +80,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         _summary = summary;
         _history = history;
         _creditSummary = creditSummary;
+        _activeProductPriceCount = activeProductPriceCount;
         _isLoading = false;
       });
     } catch (e) {
@@ -82,6 +90,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         _summary = {};
         _history = [];
         _creditSummary = null;
+        _activeProductPriceCount = 0;
         _isLoading = false;
       });
       _showMessage('Could not load customer details.', color: _danger);
@@ -122,6 +131,34 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     await _loadCustomer();
   }
 
+  Future<void> _openPricingSettings() async {
+    final customer = _customer;
+    if (customer == null || customer.id == null) return;
+
+    final saved = await showCustomerPricingSettingsDialog(
+      context: context,
+      customer: customer,
+    );
+
+    if (!mounted || !saved) return;
+    _showMessage('Pricing settings updated.', color: _success);
+    await _loadCustomer();
+  }
+
+  Future<void> _openProductPrices() async {
+    final customer = _customer;
+    if (customer == null || customer.id == null) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CustomerProductPricesScreen(customer: customer),
+      ),
+    );
+
+    if (!mounted) return;
+    await _loadCustomer();
+  }
 
   Future<void> _openCustomerLedger() async {
     final customer = _customer;
@@ -631,6 +668,216 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     );
   }
 
+  Widget _pricingDiscountsCard(Customer customer) {
+    final isEnabled = customer.pricingEnabled;
+    final statusColor = isEnabled ? _brand : _textSecondary;
+    final discount = customer.normalizedDefaultDiscountPercent;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(
+          color: isEnabled ? _brand.withValues(alpha: 0.34) : _border,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: statusColor.withValues(alpha: 0.24),
+                  ),
+                ),
+                child: Icon(
+                  Icons.local_offer_rounded,
+                  color: statusColor,
+                  size: 27,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Pricing & Discounts',
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      isEnabled
+                          ? 'Customer pricing rules are active for this customer.'
+                          : 'Normal POS pricing is used for this customer.',
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: statusColor.withValues(alpha: 0.24),
+                  ),
+                ),
+                child: Text(
+                  isEnabled ? 'Enabled' : 'Disabled',
+                  style: TextStyle(
+                    color: statusColor,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                onPressed: _openPricingSettings,
+                icon: const Icon(Icons.tune_rounded),
+                label: Text(isEnabled ? 'Edit Settings' : 'Enable Pricing'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _pricingMiniMetric(
+                label: 'Default Price',
+                value: customer.defaultPriceType.label,
+                icon: Icons.sell_rounded,
+                color: _blue,
+              ),
+              const SizedBox(width: 10),
+              _pricingMiniMetric(
+                label: 'Default Discount',
+                value: '${discount.toStringAsFixed(2)}%',
+                icon: Icons.percent_rounded,
+                color: _warning,
+              ),
+              const SizedBox(width: 10),
+              _pricingMiniMetric(
+                label: 'Product Prices',
+                value: _activeProductPriceCount.toString(),
+                icon: Icons.inventory_2_rounded,
+                color: _brand,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _openProductPrices,
+                  icon: const Icon(Icons.price_change_rounded),
+                  label: const Text('Manage Product Prices'),
+                ),
+              ),
+            ],
+          ),
+          if (customer.hasPricingNote) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: _panelSoft,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: _border),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.note_alt_rounded, color: _textSecondary, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      customer.pricingNote!.trim(),
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontWeight: FontWeight.w700,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _pricingMiniMetric({
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: _panelSoft,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _border),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: _textPrimary,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _infoLine(IconData icon, String text) {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -761,6 +1008,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     _profileCard(customer),
                     const SizedBox(height: 16),
                     _creditAccountCard(customer),
+                    const SizedBox(height: 16),
+                    _pricingDiscountsCard(customer),
                     const SizedBox(height: 16),
                     Row(
                       children: [

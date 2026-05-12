@@ -5,6 +5,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:shared/models/customer_pricing_result.dart';
 import 'package:shared/models/product.dart';
 
 import '../config/pos_feature_flags.dart';
@@ -831,7 +832,6 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-
   Future<void> _openCustomerPicker(CartProvider cart) async {
     if (_activeModalCount > 0) return;
 
@@ -847,13 +847,13 @@ class _PosScreenState extends State<PosScreen> {
       if (!mounted || result == null) return;
 
       if (result.cleared || result.customer == null) {
-        cart.clearCustomer();
+        await cart.clearCustomer();
         _showInfoMessage(
           'Using Walk-in Customer.',
           backgroundColor: _accentBlue,
         );
       } else {
-        cart.selectCustomer(result.customer!);
+        await cart.selectCustomer(result.customer!);
         _showInfoMessage(
           'Customer selected: ${result.customer!.displayName}',
           backgroundColor: _brandColor,
@@ -977,8 +977,8 @@ class _PosScreenState extends State<PosScreen> {
             miniIconButton(
               icon: Icons.close_rounded,
               color: _dangerColor,
-              onPressed: () {
-                cart.clearCustomer();
+              onPressed: () async {
+                await cart.clearCustomer();
                 _showInfoMessage(
                   'Customer removed. Using Walk-in Customer.',
                   backgroundColor: _accentBlue,
@@ -1916,7 +1916,6 @@ class _PosScreenState extends State<PosScreen> {
     await _applyItemDiscount(cart, item);
   }
 
-
   Future<void> _applyLabelPriceToSelectedCartItem(CartProvider cart) async {
     final item = _selectedCartItem(cart);
     if (item == null) return;
@@ -1934,9 +1933,8 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    final labelPrices = await DatabaseHelper.instance.getActiveLabelPricesForProduct(
-      item.product.barcode,
-    );
+    final labelPrices = await DatabaseHelper.instance
+        .getActiveLabelPricesForProduct(item.product.barcode);
 
     if (!mounted) return;
 
@@ -1954,12 +1952,16 @@ class _PosScreenState extends State<PosScreen> {
     if (type == 'current') {
       cart.clearPriceOverride(item);
       _showTemporaryCartSelection();
-      _showInfoMessage('Current product price restored.', backgroundColor: _brandColor);
+      _showInfoMessage(
+        'Current product price restored.',
+        backgroundColor: _brandColor,
+      );
       _focusBarcodeField();
       return;
     }
 
-    final overridePrice = ((result['price'] as num?) ?? item.unitPrice).toDouble();
+    final overridePrice = ((result['price'] as num?) ?? item.unitPrice)
+        .toDouble();
     final reason = (result['reason'] ?? '').toString().trim();
     final historyId = (result['price_history_id'] as num?)?.toInt();
 
@@ -2028,18 +2030,20 @@ class _PosScreenState extends State<PosScreen> {
         context: context,
         builder: (dialogContext) {
           final currentPrice = item.systemUnitPrice;
-          final activeLabelPrices = labelPrices.where((row) {
-            final labelPrice = ((row['label_price'] as num?) ?? 0).toDouble();
-            return labelPrice > 0 &&
-                (labelPrice - currentPrice).abs() > 0.000001;
-          }).take(2).toList();
+          final activeLabelPrices = labelPrices
+              .where((row) {
+                final labelPrice = ((row['label_price'] as num?) ?? 0)
+                    .toDouble();
+                return labelPrice > 0 &&
+                    (labelPrice - currentPrice).abs() > 0.000001;
+              })
+              .take(2)
+              .toList();
 
           void closeWithCurrentPrice() {
-            Navigator.of(dialogContext).pop({
-              'type': 'current',
-              'price': currentPrice,
-              'reason': '',
-            });
+            Navigator.of(
+              dialogContext,
+            ).pop({'type': 'current', 'price': currentPrice, 'reason': ''});
           }
 
           void closeWithOldLabelPrice(Map<String, dynamic> row) {
@@ -2209,7 +2213,8 @@ class _PosScreenState extends State<PosScreen> {
                     const SizedBox(height: 18),
                     priceOption(
                       title: 'Current system price',
-                      subtitle: 'Use the latest selling price from product master.',
+                      subtitle:
+                          'Use the latest selling price from product master.',
                       price: currentPrice,
                       icon: Icons.sell_rounded,
                       color: _accentBlue,
@@ -2278,7 +2283,9 @@ class _PosScreenState extends State<PosScreen> {
                         Expanded(
                           child: ElevatedButton.icon(
                             onPressed: closeWithManualPrice,
-                            icon: const Icon(Icons.admin_panel_settings_rounded),
+                            icon: const Icon(
+                              Icons.admin_panel_settings_rounded,
+                            ),
                             label: const Text('Apply Manual'),
                           ),
                         ),
@@ -2437,14 +2444,14 @@ class _PosScreenState extends State<PosScreen> {
       if (!mounted) return;
 
       if (confirmed) {
-        cart.setPriceType(newType, applyToExistingItems: true);
+        await cart.setPriceType(newType, applyToExistingItems: true);
         _showInfoMessage(
           'Whole cart switched to ${_priceTypeTitle(newType)}.',
           backgroundColor: _priceTypeColor(newType),
         );
       } else if (typeBeforeFirstTap != null &&
           typeBeforeFirstTap != cart.selectedPriceType) {
-        cart.setPriceType(typeBeforeFirstTap);
+        await cart.setPriceType(typeBeforeFirstTap);
       }
 
       _focusBarcodeField();
@@ -2458,7 +2465,7 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    cart.setPriceType(newType);
+    await cart.setPriceType(newType);
 
     _showInfoMessage(
       '${_priceTypeTitle(newType)} selected for new items.',
@@ -2677,6 +2684,89 @@ class _PosScreenState extends State<PosScreen> {
         ),
       ),
     );
+  }
+
+  String _customerPricingTagLabel(CartItem item) {
+    switch (item.customerPricingType) {
+      case CustomerPricingType.customerProductPrice:
+        return 'Customer Price';
+      case CustomerPricingType.customerDefaultPriceType:
+        switch (item.priceType) {
+          case ProductPriceType.wholesale:
+            return 'Wholesale Price';
+          case ProductPriceType.sale:
+            return 'Sale Price';
+          case ProductPriceType.selling:
+            return 'Selling Price';
+        }
+      case CustomerPricingType.customerDefaultDiscount:
+        return 'Customer Discount';
+      case CustomerPricingType.none:
+        return '';
+    }
+  }
+
+  Color _customerPricingTagColor(CartItem item) {
+    switch (item.customerPricingType) {
+      case CustomerPricingType.customerProductPrice:
+        return _brandColor;
+      case CustomerPricingType.customerDefaultPriceType:
+        return _priceTypeColor(item.priceType);
+      case CustomerPricingType.customerDefaultDiscount:
+        return _dangerColor;
+      case CustomerPricingType.none:
+        return _textSecondary;
+    }
+  }
+
+  Widget _buildCartTag({
+    required String label,
+    required Color color,
+    IconData? icon,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: _isDark ? 0.18 : 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, color: color, size: 12),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w900,
+              fontSize: 9.5,
+              height: 1.0,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _customerPricingSavingsText(CartItem item) {
+    final original = item.customerPricingOriginalPrice;
+    final finalPrice = item.customerPricingFinalPrice;
+    final difference = original - finalPrice;
+    final unit = item.product.isWeighted ? ' / ${item.product.unitLabel}' : '';
+
+    if (difference > 0.000001) {
+      return 'Was Rs. ${original.toStringAsFixed(2)}$unit - save Rs. ${difference.toStringAsFixed(2)} each';
+    }
+
+    if (difference < -0.000001) {
+      return 'Normal Rs. ${original.toStringAsFixed(2)}$unit - customer price is Rs. ${finalPrice.toStringAsFixed(2)}$unit';
+    }
+
+    return 'Based on Rs. ${original.toStringAsFixed(2)}$unit';
   }
 
   List<Product> get _filteredProducts {
@@ -3220,12 +3310,15 @@ class _PosScreenState extends State<PosScreen> {
           ? remainingStock
           : 1.0;
 
+      final resolvedUnitPrice = await cart.resolveUnitPriceForProduct(product);
+      if (!mounted) return;
+
       final enteredQuantity = await _promptWeightedQuantity(
         product: product,
         title: 'Enter ${product.unitLabel} quantity',
         confirmLabel: 'Add to cart',
         initialQuantity: defaultQuantity,
-        unitPrice: product.resolvePrice(cart.selectedPriceType),
+        unitPrice: resolvedUnitPrice,
         maxQuantity: remainingStock,
       );
 
@@ -3246,7 +3339,7 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    cart.addToCart(product, quantity: quantityToAdd);
+    await cart.addToCart(product, quantity: quantityToAdd);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _scrollCartToLatest();
@@ -3460,8 +3553,8 @@ class _PosScreenState extends State<PosScreen> {
           amount: displayTotal,
           cashierName: cashierName,
           approvedBy: creditApprovedBy,
-          managerApproved: creditApprovedBy != null &&
-              creditApprovedBy.trim().isNotEmpty,
+          managerApproved:
+              creditApprovedBy != null && creditApprovedBy.trim().isNotEmpty,
         );
       }
 
@@ -3961,10 +4054,9 @@ class _PosScreenState extends State<PosScreen> {
                                   );
                                 },
                                 decoration: InputDecoration(
-                                  hintText:
-                                      selectedCustomer == null
-                                          ? 'Example: Customer 1 / Counter Hold'
-                                          : 'Customer name is already filled. Press Enter or edit if needed.',
+                                  hintText: selectedCustomer == null
+                                      ? 'Example: Customer 1 / Counter Hold'
+                                      : 'Customer name is already filled. Press Enter or edit if needed.',
                                   prefixIcon: Container(
                                     margin: const EdgeInsets.all(10),
                                     decoration: BoxDecoration(
@@ -4038,8 +4130,8 @@ class _PosScreenState extends State<PosScreen> {
     try {
       final resolvedCartName = cartName.trim().isEmpty
           ? (cart.selectedCustomer?.displayName.trim().isNotEmpty == true
-              ? cart.selectedCustomer!.displayName.trim()
-              : 'Held Cart')
+                ? cart.selectedCustomer!.displayName.trim()
+                : 'Held Cart')
           : cartName.trim();
 
       await DatabaseHelper.instance.saveHeldCart(
@@ -4050,12 +4142,7 @@ class _PosScreenState extends State<PosScreen> {
         discountValue: cart.discountValue,
         items: cart.getCartItemsAsMap(),
         selectedPriceType: cart.selectedPriceType.dbValue,
-      );
-
-      await CustomerService.instance.saveCustomerSnapshotToLatestHeldCart(
-        cartName: resolvedCartName,
-        cashierName: cashierName,
-        customer: cart.selectedCustomer,
+        selectedCustomer: cart.selectedCustomer,
       );
 
       cart.clearCart();
@@ -4279,11 +4366,13 @@ class _PosScreenState extends State<PosScreen> {
 
       final priceTypeUsed = (item['price_type_used'] ?? fallbackPriceType)
           .toString();
-      final resolvedUnitPrice =
-          (item['unit_price_used'] as num?)?.toDouble() ??
+      final systemUnitPrice =
+          (item['system_unit_price'] as num?)?.toDouble() ??
           resolvedProduct!.resolvePrice(
             ProductPriceTypeX.fromDb(priceTypeUsed),
           );
+      final resolvedUnitPrice =
+          (item['unit_price_used'] as num?)?.toDouble() ?? systemUnitPrice;
       final baseLineTotal =
           (item['base_line_total'] as num?)?.toDouble() ??
           (resolvedUnitPrice * safeQuantity);
@@ -4302,6 +4391,23 @@ class _PosScreenState extends State<PosScreen> {
           'product': resolvedProductMap,
           'quantity': safeQuantity,
           'unit_price_used': resolvedUnitPrice,
+          'system_unit_price': systemUnitPrice,
+          'price_override_type': item['price_override_type'],
+          'price_override_reason': item['price_override_reason'],
+          'price_override_original_price':
+              item['price_override_original_price'],
+          'price_override_difference': item['price_override_difference'],
+          'price_history_id': item['price_history_id'],
+          'price_override_approved_by': item['price_override_approved_by'],
+          'customer_pricing_applied': item['customer_pricing_applied'],
+          'customer_pricing_type': item['customer_pricing_type'],
+          'customer_pricing_rule_id': item['customer_pricing_rule_id'],
+          'customer_pricing_original_price':
+              item['customer_pricing_original_price'],
+          'customer_pricing_final_price': item['customer_pricing_final_price'],
+          'customer_pricing_discount_amount':
+              item['customer_pricing_discount_amount'],
+          'customer_pricing_note': item['customer_pricing_note'],
           'price_type_used': priceTypeUsed,
           'base_line_total': baseLineTotal,
           'item_discount_type': itemDiscountType,
@@ -4368,8 +4474,9 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    final restoredCustomer =
-        CustomerService.instance.customerFromHeldCartRow(restored);
+    final restoredCustomer = CustomerService.instance.customerFromHeldCartRow(
+      restored,
+    );
 
     cart.loadHeldCart(
       items: preparedItems,
@@ -5694,6 +5801,10 @@ class _PosScreenState extends State<PosScreen> {
     );
 
     final selectedColor = cart.isRefundMode ? _dangerColor : _brandColor;
+    final customerPricingLabel = item.customerPricingApplied
+        ? _customerPricingTagLabel(item)
+        : '';
+    final customerPricingColor = _customerPricingTagColor(item);
 
     return InkWell(
       borderRadius: BorderRadius.circular(14),
@@ -5770,9 +5881,7 @@ class _PosScreenState extends State<PosScreen> {
                       : () => _applyLabelPrice(cart, item),
                   icon: Icon(
                     Icons.price_change_outlined,
-                    color: item.hasPriceOverride
-                        ? _brandColor
-                        : _textSecondary,
+                    color: item.hasPriceOverride ? _brandColor : _textSecondary,
                     size: 16,
                   ),
                   constraints: const BoxConstraints.tightFor(
@@ -5809,6 +5918,37 @@ class _PosScreenState extends State<PosScreen> {
                 fontSize: 10.5,
               ),
             ),
+            if (customerPricingLabel.isNotEmpty) ...[
+              const SizedBox(height: 5),
+              Wrap(
+                spacing: 6,
+                runSpacing: 5,
+                children: [
+                  _buildCartTag(
+                    label: customerPricingLabel,
+                    color: customerPricingColor,
+                    icon: Icons.local_offer_rounded,
+                  ),
+                  if (item.hasPriceOverride)
+                    _buildCartTag(
+                      label: 'Override Applied',
+                      color: _warningColor,
+                      icon: Icons.admin_panel_settings_rounded,
+                    ),
+                ],
+              ),
+              if (!item.hasPriceOverride) ...[
+                const SizedBox(height: 4),
+                Text(
+                  _customerPricingSavingsText(item),
+                  style: TextStyle(
+                    color: customerPricingColor,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 9.8,
+                  ),
+                ),
+              ],
+            ],
             if (item.hasPriceOverride) ...[
               const SizedBox(height: 3),
               Text(
@@ -6009,9 +6149,14 @@ class _PosScreenState extends State<PosScreen> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    if (item.discountAmount > 0)
+                    if (item.discountAmount > 0 ||
+                        (item.customerPricingApplied &&
+                            !item.hasPriceOverride &&
+                            item.customerPricingDiscountAmount > 0))
                       Text(
-                        'Rs. ${item.baseTotal.toStringAsFixed(2)}',
+                        item.discountAmount > 0
+                            ? 'Rs. ${item.baseTotal.toStringAsFixed(2)}'
+                            : 'Rs. ${(item.customerPricingOriginalPrice * item.quantity).toStringAsFixed(2)}',
                         style: TextStyle(
                           color: _textSecondary,
                           fontWeight: FontWeight.w700,

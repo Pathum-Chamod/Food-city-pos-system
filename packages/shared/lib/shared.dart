@@ -3,6 +3,8 @@ export 'models/customer.dart';
 export 'models/customer_credit_summary.dart';
 export 'models/customer_ledger_entry.dart';
 export 'models/customer_payment.dart';
+export 'models/customer_pricing_result.dart';
+export 'models/customer_product_price.dart';
 export 'models/product.dart';
 export 'models/sync_queue.dart';
 export 'models/user.dart';

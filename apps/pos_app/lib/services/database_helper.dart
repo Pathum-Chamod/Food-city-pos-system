@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
+import 'package:shared/models/customer.dart';
 import 'package:shared/models/product.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -42,7 +43,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 24,
+        version: 25,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -442,6 +443,13 @@ class DatabaseHelper {
         price_override_difference REAL NOT NULL DEFAULT 0,
         price_history_id INTEGER,
         price_override_approved_by TEXT,
+        customer_pricing_applied INTEGER NOT NULL DEFAULT 0,
+        customer_pricing_type TEXT NOT NULL DEFAULT 'none',
+        customer_pricing_rule_id INTEGER,
+        customer_pricing_original_price REAL NOT NULL DEFAULT 0,
+        customer_pricing_final_price REAL NOT NULL DEFAULT 0,
+        customer_pricing_discount_amount REAL NOT NULL DEFAULT 0,
+        customer_pricing_note TEXT,
         cost_price_snapshot REAL NOT NULL DEFAULT 0,
         quantity INTEGER NOT NULL,
         base_line_total REAL NOT NULL DEFAULT 0,
@@ -536,6 +544,10 @@ class DatabaseHelper {
         selected_price_type TEXT NOT NULL DEFAULT 'selling',
         discount_type TEXT NOT NULL DEFAULT 'none',
         discount_value REAL NOT NULL DEFAULT 0,
+        customer_id INTEGER,
+        customer_name_snapshot TEXT,
+        customer_phone_snapshot TEXT,
+        customer_code_snapshot TEXT,
         items_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -551,6 +563,9 @@ class DatabaseHelper {
         created_at TEXT NOT NULL
       )
     ''');
+
+    await _createCustomersTable(db);
+    await _ensureCustomerPricingSchema(db);
 
     await _createUserTables(db);
 
@@ -1248,7 +1263,12 @@ class DatabaseHelper {
         'price_override_difference',
         "REAL NOT NULL DEFAULT 0",
       );
-      await _addColumnIfMissing(db, 'sale_items', 'price_history_id', 'INTEGER');
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_history_id',
+        'INTEGER',
+      );
       await _addColumnIfMissing(
         db,
         'sale_items',
@@ -1273,6 +1293,172 @@ class DatabaseHelper {
       ''');
     }
 
+    if (oldVersion < 25) {
+      await _createCustomersTable(db);
+      await _ensureCustomerPricingSchema(db);
+      await _ensureHeldCartCustomerSchema(db);
+    }
+  }
+
+  Future<void> _createCustomersTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS customers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_code TEXT UNIQUE,
+        name TEXT NOT NULL,
+        phone TEXT,
+        phone_normalized TEXT,
+        email TEXT,
+        address TEXT,
+        customer_type TEXT NOT NULL DEFAULT 'regular',
+        notes TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        credit_enabled INTEGER NOT NULL DEFAULT 0,
+        credit_limit REAL NOT NULL DEFAULT 0,
+        current_credit_balance REAL NOT NULL DEFAULT 0,
+        credit_status TEXT NOT NULL DEFAULT 'normal',
+        credit_note TEXT,
+        pricing_enabled INTEGER NOT NULL DEFAULT 0,
+        default_price_type TEXT NOT NULL DEFAULT 'selling',
+        default_discount_percent REAL NOT NULL DEFAULT 0,
+        pricing_note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by INTEGER,
+        updated_by INTEGER
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone_normalized)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_code ON customers(customer_code)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_active ON customers(is_active)',
+    );
+  }
+
+  Future<void> _ensureCustomerPricingSchema(Database db) async {
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'pricing_enabled',
+      "INTEGER NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'default_price_type',
+      "TEXT NOT NULL DEFAULT 'selling'",
+    );
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'default_discount_percent',
+      "REAL NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(db, 'customers', 'pricing_note', 'TEXT');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS customer_product_prices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id INTEGER NOT NULL,
+        barcode TEXT NOT NULL,
+        product_name_snapshot TEXT NOT NULL,
+        fixed_price REAL NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by INTEGER,
+        updated_by INTEGER,
+        UNIQUE(customer_id, barcode),
+        FOREIGN KEY (customer_id) REFERENCES customers(id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_product_prices_customer
+      ON customer_product_prices(customer_id)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_product_prices_barcode
+      ON customer_product_prices(barcode)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_product_prices_active
+      ON customer_product_prices(is_active)
+    ''');
+
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_applied',
+      "INTEGER NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_type',
+      "TEXT NOT NULL DEFAULT 'none'",
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_rule_id',
+      'INTEGER',
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_original_price',
+      "REAL NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_final_price',
+      "REAL NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_discount_amount',
+      "REAL NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_note',
+      'TEXT',
+    );
+  }
+
+  Future<void> _ensureHeldCartCustomerSchema(Database db) async {
+    await _addColumnIfMissing(db, 'held_carts', 'customer_id', 'INTEGER');
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'customer_name_snapshot',
+      'TEXT',
+    );
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'customer_phone_snapshot',
+      'TEXT',
+    );
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'customer_code_snapshot',
+      'TEXT',
+    );
   }
 
   Future<void> _addColumnIfMissing(
@@ -1281,6 +1467,12 @@ class DatabaseHelper {
     String column,
     String definition,
   ) async {
+    final tableRows = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      [table],
+    );
+    if (tableRows.isEmpty) return;
+
     final columns = await db.rawQuery('PRAGMA table_info($table)');
     final exists = columns.any((c) => c['name'] == column);
 
@@ -1312,6 +1504,18 @@ class DatabaseHelper {
     if (normalized == 'old_label') return 'old_label';
     if (normalized == 'manual') return 'manual';
     return 'none';
+  }
+
+  String _normalizeCustomerPricingType(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    switch (normalized) {
+      case 'customer_product_price':
+      case 'customer_default_price_type':
+      case 'customer_default_discount':
+        return normalized;
+      default:
+        return 'none';
+    }
   }
 
   String _normalizeProductQuantityType(dynamic value) {
@@ -2210,8 +2414,9 @@ class DatabaseHelper {
           final priceOverrideType = _normalizePriceOverrideType(
             item['price_override_type']?.toString(),
           );
-          final priceOverrideReason =
-              (item['price_override_reason'] ?? '').toString().trim();
+          final priceOverrideReason = (item['price_override_reason'] ?? '')
+              .toString()
+              .trim();
           final priceOverrideOriginalPrice = _parseDouble(
             item['price_override_original_price'],
             fallback: systemUnitPrice,
@@ -2220,8 +2425,36 @@ class DatabaseHelper {
             unitPrice - systemUnitPrice,
           );
           final priceHistoryId = _parseOptionalInt(item['price_history_id']);
-          final priceOverrideApprovedBy =
-              item['price_override_approved_by']?.toString().trim();
+          final priceOverrideApprovedBy = item['price_override_approved_by']
+              ?.toString()
+              .trim();
+          final customerPricingType = _normalizeCustomerPricingType(
+            item['customer_pricing_type']?.toString(),
+          );
+          final customerPricingEffective =
+              priceOverrideType == 'none' &&
+              customerPricingType != 'none' &&
+              _parseInt(item['customer_pricing_applied']) == 1;
+          final customerPricingOriginalPrice = customerPricingEffective
+              ? _parseDouble(
+                  item['customer_pricing_original_price'],
+                  fallback: systemUnitPrice,
+                )
+              : 0.0;
+          final customerPricingFinalPrice = customerPricingEffective
+              ? _parseDouble(
+                  item['customer_pricing_final_price'],
+                  fallback: unitPrice,
+                )
+              : 0.0;
+          final customerPricingDiscountAmount = customerPricingEffective
+              ? _roundMoney(
+                  _parseDouble(item['customer_pricing_discount_amount']),
+                )
+              : 0.0;
+          final customerPricingNote = customerPricingEffective
+              ? item['customer_pricing_note']?.toString().trim()
+              : null;
           final priceTypeUsed = _resolveCartItemPriceType(item);
           final markedPrice = _parseDouble(productMap['selling_price']) > 0
               ? _parseDouble(productMap['selling_price'])
@@ -2273,6 +2506,20 @@ class DatabaseHelper {
             'price_override_difference': priceOverrideDifference,
             'price_history_id': priceHistoryId,
             'price_override_approved_by': priceOverrideApprovedBy,
+            'customer_pricing_applied': customerPricingEffective ? 1 : 0,
+            'customer_pricing_type': customerPricingEffective
+                ? customerPricingType
+                : 'none',
+            'customer_pricing_rule_id': customerPricingEffective
+                ? _parseOptionalInt(item['customer_pricing_rule_id'])
+                : null,
+            'customer_pricing_original_price': customerPricingOriginalPrice,
+            'customer_pricing_final_price': customerPricingFinalPrice,
+            'customer_pricing_discount_amount': customerPricingDiscountAmount,
+            'customer_pricing_note':
+                customerPricingNote == null || customerPricingNote.isEmpty
+                ? null
+                : customerPricingNote,
             'marked_price': markedPrice,
             'price_category_used': priceTypeUsed,
             'cost_price_snapshot': costPriceSnapshot,
@@ -2415,8 +2662,23 @@ class DatabaseHelper {
               (item['price_override_difference'] as num?)?.toDouble() ??
               (unitPrice - systemUnitPrice);
           final priceHistoryId = item['price_history_id'] as int?;
-          final priceOverrideApprovedBy =
-              item['price_override_approved_by']?.toString();
+          final priceOverrideApprovedBy = item['price_override_approved_by']
+              ?.toString();
+          final customerPricingApplied =
+              ((item['customer_pricing_applied'] as num?)?.toInt() ?? 0) == 1;
+          final customerPricingType = (item['customer_pricing_type'] ?? 'none')
+              .toString();
+          final customerPricingRuleId =
+              item['customer_pricing_rule_id'] as int?;
+          final customerPricingOriginalPrice =
+              (item['customer_pricing_original_price'] as num?)?.toDouble() ??
+              0.0;
+          final customerPricingFinalPrice =
+              (item['customer_pricing_final_price'] as num?)?.toDouble() ?? 0.0;
+          final customerPricingDiscountAmount =
+              (item['customer_pricing_discount_amount'] as num?)?.toDouble() ??
+              0.0;
+          final customerPricingNote = item['customer_pricing_note']?.toString();
           final markedPrice = item['marked_price'] as double;
           final priceTypeUsed = (item['price_category_used'] ?? 'selling')
               .toString();
@@ -2489,6 +2751,13 @@ class DatabaseHelper {
             'price_override_difference': priceOverrideDifference,
             'price_history_id': priceHistoryId,
             'price_override_approved_by': priceOverrideApprovedBy,
+            'customer_pricing_applied': customerPricingApplied ? 1 : 0,
+            'customer_pricing_type': customerPricingType,
+            'customer_pricing_rule_id': customerPricingRuleId,
+            'customer_pricing_original_price': customerPricingOriginalPrice,
+            'customer_pricing_final_price': customerPricingFinalPrice,
+            'customer_pricing_discount_amount': customerPricingDiscountAmount,
+            'customer_pricing_note': customerPricingNote,
             'marked_price': markedPrice,
             'price_category_used': priceTypeUsed,
             'cost_price_snapshot': costPriceSnapshot,
@@ -2522,8 +2791,23 @@ class DatabaseHelper {
               (item['price_override_difference'] as num?)?.toDouble() ??
               (unitPrice - systemUnitPrice);
           final priceHistoryId = item['price_history_id'] as int?;
-          final priceOverrideApprovedBy =
-              item['price_override_approved_by']?.toString();
+          final priceOverrideApprovedBy = item['price_override_approved_by']
+              ?.toString();
+          final customerPricingApplied =
+              ((item['customer_pricing_applied'] as num?)?.toInt() ?? 0) == 1;
+          final customerPricingType = (item['customer_pricing_type'] ?? 'none')
+              .toString();
+          final customerPricingRuleId =
+              item['customer_pricing_rule_id'] as int?;
+          final customerPricingOriginalPrice =
+              (item['customer_pricing_original_price'] as num?)?.toDouble() ??
+              0.0;
+          final customerPricingFinalPrice =
+              (item['customer_pricing_final_price'] as num?)?.toDouble() ?? 0.0;
+          final customerPricingDiscountAmount =
+              (item['customer_pricing_discount_amount'] as num?)?.toDouble() ??
+              0.0;
+          final customerPricingNote = item['customer_pricing_note']?.toString();
           final markedPrice =
               (item['marked_price'] as num?)?.toDouble() ?? unitPrice;
           final priceCategoryUsed = (item['price_category_used'] ?? 'selling')
@@ -2593,6 +2877,13 @@ class DatabaseHelper {
             'price_override_difference': priceOverrideDifference,
             'price_history_id': priceHistoryId,
             'price_override_approved_by': priceOverrideApprovedBy,
+            'customer_pricing_applied': customerPricingApplied ? 1 : 0,
+            'customer_pricing_type': customerPricingType,
+            'customer_pricing_rule_id': customerPricingRuleId,
+            'customer_pricing_original_price': customerPricingOriginalPrice,
+            'customer_pricing_final_price': customerPricingFinalPrice,
+            'customer_pricing_discount_amount': customerPricingDiscountAmount,
+            'customer_pricing_note': customerPricingNote,
             'marked_price': markedPrice,
             'price_category_used': priceCategoryUsed,
             'cost_price_snapshot': costPriceSnapshot,
@@ -2632,8 +2923,8 @@ class DatabaseHelper {
                   (item['system_unit_price'] as num?)?.toDouble() ?? unitPrice;
               final priceOverrideType = (item['price_override_type'] ?? 'none')
                   .toString();
-              final priceOverrideReason =
-                  (item['price_override_reason'] ?? '').toString();
+              final priceOverrideReason = (item['price_override_reason'] ?? '')
+                  .toString();
               final priceOverrideOriginalPrice =
                   (item['price_override_original_price'] as num?)?.toDouble() ??
                   systemUnitPrice;
@@ -2641,8 +2932,27 @@ class DatabaseHelper {
                   (item['price_override_difference'] as num?)?.toDouble() ??
                   (unitPrice - systemUnitPrice);
               final priceHistoryId = item['price_history_id'];
-              final priceOverrideApprovedBy =
-                  item['price_override_approved_by']?.toString();
+              final priceOverrideApprovedBy = item['price_override_approved_by']
+                  ?.toString();
+              final customerPricingApplied =
+                  ((item['customer_pricing_applied'] as num?)?.toInt() ?? 0) ==
+                  1;
+              final customerPricingType =
+                  (item['customer_pricing_type'] ?? 'none').toString();
+              final customerPricingRuleId = item['customer_pricing_rule_id'];
+              final customerPricingOriginalPrice =
+                  (item['customer_pricing_original_price'] as num?)
+                      ?.toDouble() ??
+                  0.0;
+              final customerPricingFinalPrice =
+                  (item['customer_pricing_final_price'] as num?)?.toDouble() ??
+                  0.0;
+              final customerPricingDiscountAmount =
+                  (item['customer_pricing_discount_amount'] as num?)
+                      ?.toDouble() ??
+                  0.0;
+              final customerPricingNote = item['customer_pricing_note']
+                  ?.toString();
               final priceCategoryUsed =
                   (item['price_category_used'] ?? 'selling').toString();
               final costPriceSnapshot =
@@ -2670,6 +2980,14 @@ class DatabaseHelper {
                 'price_override_difference': priceOverrideDifference,
                 'price_history_id': priceHistoryId,
                 'price_override_approved_by': priceOverrideApprovedBy,
+                'customer_pricing_applied': customerPricingApplied ? 1 : 0,
+                'customer_pricing_type': customerPricingType,
+                'customer_pricing_rule_id': customerPricingRuleId,
+                'customer_pricing_original_price': customerPricingOriginalPrice,
+                'customer_pricing_final_price': customerPricingFinalPrice,
+                'customer_pricing_discount_amount':
+                    customerPricingDiscountAmount,
+                'customer_pricing_note': customerPricingNote,
                 'price_type_used': priceCategoryUsed,
                 'cost_price_snapshot': costPriceSnapshot,
                 'base_line_total': baseLineTotal,
@@ -2823,6 +3141,27 @@ class DatabaseHelper {
               (refundableData['price_category_used'] ?? 'selling').toString();
           final costPriceSnapshot =
               ((refundableData['cost_price_snapshot'] as num?) ?? 0).toDouble();
+          final customerPricingApplied =
+              ((refundableData['customer_pricing_applied'] as num?)?.toInt() ??
+                  0) ==
+              1;
+          final customerPricingType = _normalizeCustomerPricingType(
+            refundableData['customer_pricing_type']?.toString(),
+          );
+          final customerPricingRuleId = _parseOptionalInt(
+            refundableData['customer_pricing_rule_id'],
+          );
+          final customerPricingOriginalPrice = _parseDouble(
+            refundableData['customer_pricing_original_price'],
+          );
+          final customerPricingFinalPrice = _parseDouble(
+            refundableData['customer_pricing_final_price'],
+          );
+          final customerPricingDiscountAmount = _parseDouble(
+            refundableData['customer_pricing_discount_amount'],
+          );
+          final customerPricingNote = refundableData['customer_pricing_note']
+              ?.toString();
 
           final stockRows = await txn.query(
             'products',
@@ -2869,6 +3208,25 @@ class DatabaseHelper {
             'marked_price': unitPrice,
             'price_category_used': originalPriceCategory,
             'cost_price_snapshot': costPriceSnapshot,
+            'customer_pricing_applied': customerPricingApplied ? 1 : 0,
+            'customer_pricing_type': customerPricingApplied
+                ? customerPricingType
+                : 'none',
+            'customer_pricing_rule_id': customerPricingApplied
+                ? customerPricingRuleId
+                : null,
+            'customer_pricing_original_price': customerPricingApplied
+                ? customerPricingOriginalPrice
+                : 0.0,
+            'customer_pricing_final_price': customerPricingApplied
+                ? customerPricingFinalPrice
+                : 0.0,
+            'customer_pricing_discount_amount': customerPricingApplied
+                ? customerPricingDiscountAmount
+                : 0.0,
+            'customer_pricing_note': customerPricingApplied
+                ? customerPricingNote
+                : null,
             'quantity': quantity,
             'base_line_total': refundLineTotal,
             'item_discount_type': 'none',
@@ -2906,6 +3264,25 @@ class DatabaseHelper {
             'quantity': quantity,
             'unit_price_used': unitPrice,
             'price_type_used': originalPriceCategory,
+            'customer_pricing_applied': customerPricingApplied ? 1 : 0,
+            'customer_pricing_type': customerPricingApplied
+                ? customerPricingType
+                : 'none',
+            'customer_pricing_rule_id': customerPricingApplied
+                ? customerPricingRuleId
+                : null,
+            'customer_pricing_original_price': customerPricingApplied
+                ? customerPricingOriginalPrice
+                : 0.0,
+            'customer_pricing_final_price': customerPricingApplied
+                ? customerPricingFinalPrice
+                : 0.0,
+            'customer_pricing_discount_amount': customerPricingApplied
+                ? customerPricingDiscountAmount
+                : 0.0,
+            'customer_pricing_note': customerPricingApplied
+                ? customerPricingNote
+                : null,
             'line_total': -refundLineTotal,
           });
         }
@@ -3181,11 +3558,7 @@ class DatabaseHelper {
 
     await executor.update(
       'product_price_history',
-      {
-        'is_active': 0,
-        'effective_to': now,
-        'updated_at': now,
-      },
+      {'is_active': 0, 'effective_to': now, 'updated_at': now},
       where: 'id IN ($placeholders)',
       whereArgs: idsToDeactivate,
     );
@@ -3216,11 +3589,7 @@ class DatabaseHelper {
     final now = DateTime.now().toIso8601String();
     final updated = await db.update(
       'product_price_history',
-      {
-        'is_active': 0,
-        'effective_to': now,
-        'updated_at': now,
-      },
+      {'is_active': 0, 'effective_to': now, 'updated_at': now},
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -4092,6 +4461,13 @@ class DatabaseHelper {
         si.price_override_difference,
         si.price_history_id,
         si.price_override_approved_by,
+        si.customer_pricing_applied,
+        si.customer_pricing_type,
+        si.customer_pricing_rule_id,
+        si.customer_pricing_original_price,
+        si.customer_pricing_final_price,
+        si.customer_pricing_discount_amount,
+        si.customer_pricing_note,
         CASE
           WHEN COALESCE(si.marked_price, 0) > 0 THEN si.marked_price
           WHEN COALESCE(p.selling_price, 0) > 0 THEN p.selling_price
@@ -4127,10 +4503,20 @@ class DatabaseHelper {
             'system_unit_price': row['system_unit_price'],
             'price_override_type': row['price_override_type'],
             'price_override_reason': row['price_override_reason'],
-            'price_override_original_price': row['price_override_original_price'],
+            'price_override_original_price':
+                row['price_override_original_price'],
             'price_override_difference': row['price_override_difference'],
             'price_history_id': row['price_history_id'],
             'price_override_approved_by': row['price_override_approved_by'],
+            'customer_pricing_applied': row['customer_pricing_applied'],
+            'customer_pricing_type': row['customer_pricing_type'],
+            'customer_pricing_rule_id': row['customer_pricing_rule_id'],
+            'customer_pricing_original_price':
+                row['customer_pricing_original_price'],
+            'customer_pricing_final_price': row['customer_pricing_final_price'],
+            'customer_pricing_discount_amount':
+                row['customer_pricing_discount_amount'],
+            'customer_pricing_note': row['customer_pricing_note'],
             'marked_price': row['marked_price'],
             'price_category_used': row['price_category_used'],
             'cost_price_snapshot': row['cost_price_snapshot'],
@@ -4187,6 +4573,13 @@ class DatabaseHelper {
         si.unit_price,
         si.price_category_used,
         si.cost_price_snapshot,
+        si.customer_pricing_applied,
+        si.customer_pricing_type,
+        si.customer_pricing_rule_id,
+        si.customer_pricing_original_price,
+        si.customer_pricing_final_price,
+        si.customer_pricing_discount_amount,
+        si.customer_pricing_note,
         CASE
           WHEN LOWER(COALESCE(MAX(p.quantity_type), '')) = 'weight' THEN 'weight'
           ELSE 'unit'
@@ -4208,7 +4601,14 @@ class DatabaseHelper {
         si.product_name,
         si.unit_price,
         si.price_category_used,
-        si.cost_price_snapshot
+        si.cost_price_snapshot,
+        si.customer_pricing_applied,
+        si.customer_pricing_type,
+        si.customer_pricing_rule_id,
+        si.customer_pricing_original_price,
+        si.customer_pricing_final_price,
+        si.customer_pricing_discount_amount,
+        si.customer_pricing_note
       ORDER BY si.product_name ASC
       ''',
       [saleId],
@@ -4264,6 +4664,15 @@ class DatabaseHelper {
         'unit_price': row['unit_price'],
         'price_category_used': row['price_category_used'],
         'cost_price_snapshot': row['cost_price_snapshot'],
+        'customer_pricing_applied': row['customer_pricing_applied'],
+        'customer_pricing_type': row['customer_pricing_type'],
+        'customer_pricing_rule_id': row['customer_pricing_rule_id'],
+        'customer_pricing_original_price':
+            row['customer_pricing_original_price'],
+        'customer_pricing_final_price': row['customer_pricing_final_price'],
+        'customer_pricing_discount_amount':
+            row['customer_pricing_discount_amount'],
+        'customer_pricing_note': row['customer_pricing_note'],
         'quantity_type': row['quantity_type'],
         'unit_label': row['unit_label'],
         'original_quantity': originalQty,
@@ -4834,8 +5243,10 @@ class DatabaseHelper {
     required double discountValue,
     required List<Map<String, dynamic>> items,
     String selectedPriceType = 'selling',
+    Customer? selectedCustomer,
   }) async {
     final db = await database;
+    await _ensureHeldCartCustomerSchema(db);
 
     if (items.isEmpty) {
       throw Exception('Cannot hold an empty cart.');
@@ -4855,6 +5266,12 @@ class DatabaseHelper {
           ? 'none'
           : _normalizeDiscountType(discountType),
       'discount_value': isRefundMode ? 0.0 : discountValue,
+      'customer_id': selectedCustomer?.id,
+      'customer_name_snapshot': selectedCustomer?.displayName,
+      'customer_phone_snapshot': selectedCustomer?.hasPhone == true
+          ? selectedCustomer?.phone?.trim()
+          : null,
+      'customer_code_snapshot': selectedCustomer?.displayCode,
       'items_json': jsonEncode(items),
       'created_at': now,
       'updated_at': now,
@@ -4910,6 +5327,10 @@ class DatabaseHelper {
             .toString(),
         'discount_type': discountType,
         'discount_value': discountValue,
+        'customer_id': row['customer_id'],
+        'customer_name_snapshot': row['customer_name_snapshot'],
+        'customer_phone_snapshot': row['customer_phone_snapshot'],
+        'customer_code_snapshot': row['customer_code_snapshot'],
         'item_count': itemCount,
         'total_amount': _roundMoney(subtotal - discountAmount),
         'created_at': row['created_at'],
@@ -4967,6 +5388,10 @@ class DatabaseHelper {
             .toString(),
         'discount_type': (row['discount_type'] ?? 'none').toString(),
         'discount_value': ((row['discount_value'] as num?) ?? 0).toDouble(),
+        'customer_id': row['customer_id'],
+        'customer_name_snapshot': row['customer_name_snapshot'],
+        'customer_phone_snapshot': row['customer_phone_snapshot'],
+        'customer_code_snapshot': row['customer_code_snapshot'],
         'items': decodedItems,
         'created_at': row['created_at'],
         'updated_at': row['updated_at'],
