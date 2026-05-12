@@ -9,12 +9,14 @@ import '../services/customer_service.dart';
 import '../widgets/app_snackbar.dart';
 import 'customer_detail_screen.dart';
 import 'customer_form_dialog.dart';
+import 'customer_credit_report_screen.dart';
 
 class CustomerManagementScreen extends StatefulWidget {
   const CustomerManagementScreen({super.key});
 
   @override
-  State<CustomerManagementScreen> createState() => _CustomerManagementScreenState();
+  State<CustomerManagementScreen> createState() =>
+      _CustomerManagementScreenState();
 }
 
 class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
@@ -33,12 +35,17 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
   static const Color _success = Color(0xFF1FCF9A);
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
-  Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _page =>
+      _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
   Color get _panel => _isDark ? const Color(0xFF0F1C31) : Colors.white;
-  Color get _panelSoft => _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
-  Color get _border => _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
-  Color get _textPrimary => _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
-  Color get _textSecondary => _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get _panelSoft =>
+      _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get _border =>
+      _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get _textPrimary =>
+      _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get _textSecondary =>
+      _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
 
   @override
   void initState() {
@@ -174,6 +181,16 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
     }
   }
 
+  Future<void> _openCreditReport() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CustomerCreditReportScreen()),
+    );
+
+    if (!mounted) return;
+    await _loadCustomers();
+  }
+
   Future<void> _openDetails(Customer customer) async {
     await Navigator.push(
       context,
@@ -246,7 +263,7 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: color.withOpacity(_isDark ? 0.16 : 0.10),
+                color: color.withValues(alpha: _isDark ? 0.16 : 0.10),
                 borderRadius: BorderRadius.circular(15),
               ),
               child: Icon(icon, color: color),
@@ -292,7 +309,7 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
         color: _panel,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color: customer.isActive ? _border : _danger.withOpacity(0.35),
+          color: customer.isActive ? _border : _danger.withValues(alpha: 0.35),
         ),
       ),
       child: Material(
@@ -306,7 +323,9 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
               children: [
                 CircleAvatar(
                   radius: 24,
-                  backgroundColor: typeColor.withOpacity(_isDark ? 0.18 : 0.12),
+                  backgroundColor: typeColor.withValues(
+                    alpha: _isDark ? 0.18 : 0.12,
+                  ),
                   child: Text(
                     customer.displayName.trim().isEmpty
                         ? 'C'
@@ -341,9 +360,13 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                               vertical: 5,
                             ),
                             decoration: BoxDecoration(
-                              color: typeColor.withOpacity(_isDark ? 0.16 : 0.10),
+                              color: typeColor.withValues(
+                                alpha: _isDark ? 0.16 : 0.10,
+                              ),
                               borderRadius: BorderRadius.circular(999),
-                              border: Border.all(color: typeColor.withOpacity(0.24)),
+                              border: Border.all(
+                                color: typeColor.withValues(alpha: 0.24),
+                              ),
                             ),
                             child: Text(
                               customer.typeLabel,
@@ -361,9 +384,13 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                                 vertical: 5,
                               ),
                               decoration: BoxDecoration(
-                                color: _danger.withOpacity(_isDark ? 0.18 : 0.10),
+                                color: _danger.withValues(
+                                  alpha: _isDark ? 0.18 : 0.10,
+                                ),
                                 borderRadius: BorderRadius.circular(999),
-                                border: Border.all(color: _danger.withOpacity(0.24)),
+                                border: Border.all(
+                                  color: _danger.withValues(alpha: 0.24),
+                                ),
                               ),
                               child: const Text(
                                 'Inactive',
@@ -439,7 +466,9 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final activeCount = _customers.where((customer) => customer.isActive).length;
+    final activeCount = _customers
+        .where((customer) => customer.isActive)
+        .length;
     final inactiveCount = _customers.length - activeCount;
 
     return Scaffold(
@@ -447,6 +476,12 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
       appBar: AppBar(
         title: const Text('Customer Management'),
         actions: [
+          TextButton.icon(
+            onPressed: _openCreditReport,
+            icon: const Icon(Icons.account_balance_wallet_rounded),
+            label: const Text('Credit Report'),
+          ),
+          const SizedBox(width: 8),
           IconButton(
             tooltip: 'Refresh',
             onPressed: _isLoading ? null : _loadCustomers,
@@ -501,24 +536,25 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                     Expanded(
                       child: TextField(
                         controller: _searchController,
-                        decoration: _inputDecoration(
-                          label: 'Search customers',
-                          icon: Icons.search_rounded,
-                          hint: 'Name / phone / code',
-                        ).copyWith(
-                          suffixIcon: _searchController.text.trim().isEmpty
-                              ? null
-                              : IconButton(
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    setState(() {
-                                      _query = '';
-                                    });
-                                    _loadCustomers();
-                                  },
-                                  icon: const Icon(Icons.clear_rounded),
-                                ),
-                        ),
+                        decoration:
+                            _inputDecoration(
+                              label: 'Search customers',
+                              icon: Icons.search_rounded,
+                              hint: 'Name / phone / code',
+                            ).copyWith(
+                              suffixIcon: _searchController.text.trim().isEmpty
+                                  ? null
+                                  : IconButton(
+                                      onPressed: () {
+                                        _searchController.clear();
+                                        setState(() {
+                                          _query = '';
+                                        });
+                                        _loadCustomers();
+                                      },
+                                      icon: const Icon(Icons.clear_rounded),
+                                    ),
+                            ),
                         onChanged: (value) {
                           setState(() {});
                           _onSearchChanged(value);
@@ -544,7 +580,7 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                           ),
                           Switch(
                             value: _includeInactive,
-                            activeColor: _brand,
+                            activeThumbColor: _brand,
                             onChanged: (value) {
                               setState(() {
                                 _includeInactive = value;
@@ -563,56 +599,56 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                 child: _isLoading
                     ? const Center(child: CircularProgressIndicator())
                     : _customers.isEmpty
-                        ? Center(
-                            child: Container(
-                              padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(
-                                color: _panel,
-                                borderRadius: BorderRadius.circular(24),
-                                border: Border.all(color: _border),
-                              ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.person_search_rounded,
-                                    size: 44,
-                                    color: _textSecondary,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    'No customers found',
-                                    style: TextStyle(
-                                      color: _textPrimary,
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 18,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'Add your first customer or try another search term.',
-                                    style: TextStyle(
-                                      color: _textSecondary,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  ElevatedButton.icon(
-                                    onPressed: _addCustomer,
-                                    icon: const Icon(Icons.person_add_rounded),
-                                    label: const Text('Add Customer'),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        : ListView.separated(
-                            itemCount: _customers.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 12),
-                            itemBuilder: (context, index) {
-                              return _customerCard(_customers[index]);
-                            },
+                    ? Center(
+                        child: Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: _panel,
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(color: _border),
                           ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.person_search_rounded,
+                                size: 44,
+                                color: _textSecondary,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                'No customers found',
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 18,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Add your first customer or try another search term.',
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              ElevatedButton.icon(
+                                onPressed: _addCustomer,
+                                icon: const Icon(Icons.person_add_rounded),
+                                label: const Text('Add Customer'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: _customers.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 12),
+                        itemBuilder: (context, index) {
+                          return _customerCard(_customers[index]);
+                        },
+                      ),
               ),
             ],
           ),

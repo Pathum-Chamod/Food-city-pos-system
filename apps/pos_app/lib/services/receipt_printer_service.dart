@@ -158,6 +158,12 @@ class ReceiptPrinterService {
     String storeAddress = 'No. 1, Main Street',
     String storePhone = '+94 11 000 0000',
     bool isRefund = false,
+    bool isCreditSale = false,
+    double? creditPreviousBalance,
+    double? creditBillAmount,
+    double? creditNewBalance,
+    double? creditLimit,
+    String? creditApprovedBy,
     String? approvalCode,
     String? authCode,
     String? cardLast4,
@@ -186,6 +192,10 @@ class ReceiptPrinterService {
       final customerPhoneText = (customerPhone ?? '').trim();
       final customerCodeText = (customerCode ?? '').trim();
       final hasCustomer = customerNameText.isNotEmpty;
+      final paymentMethodLower = paymentMethod.toLowerCase();
+      final isCustomerCredit = isCreditSale ||
+          paymentMethodLower == 'customer_credit' ||
+          paymentMethodLower == 'customer_credit_refund';
 
       // Reset + basic formatting
       bytes.addAll(_escInit());
@@ -308,9 +318,35 @@ class ReceiptPrinterService {
       bytes.addAll(_boldOff());
       bytes.addAll(_text('${_line('=')}\n'));
 
-      bytes.addAll(_text('${_labelValue('Paid by', paymentMethod.toUpperCase())}\n'));
+      bytes.addAll(
+        _text(
+          '${_labelValue('Paid by', isCustomerCredit ? (isRefund ? 'CUSTOMER CREDIT REFUND' : 'CUSTOMER CREDIT') : paymentMethod.toUpperCase())}\n',
+        ),
+      );
 
-      if (paymentMethod.toLowerCase() == 'cash') {
+      if (isCustomerCredit) {
+        if (creditPreviousBalance != null) {
+          bytes.addAll(
+            _text('${_labelValue('Prev. Balance', 'Rs.${creditPreviousBalance.toStringAsFixed(2)}')}\n'),
+          );
+        }
+        bytes.addAll(
+          _text('${_labelValue(isRefund ? 'This Refund' : 'This Bill', 'Rs.${(creditBillAmount ?? total).toStringAsFixed(2)}')}\n'),
+        );
+        if (creditNewBalance != null) {
+          bytes.addAll(
+            _text('${_labelValue('New Balance', 'Rs.${creditNewBalance.toStringAsFixed(2)}')}\n'),
+          );
+        }
+        if (creditLimit != null && creditLimit > 0) {
+          bytes.addAll(
+            _text('${_labelValue('Credit Limit', 'Rs.${creditLimit.toStringAsFixed(2)}')}\n'),
+          );
+        }
+        if ((creditApprovedBy ?? '').trim().isNotEmpty) {
+          bytes.addAll(_text('${_labelValue('Approved By', creditApprovedBy!.trim())}\n'));
+        }
+      } else if (paymentMethod.toLowerCase() == 'cash') {
         if (amountTendered != null) {
           bytes.addAll(
             _text('${_labelValue('Tendered', 'Rs.${amountTendered.toStringAsFixed(2)}')}\n'),
@@ -321,7 +357,7 @@ class ReceiptPrinterService {
             _text('${_labelValue('Change', 'Rs.${changeAmount.toStringAsFixed(2)}')}\n'),
           );
         }
-      } else {
+      } else if (paymentMethod.toLowerCase() == 'card') {
         if ((cardType ?? '').trim().isNotEmpty) {
           bytes.addAll(_text('${_labelValue('Card', cardType!.trim())}\n'));
         }

@@ -12,6 +12,7 @@ class PosRouteNames {
   static const supplierManagement = '/supplier-management';
   static const userManagement = '/user-management';
   static const customerManagement = '/customer-management';
+  static const customerCreditReport = '/customer-credit-report';
   static const shiftManagement = '/shift-management';
   static const presentationSettings = '/presentation-settings';
 }

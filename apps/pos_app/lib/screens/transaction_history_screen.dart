@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/database_helper.dart';
 import '../services/customer_service.dart';
+import '../services/customer_credit_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import '../widgets/app_snackbar.dart';
@@ -36,6 +37,30 @@ class TransactionHistoryScreen extends StatefulWidget {
     final customerSnapshot =
         await CustomerService.instance.getSaleCustomerSnapshotMap(saleId);
     resolved.addAll(customerSnapshot);
+
+    final creditInfo = await CustomerCreditService.instance.getCreditSaleInfo(saleId);
+    if (creditInfo != null) {
+      resolved.addAll(creditInfo);
+    }
+
+    final paymentMethod =
+        (resolved['payment_method'] ?? '').toString().toLowerCase();
+    final creditStatus =
+        (resolved['credit_status'] ?? '').toString().toLowerCase();
+    final isCreditSale = _readBool(resolved['is_credit_sale']) ||
+        paymentMethod == 'customer_credit' ||
+        paymentMethod == 'customer_credit_refund' ||
+        creditStatus == 'refund_posted';
+    final customerId = (resolved['customer_id'] as num?)?.toInt();
+    if (isCreditSale &&
+        (resolved['credit_limit_snapshot'] == null) &&
+        customerId != null &&
+        customerId > 0) {
+      final creditSummary =
+          await CustomerCreditService.instance.getCreditSummary(customerId);
+      resolved['credit_limit_snapshot'] = creditSummary.creditLimit;
+    }
+
     return resolved;
   }
 
@@ -44,6 +69,14 @@ class TransactionHistoryScreen extends StatefulWidget {
     String key,
   ) {
     return (summary[key] ?? '').toString().trim();
+  }
+
+  static bool _readBool(dynamic value) {
+    if (value == null) return false;
+    if (value is bool) return value;
+    if (value is num) return value.toInt() == 1;
+    final text = value.toString().trim().toLowerCase();
+    return text == '1' || text == 'true' || text == 'yes';
   }
 
   static Future<void> showReceiptDialogForTransaction(
@@ -88,6 +121,32 @@ class TransactionHistoryScreen extends StatefulWidget {
       if (!context.mounted) return;
 
       if (refundSaleId != null) {
+        try {
+          final result = await CustomerCreditService.instance
+              .postCreditRefundFromOriginalSale(
+            originalSaleId: saleId,
+            refundSaleId: refundSaleId,
+            performedBy: (summary['cashier_name'] ?? 'Unknown').toString(),
+          );
+
+          if (context.mounted && result != null) {
+            AppSnackBar.show(
+              context,
+              message:
+                  'Credit balance adjusted. New balance Rs. ${result.newBalance.toStringAsFixed(2)}.',
+              backgroundColor: Colors.green,
+            );
+          }
+        } catch (e) {
+          if (context.mounted) {
+            AppSnackBar.show(
+              context,
+              message: e.toString().replaceFirst('Exception: ', ''),
+              backgroundColor: Colors.orange,
+            );
+          }
+        }
+
         await showReceiptDialogForTransaction(context, refundSaleId);
       }
     }
@@ -164,6 +223,23 @@ class TransactionHistoryScreen extends StatefulWidget {
       summary,
       'customer_code_snapshot',
     );
+    final paymentMethodLower = paymentMethod.toLowerCase();
+    final creditStatus =
+        (summary['credit_status'] ?? '').toString().toLowerCase();
+    final isCreditSale = _readBool(summary['is_credit_sale']) ||
+        paymentMethodLower == 'customer_credit' ||
+        paymentMethodLower == 'customer_credit_refund' ||
+        creditStatus == 'refund_posted';
+    final creditPreviousBalance =
+        ((summary['credit_previous_balance'] as num?) ?? 0).toDouble();
+    final creditNewBalance =
+        ((summary['credit_new_balance'] as num?) ?? 0).toDouble();
+    final creditBillAmount =
+        ((summary['credit_bill_amount'] as num?) ?? total).toDouble().abs();
+    final creditLimit =
+        ((summary['credit_limit_snapshot'] as num?) ?? 0).toDouble();
+    final creditApprovedBy =
+        (summary['credit_approved_by'] ?? '').toString().trim();
 
     final receiptItems = items.map((item) {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
@@ -228,6 +304,12 @@ class TransactionHistoryScreen extends StatefulWidget {
       amountTendered: paymentMethod.toLowerCase() == 'cash' ? amountTendered : null,
       changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
       isRefund: isRefund,
+      isCreditSale: isCreditSale,
+      creditPreviousBalance: creditPreviousBalance,
+      creditBillAmount: creditBillAmount,
+      creditNewBalance: creditNewBalance,
+      creditLimit: creditLimit,
+      creditApprovedBy: creditApprovedBy,
     );
 
     if (!context.mounted) return response.isSuccess;
@@ -287,6 +369,23 @@ class TransactionHistoryScreen extends StatefulWidget {
       summary,
       'customer_code_snapshot',
     );
+    final paymentMethodLower = paymentMethod.toLowerCase();
+    final creditStatus =
+        (summary['credit_status'] ?? '').toString().toLowerCase();
+    final isCreditSale = _readBool(summary['is_credit_sale']) ||
+        paymentMethodLower == 'customer_credit' ||
+        paymentMethodLower == 'customer_credit_refund' ||
+        creditStatus == 'refund_posted';
+    final creditPreviousBalance =
+        ((summary['credit_previous_balance'] as num?) ?? 0).toDouble();
+    final creditNewBalance =
+        ((summary['credit_new_balance'] as num?) ?? 0).toDouble();
+    final creditBillAmount =
+        ((summary['credit_bill_amount'] as num?) ?? total).toDouble().abs();
+    final creditLimit =
+        ((summary['credit_limit_snapshot'] as num?) ?? 0).toDouble();
+    final creditApprovedBy =
+        (summary['credit_approved_by'] ?? '').toString().trim();
 
     final receiptItems = items.map((item) {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
@@ -351,6 +450,12 @@ class TransactionHistoryScreen extends StatefulWidget {
       amountTendered: paymentMethod.toLowerCase() == 'cash' ? amountTendered : null,
       changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
       isRefund: isRefund,
+      isCreditSale: isCreditSale,
+      creditPreviousBalance: creditPreviousBalance,
+      creditBillAmount: creditBillAmount,
+      creditNewBalance: creditNewBalance,
+      creditLimit: creditLimit,
+      creditApprovedBy: creditApprovedBy,
     );
 
     if (!context.mounted) return response.isSuccess;
@@ -676,6 +781,10 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
         return 'Cash';
       case 'card':
         return 'Card';
+      case 'customer_credit':
+        return 'Customer Credit';
+      case 'customer_credit_refund':
+        return 'Customer Credit Refund';
       case 'refund':
         return 'Refund';
       default:
@@ -685,6 +794,18 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
 
   String _customerName(Map<String, dynamic> tx) {
     return (tx['customer_name_snapshot'] ?? '').toString().trim();
+  }
+
+  bool _isCreditSale(Map<String, dynamic> tx) {
+    final paymentMethod =
+        (tx['payment_method'] ?? '').toString().toLowerCase();
+    final creditStatus =
+        (tx['credit_status'] ?? '').toString().toLowerCase();
+
+    return TransactionHistoryScreen._readBool(tx['is_credit_sale']) ||
+        paymentMethod == 'customer_credit' ||
+        paymentMethod == 'customer_credit_refund' ||
+        creditStatus == 'refund_posted';
   }
 
   String _customerSubtitle(Map<String, dynamic> tx) {
@@ -977,6 +1098,26 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     );
   }
 
+  Widget _buildCreditChip(_TxPalette palette, {String label = 'Credit Sale'}) {
+    const color = Color(0xFFFFB65C);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(palette.isDark ? 0.18 : 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.28)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: color,
+          fontWeight: FontWeight.w800,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+
   Widget _buildTypeChip(_TxPalette palette, String type) {
     final color = _typeColor(palette, type);
     return Container(
@@ -1051,6 +1192,11 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
         ((tx['discount_amount'] as num?) ?? 0).toDouble().abs();
     final customerName = _customerName(tx);
     final hasCustomer = customerName.isNotEmpty;
+    final isCreditSale = _isCreditSale(tx);
+    final creditPreviousBalance =
+        ((tx['credit_previous_balance'] as num?) ?? 0).toDouble();
+    final creditNewBalance =
+        ((tx['credit_new_balance'] as num?) ?? 0).toDouble();
 
     return Material(
       color: Colors.transparent,
@@ -1098,6 +1244,15 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                             ),
                           ),
                         ),
+                        if (isCreditSale) ...[
+                          _buildCreditChip(
+                            palette,
+                            label: type == 'refund'
+                                ? 'Credit Refund'
+                                : 'Credit Sale',
+                          ),
+                          const SizedBox(width: 8),
+                        ],
                         _buildTypeChip(palette, type),
                       ],
                     ),
@@ -1129,6 +1284,12 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                             palette,
                             'Customer',
                             '$customerName\n${_customerSubtitle(tx)}',
+                          ),
+                        if (isCreditSale)
+                          _buildMiniInfoCard(
+                            palette,
+                            'Credit Balance',
+                            'Rs. ${creditPreviousBalance.toStringAsFixed(2)} → Rs. ${creditNewBalance.toStringAsFixed(2)}',
                           ),
                         if (type == 'sale' && discountAmount > 0)
                           _buildMiniInfoCard(
@@ -1359,6 +1520,10 @@ Future<String?> showTransactionReceiptDialog(
         return 'Cash';
       case 'card':
         return 'Card';
+      case 'customer_credit':
+        return 'Customer Credit';
+      case 'customer_credit_refund':
+        return 'Customer Credit Refund';
       case 'refund':
         return 'Refund';
       default:
@@ -1392,6 +1557,18 @@ Future<String?> showTransactionReceiptDialog(
   final customerCode =
       (summary['customer_code_snapshot'] ?? '').toString().trim();
   final hasCustomer = customerName.isNotEmpty;
+  final isCreditSale = TransactionHistoryScreen._readBool(summary['is_credit_sale']) ||
+      paymentMethod.toLowerCase() == 'customer_credit';
+  final creditPreviousBalance =
+      ((summary['credit_previous_balance'] as num?) ?? 0).toDouble();
+  final creditNewBalance =
+      ((summary['credit_new_balance'] as num?) ?? 0).toDouble();
+  final creditBillAmount =
+      ((summary['credit_bill_amount'] as num?) ?? total).toDouble().abs();
+  final creditLimit =
+      ((summary['credit_limit_snapshot'] as num?) ?? 0).toDouble();
+  final creditApprovedBy =
+      (summary['credit_approved_by'] ?? '').toString().trim();
 
   String formatPercent(num value) {
     final number = value.toDouble();
@@ -1626,7 +1803,9 @@ Future<String?> showTransactionReceiptDialog(
                               ),
                               if (!isRefund)
                                 buildInfoChip(
-                                  Icons.payments_outlined,
+                                  isCreditSale
+                                      ? Icons.account_balance_wallet_outlined
+                                      : Icons.payments_outlined,
                                   paymentLabel(paymentMethod),
                                 ),
                               if (isRefund && originalSaleId != null)
@@ -1707,6 +1886,75 @@ Future<String?> showTransactionReceiptDialog(
                             Text(
                               'Amount Charged: Rs. ${total.toStringAsFixed(2)}',
                               style: TextStyle(color: palette.textSecondary),
+                            ),
+                          ],
+                          if (isCreditSale) ...[
+                            const SizedBox(height: 14),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFB65C)
+                                    .withOpacity(palette.isDark ? 0.16 : 0.10),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFFFB65C).withOpacity(0.28),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.account_balance_wallet_outlined,
+                                        color: Color(0xFFFFB65C),
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Customer Credit Details',
+                                        style: TextStyle(
+                                          color: palette.textPrimary,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    'Previous Balance: Rs. ${creditPreviousBalance.toStringAsFixed(2)}',
+                                    style: TextStyle(color: palette.textSecondary),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${isRefund ? 'This Refund' : 'This Bill'}: Rs. ${creditBillAmount.toStringAsFixed(2)}',
+                                    style: TextStyle(color: palette.textSecondary),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'New Balance: Rs. ${creditNewBalance.toStringAsFixed(2)}',
+                                    style: TextStyle(
+                                      color: palette.textPrimary,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  if (creditLimit > 0) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Credit Limit: Rs. ${creditLimit.toStringAsFixed(2)}',
+                                      style: TextStyle(color: palette.textSecondary),
+                                    ),
+                                  ],
+                                  if (creditApprovedBy.isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Approved By: $creditApprovedBy',
+                                      style: TextStyle(color: palette.textSecondary),
+                                    ),
+                                  ],
+                                ],
+                              ),
                             ),
                           ],
                           const SizedBox(height: 16),

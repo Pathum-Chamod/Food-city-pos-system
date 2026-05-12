@@ -1,5 +1,8 @@
 // packages/shared/lib/shared.dart
 export 'models/customer.dart';
+export 'models/customer_credit_summary.dart';
+export 'models/customer_ledger_entry.dart';
+export 'models/customer_payment.dart';
 export 'models/product.dart';
 export 'models/sync_queue.dart';
 export 'models/user.dart';

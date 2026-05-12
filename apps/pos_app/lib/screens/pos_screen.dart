@@ -14,6 +14,7 @@ import '../providers/cart_provider.dart';
 import '../providers/app_theme_provider.dart';
 import '../services/database_helper.dart';
 import '../services/customer_service.dart';
+import '../services/customer_credit_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import '../services/sync_service.dart';
@@ -3380,6 +3381,8 @@ class _PosScreenState extends State<PosScreen> {
     String? paymentMethod;
     double? amountTendered;
     double? changeAmount;
+    bool isCreditSale = false;
+    String? creditApprovedBy;
 
     if (!isRefund) {
       _isPaymentDialogOpen = true;
@@ -3389,6 +3392,7 @@ class _PosScreenState extends State<PosScreen> {
         paymentResult = await showCheckoutPaymentDialog(
           context,
           totalAmount: displayTotal,
+          selectedCustomer: cart.selectedCustomer,
         );
       } finally {
         _isPaymentDialogOpen = false;
@@ -3403,6 +3407,8 @@ class _PosScreenState extends State<PosScreen> {
       paymentMethod = paymentResult['payment_method']?.toString();
       amountTendered = (paymentResult['amount_tendered'] as num?)?.toDouble();
       changeAmount = (paymentResult['change_amount'] as num?)?.toDouble();
+      isCreditSale = (paymentResult['is_credit_sale'] as bool?) ?? false;
+      creditApprovedBy = paymentResult['credit_approved_by']?.toString();
     }
 
     setState(() {
@@ -3416,13 +3422,20 @@ class _PosScreenState extends State<PosScreen> {
         isRefund: isRefund,
       );
 
+      // DatabaseHelper currently validates only the normal tender methods
+      // used by the base sale save flow. For customer credit, save the base
+      // transaction through the safe card path first, then postCreditSale()
+      // immediately updates the saved sale to payment_method = customer_credit
+      // and creates the ledger entry.
+      final baseSalePaymentMethod = isCreditSale ? 'card' : paymentMethod;
+
       final saleId = await DatabaseHelper.instance.processTransaction(
         subtotalAmount: subtotal,
         totalAmount: displayTotal,
         cartItems: itemsMap,
         cashierName: cashierName,
         isRefund: isRefund,
-        paymentMethod: paymentMethod,
+        paymentMethod: baseSalePaymentMethod,
         amountTendered: amountTendered,
         changeAmount: changeAmount,
         discountType: cart.discountType,
@@ -3434,6 +3447,23 @@ class _PosScreenState extends State<PosScreen> {
         saleId: saleId,
         customer: cart.selectedCustomer,
       );
+
+      if (isCreditSale) {
+        final selectedCustomer = cart.selectedCustomer;
+        if (selectedCustomer == null || selectedCustomer.id == null) {
+          throw Exception('Select a customer to use Customer Credit.');
+        }
+
+        await CustomerCreditService.instance.postCreditSale(
+          customerId: selectedCustomer.id!,
+          saleId: saleId,
+          amount: displayTotal,
+          cashierName: cashierName,
+          approvedBy: creditApprovedBy,
+          managerApproved: creditApprovedBy != null &&
+              creditApprovedBy.trim().isNotEmpty,
+        );
+      }
 
       cart.clearCart();
 

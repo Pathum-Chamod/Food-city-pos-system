@@ -13,6 +13,11 @@ class Customer {
     this.customerType = 'regular',
     this.notes,
     this.isActive = true,
+    this.creditEnabled = false,
+    this.creditLimit = 0.0,
+    this.currentCreditBalance = 0.0,
+    this.creditStatus = 'normal',
+    this.creditNote,
     required this.createdAt,
     required this.updatedAt,
     this.createdBy,
@@ -29,6 +34,17 @@ class Customer {
   final String customerType;
   final String? notes;
   final bool isActive;
+
+  /// Credit account fields.
+  ///
+  /// These are optional in Customer Module V1 and become active in
+  /// Customer Credit / Ledger implementation.
+  final bool creditEnabled;
+  final double creditLimit;
+  final double currentCreditBalance;
+  final String creditStatus; // normal | watchlist | blocked
+  final String? creditNote;
+
   final String createdAt;
   final String updatedAt;
   final int? createdBy;
@@ -38,6 +54,7 @@ class Customer {
   bool get hasEmail => (email ?? '').trim().isNotEmpty;
   bool get hasAddress => (address ?? '').trim().isNotEmpty;
   bool get hasNotes => (notes ?? '').trim().isNotEmpty;
+  bool get hasCreditNote => (creditNote ?? '').trim().isNotEmpty;
 
   String get displayCode {
     final trimmed = customerCode.trim();
@@ -76,6 +93,38 @@ class Customer {
     }
   }
 
+  String get normalizedCreditStatus {
+    final normalized = creditStatus.trim().toLowerCase();
+    if (normalized == 'watchlist') return 'watchlist';
+    if (normalized == 'blocked') return 'blocked';
+    return 'normal';
+  }
+
+  String get creditStatusLabel {
+    switch (normalizedCreditStatus) {
+      case 'watchlist':
+        return 'Watchlist';
+      case 'blocked':
+        return 'Blocked';
+      case 'normal':
+      default:
+        return 'Normal';
+    }
+  }
+
+  bool get isCreditBlocked => normalizedCreditStatus == 'blocked';
+
+  double get availableCredit {
+    final available = creditLimit - currentCreditBalance;
+    return double.parse(available.toStringAsFixed(2));
+  }
+
+  bool get isOverCreditLimit {
+    if (!creditEnabled) return false;
+    if (creditLimit <= 0) return currentCreditBalance > 0;
+    return currentCreditBalance > creditLimit;
+  }
+
   Customer copyWith({
     int? id,
     String? customerCode,
@@ -87,6 +136,11 @@ class Customer {
     String? customerType,
     String? notes,
     bool? isActive,
+    bool? creditEnabled,
+    double? creditLimit,
+    double? currentCreditBalance,
+    String? creditStatus,
+    String? creditNote,
     String? createdAt,
     String? updatedAt,
     int? createdBy,
@@ -103,6 +157,12 @@ class Customer {
       customerType: customerType ?? this.customerType,
       notes: notes ?? this.notes,
       isActive: isActive ?? this.isActive,
+      creditEnabled: creditEnabled ?? this.creditEnabled,
+      creditLimit: creditLimit ?? this.creditLimit,
+      currentCreditBalance:
+          currentCreditBalance ?? this.currentCreditBalance,
+      creditStatus: creditStatus ?? this.creditStatus,
+      creditNote: creditNote ?? this.creditNote,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       createdBy: createdBy ?? this.createdBy,
@@ -122,6 +182,11 @@ class Customer {
       'customer_type': normalizedType,
       'notes': notes,
       'is_active': isActive ? 1 : 0,
+      'credit_enabled': creditEnabled ? 1 : 0,
+      'credit_limit': creditLimit,
+      'current_credit_balance': currentCreditBalance,
+      'credit_status': normalizedCreditStatus,
+      'credit_note': creditNote,
       'created_at': createdAt,
       'updated_at': updatedAt,
       'created_by': createdBy,
@@ -140,6 +205,12 @@ class Customer {
       if (value == null) return null;
       if (value is num) return value.toInt();
       return int.tryParse(value.toString());
+    }
+
+    double readDouble(dynamic value, {double fallback = 0.0}) {
+      if (value == null) return fallback;
+      if (value is num) return value.toDouble();
+      return double.tryParse(value.toString()) ?? fallback;
     }
 
     bool readBool(dynamic value, {bool fallback = true}) {
@@ -165,6 +236,11 @@ class Customer {
       customerType: (map['customer_type'] ?? 'regular').toString(),
       notes: readNullableString(map['notes']),
       isActive: readBool(map['is_active'], fallback: true),
+      creditEnabled: readBool(map['credit_enabled'], fallback: false),
+      creditLimit: readDouble(map['credit_limit']),
+      currentCreditBalance: readDouble(map['current_credit_balance']),
+      creditStatus: (map['credit_status'] ?? 'normal').toString(),
+      creditNote: readNullableString(map['credit_note']),
       createdAt: (map['created_at'] ?? now).toString(),
       updatedAt: (map['updated_at'] ?? now).toString(),
       createdBy: readNullableInt(map['created_by']),

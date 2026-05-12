@@ -72,6 +72,12 @@ class ReceiptPdfService {
     String? customerPhone,
     String? customerCode,
     bool isRefund = false,
+    bool isCreditSale = false,
+    double? creditPreviousBalance,
+    double? creditBillAmount,
+    double? creditNewBalance,
+    double? creditLimit,
+    String? creditApprovedBy,
     String? footerNote,
   }) async {
     String? outputPath;
@@ -96,6 +102,10 @@ class ReceiptPdfService {
       final hasCustomer = cleanCustomerName.isNotEmpty ||
           cleanCustomerPhone.isNotEmpty ||
           cleanCustomerCode.isNotEmpty;
+      final paymentMethodLower = paymentMethod.toLowerCase();
+      final isCustomerCredit = isCreditSale ||
+          paymentMethodLower == 'customer_credit' ||
+          paymentMethodLower == 'customer_credit_refund';
 
       pdf.addPage(
         pw.MultiPage(
@@ -219,10 +229,38 @@ class ReceiptPdfService {
                   fontSize: 11,
                 ),
                 _receiptDivider(char: '='),
-                _receiptLabelValue('Paid by', paymentMethod.toUpperCase()),
-                if (!isRefund && amountTendered != null)
+                _receiptLabelValue(
+                  'Paid by',
+                  isCustomerCredit
+                      ? (isRefund ? 'CUSTOMER CREDIT REFUND' : 'CUSTOMER CREDIT')
+                      : paymentMethod.toUpperCase(),
+                ),
+                if (isCustomerCredit) ...[
+                  if (creditPreviousBalance != null)
+                    _receiptLabelValue(
+                      'Prev. Balance',
+                      _formatMoney(creditPreviousBalance),
+                    ),
+                  _receiptLabelValue(
+                    isRefund ? 'This Refund' : 'This Bill',
+                    _formatMoney(creditBillAmount ?? total),
+                  ),
+                  if (creditNewBalance != null)
+                    _receiptLabelValue(
+                      'New Balance',
+                      _formatMoney(creditNewBalance),
+                    ),
+                  if (creditLimit != null && creditLimit > 0)
+                    _receiptLabelValue(
+                      'Credit Limit',
+                      _formatMoney(creditLimit),
+                    ),
+                  if ((creditApprovedBy ?? '').trim().isNotEmpty)
+                    _receiptLabelValue('Approved By', creditApprovedBy!.trim()),
+                ],
+                if (!isRefund && !isCustomerCredit && amountTendered != null)
                   _receiptLabelValue('Tendered', _formatMoney(amountTendered)),
-                if (!isRefund && changeAmount != null)
+                if (!isRefund && !isCustomerCredit && changeAmount != null)
                   _receiptLabelValue('Change', _formatMoney(changeAmount)),
                 pw.SizedBox(height: 10),
                 pw.Text(

@@ -257,6 +257,12 @@ def create_customer_tables(cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_code ON customers(customer_code)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_active ON customers(is_active)")
 
+    ensure_column(cursor, "customers", "credit_enabled", "credit_enabled INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "credit_limit", "credit_limit REAL NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "current_credit_balance", "current_credit_balance REAL NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "credit_status", "credit_status TEXT NOT NULL DEFAULT 'normal'")
+    ensure_column(cursor, "customers", "credit_note", "credit_note TEXT")
+
 
 def ensure_customer_sales_columns(cursor):
     create_customer_tables(cursor)
@@ -264,6 +270,15 @@ def ensure_customer_sales_columns(cursor):
     ensure_column(cursor, "sales", "customer_name_snapshot", "customer_name_snapshot TEXT")
     ensure_column(cursor, "sales", "customer_phone_snapshot", "customer_phone_snapshot TEXT")
     ensure_column(cursor, "sales", "customer_code_snapshot", "customer_code_snapshot TEXT")
+    ensure_column(cursor, "sales", "pos_sale_id", "pos_sale_id INTEGER")
+    ensure_column(cursor, "sales", "is_credit_sale", "is_credit_sale INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "sales", "credit_status", "credit_status TEXT")
+    ensure_column(cursor, "sales", "credit_ledger_id", "credit_ledger_id INTEGER")
+    ensure_column(cursor, "sales", "credit_approved_by", "credit_approved_by TEXT")
+    ensure_column(cursor, "sales", "credit_previous_balance", "credit_previous_balance REAL")
+    ensure_column(cursor, "sales", "credit_new_balance", "credit_new_balance REAL")
+    ensure_column(cursor, "sales", "credit_bill_amount", "credit_bill_amount REAL")
+    ensure_column(cursor, "sales", "credit_limit_snapshot", "credit_limit_snapshot REAL")
 
 
 def generate_customer_code(customer_id):
@@ -530,6 +545,540 @@ def set_customer_active_status(cursor, body, is_active):
     )
     return True, "success", get_customer_by_id(cursor, customer_id)
 
+
+
+def create_customer_credit_tables(cursor):
+    create_customer_tables(cursor)
+    ensure_customer_sales_columns(cursor)
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customer_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pos_ledger_id INTEGER,
+            customer_id INTEGER NOT NULL,
+            entry_type TEXT NOT NULL,
+            debit REAL NOT NULL DEFAULT 0,
+            credit REAL NOT NULL DEFAULT 0,
+            balance_after REAL NOT NULL DEFAULT 0,
+            reference_type TEXT,
+            reference_id INTEGER,
+            sale_id INTEGER,
+            payment_id INTEGER,
+            description TEXT,
+            payment_method TEXT,
+            performed_by TEXT,
+            approved_by TEXT,
+            created_at TEXT NOT NULL,
+            voided_at TEXT,
+            voided_by TEXT,
+            void_reason TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customer_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pos_payment_id INTEGER,
+            customer_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            payment_method TEXT NOT NULL,
+            reference_note TEXT,
+            cashier_name TEXT,
+            received_by TEXT,
+            created_at TEXT NOT NULL,
+            voided_at TEXT,
+            voided_by TEXT,
+            void_reason TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_ledger_customer ON customer_ledger(customer_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_ledger_pos_id ON customer_ledger(pos_ledger_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_payments_customer ON customer_payments(customer_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_payments_pos_id ON customer_payments(pos_payment_id)")
+
+
+def normalize_credit_status(value):
+    normalized = str(value or "normal").strip().lower()
+    if normalized in {"watchlist", "blocked"}:
+        return normalized
+    return "normal"
+
+
+def upsert_customer_from_sync(cursor, data):
+    create_customer_credit_tables(cursor)
+
+    customer_id = parse_int(data.get("customer_id") or data.get("id"), 0)
+    customer_code = clean_optional_text(data.get("customer_code") or data.get("customer_code_snapshot"))
+    name = clean_optional_text(
+        data.get("customer_name")
+        or data.get("name")
+        or data.get("customer_name_snapshot")
+    )
+    phone = clean_optional_text(
+        data.get("customer_phone")
+        or data.get("phone")
+        or data.get("customer_phone_snapshot")
+    )
+    phone_normalized = normalize_customer_phone(
+        data.get("customer_phone_normalized") or data.get("phone_normalized") or phone
+    )
+
+    existing = None
+    if customer_id > 0:
+        existing = cursor.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
+    if existing is None and customer_code:
+        existing = cursor.execute("SELECT * FROM customers WHERE customer_code = ?", (customer_code,)).fetchone()
+    if existing is None and phone_normalized:
+        existing = cursor.execute("SELECT * FROM customers WHERE phone_normalized = ?", (phone_normalized,)).fetchone()
+
+    now = datetime.now().astimezone().isoformat()
+    credit_enabled = 1 if normalize_bool(data.get("credit_enabled"), False) else 0
+    credit_limit = parse_float(data.get("credit_limit"), 0.0)
+    current_balance = parse_float(data.get("current_credit_balance"), 0.0)
+    credit_status = normalize_credit_status(data.get("credit_status"))
+    credit_note = clean_optional_text(data.get("credit_note"))
+
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE customers
+            SET customer_code = COALESCE(?, customer_code),
+                name = COALESCE(?, name),
+                phone = COALESCE(?, phone),
+                phone_normalized = COALESCE(?, phone_normalized),
+                email = COALESCE(?, email),
+                address = COALESCE(?, address),
+                customer_type = COALESCE(?, customer_type),
+                notes = COALESCE(?, notes),
+                is_active = ?,
+                credit_enabled = CASE WHEN ? IS NULL THEN credit_enabled ELSE ? END,
+                credit_limit = CASE WHEN ? IS NULL THEN credit_limit ELSE ? END,
+                current_credit_balance = CASE WHEN ? IS NULL THEN current_credit_balance ELSE ? END,
+                credit_status = COALESCE(?, credit_status),
+                credit_note = COALESCE(?, credit_note),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                customer_code,
+                name,
+                phone,
+                phone_normalized or None,
+                clean_optional_text(data.get("customer_email") or data.get("email")),
+                clean_optional_text(data.get("customer_address") or data.get("address")),
+                normalize_customer_type(data.get("customer_type")),
+                clean_optional_text(data.get("customer_notes") or data.get("notes")),
+                1 if normalize_bool(data.get("customer_is_active"), True) else 0,
+                data.get("credit_enabled"), credit_enabled,
+                data.get("credit_limit"), credit_limit,
+                data.get("current_credit_balance"), current_balance,
+                credit_status,
+                credit_note,
+                now,
+                resolved_id,
+            ),
+        )
+        return resolved_id
+
+    if not name:
+        name = f"Customer {customer_code or customer_id or 'Unknown'}"
+    if not customer_code and customer_id > 0:
+        customer_code = generate_customer_code(customer_id)
+
+    if customer_id > 0:
+        cursor.execute(
+            """
+            INSERT INTO customers (
+                id, customer_code, name, phone, phone_normalized, email, address,
+                customer_type, notes, is_active, credit_enabled, credit_limit,
+                current_credit_balance, credit_status, credit_note,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                customer_id,
+                customer_code,
+                name,
+                phone,
+                phone_normalized or None,
+                clean_optional_text(data.get("customer_email") or data.get("email")),
+                clean_optional_text(data.get("customer_address") or data.get("address")),
+                normalize_customer_type(data.get("customer_type")),
+                clean_optional_text(data.get("customer_notes") or data.get("notes")),
+                1 if normalize_bool(data.get("customer_is_active"), True) else 0,
+                credit_enabled,
+                credit_limit,
+                current_balance,
+                credit_status,
+                credit_note,
+                now,
+                now,
+            ),
+        )
+        return customer_id
+
+    cursor.execute(
+        """
+        INSERT INTO customers (
+            customer_code, name, phone, phone_normalized, email, address,
+            customer_type, notes, is_active, credit_enabled, credit_limit,
+            current_credit_balance, credit_status, credit_note,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            customer_code,
+            name,
+            phone,
+            phone_normalized or None,
+            clean_optional_text(data.get("customer_email") or data.get("email")),
+            clean_optional_text(data.get("customer_address") or data.get("address")),
+            normalize_customer_type(data.get("customer_type")),
+            clean_optional_text(data.get("customer_notes") or data.get("notes")),
+            1 if normalize_bool(data.get("customer_is_active"), True) else 0,
+            credit_enabled,
+            credit_limit,
+            current_balance,
+            credit_status,
+            credit_note,
+            now,
+            now,
+        ),
+    )
+    new_id = cursor.lastrowid
+    if not customer_code:
+        cursor.execute(
+            "UPDATE customers SET customer_code = ? WHERE id = ?",
+            (generate_customer_code(new_id), new_id),
+        )
+    return new_id
+
+
+def customer_credit_balance(cursor, customer_id):
+    create_customer_credit_tables(cursor)
+    row = cursor.execute(
+        """
+        SELECT COALESCE(SUM(COALESCE(debit, 0) - COALESCE(credit, 0)), 0) AS balance
+        FROM customer_ledger
+        WHERE customer_id = ?
+        """,
+        (parse_int(customer_id, 0),),
+    ).fetchone()
+    return round(parse_float(row["balance"] if row else 0, 0.0), 2)
+
+
+def update_customer_cached_credit_balance(cursor, customer_id, balance=None):
+    if balance is None:
+        balance = customer_credit_balance(cursor, customer_id)
+    cursor.execute(
+        "UPDATE customers SET current_credit_balance = ?, updated_at = ? WHERE id = ?",
+        (round(parse_float(balance, 0.0), 2), datetime.now().astimezone().isoformat(), parse_int(customer_id, 0)),
+    )
+    return round(parse_float(balance, 0.0), 2)
+
+
+def insert_credit_ledger_entry(cursor, data, customer_id=None):
+    create_customer_credit_tables(cursor)
+    ledger = data.get("ledger_entry") if isinstance(data.get("ledger_entry"), dict) else data
+    resolved_customer_id = parse_int(customer_id or data.get("customer_id") or ledger.get("customer_id"), 0)
+    if resolved_customer_id <= 0:
+        resolved_customer_id = upsert_customer_from_sync(cursor, data)
+
+    pos_ledger_id = parse_int(ledger.get("ledger_id") or ledger.get("pos_ledger_id"), 0) or None
+    entry_type = str(ledger.get("entry_type") or data.get("entry_type") or "adjustment").strip().lower()
+    sale_id = parse_int(ledger.get("sale_id") or data.get("sale_id") or data.get("refund_sale_id"), 0) or None
+    payment_id = parse_int(ledger.get("payment_id") or data.get("payment_id"), 0) or None
+
+    if pos_ledger_id:
+        existing = cursor.execute(
+            "SELECT id FROM customer_ledger WHERE pos_ledger_id = ? LIMIT 1",
+            (pos_ledger_id,),
+        ).fetchone()
+        if existing:
+            return parse_int(existing["id"], 0)
+
+    if entry_type in {"credit_sale", "refund"} and sale_id:
+        existing = cursor.execute(
+            "SELECT id FROM customer_ledger WHERE entry_type = ? AND sale_id = ? LIMIT 1",
+            (entry_type, sale_id),
+        ).fetchone()
+        if existing:
+            return parse_int(existing["id"], 0)
+
+    if entry_type == "payment" and payment_id:
+        existing = cursor.execute(
+            "SELECT id FROM customer_ledger WHERE entry_type = ? AND payment_id = ? LIMIT 1",
+            (entry_type, payment_id),
+        ).fetchone()
+        if existing:
+            return parse_int(existing["id"], 0)
+
+    cursor.execute(
+        """
+        INSERT INTO customer_ledger (
+            pos_ledger_id, customer_id, entry_type, debit, credit, balance_after,
+            reference_type, reference_id, sale_id, payment_id, description,
+            payment_method, performed_by, approved_by, created_at,
+            voided_at, voided_by, void_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pos_ledger_id,
+            resolved_customer_id,
+            entry_type,
+            parse_float(ledger.get("debit") if ledger.get("debit") is not None else data.get("debit"), 0.0),
+            parse_float(ledger.get("credit") if ledger.get("credit") is not None else data.get("credit"), 0.0),
+            parse_float(ledger.get("balance_after") if ledger.get("balance_after") is not None else data.get("credit_new_balance") or data.get("new_balance"), 0.0),
+            clean_optional_text(ledger.get("reference_type") or data.get("reference_type")),
+            parse_int(ledger.get("reference_id") or data.get("reference_id"), 0) or None,
+            sale_id,
+            payment_id,
+            clean_optional_text(ledger.get("description") or data.get("description")),
+            clean_optional_text(ledger.get("payment_method") or data.get("payment_method")),
+            clean_optional_text(ledger.get("performed_by") or data.get("performed_by")),
+            clean_optional_text(ledger.get("approved_by") or data.get("approved_by")),
+            clean_optional_text(ledger.get("created_at") or data.get("created_at")) or datetime.now().astimezone().isoformat(),
+            clean_optional_text(ledger.get("voided_at") or data.get("voided_at")),
+            clean_optional_text(ledger.get("voided_by") or data.get("voided_by")),
+            clean_optional_text(ledger.get("void_reason") or data.get("void_reason")),
+        ),
+    )
+    update_customer_cached_credit_balance(cursor, resolved_customer_id, data.get("credit_new_balance") or data.get("new_balance") or ledger.get("balance_after"))
+    return cursor.lastrowid
+
+
+def handle_credit_settings_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    cursor.execute(
+        """
+        UPDATE customers
+        SET credit_enabled = ?, credit_limit = ?, current_credit_balance = ?,
+            credit_status = ?, credit_note = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            1 if normalize_bool(data.get("credit_enabled"), False) else 0,
+            parse_float(data.get("credit_limit"), 0.0),
+            parse_float(data.get("current_credit_balance"), 0.0),
+            normalize_credit_status(data.get("credit_status")),
+            clean_optional_text(data.get("credit_note")),
+            clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat(),
+            customer_id,
+        ),
+    )
+    return customer_id
+
+
+def handle_credit_sale_update_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    ledger_id = insert_credit_ledger_entry(cursor, data, customer_id=customer_id)
+    sale_id = parse_int(data.get("sale_id"), 0)
+    if sale_id > 0:
+        cursor.execute(
+            """
+            UPDATE sales
+            SET payment_method = 'customer_credit',
+                is_credit_sale = 1,
+                credit_status = ?,
+                credit_ledger_id = ?,
+                credit_approved_by = ?,
+                credit_previous_balance = ?,
+                credit_new_balance = ?,
+                credit_bill_amount = ?,
+                credit_limit_snapshot = ?,
+                customer_id = ?,
+                customer_name_snapshot = COALESCE(?, customer_name_snapshot),
+                customer_phone_snapshot = COALESCE(?, customer_phone_snapshot),
+                customer_code_snapshot = COALESCE(?, customer_code_snapshot)
+            WHERE id = ? OR pos_sale_id = ?
+            """,
+            (
+                clean_optional_text(data.get("credit_status")) or "posted",
+                ledger_id,
+                clean_optional_text(data.get("credit_approved_by")),
+                parse_float(data.get("credit_previous_balance"), 0.0),
+                parse_float(data.get("credit_new_balance"), 0.0),
+                parse_float(data.get("credit_bill_amount"), 0.0),
+                parse_float(data.get("credit_limit_snapshot"), 0.0),
+                customer_id,
+                clean_optional_text(data.get("customer_name") or data.get("customer_name_snapshot")),
+                clean_optional_text(data.get("customer_phone") or data.get("customer_phone_snapshot")),
+                clean_optional_text(data.get("customer_code") or data.get("customer_code_snapshot")),
+                sale_id,
+                sale_id,
+            ),
+        )
+    return ledger_id
+
+
+def handle_credit_refund_update_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    ledger_id = insert_credit_ledger_entry(cursor, data, customer_id=customer_id)
+    refund_sale_id = parse_int(data.get("refund_sale_id") or data.get("sale_id"), 0)
+    if refund_sale_id > 0:
+        cursor.execute(
+            """
+            UPDATE sales
+            SET payment_method = COALESCE(payment_method, 'customer_credit_refund'),
+                is_credit_sale = 1,
+                credit_status = ?,
+                credit_ledger_id = ?,
+                credit_approved_by = ?,
+                credit_previous_balance = ?,
+                credit_new_balance = ?,
+                credit_bill_amount = ?,
+                credit_limit_snapshot = ?,
+                customer_id = ?,
+                customer_name_snapshot = COALESCE(?, customer_name_snapshot),
+                customer_phone_snapshot = COALESCE(?, customer_phone_snapshot),
+                customer_code_snapshot = COALESCE(?, customer_code_snapshot)
+            WHERE id = ? OR pos_sale_id = ?
+            """,
+            (
+                clean_optional_text(data.get("credit_status")) or "refund_posted",
+                ledger_id,
+                clean_optional_text(data.get("credit_approved_by")),
+                parse_float(data.get("credit_previous_balance"), 0.0),
+                parse_float(data.get("credit_new_balance"), 0.0),
+                parse_float(data.get("credit_bill_amount"), 0.0),
+                parse_float(data.get("credit_limit_snapshot"), 0.0),
+                customer_id,
+                clean_optional_text(data.get("customer_name") or data.get("customer_name_snapshot")),
+                clean_optional_text(data.get("customer_phone") or data.get("customer_phone_snapshot")),
+                clean_optional_text(data.get("customer_code") or data.get("customer_code_snapshot")),
+                refund_sale_id,
+                refund_sale_id,
+            ),
+        )
+    return ledger_id
+
+
+def handle_customer_payment_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    pos_payment_id = parse_int(data.get("payment_id"), 0) or None
+    if pos_payment_id:
+        existing = cursor.execute(
+            "SELECT id FROM customer_payments WHERE pos_payment_id = ? LIMIT 1",
+            (pos_payment_id,),
+        ).fetchone()
+        if existing:
+            return parse_int(existing["id"], 0)
+
+    cursor.execute(
+        """
+        INSERT INTO customer_payments (
+            pos_payment_id, customer_id, amount, payment_method, reference_note,
+            cashier_name, received_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pos_payment_id,
+            customer_id,
+            parse_float(data.get("amount"), 0.0),
+            clean_optional_text(data.get("payment_method")) or "cash",
+            clean_optional_text(data.get("reference_note")),
+            clean_optional_text(data.get("cashier_name")),
+            clean_optional_text(data.get("received_by")),
+            clean_optional_text(data.get("created_at")) or datetime.now().astimezone().isoformat(),
+        ),
+    )
+    insert_credit_ledger_entry(cursor, data, customer_id=customer_id)
+    return cursor.lastrowid
+
+
+def handle_customer_payment_void_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    pos_payment_id = parse_int(data.get("payment_id"), 0)
+    if pos_payment_id > 0:
+        cursor.execute(
+            """
+            UPDATE customer_payments
+            SET voided_at = ?, voided_by = ?, void_reason = ?
+            WHERE pos_payment_id = ? OR id = ?
+            """,
+            (
+                clean_optional_text(data.get("voided_at")) or datetime.now().astimezone().isoformat(),
+                clean_optional_text(data.get("voided_by")),
+                clean_optional_text(data.get("void_reason")),
+                pos_payment_id,
+                pos_payment_id,
+            ),
+        )
+        cursor.execute(
+            """
+            UPDATE customer_ledger
+            SET voided_at = ?, voided_by = ?, void_reason = ?
+            WHERE entry_type = 'payment' AND (payment_id = ? OR pos_ledger_id = ?)
+            """,
+            (
+                clean_optional_text(data.get("voided_at")) or datetime.now().astimezone().isoformat(),
+                clean_optional_text(data.get("voided_by")),
+                clean_optional_text(data.get("void_reason")),
+                pos_payment_id,
+                pos_payment_id,
+            ),
+        )
+    return insert_credit_ledger_entry(cursor, data, customer_id=customer_id)
+
+
+def get_customer_ledger_rows(cursor, customer_id, limit=300):
+    create_customer_credit_tables(cursor)
+    return [
+        dict(row)
+        for row in cursor.execute(
+            """
+            SELECT *
+            FROM customer_ledger
+            WHERE customer_id = ?
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (parse_int(customer_id, 0), parse_int(limit, 300)),
+        ).fetchall()
+    ]
+
+
+def get_credit_customers_report_rows(cursor, include_zero=False, limit=300):
+    create_customer_credit_tables(cursor)
+    where = "(COALESCE(c.credit_enabled, 0) = 1 OR ABS(COALESCE(c.current_credit_balance, 0)) > 0)" if include_zero else "ABS(COALESCE(c.current_credit_balance, 0)) > 0"
+    return [
+        dict(row)
+        for row in cursor.execute(
+            f"""
+            SELECT
+                c.id,
+                c.customer_code,
+                c.name,
+                c.phone,
+                c.customer_type,
+                c.is_active,
+                COALESCE(c.credit_enabled, 0) AS credit_enabled,
+                COALESCE(c.credit_limit, 0) AS credit_limit,
+                COALESCE(c.current_credit_balance, 0) AS current_credit_balance,
+                COALESCE(c.credit_status, 'normal') AS credit_status,
+                c.credit_note,
+                (
+                  SELECT MAX(l.created_at)
+                  FROM customer_ledger l
+                  WHERE l.customer_id = c.id AND l.entry_type = 'payment'
+                ) AS last_payment_at,
+                (
+                  SELECT MAX(l.created_at)
+                  FROM customer_ledger l
+                  WHERE l.customer_id = c.id AND l.entry_type = 'credit_sale'
+                ) AS last_credit_sale_at
+            FROM customers c
+            WHERE {where}
+            ORDER BY COALESCE(c.current_credit_balance, 0) DESC, c.name COLLATE NOCASE ASC
+            LIMIT ?
+            """,
+            (parse_int(limit, 300),),
+        ).fetchall()
+    ]
 
 def get_customer_summary(cursor, customer_id):
     ensure_customer_sales_columns(cursor)
@@ -2917,6 +3466,8 @@ def build_data_backup(cursor):
         'stock_receipts': query_rows('SELECT * FROM stock_receipts ORDER BY datetime(created_at) DESC, id DESC'),
         'inventory_history': query_rows('SELECT * FROM inventory_history ORDER BY datetime(created_at) DESC, id DESC'),
         'sales': query_rows('SELECT * FROM sales ORDER BY datetime(created_at) DESC, id DESC'),
+        'customer_ledger': query_rows('SELECT * FROM customer_ledger ORDER BY datetime(created_at) DESC, id DESC'),
+        'customer_payments': query_rows('SELECT * FROM customer_payments ORDER BY datetime(created_at) DESC, id DESC'),
         'owner_users': get_owner_users(cursor, {'search': [''], 'role': ['all'], 'status': ['all']}),
         'owner_activity_logs': get_owner_activity_logs(cursor, {'search': [''], 'filter': ['all'], 'limit': ['500']}),
     }
@@ -3262,6 +3813,7 @@ def init_db():
     ensure_column(c, "sales", "items_count", "items_count INTEGER DEFAULT 0")
     ensure_column(c, "sales", "gross_profit", "gross_profit REAL DEFAULT 0")
     ensure_customer_sales_columns(c)
+    create_customer_credit_tables(c)
 
     c.execute(
         """
@@ -3638,6 +4190,48 @@ class APIHandler(BaseHTTPRequestHandler):
                 json.dumps({"status": "success", "history": history}).encode()
             )
 
+
+        elif action == "get_customer_ledger":
+            customer_id = params.get("customer_id", params.get("id", ["0"]))[0]
+            limit = params.get("limit", ["300"])[0]
+            ledger = get_customer_ledger_rows(c, customer_id, limit=limit)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "ledger": ledger}).encode()
+            )
+
+        elif action == "get_customer_credit_summary":
+            customer_id = parse_int(params.get("customer_id", params.get("id", ["0"]))[0], 0)
+            balance = update_customer_cached_credit_balance(c, customer_id)
+            row = c.execute(
+                """
+                SELECT id AS customer_id,
+                       COALESCE(credit_enabled, 0) AS credit_enabled,
+                       COALESCE(credit_limit, 0) AS credit_limit,
+                       COALESCE(current_credit_balance, 0) AS current_credit_balance,
+                       COALESCE(credit_status, 'normal') AS credit_status,
+                       credit_note
+                FROM customers
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (customer_id,),
+            ).fetchone()
+            result = dict(row) if row else {"customer_id": customer_id, "current_credit_balance": balance}
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "summary": result}).encode()
+            )
+
+        elif action == "get_credit_customers_report":
+            include_zero = normalize_bool(params.get("include_zero", ["0"])[0], False)
+            limit = params.get("limit", ["300"])[0]
+            rows = get_credit_customers_report_rows(c, include_zero=include_zero, limit=limit)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "customers": rows}).encode()
+            )
+
         elif action == "get_inventory_history":
             barcode = params.get("barcode", [""])[0].strip()
 
@@ -3806,6 +4400,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     gross_profit += (unit_price - unit_cost) * quantity
 
                 created_at = str(data.get("created_at", "") or "").strip() or datetime.now().astimezone().isoformat()
+                pos_sale_id = parse_int(data.get("id", data.get("sale_id", 0)), 0) or None
                 ensure_customer_sales_columns(c)
                 customer_id = parse_int(data.get("customer_id"), 0) or None
                 customer_name_snapshot = clean_optional_text(
@@ -3840,12 +4435,13 @@ class APIHandler(BaseHTTPRequestHandler):
                         vendor,
                         items,
                         created_at,
+                        pos_sale_id,
                         customer_id,
                         customer_name_snapshot,
                         customer_phone_snapshot,
                         customer_code_snapshot
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         total_amount,
@@ -3861,6 +4457,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         data.get("vendor", ""),
                         json.dumps(items),
                         created_at,
+                        pos_sale_id,
                         customer_id,
                         customer_name_snapshot,
                         customer_phone_snapshot,
@@ -3906,6 +4503,50 @@ class APIHandler(BaseHTTPRequestHandler):
                 print(
                     f"  ✅ {transaction_type.upper()} synced: Rs.{data.get('total_amount', 0)} by {data.get('cashier', 'Unknown')}"
                 )
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+
+            elif sync_type == "CUSTOMER_CREDIT_SETTINGS":
+                customer_id = handle_credit_settings_sync(c, data)
+                conn.commit()
+                print(f"  ✅ CUSTOMER_CREDIT_SETTINGS synced: customer #{customer_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CREDIT_SALE_UPDATE":
+                ledger_id = handle_credit_sale_update_sync(c, data)
+                conn.commit()
+                print(f"  ✅ CREDIT_SALE_UPDATE synced: ledger #{ledger_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CREDIT_REFUND_UPDATE":
+                ledger_id = handle_credit_refund_update_sync(c, data)
+                conn.commit()
+                print(f"  ✅ CREDIT_REFUND_UPDATE synced: ledger #{ledger_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CUSTOMER_PAYMENT":
+                payment_id = handle_customer_payment_sync(c, data)
+                conn.commit()
+                print(f"  ✅ CUSTOMER_PAYMENT synced: payment #{payment_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CUSTOMER_LEDGER_ADJUSTMENT":
+                customer_id = upsert_customer_from_sync(c, data)
+                ledger_id = insert_credit_ledger_entry(c, data, customer_id=customer_id)
+                conn.commit()
+                print(f"  ✅ CUSTOMER_LEDGER_ADJUSTMENT synced: ledger #{ledger_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CUSTOMER_PAYMENT_VOID":
+                ledger_id = handle_customer_payment_void_sync(c, data)
+                conn.commit()
+                print(f"  ✅ CUSTOMER_PAYMENT_VOID synced: ledger #{ledger_id}")
                 self._set_headers()
                 self.wfile.write(json.dumps({"status": "success"}).encode())
 
@@ -4332,6 +4973,32 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._set_headers()
                 self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
 
+
+        elif action == "update_customer_credit_settings":
+            customer_id = handle_credit_settings_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+
+        elif action == "receive_customer_payment":
+            payment_id = handle_customer_payment_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "payment_id": payment_id}).encode())
+
+        elif action == "customer_ledger_adjustment":
+            customer_id = upsert_customer_from_sync(c, body)
+            ledger_id = insert_credit_ledger_entry(c, body, customer_id=customer_id)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "ledger_id": ledger_id}).encode())
+
+        elif action == "void_customer_payment":
+            ledger_id = handle_customer_payment_void_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "ledger_id": ledger_id}).encode())
+
         elif action == "add_product":
             ok, message = create_or_update_product(
                 c,
@@ -4583,6 +5250,7 @@ def main():
 ║     GET  ?action=get_owner_sales_report  → Sales report  ║
 ║     GET  ?action=get_suppliers           → Suppliers     ║
 ║     GET  ?action=get_customers           → Customers     ║
+║     GET  ?action=get_credit_customers_report → Credit     ║
 ║     GET  ?action=get_inventory_history   → History       ║
 ║     POST ?action=pos_sync                → POS sync      ║
 ║     POST ?action=update_price            → Price update  ║
