@@ -43,7 +43,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 26,
+        version: 27,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -567,6 +567,7 @@ class DatabaseHelper {
     await _createCustomersTable(db);
     await _ensureCustomerPricingSchema(db);
     await _ensurePricingSchemesSchema(db);
+    await _ensureLoyaltySchema(db);
 
     await _createUserTables(db);
 
@@ -1304,6 +1305,11 @@ class DatabaseHelper {
       await _createCustomersTable(db);
       await _ensurePricingSchemesSchema(db);
     }
+
+    if (oldVersion < 27) {
+      await _createCustomersTable(db);
+      await _ensureLoyaltySchema(db);
+    }
   }
 
   Future<void> _createCustomersTable(Database db) async {
@@ -1330,6 +1336,10 @@ class DatabaseHelper {
         default_price_type TEXT NOT NULL DEFAULT 'selling',
         default_discount_percent REAL NOT NULL DEFAULT 0,
         pricing_note TEXT,
+        loyalty_enabled INTEGER NOT NULL DEFAULT 1,
+        loyalty_points_balance INTEGER NOT NULL DEFAULT 0,
+        loyalty_lifetime_earned INTEGER NOT NULL DEFAULT 0,
+        loyalty_lifetime_redeemed INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         created_by INTEGER,
@@ -1560,6 +1570,163 @@ class DatabaseHelper {
       'customer_pricing_note',
       'TEXT',
     );
+  }
+
+  Future<void> _ensureLoyaltySchema(Database db) async {
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'loyalty_enabled',
+      'INTEGER NOT NULL DEFAULT 1',
+    );
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'loyalty_points_balance',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'loyalty_lifetime_earned',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'loyalty_lifetime_redeemed',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+
+    await _addColumnIfMissing(
+      db,
+      'sales',
+      'loyalty_points_earned',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'sales',
+      'loyalty_points_redeemed',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'sales',
+      'loyalty_redeemed_value',
+      'REAL NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'sales',
+      'loyalty_earn_base_amount',
+      'REAL NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'sales',
+      'loyalty_status',
+      "TEXT NOT NULL DEFAULT 'none'",
+    );
+    await _addColumnIfMissing(db, 'sales', 'loyalty_note', 'TEXT');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS loyalty_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        is_enabled INTEGER NOT NULL DEFAULT 1,
+        earn_rate_amount REAL NOT NULL DEFAULT 100,
+        earn_rate_points INTEGER NOT NULL DEFAULT 1,
+        point_value_amount REAL NOT NULL DEFAULT 1,
+        minimum_redeem_points INTEGER NOT NULL DEFAULT 100,
+        maximum_redeem_percent REAL NOT NULL DEFAULT 20,
+        allow_credit_sale_earn INTEGER NOT NULL DEFAULT 0,
+        rounding_mode TEXT NOT NULL DEFAULT 'floor',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS loyalty_ledger (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id INTEGER NOT NULL,
+        entry_type TEXT NOT NULL,
+        points_delta INTEGER NOT NULL,
+        points_balance_after INTEGER NOT NULL,
+        money_value REAL NOT NULL DEFAULT 0,
+        sale_id INTEGER,
+        refund_sale_id INTEGER,
+        description TEXT,
+        created_at TEXT NOT NULL,
+        created_by TEXT,
+        voided_at TEXT,
+        voided_by TEXT,
+        void_reason TEXT,
+        FOREIGN KEY (customer_id) REFERENCES customers(id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS loyalty_excluded_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category_name TEXT NOT NULL UNIQUE,
+        exclude_earning INTEGER NOT NULL DEFAULT 1,
+        exclude_redemption INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS loyalty_excluded_products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        barcode TEXT NOT NULL UNIQUE,
+        product_name_snapshot TEXT NOT NULL,
+        exclude_earning INTEGER NOT NULL DEFAULT 1,
+        exclude_redemption INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_loyalty ON customers(loyalty_enabled, loyalty_points_balance)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_customer ON loyalty_ledger(customer_id, created_at)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_sale ON loyalty_ledger(sale_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_refund ON loyalty_ledger(refund_sale_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_type ON loyalty_ledger(entry_type, created_at)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_excluded_categories_active ON loyalty_excluded_categories(is_active, category_name)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_excluded_products_active ON loyalty_excluded_products(is_active, barcode)',
+    );
+
+    final now = DateTime.now().toIso8601String();
+    await db.insert('loyalty_settings', {
+      'id': 1,
+      'is_enabled': 1,
+      'earn_rate_amount': 100.0,
+      'earn_rate_points': 1,
+      'point_value_amount': 1.0,
+      'minimum_redeem_points': 100,
+      'maximum_redeem_percent': 20.0,
+      'allow_credit_sale_earn': 0,
+      'rounding_mode': 'floor',
+      'created_at': now,
+      'updated_at': now,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
   Future<void> _ensureHeldCartCustomerSchema(Database db) async {
@@ -4450,6 +4617,12 @@ class DatabaseHelper {
         s.payment_method,
         s.amount_tendered,
         s.change_amount,
+        s.loyalty_points_earned,
+        s.loyalty_points_redeemed,
+        s.loyalty_redeemed_value,
+        s.loyalty_earn_base_amount,
+        s.loyalty_status,
+        s.loyalty_note,
         s.created_at,
         COUNT(si.id) AS item_line_count,
         COALESCE(SUM(si.quantity), 0) AS item_quantity_total
@@ -4470,6 +4643,12 @@ class DatabaseHelper {
         s.payment_method,
         s.amount_tendered,
         s.change_amount,
+        s.loyalty_points_earned,
+        s.loyalty_points_redeemed,
+        s.loyalty_redeemed_value,
+        s.loyalty_earn_base_amount,
+        s.loyalty_status,
+        s.loyalty_note,
         s.created_at
       ORDER BY datetime(s.created_at) DESC, s.id DESC
       $limitClause
@@ -4491,6 +4670,12 @@ class DatabaseHelper {
             'payment_method': row['payment_method'],
             'amount_tendered': row['amount_tendered'],
             'change_amount': row['change_amount'],
+            'loyalty_points_earned': row['loyalty_points_earned'],
+            'loyalty_points_redeemed': row['loyalty_points_redeemed'],
+            'loyalty_redeemed_value': row['loyalty_redeemed_value'],
+            'loyalty_earn_base_amount': row['loyalty_earn_base_amount'],
+            'loyalty_status': row['loyalty_status'],
+            'loyalty_note': row['loyalty_note'],
             'created_at': row['created_at'],
             'item_line_count': row['item_line_count'],
             'item_quantity_total': row['item_quantity_total'],
@@ -4518,6 +4703,12 @@ class DatabaseHelper {
         s.payment_method,
         s.amount_tendered,
         s.change_amount,
+        s.loyalty_points_earned,
+        s.loyalty_points_redeemed,
+        s.loyalty_redeemed_value,
+        s.loyalty_earn_base_amount,
+        s.loyalty_status,
+        s.loyalty_note,
         s.created_at,
         COUNT(si.id) AS item_line_count,
         COALESCE(SUM(si.quantity), 0) AS item_quantity_total
@@ -4538,6 +4729,12 @@ class DatabaseHelper {
         s.payment_method,
         s.amount_tendered,
         s.change_amount,
+        s.loyalty_points_earned,
+        s.loyalty_points_redeemed,
+        s.loyalty_redeemed_value,
+        s.loyalty_earn_base_amount,
+        s.loyalty_status,
+        s.loyalty_note,
         s.created_at
       LIMIT 1
       ''',
@@ -4562,6 +4759,12 @@ class DatabaseHelper {
       'payment_method': row['payment_method'],
       'amount_tendered': row['amount_tendered'],
       'change_amount': row['change_amount'],
+      'loyalty_points_earned': row['loyalty_points_earned'],
+      'loyalty_points_redeemed': row['loyalty_points_redeemed'],
+      'loyalty_redeemed_value': row['loyalty_redeemed_value'],
+      'loyalty_earn_base_amount': row['loyalty_earn_base_amount'],
+      'loyalty_status': row['loyalty_status'],
+      'loyalty_note': row['loyalty_note'],
       'created_at': row['created_at'],
       'item_line_count': row['item_line_count'],
       'item_quantity_total': row['item_quantity_total'],

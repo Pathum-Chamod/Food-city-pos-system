@@ -286,8 +286,110 @@ def create_customer_tables(cursor):
     ensure_column(cursor, "customers", "pricing_note", "pricing_note TEXT")
     ensure_column(cursor, "customers", "customer_category_id", "customer_category_id INTEGER")
     ensure_column(cursor, "customers", "pricing_scheme_id", "pricing_scheme_id INTEGER")
+    ensure_column(cursor, "customers", "loyalty_enabled", "loyalty_enabled INTEGER NOT NULL DEFAULT 1")
+    ensure_column(cursor, "customers", "loyalty_points_balance", "loyalty_points_balance INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "loyalty_lifetime_earned", "loyalty_lifetime_earned INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "loyalty_lifetime_redeemed", "loyalty_lifetime_redeemed INTEGER NOT NULL DEFAULT 0")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_category ON customers(customer_category_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_pricing_scheme ON customers(pricing_scheme_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_loyalty ON customers(loyalty_enabled, loyalty_points_balance)")
+
+
+def create_loyalty_tables(cursor):
+    create_customer_tables(cursor)
+    ensure_customer_sales_columns(cursor)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loyalty_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            is_enabled INTEGER NOT NULL DEFAULT 1,
+            earn_rate_amount REAL NOT NULL DEFAULT 100,
+            earn_rate_points INTEGER NOT NULL DEFAULT 1,
+            point_value_amount REAL NOT NULL DEFAULT 1,
+            minimum_redeem_points INTEGER NOT NULL DEFAULT 100,
+            maximum_redeem_percent REAL NOT NULL DEFAULT 20,
+            allow_credit_sale_earn INTEGER NOT NULL DEFAULT 0,
+            rounding_mode TEXT NOT NULL DEFAULT 'floor',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    ensure_column(cursor, "loyalty_settings", "earn_rate_amount", "earn_rate_amount REAL NOT NULL DEFAULT 100")
+    ensure_column(cursor, "loyalty_settings", "earn_rate_points", "earn_rate_points INTEGER NOT NULL DEFAULT 1")
+    ensure_column(cursor, "loyalty_settings", "point_value_amount", "point_value_amount REAL NOT NULL DEFAULT 1")
+    ensure_column(cursor, "loyalty_settings", "allow_credit_sale_earn", "allow_credit_sale_earn INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "loyalty_settings", "rounding_mode", "rounding_mode TEXT NOT NULL DEFAULT 'floor'")
+    ensure_column(cursor, "loyalty_settings", "created_at", "created_at TEXT")
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loyalty_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pos_ledger_id INTEGER,
+            customer_id INTEGER NOT NULL,
+            entry_type TEXT NOT NULL,
+            points_delta INTEGER NOT NULL DEFAULT 0,
+            points_balance_after INTEGER NOT NULL DEFAULT 0,
+            money_value REAL NOT NULL DEFAULT 0,
+            sale_id INTEGER,
+            refund_sale_id INTEGER,
+            description TEXT,
+            created_at TEXT NOT NULL,
+            created_by TEXT,
+            voided_at TEXT,
+            voided_by TEXT,
+            void_reason TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loyalty_excluded_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_name TEXT NOT NULL UNIQUE,
+            exclude_earning INTEGER NOT NULL DEFAULT 1,
+            exclude_redemption INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loyalty_excluded_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            barcode TEXT NOT NULL UNIQUE,
+            product_name_snapshot TEXT,
+            exclude_earning INTEGER NOT NULL DEFAULT 1,
+            exclude_redemption INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    ensure_column(cursor, "loyalty_excluded_categories", "exclude_earning", "exclude_earning INTEGER NOT NULL DEFAULT 1")
+    ensure_column(cursor, "loyalty_excluded_categories", "exclude_redemption", "exclude_redemption INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "loyalty_excluded_products", "exclude_earning", "exclude_earning INTEGER NOT NULL DEFAULT 1")
+    ensure_column(cursor, "loyalty_excluded_products", "exclude_redemption", "exclude_redemption INTEGER NOT NULL DEFAULT 0")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_pos_id ON loyalty_ledger(pos_ledger_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_customer ON loyalty_ledger(customer_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_sale ON loyalty_ledger(sale_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_refund ON loyalty_ledger(refund_sale_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_type ON loyalty_ledger(entry_type, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_excluded_categories_active ON loyalty_excluded_categories(is_active, category_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_excluded_products_active ON loyalty_excluded_products(is_active, barcode)")
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO loyalty_settings (
+            id, is_enabled, earn_rate_amount, earn_rate_points,
+            point_value_amount, minimum_redeem_points, maximum_redeem_percent,
+            allow_credit_sale_earn, rounding_mode, created_at, updated_at
+        ) VALUES (1, 1, 100, 1, 1, 100, 20, 0, 'floor', ?, ?)
+        """,
+        (datetime.now().astimezone().isoformat(), datetime.now().astimezone().isoformat()),
+    )
 
 
 def create_customer_product_prices_table(cursor):
@@ -446,6 +548,12 @@ def ensure_customer_sales_columns(cursor):
     ensure_column(cursor, "sales", "credit_new_balance", "credit_new_balance REAL")
     ensure_column(cursor, "sales", "credit_bill_amount", "credit_bill_amount REAL")
     ensure_column(cursor, "sales", "credit_limit_snapshot", "credit_limit_snapshot REAL")
+    ensure_column(cursor, "sales", "loyalty_points_earned", "loyalty_points_earned INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "sales", "loyalty_points_redeemed", "loyalty_points_redeemed INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "sales", "loyalty_redeemed_value", "loyalty_redeemed_value REAL NOT NULL DEFAULT 0")
+    ensure_column(cursor, "sales", "loyalty_earn_base_amount", "loyalty_earn_base_amount REAL NOT NULL DEFAULT 0")
+    ensure_column(cursor, "sales", "loyalty_status", "loyalty_status TEXT NOT NULL DEFAULT 'none'")
+    ensure_column(cursor, "sales", "loyalty_note", "loyalty_note TEXT")
 
 
 def generate_customer_code(customer_id):
@@ -517,6 +625,10 @@ def fetch_customers(cursor, params):
             pricing_note,
             customer_category_id,
             pricing_scheme_id,
+            COALESCE(loyalty_enabled, 1) AS loyalty_enabled,
+            COALESCE(loyalty_points_balance, 0) AS loyalty_points_balance,
+            COALESCE(loyalty_lifetime_earned, 0) AS loyalty_lifetime_earned,
+            COALESCE(loyalty_lifetime_redeemed, 0) AS loyalty_lifetime_redeemed,
             created_at,
             updated_at,
             created_by,
@@ -552,6 +664,10 @@ def get_customer_by_id(cursor, customer_id):
             pricing_note,
             customer_category_id,
             pricing_scheme_id,
+            COALESCE(loyalty_enabled, 1) AS loyalty_enabled,
+            COALESCE(loyalty_points_balance, 0) AS loyalty_points_balance,
+            COALESCE(loyalty_lifetime_earned, 0) AS loyalty_lifetime_earned,
+            COALESCE(loyalty_lifetime_redeemed, 0) AS loyalty_lifetime_redeemed,
             created_at,
             updated_at,
             created_by,
@@ -866,6 +982,10 @@ def upsert_customer_from_sync(cursor, data):
     pricing_note = clean_optional_text(data.get("pricing_note"))
     customer_category_id = parse_int(data.get("customer_category_id"), 0) or None
     pricing_scheme_id = parse_pricing_scheme_selection(data.get("pricing_scheme_id"))
+    loyalty_enabled = 1 if normalize_bool(data.get("loyalty_enabled"), True) else 0
+    loyalty_points_balance = parse_int(data.get("loyalty_points_balance"), 0)
+    loyalty_lifetime_earned = parse_int(data.get("loyalty_lifetime_earned"), 0)
+    loyalty_lifetime_redeemed = parse_int(data.get("loyalty_lifetime_redeemed"), 0)
 
     if existing:
         resolved_id = parse_int(existing["id"], 0)
@@ -892,6 +1012,10 @@ def upsert_customer_from_sync(cursor, data):
                 pricing_note = COALESCE(?, pricing_note),
                 customer_category_id = CASE WHEN ? IS NULL THEN customer_category_id ELSE ? END,
                 pricing_scheme_id = CASE WHEN ? IS NULL THEN pricing_scheme_id ELSE ? END,
+                loyalty_enabled = CASE WHEN ? IS NULL THEN loyalty_enabled ELSE ? END,
+                loyalty_points_balance = CASE WHEN ? IS NULL THEN loyalty_points_balance ELSE ? END,
+                loyalty_lifetime_earned = CASE WHEN ? IS NULL THEN loyalty_lifetime_earned ELSE ? END,
+                loyalty_lifetime_redeemed = CASE WHEN ? IS NULL THEN loyalty_lifetime_redeemed ELSE ? END,
                 updated_at = ?
             WHERE id = ?
             """,
@@ -916,6 +1040,10 @@ def upsert_customer_from_sync(cursor, data):
                 pricing_note,
                 data.get("customer_category_id"), customer_category_id,
                 data.get("pricing_scheme_id"), pricing_scheme_id,
+                data.get("loyalty_enabled"), loyalty_enabled,
+                data.get("loyalty_points_balance"), loyalty_points_balance,
+                data.get("loyalty_lifetime_earned"), loyalty_lifetime_earned,
+                data.get("loyalty_lifetime_redeemed"), loyalty_lifetime_redeemed,
                 now,
                 resolved_id,
             ),
@@ -936,8 +1064,9 @@ def upsert_customer_from_sync(cursor, data):
                 current_credit_balance, credit_status, credit_note,
                 pricing_enabled, default_price_type, default_discount_percent, pricing_note,
                 customer_category_id, pricing_scheme_id,
+                loyalty_enabled, loyalty_points_balance, loyalty_lifetime_earned, loyalty_lifetime_redeemed,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 customer_id,
@@ -961,6 +1090,10 @@ def upsert_customer_from_sync(cursor, data):
                 pricing_note,
                 customer_category_id,
                 pricing_scheme_id,
+                loyalty_enabled,
+                loyalty_points_balance,
+                loyalty_lifetime_earned,
+                loyalty_lifetime_redeemed,
                 now,
                 now,
             ),
@@ -975,8 +1108,9 @@ def upsert_customer_from_sync(cursor, data):
             current_credit_balance, credit_status, credit_note,
             pricing_enabled, default_price_type, default_discount_percent, pricing_note,
             customer_category_id, pricing_scheme_id,
+            loyalty_enabled, loyalty_points_balance, loyalty_lifetime_earned, loyalty_lifetime_redeemed,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             customer_code,
@@ -999,6 +1133,10 @@ def upsert_customer_from_sync(cursor, data):
             pricing_note,
             customer_category_id,
             pricing_scheme_id,
+            loyalty_enabled,
+            loyalty_points_balance,
+            loyalty_lifetime_earned,
+            loyalty_lifetime_redeemed,
             now,
             now,
         ),
@@ -1545,6 +1683,352 @@ def handle_customer_pricing_assignment_sync(cursor, data):
         ),
     )
     return customer_id
+
+
+def update_customer_loyalty_cache(cursor, customer_id):
+    create_loyalty_tables(cursor)
+    row = cursor.execute(
+        """
+        SELECT
+            COALESCE(SUM(points_delta), 0) AS balance,
+            COALESCE(SUM(CASE
+                WHEN entry_type = 'earn' THEN points_delta
+                WHEN entry_type = 'refund_earn_reversal' THEN points_delta
+                ELSE 0
+            END), 0) AS lifetime_earned,
+            COALESCE(SUM(CASE
+                WHEN entry_type = 'redeem' THEN ABS(points_delta)
+                WHEN entry_type = 'refund_redeem_restore' THEN -ABS(points_delta)
+                ELSE 0
+            END), 0) AS lifetime_redeemed
+        FROM loyalty_ledger
+        WHERE customer_id = ? AND voided_at IS NULL
+        """,
+        (parse_int(customer_id, 0),),
+    ).fetchone()
+    if not row:
+        return
+    cursor.execute(
+        """
+        UPDATE customers
+        SET loyalty_points_balance = ?,
+            loyalty_lifetime_earned = ?,
+            loyalty_lifetime_redeemed = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            parse_int(row["balance"], 0),
+            max(0, parse_int(row["lifetime_earned"], 0)),
+            max(0, parse_int(row["lifetime_redeemed"], 0)),
+            datetime.now().astimezone().isoformat(),
+            parse_int(customer_id, 0),
+        ),
+    )
+
+
+def handle_customer_loyalty_settings_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    customer_id = upsert_customer_from_sync(cursor, data)
+    cursor.execute(
+        """
+        UPDATE customers
+        SET loyalty_enabled = ?,
+            loyalty_points_balance = ?,
+            loyalty_lifetime_earned = ?,
+            loyalty_lifetime_redeemed = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            1 if normalize_bool(data.get("loyalty_enabled"), True) else 0,
+            parse_int(data.get("loyalty_points_balance"), 0),
+            parse_int(data.get("loyalty_lifetime_earned"), 0),
+            parse_int(data.get("loyalty_lifetime_redeemed"), 0),
+            clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat(),
+            customer_id,
+        ),
+    )
+    return customer_id
+
+
+def handle_loyalty_settings_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    now = clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat()
+    created_at = clean_optional_text(data.get("created_at")) or now
+    rounding_mode = str(data.get("rounding_mode") or "floor").strip().lower()
+    if rounding_mode not in {"floor", "round", "ceil"}:
+        rounding_mode = "floor"
+    cursor.execute(
+        """
+        INSERT INTO loyalty_settings (
+            id, is_enabled, earn_rate_amount, earn_rate_points,
+            point_value_amount, minimum_redeem_points, maximum_redeem_percent,
+            allow_credit_sale_earn, rounding_mode, created_at, updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            is_enabled = excluded.is_enabled,
+            earn_rate_amount = excluded.earn_rate_amount,
+            earn_rate_points = excluded.earn_rate_points,
+            point_value_amount = excluded.point_value_amount,
+            minimum_redeem_points = excluded.minimum_redeem_points,
+            maximum_redeem_percent = excluded.maximum_redeem_percent,
+            allow_credit_sale_earn = excluded.allow_credit_sale_earn,
+            rounding_mode = excluded.rounding_mode,
+            updated_at = excluded.updated_at
+        """,
+        (
+            1 if normalize_bool(data.get("is_enabled"), True) else 0,
+            max(parse_float(data.get("earn_rate_amount"), 100.0), 0.01),
+            max(parse_int(data.get("earn_rate_points"), 1), 1),
+            max(parse_float(data.get("point_value_amount"), 1.0), 0.01),
+            max(parse_int(data.get("minimum_redeem_points"), 100), 0),
+            max(0.0, min(parse_float(data.get("maximum_redeem_percent"), 20.0), 100.0)),
+            1 if normalize_bool(data.get("allow_credit_sale_earn"), False) else 0,
+            rounding_mode,
+            created_at,
+            now,
+        ),
+    )
+    return 1
+
+
+def handle_loyalty_excluded_category_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    category_name = clean_optional_text(data.get("category_name"))
+    if not category_name:
+        raise ValueError("Category name is required")
+    exclusion_id = parse_int(data.get("id"), 0) or None
+    now = clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat()
+    created_at = clean_optional_text(data.get("created_at")) or now
+    existing = None
+    if exclusion_id:
+        existing = cursor.execute(
+            "SELECT id FROM loyalty_excluded_categories WHERE id = ? LIMIT 1",
+            (exclusion_id,),
+        ).fetchone()
+    if existing is None:
+        existing = cursor.execute(
+            "SELECT id FROM loyalty_excluded_categories WHERE LOWER(category_name) = LOWER(?) LIMIT 1",
+            (category_name,),
+        ).fetchone()
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE loyalty_excluded_categories
+            SET category_name = ?, exclude_earning = ?, exclude_redemption = ?,
+                is_active = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                category_name,
+                1 if normalize_bool(data.get("exclude_earning"), True) else 0,
+                1 if normalize_bool(data.get("exclude_redemption"), False) else 0,
+                1 if normalize_bool(data.get("is_active"), True) else 0,
+                now,
+                resolved_id,
+            ),
+        )
+        return resolved_id
+    cursor.execute(
+        """
+        INSERT INTO loyalty_excluded_categories (
+            category_name, exclude_earning, exclude_redemption,
+            is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            category_name,
+            1 if normalize_bool(data.get("exclude_earning"), True) else 0,
+            1 if normalize_bool(data.get("exclude_redemption"), False) else 0,
+            1 if normalize_bool(data.get("is_active"), True) else 0,
+            created_at,
+            now,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def handle_loyalty_excluded_product_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    barcode = clean_optional_text(data.get("barcode"))
+    if not barcode:
+        raise ValueError("Product barcode is required")
+    product_name = clean_optional_text(data.get("product_name_snapshot")) or barcode
+    exclusion_id = parse_int(data.get("id"), 0) or None
+    now = clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat()
+    created_at = clean_optional_text(data.get("created_at")) or now
+    existing = None
+    if exclusion_id:
+        existing = cursor.execute(
+            "SELECT id FROM loyalty_excluded_products WHERE id = ? LIMIT 1",
+            (exclusion_id,),
+        ).fetchone()
+    if existing is None:
+        existing = cursor.execute(
+            "SELECT id FROM loyalty_excluded_products WHERE barcode = ? LIMIT 1",
+            (barcode,),
+        ).fetchone()
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE loyalty_excluded_products
+            SET barcode = ?, product_name_snapshot = ?, exclude_earning = ?,
+                exclude_redemption = ?, is_active = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                barcode,
+                product_name,
+                1 if normalize_bool(data.get("exclude_earning"), True) else 0,
+                1 if normalize_bool(data.get("exclude_redemption"), False) else 0,
+                1 if normalize_bool(data.get("is_active"), True) else 0,
+                now,
+                resolved_id,
+            ),
+        )
+        return resolved_id
+    cursor.execute(
+        """
+        INSERT INTO loyalty_excluded_products (
+            barcode, product_name_snapshot, exclude_earning, exclude_redemption,
+            is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            barcode,
+            product_name,
+            1 if normalize_bool(data.get("exclude_earning"), True) else 0,
+            1 if normalize_bool(data.get("exclude_redemption"), False) else 0,
+            1 if normalize_bool(data.get("is_active"), True) else 0,
+            created_at,
+            now,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def handle_loyalty_sale_update_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    sale_id = parse_int(data.get("sale_id") or data.get("local_sale_id"), 0)
+    if sale_id <= 0:
+        return 0
+    cursor.execute(
+        """
+        UPDATE sales
+        SET customer_id = COALESCE(?, customer_id),
+            customer_name_snapshot = COALESCE(?, customer_name_snapshot),
+            customer_phone_snapshot = COALESCE(?, customer_phone_snapshot),
+            customer_code_snapshot = COALESCE(?, customer_code_snapshot),
+            loyalty_points_earned = ?,
+            loyalty_points_redeemed = ?,
+            loyalty_redeemed_value = ?,
+            loyalty_earn_base_amount = ?,
+            loyalty_status = ?,
+            loyalty_note = ?
+        WHERE id = ? OR pos_sale_id = ?
+        """,
+        (
+            parse_int(data.get("customer_id"), 0) or None,
+            clean_optional_text(data.get("customer_name_snapshot") or data.get("customer_name")),
+            clean_optional_text(data.get("customer_phone_snapshot") or data.get("customer_phone")),
+            clean_optional_text(data.get("customer_code_snapshot") or data.get("customer_code")),
+            parse_int(data.get("loyalty_points_earned"), 0),
+            parse_int(data.get("loyalty_points_redeemed"), 0),
+            parse_float(data.get("loyalty_redeemed_value"), 0.0),
+            parse_float(data.get("loyalty_earn_base_amount"), 0.0),
+            clean_optional_text(data.get("loyalty_status")) or "none",
+            clean_optional_text(data.get("loyalty_note")),
+            sale_id,
+            sale_id,
+        ),
+    )
+    return sale_id
+
+
+def handle_loyalty_ledger_entry_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    customer_id = parse_int(data.get("customer_id"), 0)
+    if customer_id <= 0:
+        customer_id = upsert_customer_from_sync(cursor, data)
+    entry_type = str(data.get("entry_type") or "").strip().lower()
+    if entry_type not in {"earn", "redeem", "refund_earn_reversal", "refund_redeem_restore", "manual_adjustment"}:
+        raise ValueError("Invalid loyalty entry type")
+    pos_ledger_id = parse_int(data.get("pos_ledger_id") or data.get("id"), 0) or None
+    if pos_ledger_id:
+        existing = cursor.execute(
+            "SELECT id FROM loyalty_ledger WHERE pos_ledger_id = ? LIMIT 1",
+            (pos_ledger_id,),
+        ).fetchone()
+        if existing:
+            ledger_id = parse_int(existing["id"], 0)
+            cursor.execute(
+                """
+                UPDATE loyalty_ledger
+                SET customer_id = ?,
+                    entry_type = ?,
+                    points_delta = ?,
+                    points_balance_after = ?,
+                    money_value = ?,
+                    sale_id = ?,
+                    refund_sale_id = ?,
+                    description = ?,
+                    created_at = ?,
+                    created_by = ?,
+                    voided_at = ?,
+                    voided_by = ?,
+                    void_reason = ?
+                WHERE id = ?
+                """,
+                (
+                    customer_id,
+                    entry_type,
+                    parse_int(data.get("points_delta"), 0),
+                    parse_int(data.get("points_balance_after"), 0),
+                    parse_float(data.get("money_value"), 0.0),
+                    parse_int(data.get("sale_id"), 0) or None,
+                    parse_int(data.get("refund_sale_id"), 0) or None,
+                    clean_optional_text(data.get("description")),
+                    clean_optional_text(data.get("created_at")) or datetime.now().astimezone().isoformat(),
+                    clean_optional_text(data.get("created_by")),
+                    clean_optional_text(data.get("voided_at")),
+                    clean_optional_text(data.get("voided_by")),
+                    clean_optional_text(data.get("void_reason")),
+                    ledger_id,
+                ),
+            )
+            update_customer_loyalty_cache(cursor, customer_id)
+            return ledger_id
+    cursor.execute(
+        """
+        INSERT INTO loyalty_ledger (
+            pos_ledger_id, customer_id, entry_type, points_delta,
+            points_balance_after, money_value, sale_id, refund_sale_id,
+            description, created_at, created_by, voided_at, voided_by, void_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pos_ledger_id,
+            customer_id,
+            entry_type,
+            parse_int(data.get("points_delta"), 0),
+            parse_int(data.get("points_balance_after"), 0),
+            parse_float(data.get("money_value"), 0.0),
+            parse_int(data.get("sale_id"), 0) or None,
+            parse_int(data.get("refund_sale_id"), 0) or None,
+            clean_optional_text(data.get("description")),
+            clean_optional_text(data.get("created_at")) or datetime.now().astimezone().isoformat(),
+            clean_optional_text(data.get("created_by")),
+            clean_optional_text(data.get("voided_at")),
+            clean_optional_text(data.get("voided_by")),
+            clean_optional_text(data.get("void_reason")),
+        ),
+    )
+    ledger_id = cursor.lastrowid
+    update_customer_loyalty_cache(cursor, customer_id)
+    return ledger_id
 
 
 def handle_credit_sale_update_sync(cursor, data):
@@ -4216,6 +4700,7 @@ def build_data_backup(cursor):
     create_customer_product_prices_table(cursor)
     create_pricing_schemes_tables(cursor)
     create_sale_items_table(cursor)
+    create_loyalty_tables(cursor)
 
     def query_rows(sql, args=()):
         return [dict(row) for row in cursor.execute(sql, args).fetchall()]
@@ -4241,6 +4726,10 @@ def build_data_backup(cursor):
         'customer_categories': query_rows('SELECT * FROM customer_categories ORDER BY is_active DESC, name COLLATE NOCASE ASC'),
         'pricing_schemes': query_rows('SELECT * FROM pricing_schemes ORDER BY is_active DESC, priority ASC, name COLLATE NOCASE ASC'),
         'pricing_scheme_rules': query_rows('SELECT * FROM pricing_scheme_rules ORDER BY scheme_id ASC, priority ASC, id ASC'),
+        'loyalty_settings': query_rows('SELECT * FROM loyalty_settings ORDER BY id ASC'),
+        'loyalty_ledger': query_rows('SELECT * FROM loyalty_ledger ORDER BY datetime(created_at) DESC, id DESC'),
+        'loyalty_excluded_categories': query_rows('SELECT * FROM loyalty_excluded_categories ORDER BY is_active DESC, category_name COLLATE NOCASE ASC'),
+        'loyalty_excluded_products': query_rows('SELECT * FROM loyalty_excluded_products ORDER BY is_active DESC, product_name_snapshot COLLATE NOCASE ASC'),
         'customer_ledger': query_rows('SELECT * FROM customer_ledger ORDER BY datetime(created_at) DESC, id DESC'),
         'customer_payments': query_rows('SELECT * FROM customer_payments ORDER BY datetime(created_at) DESC, id DESC'),
         'owner_users': get_owner_users(cursor, {'search': [''], 'role': ['all'], 'status': ['all']}),
@@ -4592,6 +5081,7 @@ def init_db():
     create_customer_product_prices_table(c)
     create_pricing_schemes_tables(c)
     create_sale_items_table(c)
+    create_loyalty_tables(c)
 
     c.execute(
         """
@@ -5273,9 +5763,15 @@ class APIHandler(BaseHTTPRequestHandler):
                         customer_id,
                         customer_name_snapshot,
                         customer_phone_snapshot,
-                        customer_code_snapshot
+                        customer_code_snapshot,
+                        loyalty_points_earned,
+                        loyalty_points_redeemed,
+                        loyalty_redeemed_value,
+                        loyalty_earn_base_amount,
+                        loyalty_status,
+                        loyalty_note
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         total_amount,
@@ -5296,6 +5792,12 @@ class APIHandler(BaseHTTPRequestHandler):
                         customer_name_snapshot,
                         customer_phone_snapshot,
                         customer_code_snapshot,
+                        parse_int(data.get("loyalty_points_earned"), 0),
+                        parse_int(data.get("loyalty_points_redeemed"), 0),
+                        parse_float(data.get("loyalty_redeemed_value"), 0.0),
+                        parse_float(data.get("loyalty_earn_base_amount"), 0.0),
+                        clean_optional_text(data.get("loyalty_status")) or "none",
+                        clean_optional_text(data.get("loyalty_note")),
                     ),
                 )
                 sale_id = c.lastrowid
@@ -5403,6 +5905,48 @@ class APIHandler(BaseHTTPRequestHandler):
                             }
                         ).encode()
                     )
+
+            elif sync_type == "CUSTOMER_LOYALTY_SETTINGS":
+                customer_id = handle_customer_loyalty_settings_sync(c, data)
+                conn.commit()
+                print(f"  CUSTOMER_LOYALTY_SETTINGS synced: customer #{customer_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "LOYALTY_SETTINGS":
+                settings_id = handle_loyalty_settings_sync(c, data)
+                conn.commit()
+                print(f"  LOYALTY_SETTINGS synced: settings #{settings_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "LOYALTY_EXCLUDED_CATEGORY":
+                exclusion_id = handle_loyalty_excluded_category_sync(c, data)
+                conn.commit()
+                print(f"  LOYALTY_EXCLUDED_CATEGORY synced: exclusion #{exclusion_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "LOYALTY_EXCLUDED_PRODUCT":
+                exclusion_id = handle_loyalty_excluded_product_sync(c, data)
+                conn.commit()
+                print(f"  LOYALTY_EXCLUDED_PRODUCT synced: exclusion #{exclusion_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "LOYALTY_SALE_UPDATE":
+                sale_id = handle_loyalty_sale_update_sync(c, data)
+                conn.commit()
+                print(f"  LOYALTY_SALE_UPDATE synced: sale #{sale_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "LOYALTY_LEDGER_ENTRY":
+                ledger_id = handle_loyalty_ledger_entry_sync(c, data)
+                conn.commit()
+                print(f"  LOYALTY_LEDGER_ENTRY synced: entry #{ledger_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
 
             elif sync_type == "CREDIT_SALE_UPDATE":
                 ledger_id = handle_credit_sale_update_sync(c, data)
@@ -5905,6 +6449,42 @@ class APIHandler(BaseHTTPRequestHandler):
             conn.commit()
             self._set_headers()
             self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+
+        elif action == "update_customer_loyalty_settings":
+            customer_id = handle_customer_loyalty_settings_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+
+        elif action == "update_loyalty_settings":
+            settings_id = handle_loyalty_settings_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": settings_id}).encode())
+
+        elif action == "upsert_loyalty_excluded_category":
+            exclusion_id = handle_loyalty_excluded_category_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": exclusion_id}).encode())
+
+        elif action == "upsert_loyalty_excluded_product":
+            exclusion_id = handle_loyalty_excluded_product_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": exclusion_id}).encode())
+
+        elif action == "update_loyalty_sale":
+            sale_id = handle_loyalty_sale_update_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "sale_id": sale_id}).encode())
+
+        elif action == "upsert_loyalty_ledger_entry":
+            ledger_id = handle_loyalty_ledger_entry_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "ledger_id": ledger_id}).encode())
 
         elif action == "receive_customer_payment":
             payment_id = handle_customer_payment_sync(c, body)

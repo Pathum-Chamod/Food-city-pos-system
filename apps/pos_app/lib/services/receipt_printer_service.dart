@@ -163,6 +163,11 @@ class ReceiptPrinterService {
     double? creditNewBalance,
     double? creditLimit,
     String? creditApprovedBy,
+    int loyaltyPointsEarned = 0,
+    int loyaltyPointsRedeemed = 0,
+    double loyaltyRedeemedValue = 0.0,
+    double loyaltyEarnBaseAmount = 0.0,
+    String? loyaltyNote,
     String? approvalCode,
     String? authCode,
     String? cardLast4,
@@ -197,6 +202,11 @@ class ReceiptPrinterService {
           isCreditSale ||
           paymentMethodLower == 'customer_credit' ||
           paymentMethodLower == 'customer_credit_refund';
+      final hasLoyalty =
+          loyaltyPointsEarned != 0 ||
+          loyaltyPointsRedeemed != 0 ||
+          loyaltyRedeemedValue.abs() > 0.000001 ||
+          (loyaltyNote ?? '').trim().isNotEmpty;
 
       // Reset + basic formatting
       bytes.addAll(_escInit());
@@ -399,6 +409,47 @@ class ReceiptPrinterService {
         }
         if ((authCode ?? '').trim().isNotEmpty) {
           bytes.addAll(_text('${_labelValue('Auth', authCode!.trim())}\n'));
+        }
+      }
+
+      if (hasLoyalty) {
+        bytes.addAll(_text('${_line('-')}\n'));
+        bytes.addAll(_boldOn());
+        bytes.addAll(_text('LOYALTY\n'));
+        bytes.addAll(_boldOff());
+        if (loyaltyPointsRedeemed != 0) {
+          bytes.addAll(
+            _text(
+              '${_labelValue('Redeemed', '${loyaltyPointsRedeemed.abs()} pts')}\n',
+            ),
+          );
+        }
+        if (loyaltyRedeemedValue.abs() > 0.000001) {
+          bytes.addAll(
+            _text(
+              '${_labelValue('Redeem Value', 'Rs.${loyaltyRedeemedValue.abs().toStringAsFixed(2)}')}\n',
+            ),
+          );
+        }
+        if (loyaltyPointsEarned != 0) {
+          bytes.addAll(
+            _text(
+              '${_labelValue(isRefund ? 'Reversed' : 'Earned', '${loyaltyPointsEarned.abs()} pts')}\n',
+            ),
+          );
+        }
+        if (loyaltyEarnBaseAmount.abs() > 0.000001 && !isRefund) {
+          bytes.addAll(
+            _text(
+              '${_labelValue('Earn Base', 'Rs.${loyaltyEarnBaseAmount.abs().toStringAsFixed(2)}')}\n',
+            ),
+          );
+        }
+        final note = (loyaltyNote ?? '').trim();
+        if (note.isNotEmpty) {
+          for (final line in _wrapText(note, _lineWidth - 2)) {
+            bytes.addAll(_text(' $line\n'));
+          }
         }
       }
 

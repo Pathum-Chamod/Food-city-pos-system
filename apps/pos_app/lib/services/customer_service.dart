@@ -46,6 +46,10 @@ class CustomerService {
         default_price_type TEXT NOT NULL DEFAULT 'selling',
         default_discount_percent REAL NOT NULL DEFAULT 0,
         pricing_note TEXT,
+        loyalty_enabled INTEGER NOT NULL DEFAULT 1,
+        loyalty_points_balance INTEGER NOT NULL DEFAULT 0,
+        loyalty_lifetime_earned INTEGER NOT NULL DEFAULT 0,
+        loyalty_lifetime_redeemed INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         created_by INTEGER,
@@ -120,6 +124,33 @@ class CustomerService {
       customersTable,
       'pricing_scheme_id',
       'INTEGER',
+    );
+    await _addColumnIfMissing(
+      db,
+      customersTable,
+      'loyalty_enabled',
+      'INTEGER NOT NULL DEFAULT 1',
+    );
+    await _addColumnIfMissing(
+      db,
+      customersTable,
+      'loyalty_points_balance',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      customersTable,
+      'loyalty_lifetime_earned',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      customersTable,
+      'loyalty_lifetime_redeemed',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_loyalty ON $customersTable(loyalty_enabled, loyalty_points_balance)',
     );
 
     await _ensurePricingSchemesStorage(db);

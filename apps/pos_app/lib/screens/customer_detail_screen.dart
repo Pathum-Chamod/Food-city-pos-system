@@ -2,17 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:shared/models/customer_category.dart';
 import 'package:shared/models/customer.dart';
 import 'package:shared/models/customer_credit_summary.dart';
+import 'package:shared/models/loyalty_settings.dart';
 import 'package:shared/models/pricing_scheme.dart';
 
 import '../services/customer_credit_service.dart';
 import '../services/customer_pricing_service.dart';
 import '../services/customer_service.dart';
+import '../services/loyalty_service.dart';
 import '../services/pricing_scheme_service.dart';
 import '../widgets/app_snackbar.dart';
 import 'customer_category_assignment_dialog.dart';
 import 'customer_credit_settings_dialog.dart';
 import 'customer_form_dialog.dart';
 import 'customer_ledger_screen.dart';
+import 'customer_loyalty_ledger_screen.dart';
 import 'customer_product_prices_screen.dart';
 import 'customer_payment_dialog.dart';
 import 'transaction_history_screen.dart';
@@ -33,6 +36,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   List<Map<String, dynamic>> _history = [];
   List<CustomerCategory> _categories = [];
   List<PricingScheme> _schemes = [];
+  LoyaltySettings? _loyaltySettings;
   int _activeCustomerRuleCount = 0;
   bool _isLoading = true;
 
@@ -82,6 +86,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       final schemes = await PricingSchemeService.instance.getPricingSchemes(
         activeOnly: false,
       );
+      final loyaltySettings = await LoyaltyService.instance.getSettings();
 
       if (!mounted) return;
       setState(() {
@@ -91,6 +96,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         _creditSummary = creditSummary;
         _categories = categories;
         _schemes = schemes;
+        _loyaltySettings = loyaltySettings;
         _activeCustomerRuleCount = activeCustomerRuleCount;
         _isLoading = false;
       });
@@ -103,6 +109,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         _creditSummary = null;
         _categories = [];
         _schemes = [];
+        _loyaltySettings = null;
         _activeCustomerRuleCount = 0;
         _isLoading = false;
       });
@@ -206,6 +213,44 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
 
     if (!mounted) return;
     await _loadCustomer();
+  }
+
+  Future<void> _openLoyaltyLedger() async {
+    final customer = _customer;
+    if (customer == null || customer.id == null) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CustomerLoyaltyLedgerScreen(customer: customer),
+      ),
+    );
+
+    if (!mounted) return;
+    await _loadCustomer();
+  }
+
+  Future<void> _setCustomerLoyaltyEnabled(bool enabled) async {
+    final customer = _customer;
+    if (customer == null || customer.id == null) return;
+
+    try {
+      await LoyaltyService.instance.setCustomerLoyaltyEnabled(
+        customerId: customer.id!,
+        enabled: enabled,
+      );
+      if (!mounted) return;
+      _showMessage(
+        enabled
+            ? 'Loyalty enabled for customer.'
+            : 'Loyalty disabled for customer.',
+        color: _success,
+      );
+      await _loadCustomer();
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage('Could not update loyalty status.', color: _danger);
+    }
   }
 
   Future<void> _receiveCustomerPayment() async {
@@ -658,6 +703,168 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     );
   }
 
+  Widget _loyaltyCard(Customer customer) {
+    final settings = _loyaltySettings ?? LoyaltySettings.defaults();
+    final isGloballyEnabled = settings.isEnabled;
+    final isCustomerEnabled = customer.loyaltyEnabled;
+    final isActive = isGloballyEnabled && isCustomerEnabled;
+    final statusColor = isActive
+        ? _brand
+        : isGloballyEnabled
+        ? _warning
+        : _textSecondary;
+    final statusLabel = isActive
+        ? 'Enabled'
+        : isGloballyEnabled
+        ? 'Customer Off'
+        : 'Module Off';
+    final redeemValue =
+        customer.loyaltyPointsBalance * settings.safePointValueAmount;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(
+          color: isActive ? _brand.withValues(alpha: 0.34) : _border,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: statusColor.withValues(alpha: 0.24),
+                  ),
+                ),
+                child: Icon(
+                  Icons.card_giftcard_rounded,
+                  color: statusColor,
+                  size: 27,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Loyalty Points',
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      !isGloballyEnabled
+                          ? 'Global loyalty is disabled in settings.'
+                          : isCustomerEnabled
+                          ? 'Customer can earn and redeem points when eligible.'
+                          : 'Customer is excluded from earning and redeeming points.',
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: statusColor.withValues(alpha: 0.24),
+                  ),
+                ),
+                child: Text(
+                  statusLabel,
+                  style: TextStyle(
+                    color: statusColor,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                onPressed: () => _setCustomerLoyaltyEnabled(!isCustomerEnabled),
+                icon: Icon(
+                  isCustomerEnabled
+                      ? Icons.block_rounded
+                      : Icons.check_circle_rounded,
+                ),
+                label: Text(isCustomerEnabled ? 'Disable' : 'Enable'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _pricingMiniMetric(
+                label: 'Points Balance',
+                value: customer.loyaltyPointsBalance.toString(),
+                icon: Icons.stars_rounded,
+                color: _brand,
+              ),
+              const SizedBox(width: 10),
+              _pricingMiniMetric(
+                label: 'Redeem Value',
+                value: _money(redeemValue),
+                icon: Icons.payments_rounded,
+                color: _blue,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _pricingMiniMetric(
+                label: 'Lifetime Earned',
+                value: customer.loyaltyLifetimeEarned.toString(),
+                icon: Icons.trending_up_rounded,
+                color: _success,
+              ),
+              const SizedBox(width: 10),
+              _pricingMiniMetric(
+                label: 'Lifetime Redeemed',
+                value: customer.loyaltyLifetimeRedeemed.toString(),
+                icon: Icons.redeem_rounded,
+                color: _warning,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _openLoyaltyLedger,
+                  icon: const Icon(Icons.list_alt_rounded),
+                  label: const Text('View Loyalty Ledger'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _pricingDiscountsCard(Customer customer) {
     final hasCustomerRules = _activeCustomerRuleCount > 0;
     final statusColor = hasCustomerRules ? _brand : _textSecondary;
@@ -1101,6 +1308,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     _profileCard(customer),
                     const SizedBox(height: 16),
                     _creditAccountCard(customer),
+                    const SizedBox(height: 16),
+                    _loyaltyCard(customer),
                     const SizedBox(height: 16),
                     _categorySchemeCard(customer),
                     const SizedBox(height: 16),

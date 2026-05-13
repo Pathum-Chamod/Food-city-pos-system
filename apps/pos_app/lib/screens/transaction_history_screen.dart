@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/database_helper.dart';
 import '../services/customer_service.dart';
 import '../services/customer_credit_service.dart';
+import '../services/loyalty_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import '../widgets/app_snackbar.dart';
@@ -180,6 +181,21 @@ class TransactionHistoryScreen extends StatefulWidget {
 
       if (refundSaleId != null) {
         try {
+          await LoyaltyService.instance.reverseLoyaltyForRefund(
+            originalSaleId: saleId,
+            refundSaleId: refundSaleId,
+          );
+        } catch (e) {
+          if (context.mounted) {
+            AppSnackBar.show(
+              context,
+              message: e.toString().replaceFirst('Exception: ', ''),
+              backgroundColor: Colors.orange,
+            );
+          }
+        }
+
+        try {
           final result = await CustomerCreditService.instance
               .postCreditRefundFromOriginalSale(
                 originalSaleId: saleId,
@@ -306,6 +322,15 @@ class TransactionHistoryScreen extends StatefulWidget {
     final creditApprovedBy = (summary['credit_approved_by'] ?? '')
         .toString()
         .trim();
+    final loyaltyPointsEarned =
+        ((summary['loyalty_points_earned'] as num?) ?? 0).toInt();
+    final loyaltyPointsRedeemed =
+        ((summary['loyalty_points_redeemed'] as num?) ?? 0).toInt();
+    final loyaltyRedeemedValue =
+        ((summary['loyalty_redeemed_value'] as num?) ?? 0).toDouble();
+    final loyaltyEarnBaseAmount =
+        ((summary['loyalty_earn_base_amount'] as num?) ?? 0).toDouble();
+    final loyaltyNote = (summary['loyalty_note'] ?? '').toString().trim();
 
     final receiptItems = items.map((item) {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0)
@@ -392,6 +417,11 @@ class TransactionHistoryScreen extends StatefulWidget {
       creditNewBalance: creditNewBalance,
       creditLimit: creditLimit,
       creditApprovedBy: creditApprovedBy,
+      loyaltyPointsEarned: loyaltyPointsEarned,
+      loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+      loyaltyRedeemedValue: loyaltyRedeemedValue,
+      loyaltyEarnBaseAmount: loyaltyEarnBaseAmount,
+      loyaltyNote: loyaltyNote,
     );
 
     if (!context.mounted) return response.isSuccess;
@@ -475,6 +505,15 @@ class TransactionHistoryScreen extends StatefulWidget {
     final creditApprovedBy = (summary['credit_approved_by'] ?? '')
         .toString()
         .trim();
+    final loyaltyPointsEarned =
+        ((summary['loyalty_points_earned'] as num?) ?? 0).toInt();
+    final loyaltyPointsRedeemed =
+        ((summary['loyalty_points_redeemed'] as num?) ?? 0).toInt();
+    final loyaltyRedeemedValue =
+        ((summary['loyalty_redeemed_value'] as num?) ?? 0).toDouble();
+    final loyaltyEarnBaseAmount =
+        ((summary['loyalty_earn_base_amount'] as num?) ?? 0).toDouble();
+    final loyaltyNote = (summary['loyalty_note'] ?? '').toString().trim();
 
     final receiptItems = items.map((item) {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0)
@@ -561,6 +600,11 @@ class TransactionHistoryScreen extends StatefulWidget {
       creditNewBalance: creditNewBalance,
       creditLimit: creditLimit,
       creditApprovedBy: creditApprovedBy,
+      loyaltyPointsEarned: loyaltyPointsEarned,
+      loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+      loyaltyRedeemedValue: loyaltyRedeemedValue,
+      loyaltyEarnBaseAmount: loyaltyEarnBaseAmount,
+      loyaltyNote: loyaltyNote,
     );
 
     if (!context.mounted) return response.isSuccess;
@@ -1679,6 +1723,20 @@ Future<String?> showTransactionReceiptDialog(
   final creditApprovedBy = (summary['credit_approved_by'] ?? '')
       .toString()
       .trim();
+  final loyaltyPointsEarned = ((summary['loyalty_points_earned'] as num?) ?? 0)
+      .toInt();
+  final loyaltyPointsRedeemed =
+      ((summary['loyalty_points_redeemed'] as num?) ?? 0).toInt();
+  final loyaltyRedeemedValue =
+      ((summary['loyalty_redeemed_value'] as num?) ?? 0).toDouble();
+  final loyaltyEarnBaseAmount =
+      ((summary['loyalty_earn_base_amount'] as num?) ?? 0).toDouble();
+  final loyaltyNote = (summary['loyalty_note'] ?? '').toString().trim();
+  final hasLoyalty =
+      loyaltyPointsEarned != 0 ||
+      loyaltyPointsRedeemed != 0 ||
+      loyaltyRedeemedValue.abs() > 0.000001 ||
+      loyaltyNote.isNotEmpty;
 
   String formatPercent(num value) {
     final number = value.toDouble();
@@ -2091,6 +2149,84 @@ Future<String?> showTransactionReceiptDialog(
                                       'Approved By: $creditApprovedBy',
                                       style: TextStyle(
                                         color: palette.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                          if (hasLoyalty) ...[
+                            const SizedBox(height: 14),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: palette.brand.withValues(
+                                  alpha: palette.isDark ? 0.14 : 0.08,
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: palette.brand.withValues(alpha: 0.24),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        Icons.card_giftcard_outlined,
+                                        color: palette.brand,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Loyalty Details',
+                                        style: TextStyle(
+                                          color: palette.textPrimary,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  if (loyaltyPointsRedeemed != 0)
+                                    Text(
+                                      'Redeemed: ${loyaltyPointsRedeemed.abs()} point${loyaltyPointsRedeemed.abs() == 1 ? '' : 's'}'
+                                      '${loyaltyRedeemedValue.abs() > 0.000001 ? ' (${loyaltyRedeemedValue.abs().toStringAsFixed(2)} value)' : ''}',
+                                      style: TextStyle(
+                                        color: palette.textSecondary,
+                                      ),
+                                    ),
+                                  if (loyaltyPointsEarned != 0) ...[
+                                    if (loyaltyPointsRedeemed != 0)
+                                      const SizedBox(height: 4),
+                                    Text(
+                                      '${isRefund ? 'Reversed' : 'Earned'}: ${loyaltyPointsEarned.abs()} point${loyaltyPointsEarned.abs() == 1 ? '' : 's'}',
+                                      style: TextStyle(
+                                        color: palette.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                  if (!isRefund &&
+                                      loyaltyEarnBaseAmount.abs() >
+                                          0.000001) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Earn base: Rs. ${loyaltyEarnBaseAmount.abs().toStringAsFixed(2)}',
+                                      style: TextStyle(
+                                        color: palette.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                  if (loyaltyNote.isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      loyaltyNote,
+                                      style: TextStyle(
+                                        color: palette.textPrimary,
+                                        fontWeight: FontWeight.w800,
                                       ),
                                     ),
                                   ],

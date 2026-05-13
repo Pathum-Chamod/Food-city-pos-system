@@ -16,6 +16,7 @@ import '../providers/app_theme_provider.dart';
 import '../services/database_helper.dart';
 import '../services/customer_service.dart';
 import '../services/customer_credit_service.dart';
+import '../services/loyalty_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import '../services/sync_service.dart';
@@ -3483,6 +3484,9 @@ class _PosScreenState extends State<PosScreen> {
     double? changeAmount;
     bool isCreditSale = false;
     String? creditApprovedBy;
+    double paidTotal = displayTotal;
+    int loyaltyPointsRedeemed = 0;
+    double loyaltyRedeemedValue = 0.0;
 
     if (!isRefund) {
       _isPaymentDialogOpen = true;
@@ -3493,6 +3497,7 @@ class _PosScreenState extends State<PosScreen> {
           context,
           totalAmount: displayTotal,
           selectedCustomer: cart.selectedCustomer,
+          cartItems: itemsMap,
         );
       } finally {
         _isPaymentDialogOpen = false;
@@ -3509,6 +3514,12 @@ class _PosScreenState extends State<PosScreen> {
       changeAmount = (paymentResult['change_amount'] as num?)?.toDouble();
       isCreditSale = (paymentResult['is_credit_sale'] as bool?) ?? false;
       creditApprovedBy = paymentResult['credit_approved_by']?.toString();
+      paidTotal = ((paymentResult['final_total'] as num?) ?? displayTotal)
+          .toDouble();
+      loyaltyPointsRedeemed =
+          ((paymentResult['loyalty_points_redeemed'] as num?) ?? 0).toInt();
+      loyaltyRedeemedValue =
+          ((paymentResult['loyalty_redeemed_value'] as num?) ?? 0).toDouble();
     }
 
     setState(() {
@@ -3531,7 +3542,7 @@ class _PosScreenState extends State<PosScreen> {
 
       final saleId = await DatabaseHelper.instance.processTransaction(
         subtotalAmount: subtotal,
-        totalAmount: displayTotal,
+        totalAmount: paidTotal,
         cartItems: itemsMap,
         cashierName: cashierName,
         isRefund: isRefund,
@@ -3557,12 +3568,38 @@ class _PosScreenState extends State<PosScreen> {
         await CustomerCreditService.instance.postCreditSale(
           customerId: selectedCustomer.id!,
           saleId: saleId,
-          amount: displayTotal,
+          amount: paidTotal,
           cashierName: cashierName,
           approvedBy: creditApprovedBy,
           managerApproved:
               creditApprovedBy != null && creditApprovedBy.trim().isNotEmpty,
         );
+      }
+
+      if (!isRefund && !isCreditSale && cart.selectedCustomer != null) {
+        try {
+          if (loyaltyPointsRedeemed > 0 && loyaltyRedeemedValue > 0) {
+            await LoyaltyService.instance.redeemPointsForSale(
+              saleId: saleId,
+              customer: cart.selectedCustomer,
+              pointsToRedeem: loyaltyPointsRedeemed,
+              billTotalBeforeRedemption: displayTotal,
+              cashierName: cashierName,
+            );
+          }
+
+          await LoyaltyService.instance.earnPointsForSale(
+            saleId: saleId,
+            customer: cart.selectedCustomer,
+            eligibleAmount: paidTotal,
+            paymentMethod: paymentMethod,
+            isCreditSale: isCreditSale,
+            isRefund: isRefund,
+            cashierName: cashierName,
+          );
+        } catch (e) {
+          debugPrint('Loyalty earn skipped for sale $saleId: $e');
+        }
       }
 
       cart.clearCart();
@@ -3586,7 +3623,7 @@ class _PosScreenState extends State<PosScreen> {
       final action = await _showTransactionSuccessFlow(
         overlayContext: processingDialogContext,
         isRefund: isRefund,
-        displayTotal: displayTotal,
+        displayTotal: isRefund ? displayTotal : paidTotal,
         saleId: saleId,
       );
 

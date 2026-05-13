@@ -130,7 +130,9 @@ class SyncService {
 
       await DatabaseHelper.instance.replaceProductsFromBackend(products);
 
-      debugPrint("🔄 Product catalog refreshed from backend (${products.length} items).");
+      debugPrint(
+        "🔄 Product catalog refreshed from backend (${products.length} items).",
+      );
       return true;
     } catch (e) {
       debugPrint("❌ Product refresh error: $e");
@@ -143,10 +145,7 @@ class SyncService {
       final response = await http.post(
         Uri.parse('$apiUrl?action=pos_sync'),
         headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "type": item['type'],
-          "data": item['data'],
-        }),
+        body: jsonEncode({"type": item['type'], "data": item['data']}),
       );
 
       if (response.statusCode == 200) {
@@ -160,7 +159,10 @@ class SyncService {
         }
       }
 
-      debugPrint("⚠️ Unexpected HTTP status: ${response.statusCode}");
+      debugPrint(
+        "⚠️ Unexpected HTTP status: ${response.statusCode} "
+        "for item ${item['id']} (${item['type']}): ${response.body}",
+      );
       return false;
     } catch (e) {
       debugPrint("🌐 Network Upload Error: $e");

@@ -26,6 +26,10 @@ class Customer {
     this.defaultPriceType = ProductPriceType.selling,
     this.defaultDiscountPercent = 0.0,
     this.pricingNote,
+    this.loyaltyEnabled = true,
+    this.loyaltyPointsBalance = 0,
+    this.loyaltyLifetimeEarned = 0,
+    this.loyaltyLifetimeRedeemed = 0,
     required this.createdAt,
     required this.updatedAt,
     this.createdBy,
@@ -66,6 +70,15 @@ class Customer {
   final double defaultDiscountPercent;
   final String? pricingNote;
 
+  /// Loyalty Module V1 cached fields.
+  ///
+  /// The loyalty ledger remains the source of truth. These values are kept on
+  /// the customer row for fast display in customer and checkout screens.
+  final bool loyaltyEnabled;
+  final int loyaltyPointsBalance;
+  final int loyaltyLifetimeEarned;
+  final int loyaltyLifetimeRedeemed;
+
   final String createdAt;
   final String updatedAt;
   final int? createdBy;
@@ -77,6 +90,7 @@ class Customer {
   bool get hasNotes => (notes ?? '').trim().isNotEmpty;
   bool get hasCreditNote => (creditNote ?? '').trim().isNotEmpty;
   bool get hasPricingNote => (pricingNote ?? '').trim().isNotEmpty;
+  bool get hasLoyaltyPoints => loyaltyPointsBalance > 0;
 
   String get displayCode {
     final trimmed = customerCode.trim();
@@ -177,6 +191,10 @@ class Customer {
     ProductPriceType? defaultPriceType,
     double? defaultDiscountPercent,
     String? pricingNote,
+    bool? loyaltyEnabled,
+    int? loyaltyPointsBalance,
+    int? loyaltyLifetimeEarned,
+    int? loyaltyLifetimeRedeemed,
     String? createdAt,
     String? updatedAt,
     int? createdBy,
@@ -205,6 +223,12 @@ class Customer {
       defaultDiscountPercent:
           defaultDiscountPercent ?? this.defaultDiscountPercent,
       pricingNote: pricingNote ?? this.pricingNote,
+      loyaltyEnabled: loyaltyEnabled ?? this.loyaltyEnabled,
+      loyaltyPointsBalance: loyaltyPointsBalance ?? this.loyaltyPointsBalance,
+      loyaltyLifetimeEarned:
+          loyaltyLifetimeEarned ?? this.loyaltyLifetimeEarned,
+      loyaltyLifetimeRedeemed:
+          loyaltyLifetimeRedeemed ?? this.loyaltyLifetimeRedeemed,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       createdBy: createdBy ?? this.createdBy,
@@ -235,6 +259,16 @@ class Customer {
       'default_price_type': defaultPriceType.dbValue,
       'default_discount_percent': normalizedDefaultDiscountPercent,
       'pricing_note': pricingNote,
+      'loyalty_enabled': loyaltyEnabled ? 1 : 0,
+      'loyalty_points_balance': loyaltyPointsBalance < 0
+          ? 0
+          : loyaltyPointsBalance,
+      'loyalty_lifetime_earned': loyaltyLifetimeEarned < 0
+          ? 0
+          : loyaltyLifetimeEarned,
+      'loyalty_lifetime_redeemed': loyaltyLifetimeRedeemed < 0
+          ? 0
+          : loyaltyLifetimeRedeemed,
       'created_at': createdAt,
       'updated_at': updatedAt,
       'created_by': createdBy,
@@ -297,6 +331,12 @@ class Customer {
       ),
       defaultDiscountPercent: readDouble(map['default_discount_percent']),
       pricingNote: readNullableString(map['pricing_note']),
+      loyaltyEnabled: readBool(map['loyalty_enabled'], fallback: true),
+      loyaltyPointsBalance: readNullableInt(map['loyalty_points_balance']) ?? 0,
+      loyaltyLifetimeEarned:
+          readNullableInt(map['loyalty_lifetime_earned']) ?? 0,
+      loyaltyLifetimeRedeemed:
+          readNullableInt(map['loyalty_lifetime_redeemed']) ?? 0,
       createdAt: (map['created_at'] ?? now).toString(),
       updatedAt: (map['updated_at'] ?? now).toString(),
       createdBy: readNullableInt(map['created_by']),

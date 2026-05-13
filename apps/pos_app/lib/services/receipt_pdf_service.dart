@@ -80,6 +80,11 @@ class ReceiptPdfService {
     double? creditNewBalance,
     double? creditLimit,
     String? creditApprovedBy,
+    int loyaltyPointsEarned = 0,
+    int loyaltyPointsRedeemed = 0,
+    double loyaltyRedeemedValue = 0.0,
+    double loyaltyEarnBaseAmount = 0.0,
+    String? loyaltyNote,
     String? footerNote,
   }) async {
     String? outputPath;
@@ -110,6 +115,12 @@ class ReceiptPdfService {
           isCreditSale ||
           paymentMethodLower == 'customer_credit' ||
           paymentMethodLower == 'customer_credit_refund';
+      final cleanLoyaltyNote = (loyaltyNote ?? '').trim();
+      final hasLoyalty =
+          loyaltyPointsEarned != 0 ||
+          loyaltyPointsRedeemed != 0 ||
+          loyaltyRedeemedValue.abs() > 0.000001 ||
+          cleanLoyaltyNote.isNotEmpty;
 
       pdf.addPage(
         pw.MultiPage(
@@ -273,6 +284,36 @@ class ReceiptPdfService {
                   _receiptLabelValue('Tendered', _formatMoney(amountTendered)),
                 if (!isRefund && !isCustomerCredit && changeAmount != null)
                   _receiptLabelValue('Change', _formatMoney(changeAmount)),
+                if (hasLoyalty) ...[
+                  _receiptThinDivider(),
+                  _receiptText('LOYALTY', bold: true, fontSize: 8),
+                  if (loyaltyPointsRedeemed != 0)
+                    _receiptLabelValue(
+                      'Redeemed',
+                      '${loyaltyPointsRedeemed.abs()} pts',
+                    ),
+                  if (loyaltyRedeemedValue.abs() > 0.000001)
+                    _receiptLabelValue(
+                      'Redeem Value',
+                      _formatMoney(loyaltyRedeemedValue.abs()),
+                    ),
+                  if (loyaltyPointsEarned != 0)
+                    _receiptLabelValue(
+                      isRefund ? 'Reversed' : 'Earned',
+                      '${loyaltyPointsEarned.abs()} pts',
+                    ),
+                  if (loyaltyEarnBaseAmount.abs() > 0.000001 && !isRefund)
+                    _receiptLabelValue(
+                      'Earn Base',
+                      _formatMoney(loyaltyEarnBaseAmount.abs()),
+                    ),
+                  if (cleanLoyaltyNote.isNotEmpty)
+                    _receiptText(
+                      cleanLoyaltyNote,
+                      fontSize: 6.4,
+                      color: PdfColors.grey700,
+                    ),
+                ],
                 pw.SizedBox(height: 10),
                 pw.Text(
                   footerNote ?? 'Thank you for shopping with us!',

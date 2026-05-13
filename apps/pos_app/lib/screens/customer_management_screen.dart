@@ -11,6 +11,8 @@ import 'customer_categories_screen.dart';
 import 'customer_detail_screen.dart';
 import 'customer_form_dialog.dart';
 import 'customer_credit_report_screen.dart';
+import 'customer_loyalty_report_screen.dart';
+import 'loyalty_settings_screen.dart';
 import 'pricing_schemes_screen.dart';
 
 class CustomerManagementScreen extends StatefulWidget {
@@ -186,6 +188,26 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const CustomerCreditReportScreen()),
+    );
+
+    if (!mounted) return;
+    await _loadCustomers();
+  }
+
+  Future<void> _openLoyaltyReport() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CustomerLoyaltyReportScreen()),
+    );
+
+    if (!mounted) return;
+    await _loadCustomers();
+  }
+
+  Future<void> _openLoyaltySettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const LoyaltySettingsScreen()),
     );
 
     if (!mounted) return;
@@ -474,6 +496,18 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
             onPressed: _openCreditReport,
             icon: const Icon(Icons.account_balance_wallet_rounded),
             label: const Text('Credit Report'),
+          ),
+          const SizedBox(width: 8),
+          TextButton.icon(
+            onPressed: _openLoyaltyReport,
+            icon: const Icon(Icons.card_giftcard_rounded),
+            label: const Text('Loyalty Report'),
+          ),
+          const SizedBox(width: 8),
+          TextButton.icon(
+            onPressed: _openLoyaltySettings,
+            icon: const Icon(Icons.tune_rounded),
+            label: const Text('Loyalty Settings'),
           ),
           const SizedBox(width: 8),
           IconButton(
