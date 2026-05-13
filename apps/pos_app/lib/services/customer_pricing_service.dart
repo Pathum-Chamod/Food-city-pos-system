@@ -11,6 +11,7 @@ class CustomerPricingService {
   static final CustomerPricingService instance = CustomerPricingService._();
 
   static const String productPricesTable = 'customer_product_prices';
+  static const String customerPricingRulesTable = 'customer_pricing_rules';
   static const String customerCategoriesTable = 'customer_categories';
   static const String pricingSchemesTable = 'pricing_schemes';
   static const String pricingSchemeRulesTable = 'pricing_scheme_rules';
@@ -54,6 +55,41 @@ class CustomerPricingService {
       CREATE INDEX IF NOT EXISTS idx_customer_product_prices_active
       ON $productPricesTable(is_active)
     ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $customerPricingRulesTable (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id INTEGER NOT NULL,
+        apply_to TEXT NOT NULL,
+        category TEXT,
+        barcode TEXT,
+        product_name_snapshot TEXT,
+        rule_type TEXT NOT NULL,
+        price_type TEXT,
+        discount_percent REAL NOT NULL DEFAULT 0,
+        fixed_price REAL,
+        priority INTEGER NOT NULL DEFAULT 100,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by INTEGER,
+        updated_by INTEGER,
+        FOREIGN KEY (customer_id) REFERENCES customers(id)
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_pricing_rules_customer
+      ON $customerPricingRulesTable(customer_id)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_pricing_rules_target
+      ON $customerPricingRulesTable(customer_id, apply_to, category, barcode)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_pricing_rules_active
+      ON $customerPricingRulesTable(customer_id, is_active, priority)
+    ''');
   }
 
   Future<CustomerPricingResult> resolvePriceForProduct({
@@ -77,6 +113,13 @@ class CustomerPricingService {
         finalPrice: originalPrice,
       );
     }
+
+    final customerRuleResult = await _resolveCustomerRulePriceForProduct(
+      customerId: customerId,
+      product: product,
+      originalPrice: originalPrice,
+    );
+    if (customerRuleResult != null) return customerRuleResult;
 
     final specialPrice = await getActiveProductPrice(
       customerId: customerId,
@@ -102,53 +145,17 @@ class CustomerPricingService {
     );
     if (directSchemeResult != null) return directSchemeResult;
 
-    final categorySchemeId = await _getCategoryPricingSchemeId(
-      customer.customerCategoryId,
-    );
-    final categorySchemeResult = await _resolveSchemePriceForProduct(
-      schemeId: categorySchemeId,
-      pricingType: CustomerPricingType.customerCategoryScheme,
-      product: product,
-      originalPrice: originalPrice,
-    );
-    if (categorySchemeResult != null) return categorySchemeResult;
-
-    if (!customer.pricingEnabled) {
-      return CustomerPricingResult(
+    if (customer.pricingSchemeId != 0) {
+      final categorySchemeId = await _getCategoryPricingSchemeId(
+        customer.customerCategoryId,
+      );
+      final categorySchemeResult = await _resolveSchemePriceForProduct(
+        schemeId: categorySchemeId,
+        pricingType: CustomerPricingType.customerCategoryScheme,
+        product: product,
         originalPrice: originalPrice,
-        finalPrice: originalPrice,
       );
-    }
-
-    final currentType = ProductPriceTypeX.fromDb(currentPriceType);
-    final defaultType = customer.defaultPriceType;
-    final typePrice = _roundMoney(product.resolvePrice(defaultType));
-    final defaultTypeChangesPrice =
-        defaultType != currentType || typePrice != originalPrice;
-
-    if (defaultTypeChangesPrice) {
-      return CustomerPricingResult(
-        originalPrice: originalPrice,
-        finalPrice: typePrice,
-        type: CustomerPricingType.customerDefaultPriceType,
-        priceType: defaultType,
-        discountAmount: _discountAmount(originalPrice, typePrice),
-        note: defaultType.label,
-      );
-    }
-
-    final discountPercent = customer.normalizedDefaultDiscountPercent;
-    if (discountPercent > 0) {
-      final finalPrice = _roundMoney(
-        originalPrice - (originalPrice * (discountPercent / 100)),
-      );
-      return CustomerPricingResult(
-        originalPrice: originalPrice,
-        finalPrice: finalPrice,
-        type: CustomerPricingType.customerDefaultDiscount,
-        discountAmount: _discountAmount(originalPrice, finalPrice),
-        note: '${discountPercent.toStringAsFixed(2)}%',
-      );
+      if (categorySchemeResult != null) return categorySchemeResult;
     }
 
     return CustomerPricingResult(
@@ -234,6 +241,224 @@ class CustomerPricingService {
           note: _schemeNote(rule, 'No Discount'),
         );
     }
+  }
+
+  Future<CustomerPricingResult?> _resolveCustomerRulePriceForProduct({
+    required int customerId,
+    required Product product,
+    required double originalPrice,
+  }) async {
+    final rule = await _getBestActiveCustomerRule(
+      customerId: customerId,
+      product: product,
+    );
+    if (rule == null) return null;
+    return _resultForRule(
+      ruleType: rule.ruleType,
+      priceType: rule.priceType,
+      discountPercent: rule.normalizedDiscountPercent,
+      fixedPrice: rule.fixedPrice,
+      ruleId: rule.id,
+      product: product,
+      originalPrice: originalPrice,
+      note: rule.note,
+    );
+  }
+
+  CustomerPricingResult _resultForRule({
+    required PricingSchemeRuleType ruleType,
+    required ProductPriceType? priceType,
+    required double discountPercent,
+    required double? fixedPrice,
+    required int? ruleId,
+    required Product product,
+    required double originalPrice,
+    String? note,
+  }) {
+    switch (ruleType) {
+      case PricingSchemeRuleType.priceType:
+        final resolvedPriceType = priceType ?? ProductPriceType.selling;
+        final finalPrice = _roundMoney(product.resolvePrice(resolvedPriceType));
+        return CustomerPricingResult(
+          originalPrice: originalPrice,
+          finalPrice: finalPrice,
+          type: CustomerPricingType.customerProductPrice,
+          priceType: resolvedPriceType,
+          ruleId: ruleId,
+          discountAmount: _discountAmount(originalPrice, finalPrice),
+          note: _cleanOptional(note) ?? resolvedPriceType.label,
+        );
+      case PricingSchemeRuleType.percentDiscount:
+        final finalPrice = _roundMoney(
+          originalPrice - (originalPrice * (discountPercent / 100)),
+        );
+        return CustomerPricingResult(
+          originalPrice: originalPrice,
+          finalPrice: finalPrice,
+          type: CustomerPricingType.customerProductPrice,
+          ruleId: ruleId,
+          discountAmount: _discountAmount(originalPrice, finalPrice),
+          note:
+              _cleanOptional(note) ?? '${discountPercent.toStringAsFixed(2)}%',
+        );
+      case PricingSchemeRuleType.fixedPrice:
+        final finalPrice = _roundMoney(fixedPrice ?? originalPrice);
+        return CustomerPricingResult(
+          originalPrice: originalPrice,
+          finalPrice: finalPrice,
+          type: CustomerPricingType.customerProductPrice,
+          ruleId: ruleId,
+          discountAmount: _discountAmount(originalPrice, finalPrice),
+          note: _cleanOptional(note) ?? 'Fixed Price',
+        );
+      case PricingSchemeRuleType.noDiscount:
+        return CustomerPricingResult(
+          originalPrice: originalPrice,
+          finalPrice: originalPrice,
+          type: CustomerPricingType.customerProductPrice,
+          ruleId: ruleId,
+          discountAmount: 0.0,
+          note: _cleanOptional(note) ?? 'No Discount',
+        );
+    }
+  }
+
+  Future<CustomerPricingRule?> _getBestActiveCustomerRule({
+    required int customerId,
+    required Product product,
+  }) async {
+    final cleanBarcode = product.barcode.trim();
+    final cleanCategory = product.category.trim();
+    if (customerId <= 0 || cleanBarcode.isEmpty) return null;
+
+    final db = await _db;
+    final rows = await db.rawQuery(
+      '''
+      SELECT *
+      FROM $customerPricingRulesTable
+      WHERE customer_id = ?
+        AND is_active = 1
+        AND (
+          (apply_to = 'product' AND LOWER(barcode) = LOWER(?))
+          OR (apply_to = 'category' AND LOWER(category) = LOWER(?))
+          OR apply_to = 'all'
+        )
+      ORDER BY
+        CASE apply_to
+          WHEN 'product' THEN 0
+          WHEN 'category' THEN 1
+          ELSE 2
+        END ASC,
+        priority ASC,
+        updated_at DESC,
+        id DESC
+      LIMIT 1
+      ''',
+      [customerId, cleanBarcode, cleanCategory],
+    );
+    if (rows.isEmpty) return null;
+    return CustomerPricingRule.fromMap(rows.first);
+  }
+
+  Future<List<CustomerPricingRule>> getRulesForCustomer(
+    int customerId, {
+    bool activeOnly = false,
+  }) async {
+    if (customerId <= 0) return const [];
+    final db = await _db;
+    final rows = await db.query(
+      customerPricingRulesTable,
+      where: activeOnly
+          ? 'customer_id = ? AND is_active = 1'
+          : 'customer_id = ?',
+      whereArgs: [customerId],
+      orderBy: 'is_active DESC, priority ASC, updated_at DESC, id DESC',
+    );
+    return rows.map(CustomerPricingRule.fromMap).toList();
+  }
+
+  Future<int> countRulesForCustomer(int customerId) async {
+    if (customerId <= 0) return 0;
+    final db = await _db;
+    final rows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM $customerPricingRulesTable
+      WHERE customer_id = ? AND is_active = 1
+      ''',
+      [customerId],
+    );
+    return ((rows.first['count'] as num?) ?? 0).toInt();
+  }
+
+  Future<int> upsertCustomerRule({
+    int? id,
+    required int customerId,
+    required PricingSchemeRuleApplyTo applyTo,
+    String? category,
+    String? barcode,
+    String? productNameSnapshot,
+    required PricingSchemeRuleType ruleType,
+    ProductPriceType? priceType,
+    double discountPercent = 0.0,
+    double? fixedPrice,
+    int priority = 100,
+    bool isActive = true,
+    String? note,
+    int? userId,
+  }) async {
+    if (customerId <= 0) throw Exception('Invalid customer.');
+    final db = await _db;
+    final now = DateTime.now().toIso8601String();
+    final data = {
+      'customer_id': customerId,
+      'apply_to': applyTo.dbValue,
+      'category': _cleanOptional(category),
+      'barcode': _cleanOptional(barcode),
+      'product_name_snapshot': _cleanOptional(productNameSnapshot),
+      'rule_type': ruleType.dbValue,
+      'price_type': priceType?.dbValue,
+      'discount_percent': discountPercent.clamp(0.0, 100.0),
+      'fixed_price': fixedPrice == null ? null : _roundMoney(fixedPrice),
+      'priority': priority,
+      'is_active': isActive ? 1 : 0,
+      'note': _cleanOptional(note),
+      'updated_at': now,
+      'updated_by': userId,
+    };
+    if (id != null && id > 0) {
+      await db.update(
+        customerPricingRulesTable,
+        data,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      return id;
+    }
+    return db.insert(customerPricingRulesTable, {
+      ...data,
+      'created_at': now,
+      'created_by': userId,
+    });
+  }
+
+  Future<void> setCustomerRuleActive({
+    required int id,
+    required bool isActive,
+    int? updatedBy,
+  }) async {
+    if (id <= 0) return;
+    final db = await _db;
+    await db.update(
+      customerPricingRulesTable,
+      {
+        'is_active': isActive ? 1 : 0,
+        'updated_at': DateTime.now().toIso8601String(),
+        'updated_by': updatedBy,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<PricingSchemeRule?> _getBestActiveSchemeRule({

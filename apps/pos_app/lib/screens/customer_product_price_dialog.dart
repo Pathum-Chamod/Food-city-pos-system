@@ -250,7 +250,9 @@ class _CustomerProductPriceDialogState
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _isEdit ? 'Edit Product Price' : 'Add Product Price',
+                          _isEdit
+                              ? 'Edit Specific Product Price'
+                              : 'Add Specific Product Price',
                           style: TextStyle(
                             color: textPrimary,
                             fontSize: 24,
@@ -261,7 +263,7 @@ class _CustomerProductPriceDialogState
                         Text(
                           _isEdit
                               ? 'Update this customer-specific fixed price.'
-                              : 'Select a product and set the customer fixed price.',
+                              : 'Select a product and set the customer-specific fixed price.',
                           style: TextStyle(
                             color: textSecondary,
                             fontWeight: FontWeight.w700,
@@ -373,7 +375,7 @@ class _CustomerProductPriceDialogState
                                 ),
                               ],
                               decoration: _inputDecoration(
-                                label: 'Customer fixed price',
+                                label: 'Customer-specific fixed price',
                                 icon: Icons.sell_rounded,
                                 hint: 'Example: 1760.00',
                               ),
@@ -462,7 +464,9 @@ class _CustomerProductPriceDialogState
                     child: ElevatedButton.icon(
                       onPressed: _submit,
                       icon: const Icon(Icons.save_rounded),
-                      label: Text(_isEdit ? 'Save Price' : 'Add Price'),
+                      label: Text(
+                        _isEdit ? 'Save Price' : 'Add Specific Price',
+                      ),
                     ),
                   ),
                 ],
@@ -606,7 +610,7 @@ class _CustomerProductPriceDialogState
           ),
           const Divider(height: 22),
           _previewLine(
-            'Customer price',
+            'Specific price',
             fixed == null ? '-' : _money(fixed),
             textPrimary,
           ),

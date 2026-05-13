@@ -212,7 +212,7 @@ class _CustomerPricingSettingsDialogState
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Pricing Settings',
+                          'Fallback Customer Defaults',
                           style: TextStyle(
                             color: textPrimary,
                             fontSize: 24,
@@ -260,7 +260,7 @@ class _CustomerPricingSettingsDialogState
                           value: _pricingEnabled,
                           contentPadding: EdgeInsets.zero,
                           title: Text(
-                            'Enable customer pricing',
+                            'Enable customer-specific fallback options',
                             style: TextStyle(
                               color: textPrimary,
                               fontWeight: FontWeight.w900,
@@ -268,8 +268,8 @@ class _CustomerPricingSettingsDialogState
                           ),
                           subtitle: Text(
                             _pricingEnabled
-                                ? 'Customer pricing rules can apply in POS.'
-                                : 'POS uses normal selected price mode.',
+                                ? 'Use these only when no customer item, category, or scheme rule applies.'
+                                : 'Only customer rules and pricing schemes apply.',
                             style: TextStyle(
                               color: textSecondary,
                               fontWeight: FontWeight.w600,
@@ -290,7 +290,7 @@ class _CustomerPricingSettingsDialogState
                       DropdownButtonFormField<ProductPriceType>(
                         initialValue: _defaultPriceType,
                         decoration: _inputDecoration(
-                          label: 'Default price type',
+                          label: 'Fallback price type',
                           icon: Icons.sell_rounded,
                         ),
                         items: ProductPriceType.values
@@ -323,7 +323,7 @@ class _CustomerPricingSettingsDialogState
                           ),
                         ],
                         decoration: _inputDecoration(
-                          label: 'Default discount percent',
+                          label: 'Fallback discount percent',
                           icon: Icons.percent_rounded,
                           hint: '0 to 100',
                         ),
@@ -335,7 +335,7 @@ class _CustomerPricingSettingsDialogState
                         minLines: 2,
                         maxLines: 4,
                         decoration: _inputDecoration(
-                          label: 'Pricing note',
+                          label: 'Customer override note',
                           icon: Icons.note_alt_rounded,
                           hint: 'Optional owner note',
                         ),
@@ -369,7 +369,7 @@ class _CustomerPricingSettingsDialogState
                               ),
                             )
                           : const Icon(Icons.save_rounded),
-                      label: Text(_isSaving ? 'Saving...' : 'Save Settings'),
+                      label: Text(_isSaving ? 'Saving...' : 'Save Options'),
                     ),
                   ),
                 ],

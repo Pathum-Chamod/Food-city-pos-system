@@ -85,7 +85,9 @@ class Customer {
 
   String get displayName {
     final trimmed = name.trim();
-    return trimmed.isEmpty ? 'Unnamed Customer' : trimmed;
+    if (trimmed.isNotEmpty) return trimmed;
+    final phoneText = (phone ?? '').trim();
+    return phoneText.isEmpty ? 'Unnamed Customer' : phoneText;
   }
 
   String get displayPhone {

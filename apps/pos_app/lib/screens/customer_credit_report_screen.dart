@@ -66,7 +66,6 @@ class _CustomerCreditReportScreenState
         row['customer_code'],
         row['name'],
         row['phone'],
-        row['customer_type'],
         row['credit_status'],
         row['credit_note'],
       ].whereType<Object>().join(' ').toLowerCase();
@@ -193,7 +192,6 @@ class _CustomerCreditReportScreenState
       'customer_code': row['customer_code'],
       'name': row['name'],
       'phone': row['phone'],
-      'customer_type': row['customer_type'],
       'is_active': row['is_active'],
       'credit_enabled': row['credit_enabled'],
       'credit_limit': row['credit_limit'],

@@ -36,6 +36,7 @@ Future<PricingSchemeRuleDialogResult?> showPricingSchemeRuleDialog({
   required List<Product> products,
   required List<String> categories,
   PricingSchemeRule? rule,
+  String titleNoun = 'Scheme Rule',
 }) {
   return showPremiumDialog<PricingSchemeRuleDialogResult?>(
     context: context,
@@ -44,6 +45,7 @@ Future<PricingSchemeRuleDialogResult?> showPricingSchemeRuleDialog({
       products: products,
       categories: categories,
       rule: rule,
+      titleNoun: titleNoun,
     ),
   );
 }
@@ -53,11 +55,13 @@ class _PricingSchemeRuleDialog extends StatefulWidget {
     required this.products,
     required this.categories,
     this.rule,
+    required this.titleNoun,
   });
 
   final List<Product> products;
   final List<String> categories;
   final PricingSchemeRule? rule;
+  final String titleNoun;
 
   @override
   State<_PricingSchemeRuleDialog> createState() =>
@@ -370,7 +374,9 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                _isEdit ? 'Edit Scheme Rule' : 'Add Scheme Rule',
+                _isEdit
+                    ? 'Edit ${widget.titleNoun}'
+                    : 'Add ${widget.titleNoun}',
                 style: TextStyle(
                   color: textPrimary,
                   fontSize: 24,

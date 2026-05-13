@@ -4,7 +4,7 @@ import 'package:shared/shared.dart';
 import '../services/customer_pricing_service.dart';
 import '../services/database_helper.dart';
 import '../widgets/app_snackbar.dart';
-import 'customer_product_price_dialog.dart';
+import 'pricing_scheme_rule_dialog.dart';
 
 class CustomerProductPricesScreen extends StatefulWidget {
   const CustomerProductPricesScreen({super.key, required this.customer});
@@ -19,7 +19,7 @@ class CustomerProductPricesScreen extends StatefulWidget {
 class _CustomerProductPricesScreenState
     extends State<CustomerProductPricesScreen> {
   final TextEditingController _searchController = TextEditingController();
-  List<CustomerProductPrice> _prices = [];
+  List<CustomerPricingRule> _rules = [];
   List<Product> _products = [];
   bool _isLoading = true;
 
@@ -59,24 +59,24 @@ class _CustomerProductPricesScreenState
     try {
       final customerId = widget.customer.id ?? 0;
       final results = await Future.wait([
-        CustomerPricingService.instance.getProductPricesForCustomer(customerId),
+        CustomerPricingService.instance.getRulesForCustomer(customerId),
         DatabaseHelper.instance.getProducts(),
       ]);
 
       if (!mounted) return;
       setState(() {
-        _prices = results[0] as List<CustomerProductPrice>;
+        _rules = results[0] as List<CustomerPricingRule>;
         _products = results[1] as List<Product>;
         _isLoading = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _prices = [];
+        _rules = [];
         _products = [];
         _isLoading = false;
       });
-      _showMessage('Could not load customer product prices.', color: _danger);
+      _showMessage('Could not load customer-specific prices.', color: _danger);
     }
   }
 
@@ -88,45 +88,58 @@ class _CustomerProductPricesScreenState
     return 'Rs. ${value.toDouble().toStringAsFixed(2)}';
   }
 
-  Product? _productForBarcode(String barcode) {
-    for (final product in _products) {
-      if (product.barcode == barcode) return product;
-    }
-    return null;
+  List<String> get _categories {
+    final categories =
+        _products
+            .map((product) => product.category.trim())
+            .where((category) => category.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
+    return categories;
   }
 
-  List<CustomerProductPrice> get _filteredPrices {
+  List<CustomerPricingRule> get _filteredRules {
     final query = _searchController.text.trim().toLowerCase();
-    if (query.isEmpty) return _prices;
+    if (query.isEmpty) return _rules;
 
-    return _prices.where((price) {
-      return price.productNameSnapshot.toLowerCase().contains(query) ||
-          price.barcode.toLowerCase().contains(query) ||
-          (price.note ?? '').toLowerCase().contains(query);
+    return _rules.where((rule) {
+      return (rule.productNameSnapshot ?? '').toLowerCase().contains(query) ||
+          (rule.category ?? '').toLowerCase().contains(query) ||
+          (rule.barcode ?? '').toLowerCase().contains(query) ||
+          (rule.note ?? '').toLowerCase().contains(query);
     }).toList();
   }
 
-  Future<void> _addPrice() async {
+  Future<void> _addRule() async {
     final customerId = widget.customer.id ?? 0;
     if (customerId <= 0) return;
 
-    final result = await showCustomerProductPriceDialog(
+    final result = await showPricingSchemeRuleDialog(
       context: context,
       products: _products,
+      categories: _categories,
+      titleNoun: 'Customer Rule',
     );
     if (result == null) return;
 
     try {
-      await CustomerPricingService.instance.upsertProductPrice(
+      await CustomerPricingService.instance.upsertCustomerRule(
         customerId: customerId,
-        barcode: result.product.barcode,
-        productNameSnapshot: result.product.name,
+        applyTo: result.applyTo,
+        category: result.category,
+        barcode: result.product?.barcode,
+        productNameSnapshot: result.product?.name,
+        ruleType: result.ruleType,
+        priceType: result.priceType,
+        discountPercent: result.discountPercent,
         fixedPrice: result.fixedPrice,
+        priority: result.priority,
         isActive: result.isActive,
         note: result.note,
       );
       if (!mounted) return;
-      _showMessage('Customer product price saved.', color: _success);
+      _showMessage('Customer-specific rule saved.', color: _success);
       await _loadData();
     } catch (e) {
       if (!mounted) return;
@@ -137,29 +150,37 @@ class _CustomerProductPricesScreenState
     }
   }
 
-  Future<void> _editPrice(CustomerProductPrice price) async {
+  Future<void> _editRule(CustomerPricingRule rule) async {
     final customerId = widget.customer.id ?? 0;
     if (customerId <= 0) return;
 
-    final result = await showCustomerProductPriceDialog(
+    final result = await showPricingSchemeRuleDialog(
       context: context,
       products: _products,
-      existingPrice: price,
+      categories: _categories,
+      rule: rule.asPricingSchemeRule(),
+      titleNoun: 'Customer Rule',
     );
     if (result == null) return;
 
     try {
-      await CustomerPricingService.instance.upsertProductPrice(
-        id: price.id,
+      await CustomerPricingService.instance.upsertCustomerRule(
+        id: rule.id,
         customerId: customerId,
-        barcode: result.product.barcode,
-        productNameSnapshot: result.product.name,
+        applyTo: result.applyTo,
+        category: result.category,
+        barcode: result.product?.barcode,
+        productNameSnapshot: result.product?.name,
+        ruleType: result.ruleType,
+        priceType: result.priceType,
+        discountPercent: result.discountPercent,
         fixedPrice: result.fixedPrice,
+        priority: result.priority,
         isActive: result.isActive,
         note: result.note,
       );
       if (!mounted) return;
-      _showMessage('Customer product price updated.', color: _success);
+      _showMessage('Customer-specific rule updated.', color: _success);
       await _loadData();
     } catch (e) {
       if (!mounted) return;
@@ -170,18 +191,18 @@ class _CustomerProductPricesScreenState
     }
   }
 
-  Future<void> _toggleActive(CustomerProductPrice price) async {
-    final id = price.id;
+  Future<void> _toggleActive(CustomerPricingRule rule) async {
+    final id = rule.id;
     if (id == null || id <= 0) return;
 
     try {
-      await CustomerPricingService.instance.setProductPriceActive(
+      await CustomerPricingService.instance.setCustomerRuleActive(
         id: id,
-        isActive: !price.isActive,
+        isActive: !rule.isActive,
       );
       if (!mounted) return;
       _showMessage(
-        price.isActive ? 'Product price deactivated.' : 'Product price active.',
+        rule.isActive ? 'Rule deactivated.' : 'Rule activated.',
         color: _success,
       );
       await _loadData();
@@ -196,8 +217,8 @@ class _CustomerProductPricesScreenState
 
   InputDecoration _searchDecoration() {
     return InputDecoration(
-      labelText: 'Search product prices',
-      hintText: 'Product name, barcode, or note',
+      labelText: 'Search customer rules',
+      hintText: 'Product, category, barcode, or note',
       prefixIcon: const Icon(Icons.search_rounded),
       filled: true,
       fillColor: _panel,
@@ -218,12 +239,12 @@ class _CustomerProductPricesScreenState
 
   @override
   Widget build(BuildContext context) {
-    final activeCount = _prices.where((price) => price.isActive).length;
+    final activeCount = _rules.where((rule) => rule.isActive).length;
 
     return Scaffold(
       backgroundColor: _page,
       appBar: AppBar(
-        title: const Text('Customer Product Prices'),
+        title: const Text('Customer Item & Category Rules'),
         actions: [
           IconButton(
             tooltip: 'Refresh',
@@ -233,9 +254,9 @@ class _CustomerProductPricesScreenState
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isLoading ? null : _addPrice,
+        onPressed: _isLoading ? null : _addRule,
         icon: const Icon(Icons.add_rounded),
-        label: const Text('Add Price'),
+        label: const Text('Add Rule'),
       ),
       body: SafeArea(
         child: _isLoading
@@ -253,16 +274,16 @@ class _CustomerProductPricesScreenState
                       onChanged: (_) => setState(() {}),
                     ),
                     const SizedBox(height: 16),
-                    if (_filteredPrices.isEmpty)
+                    if (_filteredRules.isEmpty)
                       _emptyState()
                     else
                       ListView.separated(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
-                        itemCount: _filteredPrices.length,
+                        itemCount: _filteredRules.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (context, index) {
-                          return _priceRow(_filteredPrices[index]);
+                          return _ruleRow(_filteredRules[index]);
                         },
                       ),
                   ],
@@ -311,7 +332,7 @@ class _CustomerProductPricesScreenState
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${widget.customer.displayCode} - $activeCount active of ${_prices.length} product prices',
+                  '${widget.customer.displayCode} - $activeCount active of ${_rules.length} customer rules',
                   style: TextStyle(
                     color: _textSecondary,
                     fontWeight: FontWeight.w700,
@@ -321,9 +342,9 @@ class _CustomerProductPricesScreenState
             ),
           ),
           ElevatedButton.icon(
-            onPressed: _addPrice,
+            onPressed: _addRule,
             icon: const Icon(Icons.add_rounded),
-            label: const Text('Add Price'),
+            label: const Text('Add Rule'),
           ),
         ],
       ),
@@ -339,18 +360,15 @@ class _CustomerProductPricesScreenState
         border: Border.all(color: _border),
       ),
       child: Text(
-        'No customer-specific product prices yet.',
+        'No customer-specific item or category rules yet. Add special prices or discounts for this customer.',
         textAlign: TextAlign.center,
         style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w800),
       ),
     );
   }
 
-  Widget _priceRow(CustomerProductPrice price) {
-    final product = _productForBarcode(price.barcode);
-    final normalPrice = product?.sellingPrice ?? price.fixedPrice;
-    final savings = normalPrice - price.fixedPrice;
-    final statusColor = price.isActive ? _brand : _textSecondary;
+  Widget _ruleRow(CustomerPricingRule rule) {
+    final statusColor = rule.isActive ? _brand : _textSecondary;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -358,7 +376,7 @@ class _CustomerProductPricesScreenState
         color: _panel,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: price.isActive ? _brand.withValues(alpha: 0.22) : _border,
+          color: rule.isActive ? _brand.withValues(alpha: 0.22) : _border,
         ),
       ),
       child: Row(
@@ -370,7 +388,7 @@ class _CustomerProductPricesScreenState
               color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
               borderRadius: BorderRadius.circular(16),
             ),
-            child: Icon(Icons.inventory_2_rounded, color: statusColor),
+            child: Icon(_targetIcon(rule.applyTo), color: statusColor),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -383,29 +401,29 @@ class _CustomerProductPricesScreenState
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(
-                      price.productNameSnapshot,
+                      _targetLabel(rule),
                       style: TextStyle(
                         color: _textPrimary,
                         fontWeight: FontWeight.w900,
                         fontSize: 15,
                       ),
                     ),
-                    _statusPill(price.isActive),
+                    _statusPill(rule.isActive),
                   ],
                 ),
                 const SizedBox(height: 5),
                 Text(
-                  '${price.barcode} - Normal ${_money(normalPrice)} - Customer ${_money(price.fixedPrice)}',
+                  _ruleActionLabel(rule),
                   style: TextStyle(
                     color: _textSecondary,
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
                   ),
                 ),
-                if ((price.note ?? '').trim().isNotEmpty) ...[
+                if ((rule.note ?? '').trim().isNotEmpty) ...[
                   const SizedBox(height: 5),
                   Text(
-                    price.note!.trim(),
+                    rule.note!.trim(),
                     style: TextStyle(
                       color: _textSecondary,
                       fontWeight: FontWeight.w600,
@@ -418,24 +436,24 @@ class _CustomerProductPricesScreenState
           ),
           const SizedBox(width: 12),
           _amountColumn(
-            label: savings >= 0 ? 'Saving' : 'Higher by',
-            value: _money(savings.abs()),
-            color: savings >= 0 ? _brand : _warning,
+            label: 'Priority',
+            value: rule.priority.toString(),
+            color: _warning,
           ),
           const SizedBox(width: 12),
           IconButton(
             tooltip: 'Edit',
-            onPressed: () => _editPrice(price),
+            onPressed: () => _editRule(rule),
             icon: const Icon(Icons.edit_rounded),
           ),
           IconButton(
-            tooltip: price.isActive ? 'Deactivate' : 'Activate',
-            onPressed: () => _toggleActive(price),
+            tooltip: rule.isActive ? 'Deactivate' : 'Activate',
+            onPressed: () => _toggleActive(rule),
             icon: Icon(
-              price.isActive
+              rule.isActive
                   ? Icons.toggle_on_rounded
                   : Icons.toggle_off_rounded,
-              color: price.isActive ? _brand : _textSecondary,
+              color: rule.isActive ? _brand : _textSecondary,
               size: 32,
             ),
           ),
@@ -462,6 +480,42 @@ class _CustomerProductPricesScreenState
         ),
       ),
     );
+  }
+
+  IconData _targetIcon(PricingSchemeRuleApplyTo applyTo) {
+    switch (applyTo) {
+      case PricingSchemeRuleApplyTo.product:
+        return Icons.inventory_2_rounded;
+      case PricingSchemeRuleApplyTo.category:
+        return Icons.category_rounded;
+      case PricingSchemeRuleApplyTo.all:
+        return Icons.all_inbox_rounded;
+    }
+  }
+
+  String _targetLabel(CustomerPricingRule rule) {
+    switch (rule.applyTo) {
+      case PricingSchemeRuleApplyTo.product:
+        return rule.productNameSnapshot ?? rule.barcode ?? 'Specific Product';
+      case PricingSchemeRuleApplyTo.category:
+        return rule.category ?? 'Product Category';
+      case PricingSchemeRuleApplyTo.all:
+        return 'All Products';
+    }
+  }
+
+  String _ruleActionLabel(CustomerPricingRule rule) {
+    final target = rule.applyTo.label;
+    switch (rule.ruleType) {
+      case PricingSchemeRuleType.priceType:
+        return '$target - Use ${rule.priceType?.label ?? 'Selling Price'}';
+      case PricingSchemeRuleType.percentDiscount:
+        return '$target - ${rule.normalizedDiscountPercent.toStringAsFixed(2)}% discount';
+      case PricingSchemeRuleType.fixedPrice:
+        return '$target - Fixed ${_money(rule.fixedPrice ?? 0)}';
+      case PricingSchemeRuleType.noDiscount:
+        return '$target - No discount';
+    }
   }
 
   Widget _amountColumn({

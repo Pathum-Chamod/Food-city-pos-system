@@ -160,7 +160,7 @@ class PricingSchemeService {
     await db.update(
       CustomerService.customersTable,
       {
-        'pricing_scheme_id': _positiveOrNull(pricingSchemeId),
+        'pricing_scheme_id': _pricingSchemeSelectionValue(pricingSchemeId),
         'updated_at': DateTime.now().toIso8601String(),
         'updated_by': updatedBy,
       },
@@ -574,6 +574,13 @@ class PricingSchemeService {
   int? _positiveOrNull(int? value) {
     if (value == null || value <= 0) return null;
     return value;
+  }
+
+  int? _pricingSchemeSelectionValue(int? value) {
+    if (value == null) return null;
+    if (value == 0) return 0;
+    if (value > 0) return value;
+    return null;
   }
 
   double _clampPercent(double value) {

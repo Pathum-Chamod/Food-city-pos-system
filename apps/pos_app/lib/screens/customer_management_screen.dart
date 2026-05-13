@@ -31,7 +31,6 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
   String _query = '';
 
   static const Color _brand = Color(0xFF2AAA8A);
-  static const Color _blue = Color(0xFF4B8DFF);
   static const Color _warning = Color(0xFFFFB65C);
   static const Color _danger = Color(0xFFFF6B7A);
   static const Color _success = Color(0xFF1FCF9A);
@@ -251,20 +250,6 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
     );
   }
 
-  Color _typeColor(Customer customer) {
-    switch (customer.normalizedType) {
-      case 'vip':
-        return _warning;
-      case 'wholesale':
-        return _blue;
-      case 'staff':
-        return const Color(0xFF9B7BFF);
-      case 'regular':
-      default:
-        return _brand;
-    }
-  }
-
   Widget _summaryCard({
     required String label,
     required String value,
@@ -324,8 +309,6 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
   }
 
   Widget _customerCard(Customer customer) {
-    final typeColor = _typeColor(customer);
-
     return Container(
       decoration: BoxDecoration(
         color: _panel,
@@ -345,7 +328,7 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
               children: [
                 CircleAvatar(
                   radius: 24,
-                  backgroundColor: typeColor.withValues(
+                  backgroundColor: _brand.withValues(
                     alpha: _isDark ? 0.18 : 0.12,
                   ),
                   child: Text(
@@ -353,7 +336,7 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                         ? 'C'
                         : customer.displayName.trim()[0].toUpperCase(),
                     style: TextStyle(
-                      color: typeColor,
+                      color: _brand,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
@@ -374,29 +357,6 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                               color: _textPrimary,
                               fontWeight: FontWeight.w900,
                               fontSize: 16,
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 9,
-                              vertical: 5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: typeColor.withValues(
-                                alpha: _isDark ? 0.16 : 0.10,
-                              ),
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: typeColor.withValues(alpha: 0.24),
-                              ),
-                            ),
-                            child: Text(
-                              customer.typeLabel,
-                              style: TextStyle(
-                                color: typeColor,
-                                fontWeight: FontWeight.w900,
-                                fontSize: 11,
-                              ),
                             ),
                           ),
                           if (!customer.isActive)

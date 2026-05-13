@@ -203,7 +203,11 @@ class _CustomerCategoryAssignmentDialogState
                 items: [
                   const DropdownMenuItem<int?>(
                     value: null,
-                    child: Text('No direct scheme'),
+                    child: Text('Use category default'),
+                  ),
+                  const DropdownMenuItem<int?>(
+                    value: 0,
+                    child: Text('No Scheme'),
                   ),
                   ...widget.schemes.map(
                     (scheme) => DropdownMenuItem<int?>(

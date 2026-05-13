@@ -3,7 +3,6 @@ import 'package:shared/models/customer_category.dart';
 import 'package:shared/models/customer.dart';
 import 'package:shared/models/customer_credit_summary.dart';
 import 'package:shared/models/pricing_scheme.dart';
-import 'package:shared/models/product.dart';
 
 import '../services/customer_credit_service.dart';
 import '../services/customer_pricing_service.dart';
@@ -15,7 +14,6 @@ import 'customer_credit_settings_dialog.dart';
 import 'customer_form_dialog.dart';
 import 'customer_ledger_screen.dart';
 import 'customer_product_prices_screen.dart';
-import 'customer_pricing_settings_dialog.dart';
 import 'customer_payment_dialog.dart';
 import 'transaction_history_screen.dart';
 
@@ -35,7 +33,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   List<Map<String, dynamic>> _history = [];
   List<CustomerCategory> _categories = [];
   List<PricingScheme> _schemes = [];
-  int _activeProductPriceCount = 0;
+  int _activeCustomerRuleCount = 0;
   bool _isLoading = true;
 
   static const Color _brand = Color(0xFF2AAA8A);
@@ -77,8 +75,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       );
       final creditSummary = await CustomerCreditService.instance
           .getCreditSummary(widget.customerId);
-      final activeProductPriceCount = await CustomerPricingService.instance
-          .countProductPricesForCustomer(widget.customerId);
+      final activeCustomerRuleCount = await CustomerPricingService.instance
+          .countRulesForCustomer(widget.customerId);
       final categories = await PricingSchemeService.instance
           .getCustomerCategories(activeOnly: false);
       final schemes = await PricingSchemeService.instance.getPricingSchemes(
@@ -93,7 +91,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         _creditSummary = creditSummary;
         _categories = categories;
         _schemes = schemes;
-        _activeProductPriceCount = activeProductPriceCount;
+        _activeCustomerRuleCount = activeCustomerRuleCount;
         _isLoading = false;
       });
     } catch (e) {
@@ -105,7 +103,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         _creditSummary = null;
         _categories = [];
         _schemes = [];
-        _activeProductPriceCount = 0;
+        _activeCustomerRuleCount = 0;
         _isLoading = false;
       });
       _showMessage('Could not load customer details.', color: _danger);
@@ -143,20 +141,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
 
     if (!mounted || !saved) return;
     _showMessage('Credit settings updated.', color: _success);
-    await _loadCustomer();
-  }
-
-  Future<void> _openPricingSettings() async {
-    final customer = _customer;
-    if (customer == null || customer.id == null) return;
-
-    final saved = await showCustomerPricingSettingsDialog(
-      context: context,
-      customer: customer,
-    );
-
-    if (!mounted || !saved) return;
-    _showMessage('Pricing settings updated.', color: _success);
     await _loadCustomer();
   }
 
@@ -269,20 +253,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     return '${parsed.year.toString().padLeft(4, '0')}-${parsed.month.toString().padLeft(2, '0')}-${parsed.day.toString().padLeft(2, '0')} ${parsed.hour.toString().padLeft(2, '0')}:${parsed.minute.toString().padLeft(2, '0')}';
   }
 
-  Color _typeColor(Customer customer) {
-    switch (customer.normalizedType) {
-      case 'vip':
-        return _warning;
-      case 'wholesale':
-        return _blue;
-      case 'staff':
-        return const Color(0xFF9B7BFF);
-      case 'regular':
-      default:
-        return _brand;
-    }
-  }
-
   Widget _metricCard({
     required String label,
     required String value,
@@ -342,8 +312,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   }
 
   Widget _profileCard(Customer customer) {
-    final typeColor = _typeColor(customer);
-
     return Container(
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
@@ -356,13 +324,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         children: [
           CircleAvatar(
             radius: 34,
-            backgroundColor: typeColor.withValues(alpha: _isDark ? 0.18 : 0.12),
+            backgroundColor: _brand.withValues(alpha: _isDark ? 0.18 : 0.12),
             child: Text(
               customer.displayName.trim().isEmpty
                   ? 'C'
                   : customer.displayName.trim()[0].toUpperCase(),
               style: TextStyle(
-                color: typeColor,
+                color: _brand,
                 fontWeight: FontWeight.w900,
                 fontSize: 24,
               ),
@@ -384,29 +352,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                         color: _textPrimary,
                         fontSize: 26,
                         fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: typeColor.withValues(
-                          alpha: _isDark ? 0.16 : 0.10,
-                        ),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                          color: typeColor.withValues(alpha: 0.24),
-                        ),
-                      ),
-                      child: Text(
-                        customer.typeLabel,
-                        style: TextStyle(
-                          color: typeColor,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 12,
-                        ),
                       ),
                     ),
                     if (!customer.isActive)
@@ -714,9 +659,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   }
 
   Widget _pricingDiscountsCard(Customer customer) {
-    final isEnabled = customer.pricingEnabled;
-    final statusColor = isEnabled ? _brand : _textSecondary;
-    final discount = customer.normalizedDefaultDiscountPercent;
+    final hasCustomerRules = _activeCustomerRuleCount > 0;
+    final statusColor = hasCustomerRules ? _brand : _textSecondary;
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -724,7 +668,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         color: _panel,
         borderRadius: BorderRadius.circular(26),
         border: Border.all(
-          color: isEnabled ? _brand.withValues(alpha: 0.34) : _border,
+          color: hasCustomerRules ? _brand.withValues(alpha: 0.34) : _border,
         ),
       ),
       child: Column(
@@ -754,7 +698,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Pricing & Discounts',
+                      'Special Prices & Discounts',
                       style: TextStyle(
                         color: _textPrimary,
                         fontSize: 20,
@@ -763,9 +707,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      isEnabled
-                          ? 'Customer pricing rules are active for this customer.'
-                          : 'Normal POS pricing is used for this customer.',
+                      'Set customer-only rules for all items, item categories, or specific products.',
                       style: TextStyle(
                         color: _textSecondary,
                         fontWeight: FontWeight.w700,
@@ -787,7 +729,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                   ),
                 ),
                 child: Text(
-                  isEnabled ? 'Enabled' : 'Disabled',
+                  '$_activeCustomerRuleCount Rules',
                   style: TextStyle(
                     color: statusColor,
                     fontWeight: FontWeight.w900,
@@ -797,9 +739,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               ),
               const SizedBox(width: 12),
               ElevatedButton.icon(
-                onPressed: _openPricingSettings,
-                icon: const Icon(Icons.tune_rounded),
-                label: Text(isEnabled ? 'Edit Settings' : 'Enable Pricing'),
+                onPressed: _openProductPrices,
+                icon: const Icon(Icons.price_change_rounded),
+                label: const Text('Manage Rules'),
               ),
             ],
           ),
@@ -807,24 +749,24 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           Row(
             children: [
               _pricingMiniMetric(
-                label: 'Default Price',
-                value: customer.defaultPriceType.label,
-                icon: Icons.sell_rounded,
-                color: _blue,
+                label: 'Active Rules',
+                value: _activeCustomerRuleCount.toString(),
+                icon: Icons.inventory_2_rounded,
+                color: _brand,
               ),
               const SizedBox(width: 10),
               _pricingMiniMetric(
-                label: 'Default Discount',
-                value: '${discount.toStringAsFixed(2)}%',
-                icon: Icons.percent_rounded,
+                label: 'Rule Targets',
+                value: 'All / Category / Item',
+                icon: Icons.category_rounded,
                 color: _warning,
               ),
               const SizedBox(width: 10),
               _pricingMiniMetric(
-                label: 'Product Prices',
-                value: _activeProductPriceCount.toString(),
-                icon: Icons.inventory_2_rounded,
-                color: _brand,
+                label: 'Rule Actions',
+                value: 'Price / Discount',
+                icon: Icons.tune_rounded,
+                color: _blue,
               ),
             ],
           ),
@@ -835,39 +777,11 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                 child: OutlinedButton.icon(
                   onPressed: _openProductPrices,
                   icon: const Icon(Icons.price_change_rounded),
-                  label: const Text('Manage Product Prices'),
+                  label: const Text('Manage Customer Item & Category Rules'),
                 ),
               ),
             ],
           ),
-          if (customer.hasPricingNote) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: _panelSoft,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: _border),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.note_alt_rounded, color: _textSecondary, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      customer.pricingNote!.trim(),
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontWeight: FontWeight.w700,
-                        height: 1.35,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -875,9 +789,12 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
 
   Widget _categorySchemeCard(Customer customer) {
     final category = _categoryFor(customer.customerCategoryId);
+    final noSchemeSelected = customer.pricingSchemeId == 0;
     final directScheme = _schemeFor(customer.pricingSchemeId);
     final inheritedScheme = _schemeFor(category?.defaultPricingSchemeId);
-    final activeScheme = directScheme ?? inheritedScheme;
+    final activeScheme = noSchemeSelected
+        ? null
+        : directScheme ?? inheritedScheme;
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -921,7 +838,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     const SizedBox(height: 4),
                     Text(
                       activeScheme == null
-                          ? 'No pricing scheme is assigned yet.'
+                          ? noSchemeSelected
+                                ? 'No pricing scheme is applied for this customer.'
+                                : 'No pricing scheme is assigned yet.'
                           : directScheme == null
                           ? 'Using category default scheme.'
                           : 'Using direct customer scheme.',
@@ -959,7 +878,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               const SizedBox(width: 10),
               _pricingMiniMetric(
                 label: 'Direct Scheme',
-                value: _schemeDisplayName(directScheme),
+                value: noSchemeSelected
+                    ? 'No Scheme'
+                    : _schemeDisplayName(directScheme),
                 icon: Icons.sell_rounded,
                 color: _blue,
               ),

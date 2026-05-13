@@ -177,6 +177,17 @@ def parse_int(value, default=0):
         return default
 
 
+def parse_pricing_scheme_selection(value):
+    if value is None:
+        return None
+    parsed = parse_int(value, 0)
+    if parsed == 0:
+        return 0
+    if parsed > 0:
+        return parsed
+    return None
+
+
 def parse_float(value, default=0.0):
     try:
         return float(value)
@@ -575,15 +586,13 @@ def create_customer(cursor, body):
     create_customer_tables(cursor)
 
     name = str(body.get("name", "") or "").strip()
-    if not name:
-        return False, "Customer name is required", None
-
     phone = clean_optional_text(body.get("phone"))
     phone_normalized = normalize_customer_phone(phone)
-    if phone_normalized:
-        existing = find_customer_by_phone(cursor, phone_normalized)
-        if existing:
-            return False, f"A customer with this phone already exists: {existing.get('name')}", existing
+    if not phone_normalized:
+        return False, "Phone number is required", None
+    existing = find_customer_by_phone(cursor, phone_normalized)
+    if existing:
+        return False, f"A customer with this phone already exists: {existing.get('name') or existing.get('phone')}", existing
 
     now = datetime.now().astimezone().isoformat()
     cursor.execute(
@@ -624,7 +633,7 @@ def create_customer(cursor, body):
             max(0.0, min(parse_float(body.get("default_discount_percent"), 0.0), 100.0)),
             clean_optional_text(body.get("pricing_note")),
             parse_int(body.get("customer_category_id"), 0) or None,
-            parse_int(body.get("pricing_scheme_id"), 0) or None,
+            parse_pricing_scheme_selection(body.get("pricing_scheme_id")),
             now,
             now,
             parse_int(body.get("created_by"), 0) or None,
@@ -653,15 +662,13 @@ def update_customer(cursor, body):
         return False, "Customer not found", None
 
     name = str(body.get("name", "") or "").strip()
-    if not name:
-        return False, "Customer name is required", None
-
     phone = clean_optional_text(body.get("phone"))
     phone_normalized = normalize_customer_phone(phone)
-    if phone_normalized:
-        duplicate = find_customer_by_phone(cursor, phone_normalized, excluding_id=customer_id)
-        if duplicate:
-            return False, f"A customer with this phone already exists: {duplicate.get('name')}", duplicate
+    if not phone_normalized:
+        return False, "Phone number is required", None
+    duplicate = find_customer_by_phone(cursor, phone_normalized, excluding_id=customer_id)
+    if duplicate:
+        return False, f"A customer with this phone already exists: {duplicate.get('name') or duplicate.get('phone')}", duplicate
 
     now = datetime.now().astimezone().isoformat()
     cursor.execute(
@@ -711,7 +718,9 @@ def update_customer(cursor, body):
             ),
             clean_optional_text(body.get("pricing_note", existing.get("pricing_note"))),
             parse_int(body.get("customer_category_id", existing.get("customer_category_id")), 0) or None,
-            parse_int(body.get("pricing_scheme_id", existing.get("pricing_scheme_id")), 0) or None,
+            parse_pricing_scheme_selection(
+                body.get("pricing_scheme_id", existing.get("pricing_scheme_id"))
+            ),
             now,
             parse_int(body.get("updated_by"), 0) or None,
             customer_id,
@@ -856,7 +865,7 @@ def upsert_customer_from_sync(cursor, data):
     )
     pricing_note = clean_optional_text(data.get("pricing_note"))
     customer_category_id = parse_int(data.get("customer_category_id"), 0) or None
-    pricing_scheme_id = parse_int(data.get("pricing_scheme_id"), 0) or None
+    pricing_scheme_id = parse_pricing_scheme_selection(data.get("pricing_scheme_id"))
 
     if existing:
         resolved_id = parse_int(existing["id"], 0)
@@ -902,7 +911,7 @@ def upsert_customer_from_sync(cursor, data):
                 credit_status,
                 credit_note,
                 data.get("pricing_enabled"), pricing_enabled,
-                default_price_type or "selling",
+                default_price_type,
                 data.get("default_discount_percent"), default_discount_percent,
                 pricing_note,
                 data.get("customer_category_id"), customer_category_id,
@@ -947,7 +956,7 @@ def upsert_customer_from_sync(cursor, data):
                 credit_status,
                 credit_note,
                 pricing_enabled,
-                default_price_type,
+                default_price_type or "selling",
                 default_discount_percent,
                 pricing_note,
                 customer_category_id,
@@ -1140,7 +1149,7 @@ def handle_customer_pricing_settings_sync(cursor, data):
             1 if "customer_category_id" in data else 0,
             parse_int(data.get("customer_category_id"), 0) or None,
             1 if "pricing_scheme_id" in data else 0,
-            parse_int(data.get("pricing_scheme_id"), 0) or None,
+            parse_pricing_scheme_selection(data.get("pricing_scheme_id")),
             datetime.now().astimezone().isoformat(),
             customer_id,
         ),
@@ -1519,7 +1528,7 @@ def handle_customer_pricing_assignment_sync(cursor, data):
     create_pricing_schemes_tables(cursor)
     customer_id = upsert_customer_from_sync(cursor, data)
     category_id = parse_int(data.get("customer_category_id"), 0) or None
-    scheme_id = parse_int(data.get("pricing_scheme_id"), 0) or None
+    scheme_id = parse_pricing_scheme_selection(data.get("pricing_scheme_id"))
     cursor.execute(
         """
         UPDATE customers
@@ -5376,11 +5385,24 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"status": "success"}).encode())
 
             elif sync_type == "CUSTOMER_PRICING_ASSIGNMENT":
-                customer_id = handle_customer_pricing_assignment_sync(c, data)
-                conn.commit()
-                print(f"  CUSTOMER_PRICING_ASSIGNMENT synced: customer #{customer_id}")
-                self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                try:
+                    customer_id = handle_customer_pricing_assignment_sync(c, data)
+                    conn.commit()
+                    print(f"  CUSTOMER_PRICING_ASSIGNMENT synced: customer #{customer_id}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                except Exception as exc:
+                    conn.rollback()
+                    print(f"  CUSTOMER_PRICING_ASSIGNMENT failed: {exc}")
+                    self._set_headers(500)
+                    self.wfile.write(
+                        json.dumps(
+                            {
+                                "status": "error",
+                                "message": f"CUSTOMER_PRICING_ASSIGNMENT failed: {exc}",
+                            }
+                        ).encode()
+                    )
 
             elif sync_type == "CREDIT_SALE_UPDATE":
                 ledger_id = handle_credit_sale_update_sync(c, data)

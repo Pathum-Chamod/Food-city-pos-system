@@ -278,6 +278,54 @@ class CustomerService {
     return text.isEmpty ? null : text;
   }
 
+  int? _positiveOrNull(int? value) {
+    if (value == null || value <= 0) return null;
+    return value;
+  }
+
+  int? _pricingSchemeSelectionValue(int? value) {
+    if (value == null) return null;
+    if (value == 0) return 0;
+    if (value > 0) return value;
+    return null;
+  }
+
+  Future<void> _queueCustomerPricingAssignmentSync(int customerId) async {
+    if (customerId <= 0) return;
+
+    final db = await _db;
+    final rows = await db.query(
+      customersTable,
+      where: 'id = ?',
+      whereArgs: [customerId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+
+    final row = Map<String, dynamic>.from(rows.first);
+    await db.insert('sync_queue', {
+      'type': 'CUSTOMER_PRICING_ASSIGNMENT',
+      'data': jsonEncode({
+        'customer_id': row['id'],
+        'customer_code': row['customer_code'],
+        'customer_name': row['name'],
+        'customer_phone': row['phone'],
+        'customer_phone_normalized': row['phone_normalized'],
+        'customer_email': row['email'],
+        'customer_address': row['address'],
+        'customer_type': row['customer_type'],
+        'customer_notes': row['notes'],
+        'customer_is_active': row['is_active'],
+        'customer_category_id': row['customer_category_id'],
+        'pricing_scheme_id': row['pricing_scheme_id'],
+        'updated_by': row['updated_by'],
+        'updated_at': row['updated_at'],
+      }),
+      'status': 'pending',
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
   Future<List<Customer>> getCustomers({
     String query = '',
     bool activeOnly = true,
@@ -380,17 +428,18 @@ class CustomerService {
     String? email,
     String? address,
     String customerType = 'regular',
+    int? customerCategoryId,
+    int? pricingSchemeId,
     String? notes,
     int? createdBy,
     bool preventDuplicatePhone = true,
   }) async {
     final trimmedName = name.trim();
-    if (trimmedName.isEmpty) {
-      throw Exception('Customer name is required.');
-    }
-
     final normalizedPhone = normalizePhone(phone ?? '');
-    if (preventDuplicatePhone && normalizedPhone.isNotEmpty) {
+    if (normalizedPhone.isEmpty) {
+      throw Exception('Phone number is required.');
+    }
+    if (preventDuplicatePhone) {
       final existing = await findCustomerByPhone(normalizedPhone);
       if (existing != null) {
         throw Exception(
@@ -410,6 +459,8 @@ class CustomerService {
       'email': _cleanOptional(email),
       'address': _cleanOptional(address),
       'customer_type': _normalizeCustomerType(customerType),
+      'customer_category_id': _positiveOrNull(customerCategoryId),
+      'pricing_scheme_id': _pricingSchemeSelectionValue(pricingSchemeId),
       'notes': _cleanOptional(notes),
       'is_active': 1,
       'created_at': now,
@@ -429,6 +480,11 @@ class CustomerService {
       whereArgs: [id],
     );
 
+    if (_positiveOrNull(customerCategoryId) != null ||
+        _pricingSchemeSelectionValue(pricingSchemeId) != null) {
+      await _queueCustomerPricingAssignmentSync(id);
+    }
+
     return id;
   }
 
@@ -439,6 +495,8 @@ class CustomerService {
     String? email,
     String? address,
     String customerType = 'regular',
+    int? customerCategoryId,
+    int? pricingSchemeId,
     String? notes,
     bool isActive = true,
     int? updatedBy,
@@ -449,12 +507,11 @@ class CustomerService {
     }
 
     final trimmedName = name.trim();
-    if (trimmedName.isEmpty) {
-      throw Exception('Customer name is required.');
-    }
-
     final normalizedPhone = normalizePhone(phone ?? '');
-    if (preventDuplicatePhone && normalizedPhone.isNotEmpty) {
+    if (normalizedPhone.isEmpty) {
+      throw Exception('Phone number is required.');
+    }
+    if (preventDuplicatePhone) {
       final existing = await findCustomerByPhone(normalizedPhone);
       if (existing != null && existing.id != id) {
         throw Exception(
@@ -478,6 +535,8 @@ class CustomerService {
         'email': _cleanOptional(email),
         'address': _cleanOptional(address),
         'customer_type': _normalizeCustomerType(customerType),
+        'customer_category_id': _positiveOrNull(customerCategoryId),
+        'pricing_scheme_id': _pricingSchemeSelectionValue(pricingSchemeId),
         'notes': _cleanOptional(notes),
         'is_active': isActive ? 1 : 0,
         'updated_at': DateTime.now().toIso8601String(),
@@ -486,6 +545,12 @@ class CustomerService {
       where: 'id = ?',
       whereArgs: [id],
     );
+
+    if (existing.customerCategoryId != _positiveOrNull(customerCategoryId) ||
+        existing.pricingSchemeId !=
+            _pricingSchemeSelectionValue(pricingSchemeId)) {
+      await _queueCustomerPricingAssignmentSync(id);
+    }
   }
 
   Future<void> updateCustomerPricingSettings({
