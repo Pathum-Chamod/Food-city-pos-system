@@ -7,9 +7,11 @@ import 'package:shared/models/customer.dart';
 import '../providers/auth_provider.dart';
 import '../services/customer_service.dart';
 import '../widgets/app_snackbar.dart';
+import 'customer_categories_screen.dart';
 import 'customer_detail_screen.dart';
 import 'customer_form_dialog.dart';
 import 'customer_credit_report_screen.dart';
+import 'pricing_schemes_screen.dart';
 
 class CustomerManagementScreen extends StatefulWidget {
   const CustomerManagementScreen({super.key});
@@ -185,6 +187,26 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const CustomerCreditReportScreen()),
+    );
+
+    if (!mounted) return;
+    await _loadCustomers();
+  }
+
+  Future<void> _openCustomerCategories() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CustomerCategoriesScreen()),
+    );
+
+    if (!mounted) return;
+    await _loadCustomers();
+  }
+
+  Future<void> _openPricingSchemes() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const PricingSchemesScreen()),
     );
 
     if (!mounted) return;
@@ -476,6 +498,18 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
       appBar: AppBar(
         title: const Text('Customer Management'),
         actions: [
+          TextButton.icon(
+            onPressed: _openPricingSchemes,
+            icon: const Icon(Icons.sell_rounded),
+            label: const Text('Pricing Schemes'),
+          ),
+          const SizedBox(width: 8),
+          TextButton.icon(
+            onPressed: _openCustomerCategories,
+            icon: const Icon(Icons.groups_2_rounded),
+            label: const Text('Categories'),
+          ),
+          const SizedBox(width: 8),
           TextButton.icon(
             onPressed: _openCreditReport,
             icon: const Icon(Icons.account_balance_wallet_rounded),

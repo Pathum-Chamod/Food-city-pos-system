@@ -1,8 +1,12 @@
 import 'package:flutter/foundation.dart';
 
+import 'product.dart';
+
 enum CustomerPricingType {
   none,
   customerProductPrice,
+  customerDirectScheme,
+  customerCategoryScheme,
   customerDefaultPriceType,
   customerDefaultDiscount,
 }
@@ -12,6 +16,10 @@ extension CustomerPricingTypeX on CustomerPricingType {
     switch (this) {
       case CustomerPricingType.customerProductPrice:
         return 'customer_product_price';
+      case CustomerPricingType.customerDirectScheme:
+        return 'customer_direct_scheme';
+      case CustomerPricingType.customerCategoryScheme:
+        return 'customer_category_scheme';
       case CustomerPricingType.customerDefaultPriceType:
         return 'customer_default_price_type';
       case CustomerPricingType.customerDefaultDiscount:
@@ -25,6 +33,10 @@ extension CustomerPricingTypeX on CustomerPricingType {
     switch (this) {
       case CustomerPricingType.customerProductPrice:
         return 'Customer Price';
+      case CustomerPricingType.customerDirectScheme:
+        return 'Customer Scheme';
+      case CustomerPricingType.customerCategoryScheme:
+        return 'Category Scheme';
       case CustomerPricingType.customerDefaultPriceType:
         return 'Customer Price Type';
       case CustomerPricingType.customerDefaultDiscount:
@@ -38,6 +50,10 @@ extension CustomerPricingTypeX on CustomerPricingType {
     switch ((value ?? '').trim().toLowerCase()) {
       case 'customer_product_price':
         return CustomerPricingType.customerProductPrice;
+      case 'customer_direct_scheme':
+        return CustomerPricingType.customerDirectScheme;
+      case 'customer_category_scheme':
+        return CustomerPricingType.customerCategoryScheme;
       case 'customer_default_price_type':
         return CustomerPricingType.customerDefaultPriceType;
       case 'customer_default_discount':
@@ -55,6 +71,7 @@ class CustomerPricingResult {
     required this.originalPrice,
     required this.finalPrice,
     this.type = CustomerPricingType.none,
+    this.priceType,
     this.ruleId,
     this.discountAmount = 0.0,
     this.note,
@@ -63,6 +80,7 @@ class CustomerPricingResult {
   final double originalPrice;
   final double finalPrice;
   final CustomerPricingType type;
+  final ProductPriceType? priceType;
   final int? ruleId;
   final double discountAmount;
   final String? note;

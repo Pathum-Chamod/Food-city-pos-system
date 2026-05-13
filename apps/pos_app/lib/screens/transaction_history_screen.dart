@@ -91,6 +91,10 @@ class TransactionHistoryScreen extends StatefulWidget {
     switch (type) {
       case 'customer_product_price':
         return 'Customer Price';
+      case 'customer_direct_scheme':
+        return 'Customer Scheme';
+      case 'customer_category_scheme':
+        return 'Category Scheme';
       case 'customer_default_price_type':
         final priceType = (item['price_category_used'] ?? 'selling')
             .toString()
@@ -325,6 +329,9 @@ class TransactionHistoryScreen extends StatefulWidget {
           : (storedCartDiscount <= 0 && discountType == 'none'
                 ? storedCombinedItemDiscount
                 : 0.0);
+      final customerPricingApplied = _readBool(
+        item['customer_pricing_applied'],
+      );
       return {
         'name': (item['product_name'] ?? 'Item').toString(),
         'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
@@ -341,6 +348,9 @@ class TransactionHistoryScreen extends StatefulWidget {
             .toDouble()
             .abs(),
         'itemDiscountAmount': explicitItemDiscount,
+        'customerPricingDetail': customerPricingApplied
+            ? _customerPricingDetail(item)
+            : '',
         'lineTotal': baseLineTotal - explicitItemDiscount,
       };
     }).toList();
@@ -488,6 +498,9 @@ class TransactionHistoryScreen extends StatefulWidget {
           : (storedCartDiscount <= 0 && discountType == 'none'
                 ? storedCombinedItemDiscount
                 : 0.0);
+      final customerPricingApplied = _readBool(
+        item['customer_pricing_applied'],
+      );
       return {
         'name': (item['product_name'] ?? 'Item').toString(),
         'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
@@ -504,6 +517,9 @@ class TransactionHistoryScreen extends StatefulWidget {
             .toDouble()
             .abs(),
         'itemDiscountAmount': explicitItemDiscount,
+        'customerPricingDetail': customerPricingApplied
+            ? _customerPricingDetail(item)
+            : '',
         'lineTotal': baseLineTotal - explicitItemDiscount,
       };
     }).toList();

@@ -638,6 +638,9 @@ class CartProvider with ChangeNotifier {
   }
 
   ProductPriceType _priceTypeForPricingResult(CustomerPricingResult pricing) {
+    final resolvedPriceType = pricing.priceType;
+    if (resolvedPriceType != null) return resolvedPriceType;
+
     if (pricing.type == CustomerPricingType.customerDefaultPriceType) {
       final customer = _selectedCustomer;
       if (customer != null) return customer.defaultPriceType;

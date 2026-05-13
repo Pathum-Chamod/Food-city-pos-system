@@ -11,6 +11,9 @@ class CustomerPricingService {
   static final CustomerPricingService instance = CustomerPricingService._();
 
   static const String productPricesTable = 'customer_product_prices';
+  static const String customerCategoriesTable = 'customer_categories';
+  static const String pricingSchemesTable = 'pricing_schemes';
+  static const String pricingSchemeRulesTable = 'pricing_scheme_rules';
 
   Future<Database> get _db async {
     final db = await DatabaseHelper.instance.database;
@@ -60,7 +63,7 @@ class CustomerPricingService {
     required String currentPriceType,
   }) async {
     final originalPrice = _roundMoney(currentUnitPrice);
-    if (customer == null || !customer.pricingEnabled) {
+    if (customer == null) {
       return CustomerPricingResult(
         originalPrice: originalPrice,
         finalPrice: originalPrice,
@@ -91,6 +94,32 @@ class CustomerPricingService {
       );
     }
 
+    final directSchemeResult = await _resolveSchemePriceForProduct(
+      schemeId: customer.pricingSchemeId,
+      pricingType: CustomerPricingType.customerDirectScheme,
+      product: product,
+      originalPrice: originalPrice,
+    );
+    if (directSchemeResult != null) return directSchemeResult;
+
+    final categorySchemeId = await _getCategoryPricingSchemeId(
+      customer.customerCategoryId,
+    );
+    final categorySchemeResult = await _resolveSchemePriceForProduct(
+      schemeId: categorySchemeId,
+      pricingType: CustomerPricingType.customerCategoryScheme,
+      product: product,
+      originalPrice: originalPrice,
+    );
+    if (categorySchemeResult != null) return categorySchemeResult;
+
+    if (!customer.pricingEnabled) {
+      return CustomerPricingResult(
+        originalPrice: originalPrice,
+        finalPrice: originalPrice,
+      );
+    }
+
     final currentType = ProductPriceTypeX.fromDb(currentPriceType);
     final defaultType = customer.defaultPriceType;
     final typePrice = _roundMoney(product.resolvePrice(defaultType));
@@ -102,6 +131,7 @@ class CustomerPricingService {
         originalPrice: originalPrice,
         finalPrice: typePrice,
         type: CustomerPricingType.customerDefaultPriceType,
+        priceType: defaultType,
         discountAmount: _discountAmount(originalPrice, typePrice),
         note: defaultType.label,
       );
@@ -125,6 +155,124 @@ class CustomerPricingService {
       originalPrice: originalPrice,
       finalPrice: originalPrice,
     );
+  }
+
+  Future<int?> _getCategoryPricingSchemeId(int? customerCategoryId) async {
+    if (customerCategoryId == null || customerCategoryId <= 0) return null;
+
+    final db = await _db;
+    final rows = await db.query(
+      customerCategoriesTable,
+      columns: const ['default_pricing_scheme_id'],
+      where: 'id = ? AND is_active = 1',
+      whereArgs: [customerCategoryId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final schemeId = (rows.first['default_pricing_scheme_id'] as num?)?.toInt();
+    if (schemeId == null || schemeId <= 0) return null;
+    return schemeId;
+  }
+
+  Future<CustomerPricingResult?> _resolveSchemePriceForProduct({
+    required int? schemeId,
+    required CustomerPricingType pricingType,
+    required Product product,
+    required double originalPrice,
+  }) async {
+    if (schemeId == null || schemeId <= 0) return null;
+
+    final rule = await _getBestActiveSchemeRule(
+      schemeId: schemeId,
+      product: product,
+    );
+    if (rule == null) return null;
+
+    switch (rule.ruleType) {
+      case PricingSchemeRuleType.priceType:
+        final priceType = rule.priceType ?? ProductPriceType.selling;
+        final finalPrice = _roundMoney(product.resolvePrice(priceType));
+        return CustomerPricingResult(
+          originalPrice: originalPrice,
+          finalPrice: finalPrice,
+          type: pricingType,
+          priceType: priceType,
+          ruleId: rule.id,
+          discountAmount: _discountAmount(originalPrice, finalPrice),
+          note: _schemeNote(rule, priceType.label),
+        );
+      case PricingSchemeRuleType.percentDiscount:
+        final percent = rule.normalizedDiscountPercent;
+        final finalPrice = _roundMoney(
+          originalPrice - (originalPrice * (percent / 100)),
+        );
+        return CustomerPricingResult(
+          originalPrice: originalPrice,
+          finalPrice: finalPrice,
+          type: pricingType,
+          ruleId: rule.id,
+          discountAmount: _discountAmount(originalPrice, finalPrice),
+          note: _schemeNote(rule, '${percent.toStringAsFixed(2)}%'),
+        );
+      case PricingSchemeRuleType.fixedPrice:
+        final finalPrice = _roundMoney(rule.fixedPrice ?? originalPrice);
+        return CustomerPricingResult(
+          originalPrice: originalPrice,
+          finalPrice: finalPrice,
+          type: pricingType,
+          ruleId: rule.id,
+          discountAmount: _discountAmount(originalPrice, finalPrice),
+          note: _schemeNote(rule, 'Fixed Price'),
+        );
+      case PricingSchemeRuleType.noDiscount:
+        return CustomerPricingResult(
+          originalPrice: originalPrice,
+          finalPrice: originalPrice,
+          type: pricingType,
+          ruleId: rule.id,
+          discountAmount: 0.0,
+          note: _schemeNote(rule, 'No Discount'),
+        );
+    }
+  }
+
+  Future<PricingSchemeRule?> _getBestActiveSchemeRule({
+    required int schemeId,
+    required Product product,
+  }) async {
+    final cleanBarcode = product.barcode.trim();
+    final cleanCategory = product.category.trim();
+    if (schemeId <= 0 || cleanBarcode.isEmpty) return null;
+
+    final db = await _db;
+    final rows = await db.rawQuery(
+      '''
+      SELECT r.*
+      FROM $pricingSchemeRulesTable r
+      INNER JOIN $pricingSchemesTable s ON s.id = r.scheme_id
+      WHERE r.scheme_id = ?
+        AND r.is_active = 1
+        AND s.is_active = 1
+        AND (
+          (r.apply_to = 'product' AND LOWER(r.barcode) = LOWER(?))
+          OR (r.apply_to = 'category' AND LOWER(r.category) = LOWER(?))
+          OR r.apply_to = 'all'
+        )
+      ORDER BY
+        CASE r.apply_to
+          WHEN 'product' THEN 0
+          WHEN 'category' THEN 1
+          ELSE 2
+        END ASC,
+        r.priority ASC,
+        r.updated_at DESC,
+        r.id DESC
+      LIMIT 1
+      ''',
+      [schemeId, cleanBarcode, cleanCategory],
+    );
+    if (rows.isEmpty) return null;
+    return PricingSchemeRule.fromMap(rows.first);
   }
 
   Future<CustomerProductPrice?> getActiveProductPrice({
@@ -333,6 +481,12 @@ class CustomerPricingService {
 
   double _roundMoney(num value) {
     return double.parse(value.toStringAsFixed(2));
+  }
+
+  String _schemeNote(PricingSchemeRule rule, String fallback) {
+    final note = _cleanOptional(rule.note);
+    if (note != null) return note;
+    return fallback;
   }
 
   String? _cleanOptional(String? value) {

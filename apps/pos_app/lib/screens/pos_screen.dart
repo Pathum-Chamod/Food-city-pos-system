@@ -2690,6 +2690,10 @@ class _PosScreenState extends State<PosScreen> {
     switch (item.customerPricingType) {
       case CustomerPricingType.customerProductPrice:
         return 'Customer Price';
+      case CustomerPricingType.customerDirectScheme:
+        return 'Customer Scheme';
+      case CustomerPricingType.customerCategoryScheme:
+        return 'Category Scheme';
       case CustomerPricingType.customerDefaultPriceType:
         switch (item.priceType) {
           case ProductPriceType.wholesale:
@@ -2710,6 +2714,9 @@ class _PosScreenState extends State<PosScreen> {
     switch (item.customerPricingType) {
       case CustomerPricingType.customerProductPrice:
         return _brandColor;
+      case CustomerPricingType.customerDirectScheme:
+      case CustomerPricingType.customerCategoryScheme:
+        return _warningColor;
       case CustomerPricingType.customerDefaultPriceType:
         return _priceTypeColor(item.priceType);
       case CustomerPricingType.customerDefaultDiscount:

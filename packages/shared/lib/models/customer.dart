@@ -20,6 +20,8 @@ class Customer {
     this.currentCreditBalance = 0.0,
     this.creditStatus = 'normal',
     this.creditNote,
+    this.customerCategoryId,
+    this.pricingSchemeId,
     this.pricingEnabled = false,
     this.defaultPriceType = ProductPriceType.selling,
     this.defaultDiscountPercent = 0.0,
@@ -50,6 +52,13 @@ class Customer {
   final double currentCreditBalance;
   final String creditStatus; // normal | watchlist | blocked
   final String? creditNote;
+
+  /// Pricing Schemes V1.5 assignment fields.
+  ///
+  /// The legacy customerType and simple pricing fields remain active for
+  /// compatibility and fallback pricing.
+  final int? customerCategoryId;
+  final int? pricingSchemeId;
 
   /// Customer-specific pricing fields.
   final bool pricingEnabled;
@@ -160,6 +169,8 @@ class Customer {
     double? currentCreditBalance,
     String? creditStatus,
     String? creditNote,
+    int? customerCategoryId,
+    int? pricingSchemeId,
     bool? pricingEnabled,
     ProductPriceType? defaultPriceType,
     double? defaultDiscountPercent,
@@ -185,6 +196,8 @@ class Customer {
       currentCreditBalance: currentCreditBalance ?? this.currentCreditBalance,
       creditStatus: creditStatus ?? this.creditStatus,
       creditNote: creditNote ?? this.creditNote,
+      customerCategoryId: customerCategoryId ?? this.customerCategoryId,
+      pricingSchemeId: pricingSchemeId ?? this.pricingSchemeId,
       pricingEnabled: pricingEnabled ?? this.pricingEnabled,
       defaultPriceType: defaultPriceType ?? this.defaultPriceType,
       defaultDiscountPercent:
@@ -214,6 +227,8 @@ class Customer {
       'current_credit_balance': currentCreditBalance,
       'credit_status': normalizedCreditStatus,
       'credit_note': creditNote,
+      'customer_category_id': customerCategoryId,
+      'pricing_scheme_id': pricingSchemeId,
       'pricing_enabled': pricingEnabled ? 1 : 0,
       'default_price_type': defaultPriceType.dbValue,
       'default_discount_percent': normalizedDefaultDiscountPercent,
@@ -272,6 +287,8 @@ class Customer {
       currentCreditBalance: readDouble(map['current_credit_balance']),
       creditStatus: (map['credit_status'] ?? 'normal').toString(),
       creditNote: readNullableString(map['credit_note']),
+      customerCategoryId: readNullableInt(map['customer_category_id']),
+      pricingSchemeId: readNullableInt(map['pricing_scheme_id']),
       pricingEnabled: readBool(map['pricing_enabled'], fallback: false),
       defaultPriceType: ProductPriceTypeX.fromDb(
         map['default_price_type']?.toString(),

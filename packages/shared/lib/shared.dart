@@ -1,10 +1,13 @@
 // packages/shared/lib/shared.dart
 export 'models/customer.dart';
+export 'models/customer_category.dart';
 export 'models/customer_credit_summary.dart';
 export 'models/customer_ledger_entry.dart';
 export 'models/customer_payment.dart';
 export 'models/customer_pricing_result.dart';
 export 'models/customer_product_price.dart';
+export 'models/pricing_scheme.dart';
+export 'models/pricing_scheme_rule.dart';
 export 'models/product.dart';
 export 'models/sync_queue.dart';
 export 'models/user.dart';

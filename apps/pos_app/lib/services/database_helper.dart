@@ -43,7 +43,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 25,
+        version: 26,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -566,6 +566,7 @@ class DatabaseHelper {
 
     await _createCustomersTable(db);
     await _ensureCustomerPricingSchema(db);
+    await _ensurePricingSchemesSchema(db);
 
     await _createUserTables(db);
 
@@ -1298,6 +1299,11 @@ class DatabaseHelper {
       await _ensureCustomerPricingSchema(db);
       await _ensureHeldCartCustomerSchema(db);
     }
+
+    if (oldVersion < 26) {
+      await _createCustomersTable(db);
+      await _ensurePricingSchemesSchema(db);
+    }
   }
 
   Future<void> _createCustomersTable(Database db) async {
@@ -1318,6 +1324,8 @@ class DatabaseHelper {
         current_credit_balance REAL NOT NULL DEFAULT 0,
         credit_status TEXT NOT NULL DEFAULT 'normal',
         credit_note TEXT,
+        customer_category_id INTEGER,
+        pricing_scheme_id INTEGER,
         pricing_enabled INTEGER NOT NULL DEFAULT 0,
         default_price_type TEXT NOT NULL DEFAULT 'selling',
         default_discount_percent REAL NOT NULL DEFAULT 0,
@@ -1341,6 +1349,121 @@ class DatabaseHelper {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_customers_active ON customers(is_active)',
     );
+  }
+
+  Future<void> _ensurePricingSchemesSchema(Database db) async {
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'customer_category_id',
+      'INTEGER',
+    );
+    await _addColumnIfMissing(db, 'customers', 'pricing_scheme_id', 'INTEGER');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS customer_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        default_pricing_scheme_id INTEGER,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS pricing_schemes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        priority INTEGER NOT NULL DEFAULT 100,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by INTEGER,
+        updated_by INTEGER
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS pricing_scheme_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scheme_id INTEGER NOT NULL,
+        apply_to TEXT NOT NULL,
+        category TEXT,
+        barcode TEXT,
+        product_name_snapshot TEXT,
+        rule_type TEXT NOT NULL,
+        price_type TEXT,
+        discount_percent REAL NOT NULL DEFAULT 0,
+        fixed_price REAL,
+        priority INTEGER NOT NULL DEFAULT 100,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by INTEGER,
+        updated_by INTEGER,
+        FOREIGN KEY (scheme_id) REFERENCES pricing_schemes(id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_categories_name
+      ON customer_categories(name)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_categories_active
+      ON customer_categories(is_active)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_schemes_name
+      ON pricing_schemes(name)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_schemes_active
+      ON pricing_schemes(is_active)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_scheme
+      ON pricing_scheme_rules(scheme_id)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_active
+      ON pricing_scheme_rules(is_active)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_target
+      ON pricing_scheme_rules(apply_to, category, barcode)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_priority
+      ON pricing_scheme_rules(scheme_id, priority, updated_at)
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_category ON customers(customer_category_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_pricing_scheme ON customers(pricing_scheme_id)',
+    );
+
+    await _seedDefaultCustomerCategories(db);
+  }
+
+  Future<void> _seedDefaultCustomerCategories(Database db) async {
+    final now = DateTime.now().toIso8601String();
+    const names = ['Regular', 'VIP', 'Wholesale', 'Staff'];
+    for (final name in names) {
+      await db.insert('customer_categories', {
+        'name': name,
+        'description': null,
+        'default_pricing_scheme_id': null,
+        'is_active': 1,
+        'created_at': now,
+        'updated_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
   }
 
   Future<void> _ensureCustomerPricingSchema(Database db) async {
@@ -1510,6 +1633,8 @@ class DatabaseHelper {
     final normalized = (value ?? '').trim().toLowerCase();
     switch (normalized) {
       case 'customer_product_price':
+      case 'customer_direct_scheme':
+      case 'customer_category_scheme':
       case 'customer_default_price_type':
       case 'customer_default_discount':
         return normalized;

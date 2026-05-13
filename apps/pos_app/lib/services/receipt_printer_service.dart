@@ -10,10 +10,7 @@ class ReceiptPrintResponse {
   final bool isSuccess;
   final String message;
 
-  const ReceiptPrintResponse({
-    required this.isSuccess,
-    required this.message,
-  });
+  const ReceiptPrintResponse({required this.isSuccess, required this.message});
 }
 
 class ReceiptPrinterService {
@@ -26,15 +23,17 @@ class ReceiptPrinterService {
 
   String? _printerName;
 
-  bool get isConnected => _printerName != null && _printerName!.trim().isNotEmpty;
+  bool get isConnected =>
+      _printerName != null && _printerName!.trim().isNotEmpty;
   String? get connectedPrinterName => _printerName;
 
   String _formatQuantity(num value, {int maxDecimals = 3}) {
-    final safeValue = value.toDouble().abs() < 0.000001 ? 0.0 : value.toDouble();
-    return safeValue.toStringAsFixed(maxDecimals).replaceFirst(
-      RegExp(r'\.?0+$'),
-      '',
-    );
+    final safeValue = value.toDouble().abs() < 0.000001
+        ? 0.0
+        : value.toDouble();
+    return safeValue
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   Future<List<String>> getInstalledPrinters() async {
@@ -173,7 +172,8 @@ class ReceiptPrinterService {
     if (!Platform.isWindows) {
       return const ReceiptPrintResponse(
         isSuccess: false,
-        message: 'Receipt printing is only configured for Windows in this build.',
+        message:
+            'Receipt printing is only configured for Windows in this build.',
       );
     }
 
@@ -193,7 +193,8 @@ class ReceiptPrinterService {
       final customerCodeText = (customerCode ?? '').trim();
       final hasCustomer = customerNameText.isNotEmpty;
       final paymentMethodLower = paymentMethod.toLowerCase();
-      final isCustomerCredit = isCreditSale ||
+      final isCustomerCredit =
+          isCreditSale ||
           paymentMethodLower == 'customer_credit' ||
           paymentMethodLower == 'customer_credit_refund';
 
@@ -238,7 +239,9 @@ class ReceiptPrinterService {
       if (hasCustomer) {
         bytes.addAll(_text('${_labelValue('Customer', customerNameText)}\n'));
         if (customerCodeText.isNotEmpty) {
-          bytes.addAll(_text('${_labelValue('Cus. Code', customerCodeText)}\n'));
+          bytes.addAll(
+            _text('${_labelValue('Cus. Code', customerCodeText)}\n'),
+          );
         }
         if (customerPhoneText.isNotEmpty) {
           bytes.addAll(_text('${_labelValue('Phone', customerPhoneText)}\n'));
@@ -252,15 +255,19 @@ class ReceiptPrinterService {
         final name = (item['name'] ?? 'Item').toString().trim();
         final qty = ((item['qty'] as num?) ?? 0).toDouble();
         final unitPrice = ((item['unitPrice'] as num?) ?? 0).toDouble();
-        final markedPrice = ((item['markedPrice'] as num?) ?? unitPrice).toDouble();
+        final markedPrice = ((item['markedPrice'] as num?) ?? unitPrice)
+            .toDouble();
         final baseLineTotal =
             ((item['baseLineTotal'] as num?) ?? (unitPrice * qty)).toDouble();
-        final itemDiscountAmount =
-            ((item['itemDiscountAmount'] as num?) ?? 0).toDouble();
-        final itemDiscountType =
-            (item['itemDiscountType'] ?? 'none').toString();
-        final itemDiscountValue =
-            ((item['itemDiscountValue'] as num?) ?? 0).toDouble();
+        final itemDiscountAmount = ((item['itemDiscountAmount'] as num?) ?? 0)
+            .toDouble();
+        final itemDiscountType = (item['itemDiscountType'] ?? 'none')
+            .toString();
+        final itemDiscountValue = ((item['itemDiscountValue'] as num?) ?? 0)
+            .toDouble();
+        final customerPricingDetail = (item['customerPricingDetail'] ?? '')
+            .toString()
+            .trim();
         final lineTotal = ((item['lineTotal'] as num?) ?? 0).toDouble();
 
         for (final line in _wrapText(name, 28)) {
@@ -279,19 +286,24 @@ class ReceiptPrinterService {
         }
         bytes.addAll(
           _text(
-            '${_itemValueRow(
-              unitPrice: unitPriceText,
-              markedPrice: 'Rs.${markedPrice.toStringAsFixed(2)}',
-              quantity: _formatQuantity(qty),
-              total: 'Rs.${lineTotal.toStringAsFixed(2)}',
-            )}\n\n',
+            '${_itemValueRow(unitPrice: unitPriceText, markedPrice: 'Rs.${markedPrice.toStringAsFixed(2)}', quantity: _formatQuantity(qty), total: 'Rs.${lineTotal.toStringAsFixed(2)}')}\n\n',
           ),
         );
+        if (customerPricingDetail.isNotEmpty) {
+          for (final line in _wrapText(customerPricingDetail, _lineWidth - 2)) {
+            bytes.addAll(_text(' $line\n'));
+          }
+          bytes.addAll(_feed(1));
+        }
       }
 
       if (shouldShowSubtotal) {
         bytes.addAll(_text('${_line('-')}\n'));
-        bytes.addAll(_text('${_labelValue('Subtotal', 'Rs.${subtotal.toStringAsFixed(2)}')}\n'));
+        bytes.addAll(
+          _text(
+            '${_labelValue('Subtotal', 'Rs.${subtotal.toStringAsFixed(2)}')}\n',
+          ),
+        );
       }
 
       if (discountAmount > 0) {
@@ -302,7 +314,9 @@ class ReceiptPrinterService {
           discountValue: discountValue,
         );
         bytes.addAll(
-          _text('${_labelValue('Discount ($percent%)', '- Rs.${discountAmount.toStringAsFixed(2)}')}\n'),
+          _text(
+            '${_labelValue('Discount ($percent%)', '- Rs.${discountAmount.toStringAsFixed(2)}')}\n',
+          ),
         );
       }
 
@@ -327,34 +341,48 @@ class ReceiptPrinterService {
       if (isCustomerCredit) {
         if (creditPreviousBalance != null) {
           bytes.addAll(
-            _text('${_labelValue('Prev. Balance', 'Rs.${creditPreviousBalance.toStringAsFixed(2)}')}\n'),
+            _text(
+              '${_labelValue('Prev. Balance', 'Rs.${creditPreviousBalance.toStringAsFixed(2)}')}\n',
+            ),
           );
         }
         bytes.addAll(
-          _text('${_labelValue(isRefund ? 'This Refund' : 'This Bill', 'Rs.${(creditBillAmount ?? total).toStringAsFixed(2)}')}\n'),
+          _text(
+            '${_labelValue(isRefund ? 'This Refund' : 'This Bill', 'Rs.${(creditBillAmount ?? total).toStringAsFixed(2)}')}\n',
+          ),
         );
         if (creditNewBalance != null) {
           bytes.addAll(
-            _text('${_labelValue('New Balance', 'Rs.${creditNewBalance.toStringAsFixed(2)}')}\n'),
+            _text(
+              '${_labelValue('New Balance', 'Rs.${creditNewBalance.toStringAsFixed(2)}')}\n',
+            ),
           );
         }
         if (creditLimit != null && creditLimit > 0) {
           bytes.addAll(
-            _text('${_labelValue('Credit Limit', 'Rs.${creditLimit.toStringAsFixed(2)}')}\n'),
+            _text(
+              '${_labelValue('Credit Limit', 'Rs.${creditLimit.toStringAsFixed(2)}')}\n',
+            ),
           );
         }
         if ((creditApprovedBy ?? '').trim().isNotEmpty) {
-          bytes.addAll(_text('${_labelValue('Approved By', creditApprovedBy!.trim())}\n'));
+          bytes.addAll(
+            _text('${_labelValue('Approved By', creditApprovedBy!.trim())}\n'),
+          );
         }
       } else if (paymentMethod.toLowerCase() == 'cash') {
         if (amountTendered != null) {
           bytes.addAll(
-            _text('${_labelValue('Tendered', 'Rs.${amountTendered.toStringAsFixed(2)}')}\n'),
+            _text(
+              '${_labelValue('Tendered', 'Rs.${amountTendered.toStringAsFixed(2)}')}\n',
+            ),
           );
         }
         if (changeAmount != null) {
           bytes.addAll(
-            _text('${_labelValue('Change', 'Rs.${changeAmount.toStringAsFixed(2)}')}\n'),
+            _text(
+              '${_labelValue('Change', 'Rs.${changeAmount.toStringAsFixed(2)}')}\n',
+            ),
           );
         }
       } else if (paymentMethod.toLowerCase() == 'card') {
@@ -365,7 +393,9 @@ class ReceiptPrinterService {
           bytes.addAll(_text('${_labelValue('Last4', cardLast4!.trim())}\n'));
         }
         if ((approvalCode ?? '').trim().isNotEmpty) {
-          bytes.addAll(_text('${_labelValue('Approval', approvalCode!.trim())}\n'));
+          bytes.addAll(
+            _text('${_labelValue('Approval', approvalCode!.trim())}\n'),
+          );
         }
         if ((authCode ?? '').trim().isNotEmpty) {
           bytes.addAll(_text('${_labelValue('Auth', authCode!.trim())}\n'));
@@ -374,7 +404,9 @@ class ReceiptPrinterService {
 
       bytes.addAll(_feed(1));
       bytes.addAll(_alignCenter());
-      bytes.addAll(_text('${footerNote ?? 'Thank you for shopping with us!'}\n'));
+      bytes.addAll(
+        _text('${footerNote ?? 'Thank you for shopping with us!'}\n'),
+      );
       bytes.addAll(_feed(3));
       bytes.addAll(_cut());
 
@@ -396,10 +428,7 @@ class ReceiptPrinterService {
       );
     } catch (e) {
       debugPrint('[Printer] Print error: $e');
-      return ReceiptPrintResponse(
-        isSuccess: false,
-        message: 'Print error: $e',
-      );
+      return ReceiptPrintResponse(isSuccess: false, message: 'Print error: $e');
     }
   }
 
@@ -484,7 +513,10 @@ class ReceiptPrinterService {
   }
 
   List<String> _wrapText(String text, int maxWidth) {
-    final words = text.split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
+    final words = text
+        .split(RegExp(r'\s+'))
+        .where((e) => e.isNotEmpty)
+        .toList();
     if (words.isEmpty) return [''];
 
     final lines = <String>[];
@@ -502,7 +534,9 @@ class ReceiptPrinterService {
           current = word;
         } else {
           for (var i = 0; i < word.length; i += maxWidth) {
-            final end = (i + maxWidth < word.length) ? i + maxWidth : word.length;
+            final end = (i + maxWidth < word.length)
+                ? i + maxWidth
+                : word.length;
             final chunk = word.substring(i, end);
             if (chunk.length == maxWidth || end < word.length) {
               lines.add(chunk);

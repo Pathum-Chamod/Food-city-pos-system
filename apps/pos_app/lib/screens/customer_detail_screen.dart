@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:shared/models/customer_category.dart';
 import 'package:shared/models/customer.dart';
 import 'package:shared/models/customer_credit_summary.dart';
+import 'package:shared/models/pricing_scheme.dart';
 import 'package:shared/models/product.dart';
 
 import '../services/customer_credit_service.dart';
 import '../services/customer_pricing_service.dart';
 import '../services/customer_service.dart';
+import '../services/pricing_scheme_service.dart';
 import '../widgets/app_snackbar.dart';
+import 'customer_category_assignment_dialog.dart';
 import 'customer_credit_settings_dialog.dart';
 import 'customer_form_dialog.dart';
 import 'customer_ledger_screen.dart';
@@ -29,6 +33,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   CustomerCreditSummary? _creditSummary;
   Map<String, dynamic> _summary = {};
   List<Map<String, dynamic>> _history = [];
+  List<CustomerCategory> _categories = [];
+  List<PricingScheme> _schemes = [];
   int _activeProductPriceCount = 0;
   bool _isLoading = true;
 
@@ -73,6 +79,11 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           .getCreditSummary(widget.customerId);
       final activeProductPriceCount = await CustomerPricingService.instance
           .countProductPricesForCustomer(widget.customerId);
+      final categories = await PricingSchemeService.instance
+          .getCustomerCategories(activeOnly: false);
+      final schemes = await PricingSchemeService.instance.getPricingSchemes(
+        activeOnly: false,
+      );
 
       if (!mounted) return;
       setState(() {
@@ -80,6 +91,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         _summary = summary;
         _history = history;
         _creditSummary = creditSummary;
+        _categories = categories;
+        _schemes = schemes;
         _activeProductPriceCount = activeProductPriceCount;
         _isLoading = false;
       });
@@ -90,6 +103,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         _summary = {};
         _history = [];
         _creditSummary = null;
+        _categories = [];
+        _schemes = [];
         _activeProductPriceCount = 0;
         _isLoading = false;
       });
@@ -158,6 +173,36 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
 
     if (!mounted) return;
     await _loadCustomer();
+  }
+
+  Future<void> _openCategoryAssignment() async {
+    final customer = _customer;
+    if (customer == null || customer.id == null) return;
+
+    final result = await showCustomerCategoryAssignmentDialog(
+      context: context,
+      customer: customer,
+      categories: _categories,
+      schemes: _schemes,
+    );
+
+    if (!mounted || result == null) return;
+
+    try {
+      final service = PricingSchemeService.instance;
+      await service.assignCustomerCategory(
+        customerId: customer.id!,
+        customerCategoryId: result.customerCategoryId,
+      );
+      await service.assignCustomerPricingScheme(
+        customerId: customer.id!,
+        pricingSchemeId: result.pricingSchemeId,
+      );
+      _showMessage('Customer category assignment updated.', color: _success);
+      await _loadCustomer();
+    } catch (e) {
+      _showMessage('Could not update category assignment.', color: _danger);
+    }
   }
 
   Future<void> _openCustomerLedger() async {
@@ -828,6 +873,133 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     );
   }
 
+  Widget _categorySchemeCard(Customer customer) {
+    final category = _categoryFor(customer.customerCategoryId);
+    final directScheme = _schemeFor(customer.pricingSchemeId);
+    final inheritedScheme = _schemeFor(category?.defaultPricingSchemeId);
+    final activeScheme = directScheme ?? inheritedScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: _blue.withValues(alpha: _isDark ? 0.16 : 0.10),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: _blue.withValues(alpha: 0.24)),
+                ),
+                child: const Icon(
+                  Icons.account_tree_rounded,
+                  color: _blue,
+                  size: 27,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Category & Scheme',
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      activeScheme == null
+                          ? 'No pricing scheme is assigned yet.'
+                          : directScheme == null
+                          ? 'Using category default scheme.'
+                          : 'Using direct customer scheme.',
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: _openCategoryAssignment,
+                icon: const Icon(Icons.tune_rounded),
+                label: const Text('Edit Assignment'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _pricingMiniMetric(
+                label: 'Category',
+                value: _categoryDisplayName(category),
+                icon: Icons.groups_2_rounded,
+                color: _brand,
+              ),
+              const SizedBox(width: 10),
+              _pricingMiniMetric(
+                label: 'Inherited Scheme',
+                value: _schemeDisplayName(inheritedScheme),
+                icon: Icons.call_merge_rounded,
+                color: _warning,
+              ),
+              const SizedBox(width: 10),
+              _pricingMiniMetric(
+                label: 'Direct Scheme',
+                value: _schemeDisplayName(directScheme),
+                icon: Icons.sell_rounded,
+                color: _blue,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  CustomerCategory? _categoryFor(int? id) {
+    if (id == null || id <= 0) return null;
+    for (final category in _categories) {
+      if (category.id == id) return category;
+    }
+    return null;
+  }
+
+  PricingScheme? _schemeFor(int? id) {
+    if (id == null || id <= 0) return null;
+    for (final scheme in _schemes) {
+      if (scheme.id == id) return scheme;
+    }
+    return null;
+  }
+
+  String _categoryDisplayName(CustomerCategory? category) {
+    if (category == null) return 'None';
+    return category.isActive
+        ? category.displayName
+        : '${category.displayName} (inactive)';
+  }
+
+  String _schemeDisplayName(PricingScheme? scheme) {
+    if (scheme == null) return 'None';
+    return scheme.isActive
+        ? scheme.displayName
+        : '${scheme.displayName} (inactive)';
+  }
+
   Widget _pricingMiniMetric({
     required String label,
     required String value,
@@ -1008,6 +1180,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     _profileCard(customer),
                     const SizedBox(height: 16),
                     _creditAccountCard(customer),
+                    const SizedBox(height: 16),
+                    _categorySchemeCard(customer),
                     const SizedBox(height: 16),
                     _pricingDiscountsCard(customer),
                     const SizedBox(height: 16),

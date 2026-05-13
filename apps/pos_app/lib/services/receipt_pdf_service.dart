@@ -26,14 +26,16 @@ class ReceiptPdfService {
   );
 
   String _formatQuantity(num value, {int maxDecimals = 3}) {
-    final safeValue = value.toDouble().abs() < 0.000001 ? 0.0 : value.toDouble();
-    return safeValue.toStringAsFixed(maxDecimals).replaceFirst(
-      RegExp(r'\.?0+$'),
-      '',
-    );
+    final safeValue = value.toDouble().abs() < 0.000001
+        ? 0.0
+        : value.toDouble();
+    return safeValue
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
-  String _formatMoney(num value) => 'Rs. ${value.toDouble().toStringAsFixed(2)}';
+  String _formatMoney(num value) =>
+      'Rs. ${value.toDouble().toStringAsFixed(2)}';
 
   String _formatPercent(num value) {
     final number = value.toDouble();
@@ -99,11 +101,13 @@ class ReceiptPdfService {
       final cleanCustomerName = (customerName ?? '').trim();
       final cleanCustomerPhone = (customerPhone ?? '').trim();
       final cleanCustomerCode = (customerCode ?? '').trim();
-      final hasCustomer = cleanCustomerName.isNotEmpty ||
+      final hasCustomer =
+          cleanCustomerName.isNotEmpty ||
           cleanCustomerPhone.isNotEmpty ||
           cleanCustomerCode.isNotEmpty;
       final paymentMethodLower = paymentMethod.toLowerCase();
-      final isCustomerCredit = isCreditSale ||
+      final isCustomerCredit =
+          isCreditSale ||
           paymentMethodLower == 'customer_credit' ||
           paymentMethodLower == 'customer_credit_refund';
 
@@ -168,8 +172,8 @@ class ReceiptPdfService {
                 ...items.expand((item) {
                   final name = (item['name'] ?? 'Item').toString();
                   final qty = ((item['qty'] as num?) ?? 0).toDouble();
-                  final unitPrice =
-                      ((item['unitPrice'] as num?) ?? 0).toDouble();
+                  final unitPrice = ((item['unitPrice'] as num?) ?? 0)
+                      .toDouble();
                   final markedPrice =
                       ((item['markedPrice'] as num?) ?? unitPrice).toDouble();
                   final baseLineTotal =
@@ -177,12 +181,14 @@ class ReceiptPdfService {
                           .toDouble();
                   final itemDiscountAmount =
                       ((item['itemDiscountAmount'] as num?) ?? 0).toDouble();
-                  final itemDiscountType =
-                      (item['itemDiscountType'] ?? 'none').toString();
+                  final itemDiscountType = (item['itemDiscountType'] ?? 'none')
+                      .toString();
                   final itemDiscountValue =
                       ((item['itemDiscountValue'] as num?) ?? 0).toDouble();
-                  final lineTotal =
-                      ((item['lineTotal'] as num?) ?? 0).toDouble();
+                  final customerPricingDetail =
+                      (item['customerPricingDetail'] ?? '').toString().trim();
+                  final lineTotal = ((item['lineTotal'] as num?) ?? 0)
+                      .toDouble();
                   final itemDiscountPercent = _discountPercentLabel(
                     discountAmount: itemDiscountAmount,
                     baseAmount: baseLineTotal,
@@ -203,6 +209,14 @@ class ReceiptPdfService {
                       quantity: _formatQuantity(qty),
                       total: _formatMoney(lineTotal),
                     ),
+                    if (customerPricingDetail.isNotEmpty) ...[
+                      pw.SizedBox(height: 2),
+                      _receiptText(
+                        customerPricingDetail,
+                        fontSize: 6.4,
+                        color: PdfColors.grey700,
+                      ),
+                    ],
                     pw.SizedBox(height: 3),
                   ];
                 }),
@@ -212,12 +226,7 @@ class ReceiptPdfService {
                 ],
                 if (discountAmount > 0)
                   _receiptLabelValue(
-                    'Discount (${_discountPercentLabel(
-                      discountAmount: discountAmount,
-                      baseAmount: subtotal,
-                      discountType: discountType,
-                      discountValue: discountValue,
-                    )}%)',
+                    'Discount (${_discountPercentLabel(discountAmount: discountAmount, baseAmount: subtotal, discountType: discountType, discountValue: discountValue)}%)',
                     '- ${_formatMoney(discountAmount)}',
                     valueColor: PdfColors.red700,
                   ),
@@ -232,7 +241,9 @@ class ReceiptPdfService {
                 _receiptLabelValue(
                   'Paid by',
                   isCustomerCredit
-                      ? (isRefund ? 'CUSTOMER CREDIT REFUND' : 'CUSTOMER CREDIT')
+                      ? (isRefund
+                            ? 'CUSTOMER CREDIT REFUND'
+                            : 'CUSTOMER CREDIT')
                       : paymentMethod.toUpperCase(),
                 ),
                 if (isCustomerCredit) ...[

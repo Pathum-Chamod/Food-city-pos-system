@@ -273,6 +273,10 @@ def create_customer_tables(cursor):
     ensure_column(cursor, "customers", "default_price_type", "default_price_type TEXT NOT NULL DEFAULT 'selling'")
     ensure_column(cursor, "customers", "default_discount_percent", "default_discount_percent REAL NOT NULL DEFAULT 0")
     ensure_column(cursor, "customers", "pricing_note", "pricing_note TEXT")
+    ensure_column(cursor, "customers", "customer_category_id", "customer_category_id INTEGER")
+    ensure_column(cursor, "customers", "pricing_scheme_id", "pricing_scheme_id INTEGER")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_category ON customers(customer_category_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_pricing_scheme ON customers(pricing_scheme_id)")
 
 
 def create_customer_product_prices_table(cursor):
@@ -298,6 +302,80 @@ def create_customer_product_prices_table(cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_product_prices_customer ON customer_product_prices(customer_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_product_prices_barcode ON customer_product_prices(barcode)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_product_prices_active ON customer_product_prices(is_active)")
+
+
+def create_pricing_schemes_tables(cursor):
+    create_customer_tables(cursor)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customer_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            default_pricing_scheme_id INTEGER,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pricing_schemes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            priority INTEGER NOT NULL DEFAULT 100,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by INTEGER,
+            updated_by INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pricing_scheme_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scheme_id INTEGER NOT NULL,
+            apply_to TEXT NOT NULL,
+            category TEXT,
+            barcode TEXT,
+            product_name_snapshot TEXT,
+            rule_type TEXT NOT NULL,
+            price_type TEXT,
+            discount_percent REAL NOT NULL DEFAULT 0,
+            fixed_price REAL,
+            priority INTEGER NOT NULL DEFAULT 100,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by INTEGER,
+            updated_by INTEGER
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_categories_name ON customer_categories(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_categories_active ON customer_categories(is_active)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_schemes_name ON pricing_schemes(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_schemes_active ON pricing_schemes(is_active)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_scheme ON pricing_scheme_rules(scheme_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_active ON pricing_scheme_rules(is_active)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_target ON pricing_scheme_rules(apply_to, category, barcode)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_priority ON pricing_scheme_rules(scheme_id, priority, updated_at)")
+
+    now = datetime.now().astimezone().isoformat()
+    for name in ("Regular", "VIP", "Wholesale", "Staff"):
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO customer_categories (
+                name, description, default_pricing_scheme_id, is_active, created_at, updated_at
+            ) VALUES (?, NULL, NULL, 1, ?, ?)
+            """,
+            (name, now, now),
+        )
 
 
 def create_sale_items_table(cursor):
@@ -426,6 +504,8 @@ def fetch_customers(cursor, params):
             COALESCE(default_price_type, 'selling') AS default_price_type,
             COALESCE(default_discount_percent, 0) AS default_discount_percent,
             pricing_note,
+            customer_category_id,
+            pricing_scheme_id,
             created_at,
             updated_at,
             created_by,
@@ -459,6 +539,8 @@ def get_customer_by_id(cursor, customer_id):
             COALESCE(default_price_type, 'selling') AS default_price_type,
             COALESCE(default_discount_percent, 0) AS default_discount_percent,
             pricing_note,
+            customer_category_id,
+            pricing_scheme_id,
             created_at,
             updated_at,
             created_by,
@@ -520,12 +602,14 @@ def create_customer(cursor, body):
             default_price_type,
             default_discount_percent,
             pricing_note,
+            customer_category_id,
+            pricing_scheme_id,
             created_at,
             updated_at,
             created_by,
             updated_by
         )
-        VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             name,
@@ -539,6 +623,8 @@ def create_customer(cursor, body):
             normalize_price_type(body.get("default_price_type")),
             max(0.0, min(parse_float(body.get("default_discount_percent"), 0.0), 100.0)),
             clean_optional_text(body.get("pricing_note")),
+            parse_int(body.get("customer_category_id"), 0) or None,
+            parse_int(body.get("pricing_scheme_id"), 0) or None,
             now,
             now,
             parse_int(body.get("created_by"), 0) or None,
@@ -593,6 +679,8 @@ def update_customer(cursor, body):
             default_price_type = ?,
             default_discount_percent = ?,
             pricing_note = ?,
+            customer_category_id = ?,
+            pricing_scheme_id = ?,
             updated_at = ?,
             updated_by = ?
         WHERE id = ?
@@ -622,6 +710,8 @@ def update_customer(cursor, body):
                 ),
             ),
             clean_optional_text(body.get("pricing_note", existing.get("pricing_note"))),
+            parse_int(body.get("customer_category_id", existing.get("customer_category_id")), 0) or None,
+            parse_int(body.get("pricing_scheme_id", existing.get("pricing_scheme_id")), 0) or None,
             now,
             parse_int(body.get("updated_by"), 0) or None,
             customer_id,
@@ -765,6 +855,8 @@ def upsert_customer_from_sync(cursor, data):
         min(parse_float(data.get("default_discount_percent"), 0.0), 100.0),
     )
     pricing_note = clean_optional_text(data.get("pricing_note"))
+    customer_category_id = parse_int(data.get("customer_category_id"), 0) or None
+    pricing_scheme_id = parse_int(data.get("pricing_scheme_id"), 0) or None
 
     if existing:
         resolved_id = parse_int(existing["id"], 0)
@@ -789,6 +881,8 @@ def upsert_customer_from_sync(cursor, data):
                 default_price_type = COALESCE(?, default_price_type),
                 default_discount_percent = CASE WHEN ? IS NULL THEN default_discount_percent ELSE ? END,
                 pricing_note = COALESCE(?, pricing_note),
+                customer_category_id = CASE WHEN ? IS NULL THEN customer_category_id ELSE ? END,
+                pricing_scheme_id = CASE WHEN ? IS NULL THEN pricing_scheme_id ELSE ? END,
                 updated_at = ?
             WHERE id = ?
             """,
@@ -811,6 +905,8 @@ def upsert_customer_from_sync(cursor, data):
                 default_price_type or "selling",
                 data.get("default_discount_percent"), default_discount_percent,
                 pricing_note,
+                data.get("customer_category_id"), customer_category_id,
+                data.get("pricing_scheme_id"), pricing_scheme_id,
                 now,
                 resolved_id,
             ),
@@ -830,8 +926,9 @@ def upsert_customer_from_sync(cursor, data):
                 customer_type, notes, is_active, credit_enabled, credit_limit,
                 current_credit_balance, credit_status, credit_note,
                 pricing_enabled, default_price_type, default_discount_percent, pricing_note,
+                customer_category_id, pricing_scheme_id,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 customer_id,
@@ -853,6 +950,8 @@ def upsert_customer_from_sync(cursor, data):
                 default_price_type,
                 default_discount_percent,
                 pricing_note,
+                customer_category_id,
+                pricing_scheme_id,
                 now,
                 now,
             ),
@@ -866,8 +965,9 @@ def upsert_customer_from_sync(cursor, data):
             customer_type, notes, is_active, credit_enabled, credit_limit,
             current_credit_balance, credit_status, credit_note,
             pricing_enabled, default_price_type, default_discount_percent, pricing_note,
+            customer_category_id, pricing_scheme_id,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             customer_code,
@@ -888,6 +988,8 @@ def upsert_customer_from_sync(cursor, data):
             default_price_type or "selling",
             default_discount_percent,
             pricing_note,
+            customer_category_id,
+            pricing_scheme_id,
             now,
             now,
         ),
@@ -1025,6 +1127,8 @@ def handle_customer_pricing_settings_sync(cursor, data):
             default_price_type = ?,
             default_discount_percent = ?,
             pricing_note = ?,
+            customer_category_id = CASE WHEN ? THEN ? ELSE customer_category_id END,
+            pricing_scheme_id = CASE WHEN ? THEN ? ELSE pricing_scheme_id END,
             updated_at = ?
         WHERE id = ?
         """,
@@ -1033,6 +1137,10 @@ def handle_customer_pricing_settings_sync(cursor, data):
             normalize_price_type(data.get("default_price_type")),
             max(0.0, min(parse_float(data.get("default_discount_percent"), 0.0), 100.0)),
             clean_optional_text(data.get("pricing_note")),
+            1 if "customer_category_id" in data else 0,
+            parse_int(data.get("customer_category_id"), 0) or None,
+            1 if "pricing_scheme_id" in data else 0,
+            parse_int(data.get("pricing_scheme_id"), 0) or None,
             datetime.now().astimezone().isoformat(),
             customer_id,
         ),
@@ -1147,6 +1255,287 @@ def handle_customer_product_price_sync(cursor, data):
         ),
     )
     return cursor.lastrowid
+
+
+def normalize_rule_apply_to(value):
+    normalized = str(value or "all").strip().lower()
+    if normalized in {"category", "product"}:
+        return normalized
+    return "all"
+
+
+def normalize_scheme_rule_type(value):
+    normalized = str(value or "price_type").strip().lower()
+    if normalized in {"percent_discount", "fixed_price", "no_discount"}:
+        return normalized
+    return "price_type"
+
+
+def handle_customer_category_sync(cursor, data):
+    create_pricing_schemes_tables(cursor)
+    category_id = parse_int(data.get("customer_category_id") or data.get("id"), 0)
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Customer category name is required")
+
+    now = datetime.now().astimezone().isoformat()
+    created_at = str(data.get("created_at") or now)
+    updated_at = str(data.get("updated_at") or now)
+    default_scheme_id = parse_int(data.get("default_pricing_scheme_id"), 0) or None
+    is_active = 1 if normalize_bool(data.get("is_active"), True) else 0
+
+    existing = None
+    if category_id > 0:
+        existing = cursor.execute(
+            "SELECT id FROM customer_categories WHERE id = ? LIMIT 1",
+            (category_id,),
+        ).fetchone()
+    if existing is None:
+        existing = cursor.execute(
+            "SELECT id FROM customer_categories WHERE LOWER(name) = LOWER(?) LIMIT 1",
+            (name,),
+        ).fetchone()
+
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE customer_categories
+            SET name = ?,
+                description = ?,
+                default_pricing_scheme_id = ?,
+                is_active = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                name,
+                clean_optional_text(data.get("description")),
+                default_scheme_id,
+                is_active,
+                updated_at,
+                resolved_id,
+            ),
+        )
+        return resolved_id
+
+    if category_id > 0:
+        cursor.execute(
+            """
+            INSERT INTO customer_categories (
+                id, name, description, default_pricing_scheme_id, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                category_id,
+                name,
+                clean_optional_text(data.get("description")),
+                default_scheme_id,
+                is_active,
+                created_at,
+                updated_at,
+            ),
+        )
+        return category_id
+
+    cursor.execute(
+        """
+        INSERT INTO customer_categories (
+            name, description, default_pricing_scheme_id, is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            name,
+            clean_optional_text(data.get("description")),
+            default_scheme_id,
+            is_active,
+            created_at,
+            updated_at,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def handle_pricing_scheme_sync(cursor, data):
+    create_pricing_schemes_tables(cursor)
+    scheme_id = parse_int(data.get("pricing_scheme_id") or data.get("id"), 0)
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Pricing scheme name is required")
+
+    now = datetime.now().astimezone().isoformat()
+    created_at = str(data.get("created_at") or now)
+    updated_at = str(data.get("updated_at") or now)
+    is_active = 1 if normalize_bool(data.get("is_active"), True) else 0
+    priority = parse_int(data.get("priority"), 100)
+
+    existing = None
+    if scheme_id > 0:
+        existing = cursor.execute(
+            "SELECT id FROM pricing_schemes WHERE id = ? LIMIT 1",
+            (scheme_id,),
+        ).fetchone()
+    if existing is None:
+        existing = cursor.execute(
+            "SELECT id FROM pricing_schemes WHERE LOWER(name) = LOWER(?) LIMIT 1",
+            (name,),
+        ).fetchone()
+
+    values = (
+        name,
+        clean_optional_text(data.get("description")),
+        is_active,
+        priority,
+        updated_at,
+        parse_int(data.get("updated_by"), 0) or None,
+    )
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE pricing_schemes
+            SET name = ?,
+                description = ?,
+                is_active = ?,
+                priority = ?,
+                updated_at = ?,
+                updated_by = ?
+            WHERE id = ?
+            """,
+            (*values, resolved_id),
+        )
+        return resolved_id
+
+    insert_values = (
+        scheme_id if scheme_id > 0 else None,
+        name,
+        clean_optional_text(data.get("description")),
+        is_active,
+        priority,
+        created_at,
+        updated_at,
+        parse_int(data.get("created_by"), 0) or None,
+        parse_int(data.get("updated_by"), 0) or None,
+    )
+    cursor.execute(
+        """
+        INSERT INTO pricing_schemes (
+            id, name, description, is_active, priority, created_at, updated_at, created_by, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        insert_values,
+    )
+    return scheme_id if scheme_id > 0 else cursor.lastrowid
+
+
+def handle_pricing_scheme_rule_sync(cursor, data):
+    create_pricing_schemes_tables(cursor)
+    rule_id = parse_int(data.get("pricing_scheme_rule_id") or data.get("id"), 0)
+    scheme_id = parse_int(data.get("scheme_id"), 0)
+    if scheme_id <= 0:
+        raise ValueError("Pricing scheme rule requires scheme_id")
+
+    now = datetime.now().astimezone().isoformat()
+    created_at = str(data.get("created_at") or now)
+    updated_at = str(data.get("updated_at") or now)
+    apply_to = normalize_rule_apply_to(data.get("apply_to"))
+    rule_type = normalize_scheme_rule_type(data.get("rule_type"))
+    price_type = normalize_price_type(data.get("price_type")) if data.get("price_type") else None
+    discount_percent = max(0.0, min(parse_float(data.get("discount_percent"), 0.0), 100.0))
+    fixed_price = data.get("fixed_price")
+    fixed_price = max(0.0, parse_float(fixed_price, 0.0)) if fixed_price is not None else None
+    is_active = 1 if normalize_bool(data.get("is_active"), True) else 0
+
+    existing = None
+    if rule_id > 0:
+        existing = cursor.execute(
+            "SELECT id FROM pricing_scheme_rules WHERE id = ? LIMIT 1",
+            (rule_id,),
+        ).fetchone()
+
+    row_values = (
+        scheme_id,
+        apply_to,
+        clean_optional_text(data.get("category")),
+        clean_optional_text(data.get("barcode")),
+        clean_optional_text(data.get("product_name_snapshot")),
+        rule_type,
+        price_type,
+        discount_percent,
+        fixed_price,
+        parse_int(data.get("priority"), 100),
+        is_active,
+        clean_optional_text(data.get("note")),
+        updated_at,
+        parse_int(data.get("updated_by"), 0) or None,
+    )
+
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE pricing_scheme_rules
+            SET scheme_id = ?,
+                apply_to = ?,
+                category = ?,
+                barcode = ?,
+                product_name_snapshot = ?,
+                rule_type = ?,
+                price_type = ?,
+                discount_percent = ?,
+                fixed_price = ?,
+                priority = ?,
+                is_active = ?,
+                note = ?,
+                updated_at = ?,
+                updated_by = ?
+            WHERE id = ?
+            """,
+            (*row_values, resolved_id),
+        )
+        return resolved_id
+
+    cursor.execute(
+        """
+        INSERT INTO pricing_scheme_rules (
+            id, scheme_id, apply_to, category, barcode, product_name_snapshot,
+            rule_type, price_type, discount_percent, fixed_price, priority,
+            is_active, note, created_at, updated_at, created_by, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            rule_id if rule_id > 0 else None,
+            *row_values[:12],
+            created_at,
+            updated_at,
+            parse_int(data.get("created_by"), 0) or None,
+            parse_int(data.get("updated_by"), 0) or None,
+        ),
+    )
+    return rule_id if rule_id > 0 else cursor.lastrowid
+
+
+def handle_customer_pricing_assignment_sync(cursor, data):
+    create_pricing_schemes_tables(cursor)
+    customer_id = upsert_customer_from_sync(cursor, data)
+    category_id = parse_int(data.get("customer_category_id"), 0) or None
+    scheme_id = parse_int(data.get("pricing_scheme_id"), 0) or None
+    cursor.execute(
+        """
+        UPDATE customers
+        SET customer_category_id = ?,
+            pricing_scheme_id = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            category_id,
+            scheme_id,
+            clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat(),
+            customer_id,
+        ),
+    )
+    return customer_id
 
 
 def handle_credit_sale_update_sync(cursor, data):
@@ -2389,6 +2778,8 @@ def insert_sale_item_snapshots(cursor, sale_id, items, created_at):
         if customer_pricing_type not in {
             "none",
             "customer_product_price",
+            "customer_direct_scheme",
+            "customer_category_scheme",
             "customer_default_price_type",
             "customer_default_discount",
         }:
@@ -3814,6 +4205,7 @@ def build_data_backup(cursor):
     seed_business_info_if_needed(cursor)
     create_user_tables(cursor)
     create_customer_product_prices_table(cursor)
+    create_pricing_schemes_tables(cursor)
     create_sale_items_table(cursor)
 
     def query_rows(sql, args=()):
@@ -3837,6 +4229,9 @@ def build_data_backup(cursor):
         'sales': query_rows('SELECT * FROM sales ORDER BY datetime(created_at) DESC, id DESC'),
         'sale_items': query_rows('SELECT * FROM sale_items ORDER BY sale_id DESC, id ASC'),
         'customer_product_prices': query_rows('SELECT * FROM customer_product_prices ORDER BY customer_id ASC, product_name_snapshot COLLATE NOCASE ASC'),
+        'customer_categories': query_rows('SELECT * FROM customer_categories ORDER BY is_active DESC, name COLLATE NOCASE ASC'),
+        'pricing_schemes': query_rows('SELECT * FROM pricing_schemes ORDER BY is_active DESC, priority ASC, name COLLATE NOCASE ASC'),
+        'pricing_scheme_rules': query_rows('SELECT * FROM pricing_scheme_rules ORDER BY scheme_id ASC, priority ASC, id ASC'),
         'customer_ledger': query_rows('SELECT * FROM customer_ledger ORDER BY datetime(created_at) DESC, id DESC'),
         'customer_payments': query_rows('SELECT * FROM customer_payments ORDER BY datetime(created_at) DESC, id DESC'),
         'owner_users': get_owner_users(cursor, {'search': [''], 'role': ['all'], 'status': ['all']}),
@@ -4186,6 +4581,7 @@ def init_db():
     ensure_customer_sales_columns(c)
     create_customer_credit_tables(c)
     create_customer_product_prices_table(c)
+    create_pricing_schemes_tables(c)
     create_sale_items_table(c)
 
     c.execute(
@@ -4561,6 +4957,47 @@ class APIHandler(BaseHTTPRequestHandler):
                 json.dumps({"status": "success", "product_prices": result}).encode()
             )
 
+        elif action == "get_customer_categories":
+            create_pricing_schemes_tables(c)
+            active_only = normalize_bool(params.get("active_only", ["0"])[0], False)
+            query = "SELECT * FROM customer_categories"
+            if active_only:
+                query += " WHERE COALESCE(is_active, 1) = 1"
+            query += " ORDER BY COALESCE(is_active, 1) DESC, name COLLATE NOCASE ASC"
+            result = [dict(row) for row in c.execute(query).fetchall()]
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "categories": result}).encode())
+
+        elif action == "get_pricing_schemes":
+            create_pricing_schemes_tables(c)
+            active_only = normalize_bool(params.get("active_only", ["0"])[0], False)
+            query = "SELECT * FROM pricing_schemes"
+            if active_only:
+                query += " WHERE COALESCE(is_active, 1) = 1"
+            query += " ORDER BY COALESCE(is_active, 1) DESC, priority ASC, name COLLATE NOCASE ASC"
+            result = [dict(row) for row in c.execute(query).fetchall()]
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "schemes": result}).encode())
+
+        elif action == "get_pricing_scheme_rules":
+            create_pricing_schemes_tables(c)
+            scheme_id = parse_int(params.get("scheme_id", ["0"])[0], 0)
+            active_only = normalize_bool(params.get("active_only", ["0"])[0], False)
+            query = "SELECT * FROM pricing_scheme_rules"
+            args = []
+            where = []
+            if scheme_id > 0:
+                where.append("scheme_id = ?")
+                args.append(scheme_id)
+            if active_only:
+                where.append("COALESCE(is_active, 1) = 1")
+            if where:
+                query += " WHERE " + " AND ".join(where)
+            query += " ORDER BY COALESCE(is_active, 1) DESC, priority ASC, updated_at DESC, id DESC"
+            result = [dict(row) for row in c.execute(query, args).fetchall()]
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "rules": result}).encode())
+
         elif action == "get_customer_summary":
             customer_id = params.get("customer_id", params.get("id", ["0"]))[0]
             summary = get_customer_summary(c, customer_id)
@@ -4914,6 +5351,34 @@ class APIHandler(BaseHTTPRequestHandler):
                 price_id = handle_customer_product_price_sync(c, data)
                 conn.commit()
                 print(f"  CUSTOMER_PRODUCT_PRICE synced: rule #{price_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"CUSTOMER_CATEGORY_UPSERT", "CUSTOMER_CATEGORY"}:
+                category_id = handle_customer_category_sync(c, data)
+                conn.commit()
+                print(f"  CUSTOMER_CATEGORY synced: category #{category_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"PRICING_SCHEME_UPSERT", "PRICING_SCHEME"}:
+                scheme_id = handle_pricing_scheme_sync(c, data)
+                conn.commit()
+                print(f"  PRICING_SCHEME synced: scheme #{scheme_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"PRICING_SCHEME_RULE_UPSERT", "PRICING_SCHEME_RULE"}:
+                rule_id = handle_pricing_scheme_rule_sync(c, data)
+                conn.commit()
+                print(f"  PRICING_SCHEME_RULE synced: rule #{rule_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CUSTOMER_PRICING_ASSIGNMENT":
+                customer_id = handle_customer_pricing_assignment_sync(c, data)
+                conn.commit()
+                print(f"  CUSTOMER_PRICING_ASSIGNMENT synced: customer #{customer_id}")
                 self._set_headers()
                 self.wfile.write(json.dumps({"status": "success"}).encode())
 
@@ -5394,6 +5859,30 @@ class APIHandler(BaseHTTPRequestHandler):
             conn.commit()
             self._set_headers()
             self.wfile.write(json.dumps({"status": "success", "id": price_id}).encode())
+
+        elif action == "upsert_customer_category":
+            category_id = handle_customer_category_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": category_id}).encode())
+
+        elif action == "upsert_pricing_scheme":
+            scheme_id = handle_pricing_scheme_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": scheme_id}).encode())
+
+        elif action == "upsert_pricing_scheme_rule":
+            rule_id = handle_pricing_scheme_rule_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": rule_id}).encode())
+
+        elif action == "update_customer_pricing_assignment":
+            customer_id = handle_customer_pricing_assignment_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
 
         elif action == "receive_customer_payment":
             payment_id = handle_customer_payment_sync(c, body)
