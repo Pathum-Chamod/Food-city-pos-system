@@ -73,7 +73,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
   final amountController = TextEditingController(
     text: totalAmount.toStringAsFixed(2),
   );
-  final loyaltyRedemptionController = TextEditingController(text: '0.00');
+  final loyaltyPointsController = TextEditingController();
 
   String selectedMethod = 'cash';
   double amountTendered = totalAmount;
@@ -153,22 +153,49 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
 
   double loyaltyRedeemedValue() {
     if (loyaltyPointsToRedeem <= 0) return 0.0;
-    final rawValue =
-        loyaltyPointsToRedeem * effectiveLoyaltySettings().safePointValueAmount;
+    final settings = effectiveLoyaltySettings();
+    final maxPoints = maxRedeemablePoints();
+    if (selectedMethod == 'customer_credit' ||
+        maxPoints <= 0 ||
+        loyaltyPointsToRedeem < settings.safeMinimumRedeemPoints ||
+        loyaltyPointsToRedeem > maxPoints) {
+      return 0.0;
+    }
+    final rawValue = loyaltyPointsToRedeem * settings.safePointValueAmount;
     return roundMoney(rawValue > totalAmount ? totalAmount : rawValue);
   }
 
-  void setLoyaltyRedemptionText(
-    double value, {
-    bool selectForReplacement = false,
-  }) {
-    loyaltyRedemptionController.text = value.toStringAsFixed(2);
+  void setLoyaltyPointsText(int value, {bool selectForReplacement = false}) {
+    loyaltyPointsController.text = value <= 0 ? '' : value.toString();
     if (selectForReplacement) {
-      loyaltyRedemptionController.selection = TextSelection(
+      loyaltyPointsController.selection = TextSelection(
         baseOffset: 0,
-        extentOffset: loyaltyRedemptionController.text.length,
+        extentOffset: loyaltyPointsController.text.length,
       );
     }
+  }
+
+  String? loyaltyRedemptionError({bool showMinimumError = true}) {
+    if (loyaltyPointsToRedeem <= 0) return null;
+    if (!canUseLoyalty()) {
+      return loyaltyUnavailableReason ?? 'Loyalty redemption is not available.';
+    }
+    if (selectedMethod == 'customer_credit') {
+      return 'Customer Credit cannot be combined with loyalty redemption in V1.';
+    }
+    final settings = effectiveLoyaltySettings();
+    final maxPoints = maxRedeemablePoints();
+    if (maxPoints <= 0) {
+      return 'This bill does not meet the minimum redemption rule.';
+    }
+    if (loyaltyPointsToRedeem < settings.safeMinimumRedeemPoints) {
+      if (!showMinimumError) return null;
+      return 'Minimum redemption is ${settings.safeMinimumRedeemPoints} points.';
+    }
+    if (loyaltyPointsToRedeem > maxPoints) {
+      return 'Maximum redemption for this bill is $maxPoints points.';
+    }
+    return null;
   }
 
   double payableTotal() {
@@ -176,21 +203,10 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
     return roundMoney(total < 0 ? 0.0 : total);
   }
 
-  void clampLoyaltyRedemption() {
-    final maxPoints = maxRedeemablePoints();
-    if (loyaltyPointsToRedeem < 0) loyaltyPointsToRedeem = 0;
-    if (loyaltyPointsToRedeem > maxPoints) {
-      loyaltyPointsToRedeem = maxPoints;
-    }
-  }
-
-  void applyLoyaltyRedeemAmount(String value, {bool normalizeText = false}) {
-    final pointValue = effectiveLoyaltySettings().safePointValueAmount;
-    final amount = double.tryParse(value.trim()) ?? 0;
-    loyaltyPointsToRedeem = pointValue <= 0 ? 0 : (amount / pointValue).floor();
-    clampLoyaltyRedemption();
+  void applyLoyaltyRedeemPoints(String value, {bool normalizeText = false}) {
+    loyaltyPointsToRedeem = int.tryParse(value.trim()) ?? 0;
     if (normalizeText) {
-      setLoyaltyRedemptionText(loyaltyRedeemedValue());
+      setLoyaltyPointsText(loyaltyPointsToRedeem);
     }
   }
 
@@ -308,11 +324,13 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
               required String label,
               String? prefixText,
               String? helperText,
+              String? errorText,
             }) {
               return InputDecoration(
                 labelText: label,
                 prefixText: prefixText,
                 helperText: helperText,
+                errorText: errorText,
                 filled: true,
                 fillColor: inputFill,
                 labelStyle: TextStyle(color: textSecondary),
@@ -353,7 +371,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                               selectedMethod = value;
                               if (value == 'customer_credit') {
                                 loyaltyPointsToRedeem = 0;
-                                setLoyaltyRedemptionText(0);
+                                setLoyaltyPointsText(0);
                               }
                               setAmountText(payableTotal().toStringAsFixed(2));
                             });
@@ -445,10 +463,15 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
 
             final due = payableTotal();
             final redeemedValue = loyaltyRedeemedValue();
+            final loyaltyError = loyaltyRedemptionError();
+            final visibleLoyaltyError = loyaltyRedemptionError(
+              showMinimumError: false,
+            );
             final canConfirm =
-                selectedMethod == 'card' ||
-                selectedMethod == 'customer_credit' ||
-                amountTendered >= due;
+                loyaltyError == null &&
+                (selectedMethod == 'card' ||
+                    selectedMethod == 'customer_credit' ||
+                    amountTendered >= due);
 
             Future<void> confirmPayment() async {
               if (!canConfirm || hasConfirmedPayment) return;
@@ -642,7 +665,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                             onPressed: () {
                               setState(() {
                                 loyaltyPointsToRedeem = 0;
-                                setLoyaltyRedemptionText(0);
+                                setLoyaltyPointsText(0);
                                 if (selectedMethod == 'cash') {
                                   setAmountText(
                                     payableTotal().toStringAsFixed(2),
@@ -661,30 +684,32 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                       children: [
                         Expanded(
                           child: TextField(
-                            controller: loyaltyRedemptionController,
+                            controller: loyaltyPointsController,
                             enabled:
                                 canRedeem &&
                                 selectedMethod != 'customer_credit',
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
+                            keyboardType: TextInputType.number,
                             inputFormatters: [
-                              FilteringTextInputFormatter.allow(
-                                RegExp(r'[0-9.]'),
-                              ),
+                              FilteringTextInputFormatter.digitsOnly,
                             ],
                             decoration: fieldDecoration(
-                              label: 'Redeem amount',
+                              label: 'Points to redeem',
                               helperText:
-                                  'Rs. ${settings.safePointValueAmount.toStringAsFixed(2)} per point. Max Rs. ${(maxPoints * settings.safePointValueAmount).toStringAsFixed(2)}.',
+                                  'Min ${settings.safeMinimumRedeemPoints} pts. Max $maxPoints pts for this bill.',
+                              errorText: visibleLoyaltyError,
                             ),
                             style: TextStyle(
                               color: textPrimary,
                               fontWeight: FontWeight.w800,
                             ),
+                            onTap: () {
+                              if (loyaltyPointsController.text == '0') {
+                                setLoyaltyPointsText(0);
+                              }
+                            },
                             onChanged: (value) {
                               setState(() {
-                                applyLoyaltyRedeemAmount(value);
+                                applyLoyaltyRedeemPoints(value);
                                 if (selectedMethod == 'cash') {
                                   setAmountText(
                                     payableTotal().toStringAsFixed(2),
@@ -704,9 +729,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                                 ? () {
                                     setState(() {
                                       loyaltyPointsToRedeem = maxPoints;
-                                      setLoyaltyRedemptionText(
-                                        loyaltyRedeemedValue(),
-                                      );
+                                      setLoyaltyPointsText(maxPoints);
                                       if (selectedMethod == 'cash') {
                                         setAmountText(
                                           payableTotal().toStringAsFixed(2),
@@ -1295,6 +1318,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
     return result;
   } finally {
     amountController.dispose();
-    loyaltyRedemptionController.dispose();
+    loyaltyPointsController.dispose();
   }
 }

@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared/models/customer_credit_summary.dart';
 import 'package:shared/models/customer_ledger_entry.dart';
 
+import '../providers/auth_provider.dart';
 import '../services/customer_credit_service.dart';
 import '../widgets/app_snackbar.dart';
 import 'customer_payment_dialog.dart';
+import 'customer_payment_receipt_dialog.dart';
 import 'customer_credit_adjustment_dialog.dart';
 
 class CustomerLedgerScreen extends StatefulWidget {
@@ -35,7 +38,8 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
   static const Color _danger = Color(0xFFFF6B7A);
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
-  Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _page =>
+      _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
   Color get _panel => _isDark ? const Color(0xFF0F1C31) : Colors.white;
   Color get _panelSoft =>
       _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
@@ -59,9 +63,7 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
           .toList();
     }
 
-    return _entries
-        .where((entry) => entry.normalizedType == _filter)
-        .toList();
+    return _entries.where((entry) => entry.normalizedType == _filter).toList();
   }
 
   @override
@@ -77,8 +79,9 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
     });
 
     try {
-      final summary =
-          await CustomerCreditService.instance.getCreditSummary(widget.customerId);
+      final summary = await CustomerCreditService.instance.getCreditSummary(
+        widget.customerId,
+      );
       final entries = await CustomerCreditService.instance.getLedger(
         customerId: widget.customerId,
         newestFirst: true,
@@ -111,10 +114,33 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
       customerId: widget.customerId,
       customerName: widget.customerName,
       initialSummary: _summary,
+      receivedBy:
+          context.read<AuthProvider>().currentUser?.name.trim().isNotEmpty ==
+              true
+          ? context.read<AuthProvider>().currentUser!.name.trim()
+          : 'Unknown',
     );
 
-    if (!mounted || !saved) return;
+    if (!mounted || saved == null) return;
+    if (saved.paymentId != null) {
+      await showCustomerPaymentReceiptDialog(
+        context: context,
+        paymentId: saved.paymentId!,
+        paymentJustSaved: true,
+      );
+    }
+    if (!mounted) return;
     await _loadLedger();
+  }
+
+  Future<void> _openPaymentReceipt(CustomerLedgerEntry entry) async {
+    final paymentId = entry.paymentId;
+    if (paymentId == null || paymentId <= 0) return;
+
+    await showCustomerPaymentReceiptDialog(
+      context: context,
+      paymentId: paymentId,
+    );
   }
 
   Future<void> _postAdjustment() async {
@@ -251,8 +277,8 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
     final balanceColor = summary.currentBalance > 0
         ? _warning
         : summary.currentBalance < 0
-            ? _blue
-            : _brand;
+        ? _blue
+        : _brand;
 
     return Container(
       padding: const EdgeInsets.all(18),
@@ -404,8 +430,8 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
               entry.normalizedType == 'payment'
                   ? Icons.south_west_rounded
                   : entry.normalizedType == 'credit_sale'
-                      ? Icons.north_east_rounded
-                      : Icons.receipt_long_rounded,
+                  ? Icons.north_east_rounded
+                  : Icons.receipt_long_rounded,
               color: color,
             ),
           ),
@@ -434,7 +460,9 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: _danger.withValues(alpha: _isDark ? 0.18 : 0.10),
+                          color: _danger.withValues(
+                            alpha: _isDark ? 0.18 : 0.10,
+                          ),
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: const Text(
@@ -479,16 +507,21 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
           _amountColumn('Credit', entry.credit, _brand),
           const SizedBox(width: 12),
           _amountColumn('Balance', entry.balanceAfter, _textPrimary),
-          if (entry.normalizedType == 'payment' &&
-              !entry.isVoided &&
-              entry.paymentId != null) ...[
+          if (entry.normalizedType == 'payment' && entry.paymentId != null) ...[
             const SizedBox(width: 10),
             IconButton(
-              tooltip: 'Void payment',
-              onPressed: () => _voidPayment(entry),
-              icon: const Icon(Icons.undo_rounded),
-              color: _danger,
+              tooltip: 'Payment receipt',
+              onPressed: () => _openPaymentReceipt(entry),
+              icon: const Icon(Icons.receipt_long_rounded),
+              color: _brand,
             ),
+            if (!entry.isVoided)
+              IconButton(
+                tooltip: 'Void payment',
+                onPressed: () => _voidPayment(entry),
+                icon: const Icon(Icons.undo_rounded),
+                color: _danger,
+              ),
           ],
         ],
       ),
@@ -555,31 +588,30 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                 child: _isLoading
                     ? const Center(child: CircularProgressIndicator())
                     : entries.isEmpty
-                        ? Center(
-                            child: Container(
-                              padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(
-                                color: _panel,
-                                borderRadius: BorderRadius.circular(24),
-                                border: Border.all(color: _border),
-                              ),
-                              child: Text(
-                                'No ledger entries found.',
-                                style: TextStyle(
-                                  color: _textSecondary,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                          )
-                        : ListView.separated(
-                            itemCount: entries.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 10),
-                            itemBuilder: (context, index) {
-                              return _entryCard(entries[index]);
-                            },
+                    ? Center(
+                        child: Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: _panel,
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(color: _border),
                           ),
+                          child: Text(
+                            'No ledger entries found.',
+                            style: TextStyle(
+                              color: _textSecondary,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: entries.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          return _entryCard(entries[index]);
+                        },
+                      ),
               ),
             ],
           ),

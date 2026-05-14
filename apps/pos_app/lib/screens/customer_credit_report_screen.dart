@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared/models/customer.dart';
 
+import '../providers/auth_provider.dart';
 import '../services/customer_credit_service.dart';
 import '../widgets/app_snackbar.dart';
 import 'customer_detail_screen.dart';
 import 'customer_ledger_screen.dart';
 import 'customer_payment_dialog.dart';
+import 'customer_payment_receipt_dialog.dart';
 
 class CustomerCreditReportScreen extends StatefulWidget {
   const CustomerCreditReportScreen({super.key});
@@ -244,14 +247,27 @@ class _CustomerCreditReportScreenState
       context: context,
       customerId: customer.id!,
       customerName: customer.displayName,
+      receivedBy:
+          context.read<AuthProvider>().currentUser?.name.trim().isNotEmpty ==
+              true
+          ? context.read<AuthProvider>().currentUser!.name.trim()
+          : 'Unknown',
     );
 
-    if (!mounted || !saved) return;
+    if (!mounted || saved == null) return;
     AppSnackBar.show(
       context,
       message: 'Payment saved.',
       backgroundColor: _brand,
     );
+    if (saved.paymentId != null) {
+      await showCustomerPaymentReceiptDialog(
+        context: context,
+        paymentId: saved.paymentId!,
+        paymentJustSaved: true,
+      );
+    }
+    if (!mounted) return;
     await _loadReport();
   }
 

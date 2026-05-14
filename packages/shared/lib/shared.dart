@@ -4,6 +4,7 @@ export 'models/customer_category.dart';
 export 'models/customer_credit_summary.dart';
 export 'models/customer_ledger_entry.dart';
 export 'models/customer_payment.dart';
+export 'models/customer_payment_receipt.dart';
 export 'models/customer_pricing_result.dart';
 export 'models/customer_pricing_rule.dart';
 export 'models/customer_product_price.dart';

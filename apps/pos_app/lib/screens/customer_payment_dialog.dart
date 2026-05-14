@@ -6,7 +6,7 @@ import '../services/customer_credit_service.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 
-Future<bool> showCustomerPaymentDialog({
+Future<CustomerCreditPostingResult?> showCustomerPaymentDialog({
   required BuildContext context,
   required int customerId,
   required String customerName,
@@ -16,7 +16,7 @@ Future<bool> showCustomerPaymentDialog({
   final summary =
       initialSummary ??
       await CustomerCreditService.instance.getCreditSummary(customerId);
-  if (!context.mounted) return false;
+  if (!context.mounted) return null;
 
   final amountController = TextEditingController();
   final noteController = TextEditingController();
@@ -25,7 +25,7 @@ Future<bool> showCustomerPaymentDialog({
   var isSaving = false;
 
   try {
-    final saved = await showPremiumDialog<bool>(
+    final saved = await showPremiumDialog<CustomerCreditPostingResult?>(
       context: context,
       barrierDismissible: !isSaving,
       builder: (dialogContext) {
@@ -119,7 +119,7 @@ Future<bool> showCustomerPaymentDialog({
               color: success,
             );
             FocusScope.of(dialogContext).unfocus();
-            Navigator.of(dialogContext).pop(true);
+            Navigator.of(dialogContext).pop(result);
           } catch (e) {
             if (!dialogContext.mounted) return;
             setState(() {
@@ -265,7 +265,7 @@ Future<bool> showCustomerPaymentDialog({
                                 ? null
                                 : () {
                                     FocusScope.of(dialogContext).unfocus();
-                                    Navigator.of(dialogContext).pop(false);
+                                    Navigator.of(dialogContext).pop();
                                   },
                             icon: const Icon(Icons.close_rounded),
                           ),
@@ -398,7 +398,7 @@ Future<bool> showCustomerPaymentDialog({
                                   ? null
                                   : () {
                                       FocusScope.of(dialogContext).unfocus();
-                                      Navigator.of(dialogContext).pop(false);
+                                      Navigator.of(dialogContext).pop();
                                     },
                               child: const Text('Cancel'),
                             ),
@@ -434,7 +434,7 @@ Future<bool> showCustomerPaymentDialog({
       },
     );
 
-    return saved == true;
+    return saved;
   } finally {
     await Future<void>.delayed(const Duration(milliseconds: 280));
     amountController.dispose();

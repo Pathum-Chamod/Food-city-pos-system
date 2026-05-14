@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared/models/customer_category.dart';
 import 'package:shared/models/customer.dart';
 import 'package:shared/models/customer_credit_summary.dart';
 import 'package:shared/models/loyalty_settings.dart';
 import 'package:shared/models/pricing_scheme.dart';
 
+import '../providers/auth_provider.dart';
 import '../services/customer_credit_service.dart';
 import '../services/customer_pricing_service.dart';
 import '../services/customer_service.dart';
@@ -18,6 +20,7 @@ import 'customer_ledger_screen.dart';
 import 'customer_loyalty_ledger_screen.dart';
 import 'customer_product_prices_screen.dart';
 import 'customer_payment_dialog.dart';
+import 'customer_payment_receipt_dialog.dart';
 import 'transaction_history_screen.dart';
 
 class CustomerDetailScreen extends StatefulWidget {
@@ -262,10 +265,23 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       customerId: customer.id!,
       customerName: customer.displayName,
       initialSummary: _creditSummary,
+      receivedBy:
+          context.read<AuthProvider>().currentUser?.name.trim().isNotEmpty ==
+              true
+          ? context.read<AuthProvider>().currentUser!.name.trim()
+          : 'Unknown',
     );
 
-    if (!mounted || !saved) return;
+    if (!mounted || saved == null) return;
     _showMessage('Customer payment saved.', color: _success);
+    if (saved.paymentId != null) {
+      await showCustomerPaymentReceiptDialog(
+        context: context,
+        paymentId: saved.paymentId!,
+        paymentJustSaved: true,
+      );
+    }
+    if (!mounted) return;
     await _loadCustomer();
   }
 
