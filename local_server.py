@@ -2306,6 +2306,421 @@ def get_customer_purchase_history(cursor, customer_id, limit=100):
     return [dict(row) for row in rows]
 
 
+def _customer_monitor_prepare(cursor):
+    create_customer_credit_tables(cursor)
+    create_customer_product_prices_table(cursor)
+    create_pricing_schemes_tables(cursor)
+    create_loyalty_tables(cursor)
+    create_sale_items_table(cursor)
+
+
+def _monitor_loyalty_point_value(cursor):
+    _customer_monitor_prepare(cursor)
+    row = cursor.execute(
+        """
+        SELECT COALESCE(point_value_amount, 1) AS point_value_amount
+        FROM loyalty_settings
+        ORDER BY id ASC
+        LIMIT 1
+        """
+    ).fetchone()
+    return parse_float(row["point_value_amount"] if row else 1, 1.0)
+
+
+def _monitor_days_since(value):
+    if not value:
+        return None
+    text = str(value).strip()
+    parsed = None
+    for candidate in (
+        text,
+        text.replace("Z", "+00:00"),
+        text.split(".")[0],
+    ):
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            break
+        except Exception:
+            continue
+    if parsed is None:
+        try:
+            parsed = datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+    if parsed.tzinfo is not None:
+        now = datetime.now(parsed.tzinfo)
+    else:
+        now = datetime.now()
+    return max((now - parsed).days, 0)
+
+
+def _monitor_customer_label(row):
+    credit_status = str(row.get("credit_status") or "normal").strip().lower()
+    credit_balance = parse_float(row.get("credit_balance"), 0.0)
+    credit_limit = parse_float(row.get("credit_limit"), 0.0)
+    total_spent = parse_float(row.get("total_spent"), 0.0)
+    loyalty_value = parse_float(row.get("loyalty_value"), 0.0)
+    days_since_purchase = _monitor_days_since(row.get("last_purchase_at"))
+
+    if credit_status == "blocked":
+        return "Blocked"
+    if credit_limit > 0 and credit_balance > credit_limit:
+        return "Over Limit"
+    if credit_balance > 0:
+        return "Has Balance"
+    if days_since_purchase is not None and days_since_purchase <= 30:
+        return "Active"
+    if (days_since_purchase is None or days_since_purchase >= 90) and total_spent >= 50000:
+        return "Inactive High Value"
+    if loyalty_value >= 5000:
+        return "High Loyalty Balance"
+    return "Good Customer"
+
+
+def _monitor_attention_reasons(row):
+    reasons = []
+    credit_status = str(row.get("credit_status") or "normal").strip().lower()
+    credit_balance = parse_float(row.get("credit_balance"), 0.0)
+    credit_limit = parse_float(row.get("credit_limit"), 0.0)
+    total_spent = parse_float(row.get("total_spent"), 0.0)
+    loyalty_value = parse_float(row.get("loyalty_value"), 0.0)
+    days_since_purchase = _monitor_days_since(row.get("last_purchase_at"))
+    days_since_payment = _monitor_days_since(row.get("last_payment_at"))
+
+    if credit_status == "blocked":
+        reasons.append("Blocked")
+    if credit_status == "watchlist":
+        reasons.append("Watchlist")
+    if credit_limit > 0 and credit_balance > credit_limit:
+        reasons.append("Over Limit")
+    if credit_balance > 0 and (days_since_payment is None or days_since_payment >= 30):
+        reasons.append("No Payment 30 Days")
+    if (days_since_purchase is None or days_since_purchase >= 90) and total_spent >= 50000:
+        reasons.append("Inactive High Value")
+    if loyalty_value >= 5000:
+        reasons.append("High Loyalty")
+    return reasons
+
+
+def _monitor_customer_row(row):
+    data = dict(row)
+    data["credit_balance"] = round(parse_float(data.get("credit_balance"), 0.0), 2)
+    data["credit_limit"] = round(parse_float(data.get("credit_limit"), 0.0), 2)
+    data["loyalty_points"] = parse_int(data.get("loyalty_points"), 0)
+    data["loyalty_value"] = round(parse_float(data.get("loyalty_value"), 0.0), 2)
+    data["total_spent"] = round(parse_float(data.get("total_spent"), 0.0), 2)
+    data["purchase_count"] = parse_int(data.get("purchase_count"), 0)
+    data["product_override_count"] = parse_int(data.get("product_override_count"), 0)
+    data["health_label"] = _monitor_customer_label(data)
+    data["attention_reasons"] = _monitor_attention_reasons(data)
+    return data
+
+
+def _monitor_customer_select_sql():
+    return """
+        SELECT
+            c.id,
+            c.customer_code,
+            c.name,
+            c.phone,
+            c.customer_type,
+            COALESCE(c.is_active, 1) AS is_active,
+            c.customer_category_id,
+            c.pricing_scheme_id,
+            COALESCE(cc.name, '') AS category,
+            COALESCE(ps.name, '') AS direct_pricing_scheme,
+            COALESCE(cps.name, '') AS category_pricing_scheme,
+            CASE
+                WHEN COALESCE(ps.name, '') != '' THEN ps.name
+                WHEN COALESCE(cps.name, '') != '' THEN cps.name
+                ELSE ''
+            END AS pricing_scheme,
+            COALESCE(c.pricing_enabled, 0) AS simple_pricing_enabled,
+            COALESCE(c.default_price_type, 'selling') AS default_price_type,
+            COALESCE(c.default_discount_percent, 0) AS default_discount_percent,
+            COALESCE(c.current_credit_balance, 0) AS credit_balance,
+            COALESCE(c.credit_limit, 0) AS credit_limit,
+            COALESCE(c.credit_status, 'normal') AS credit_status,
+            COALESCE(c.credit_enabled, 0) AS credit_enabled,
+            COALESCE(c.loyalty_enabled, 1) AS loyalty_enabled,
+            COALESCE(c.loyalty_points_balance, 0) AS loyalty_points,
+            COALESCE(c.loyalty_lifetime_earned, 0) AS loyalty_lifetime_earned,
+            COALESCE(c.loyalty_lifetime_redeemed, 0) AS loyalty_lifetime_redeemed,
+            COALESCE(c.loyalty_points_balance, 0) * ? AS loyalty_value,
+            (
+                SELECT COUNT(*)
+                FROM customer_product_prices cpp
+                WHERE cpp.customer_id = c.id
+                  AND COALESCE(cpp.is_active, 1) = 1
+            ) AS product_override_count,
+            (
+                SELECT MAX(s.created_at)
+                FROM sales s
+                WHERE s.customer_id = c.id
+                  AND LOWER(COALESCE(s.transaction_type, 'sale')) = 'sale'
+            ) AS last_purchase_at,
+            (
+                SELECT MAX(p.created_at)
+                FROM customer_payments p
+                WHERE p.customer_id = c.id
+                  AND p.voided_at IS NULL
+            ) AS last_payment_at,
+            (
+                SELECT COALESCE(SUM(CASE
+                    WHEN LOWER(COALESCE(s.transaction_type, 'sale')) = 'refund'
+                    THEN -ABS(COALESCE(s.total_amount, 0))
+                    ELSE ABS(COALESCE(s.total_amount, 0))
+                END), 0)
+                FROM sales s
+                WHERE s.customer_id = c.id
+            ) AS total_spent,
+            (
+                SELECT COUNT(*)
+                FROM sales s
+                WHERE s.customer_id = c.id
+                  AND LOWER(COALESCE(s.transaction_type, 'sale')) = 'sale'
+            ) AS purchase_count
+        FROM customers c
+        LEFT JOIN customer_categories cc ON cc.id = c.customer_category_id
+        LEFT JOIN pricing_schemes ps ON ps.id = c.pricing_scheme_id
+        LEFT JOIN pricing_schemes cps ON cps.id = cc.default_pricing_scheme_id
+    """
+
+
+def get_customers_monitor(cursor, params):
+    _customer_monitor_prepare(cursor)
+    point_value = _monitor_loyalty_point_value(cursor)
+    query = str(params.get("query", params.get("search", [""]))[0] or "").strip()
+    filter_name = str(params.get("filter", ["all"])[0] or "all").strip().lower()
+    limit = parse_int(params.get("limit", ["100"])[0], 100)
+    if limit <= 0:
+        limit = 100
+    if limit > 500:
+        limit = 500
+
+    where = ["COALESCE(c.is_active, 1) = 1"]
+    args = [point_value]
+
+    if query:
+        phone_search = normalize_customer_phone(query)
+        like = f"%{query.lower()}%"
+        where.append(
+            """
+            (
+                LOWER(COALESCE(c.name, '')) LIKE ?
+                OR LOWER(COALESCE(c.customer_code, '')) LIKE ?
+                OR COALESCE(c.phone, '') LIKE ?
+                OR COALESCE(c.phone_normalized, '') LIKE ?
+            )
+            """
+        )
+        args.extend([like, like, f"%{query}%", f"%{phone_search or query}%"])
+
+    if filter_name == "credit_balance":
+        where.append("COALESCE(c.current_credit_balance, 0) > 0")
+    elif filter_name == "over_limit":
+        where.append("COALESCE(c.credit_limit, 0) > 0 AND COALESCE(c.current_credit_balance, 0) > COALESCE(c.credit_limit, 0)")
+    elif filter_name == "blocked":
+        where.append("LOWER(COALESCE(c.credit_status, 'normal')) = 'blocked'")
+    elif filter_name == "watchlist":
+        where.append("LOWER(COALESCE(c.credit_status, 'normal')) = 'watchlist'")
+    elif filter_name == "loyalty_members":
+        where.append("(COALESCE(c.loyalty_enabled, 1) = 1 OR COALESCE(c.loyalty_points_balance, 0) > 0)")
+    elif filter_name == "recently_active":
+        where.append(
+            """
+            EXISTS (
+                SELECT 1 FROM sales s
+                WHERE s.customer_id = c.id
+                  AND LOWER(COALESCE(s.transaction_type, 'sale')) = 'sale'
+                  AND datetime(s.created_at) >= datetime('now','localtime','-30 days')
+            )
+            """
+        )
+    elif filter_name == "inactive":
+        where.append(
+            """
+            NOT EXISTS (
+                SELECT 1 FROM sales s
+                WHERE s.customer_id = c.id
+                  AND LOWER(COALESCE(s.transaction_type, 'sale')) = 'sale'
+                  AND datetime(s.created_at) >= datetime('now','localtime','-90 days')
+            )
+            """
+        )
+
+    sql = _monitor_customer_select_sql()
+    sql += " WHERE " + " AND ".join(where)
+    if filter_name in {"credit_balance", "over_limit"}:
+        sql += " ORDER BY COALESCE(c.current_credit_balance, 0) DESC, c.name COLLATE NOCASE ASC"
+    elif filter_name == "loyalty_members":
+        sql += " ORDER BY COALESCE(c.loyalty_points_balance, 0) DESC, c.name COLLATE NOCASE ASC"
+    else:
+        sql += " ORDER BY last_purchase_at IS NULL, datetime(last_purchase_at) DESC, c.name COLLATE NOCASE ASC"
+    sql += " LIMIT ?"
+    args.append(limit)
+
+    return [_monitor_customer_row(row) for row in cursor.execute(sql, args).fetchall()]
+
+
+def get_customer_dashboard(cursor):
+    _customer_monitor_prepare(cursor)
+    point_value = _monitor_loyalty_point_value(cursor)
+    rows = get_customers_monitor(cursor, {"filter": ["all"], "limit": ["500"]})
+
+    total_customers = parse_int(
+        cursor.execute(
+            "SELECT COUNT(*) FROM customers WHERE COALESCE(is_active, 1) = 1"
+        ).fetchone()[0],
+        0,
+    )
+    active_customers = parse_int(
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT customer_id)
+            FROM sales
+            WHERE customer_id IS NOT NULL
+              AND LOWER(COALESCE(transaction_type, 'sale')) = 'sale'
+              AND datetime(created_at) >= datetime('now','localtime','-30 days')
+            """
+        ).fetchone()[0],
+        0,
+    )
+    summary_row = cursor.execute(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN COALESCE(current_credit_balance, 0) > 0 THEN 1 ELSE 0 END), 0) AS credit_customers,
+            COALESCE(SUM(CASE WHEN COALESCE(current_credit_balance, 0) > 0 THEN COALESCE(current_credit_balance, 0) ELSE 0 END), 0) AS total_outstanding,
+            COALESCE(SUM(CASE WHEN COALESCE(credit_limit, 0) > 0 AND COALESCE(current_credit_balance, 0) > COALESCE(credit_limit, 0) THEN 1 ELSE 0 END), 0) AS over_limit_count,
+            COALESCE(SUM(CASE WHEN COALESCE(loyalty_enabled, 1) = 1 OR COALESCE(loyalty_points_balance, 0) > 0 THEN 1 ELSE 0 END), 0) AS loyalty_members,
+            COALESCE(SUM(COALESCE(loyalty_points_balance, 0)), 0) AS total_loyalty_points
+        FROM customers
+        WHERE COALESCE(is_active, 1) = 1
+        """
+    ).fetchone()
+
+    summary = {
+        "total_customers": total_customers,
+        "active_customers": active_customers,
+        "credit_customers": parse_int(summary_row["credit_customers"], 0),
+        "total_outstanding": round(parse_float(summary_row["total_outstanding"], 0.0), 2),
+        "over_limit_count": parse_int(summary_row["over_limit_count"], 0),
+        "loyalty_members": parse_int(summary_row["loyalty_members"], 0),
+        "total_loyalty_points": parse_int(summary_row["total_loyalty_points"], 0),
+        "loyalty_liability": round(parse_int(summary_row["total_loyalty_points"], 0) * point_value, 2),
+    }
+
+    top_outstanding = sorted(
+        [row for row in rows if parse_float(row.get("credit_balance"), 0.0) > 0],
+        key=lambda row: parse_float(row.get("credit_balance"), 0.0),
+        reverse=True,
+    )[:8]
+    recent_customers = sorted(
+        [row for row in rows if row.get("last_purchase_at")],
+        key=lambda row: str(row.get("last_purchase_at") or ""),
+        reverse=True,
+    )[:8]
+    high_loyalty = sorted(
+        [row for row in rows if parse_int(row.get("loyalty_points"), 0) > 0],
+        key=lambda row: parse_int(row.get("loyalty_points"), 0),
+        reverse=True,
+    )[:8]
+    needs_attention = [
+        row for row in sorted(
+            rows,
+            key=lambda item: (
+                len(item.get("attention_reasons") or []),
+                parse_float(item.get("credit_balance"), 0.0),
+                parse_float(item.get("loyalty_value"), 0.0),
+            ),
+            reverse=True,
+        )
+        if row.get("attention_reasons")
+    ][:10]
+
+    return {
+        "summary": summary,
+        "top_outstanding": top_outstanding,
+        "recent_customers": recent_customers,
+        "high_loyalty": high_loyalty,
+        "needs_attention": needs_attention,
+    }
+
+
+def get_customer_monitor_profile(cursor, customer_id):
+    _customer_monitor_prepare(cursor)
+    customer_id = parse_int(customer_id, 0)
+    if customer_id <= 0:
+        raise ValueError("Invalid customer_id")
+
+    point_value = _monitor_loyalty_point_value(cursor)
+    row = cursor.execute(
+        _monitor_customer_select_sql() + " WHERE c.id = ? LIMIT 1",
+        (point_value, customer_id),
+    ).fetchone()
+    if not row:
+        raise ValueError("Customer not found")
+
+    customer = _monitor_customer_row(row)
+    purchase_summary = get_customer_summary(cursor, customer_id)
+    recent_transactions = get_customer_purchase_history(cursor, customer_id, limit=5)
+    recent_credit_ledger = get_customer_ledger_rows(cursor, customer_id, limit=5)
+    recent_loyalty_ledger = [
+        dict(item)
+        for item in cursor.execute(
+            """
+            SELECT *
+            FROM loyalty_ledger
+            WHERE customer_id = ?
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT 5
+            """,
+            (customer_id,),
+        ).fetchall()
+    ]
+
+    credit_summary = {
+        "customer_id": customer_id,
+        "credit_enabled": parse_int(customer.get("credit_enabled"), 0),
+        "credit_balance": customer["credit_balance"],
+        "credit_limit": customer["credit_limit"],
+        "available_credit": round(max(customer["credit_limit"] - customer["credit_balance"], 0), 2),
+        "credit_status": customer.get("credit_status") or "normal",
+        "last_payment_at": customer.get("last_payment_at"),
+    }
+    loyalty_summary = {
+        "customer_id": customer_id,
+        "loyalty_enabled": parse_int(customer.get("loyalty_enabled"), 1),
+        "points_balance": customer["loyalty_points"],
+        "point_value_amount": point_value,
+        "redeem_value": customer["loyalty_value"],
+        "lifetime_earned": parse_int(customer.get("loyalty_lifetime_earned"), 0),
+        "lifetime_redeemed": parse_int(customer.get("loyalty_lifetime_redeemed"), 0),
+    }
+    pricing_summary = {
+        "customer_category_id": customer.get("customer_category_id"),
+        "category": customer.get("category") or "No category",
+        "direct_pricing_scheme": customer.get("direct_pricing_scheme") or "",
+        "category_pricing_scheme": customer.get("category_pricing_scheme") or "",
+        "pricing_scheme": customer.get("pricing_scheme") or "No pricing scheme",
+        "product_override_count": customer["product_override_count"],
+        "simple_pricing_enabled": parse_int(customer.get("simple_pricing_enabled"), 0),
+        "default_price_type": customer.get("default_price_type") or "selling",
+        "default_discount_percent": parse_float(customer.get("default_discount_percent"), 0.0),
+    }
+
+    return {
+        "customer": customer,
+        "credit_summary": credit_summary,
+        "loyalty_summary": loyalty_summary,
+        "pricing_summary": pricing_summary,
+        "purchase_summary": purchase_summary,
+        "recent_transactions": recent_transactions,
+        "recent_credit_ledger": recent_credit_ledger,
+        "recent_loyalty_ledger": recent_loyalty_ledger,
+    }
+
+
 
 def get_product_row(cursor, barcode):
     return cursor.execute(
@@ -5679,6 +6094,94 @@ class APIHandler(BaseHTTPRequestHandler):
                     }
                 ).encode()
             )
+
+        elif action == "get_customer_dashboard":
+            try:
+                dashboard = get_customer_dashboard(c)
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "success": True,
+                            **dashboard,
+                        }
+                    ).encode()
+                )
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "success": False,
+                            "message": str(e),
+                        }
+                    ).encode()
+                )
+
+        elif action == "get_customers_monitor":
+            try:
+                customers = get_customers_monitor(c, params)
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "success": True,
+                            "customers": customers,
+                        }
+                    ).encode()
+                )
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "success": False,
+                            "message": str(e),
+                            "customers": [],
+                        }
+                    ).encode()
+                )
+
+        elif action == "get_customer_monitor_profile":
+            customer_id = parse_int(params.get("customer_id", params.get("id", ["0"]))[0], 0)
+            try:
+                profile = get_customer_monitor_profile(c, customer_id)
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "success": True,
+                            **profile,
+                        }
+                    ).encode()
+                )
+            except ValueError as e:
+                self._set_headers(404)
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "success": False,
+                            "message": str(e),
+                        }
+                    ).encode()
+                )
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "success": False,
+                            "message": str(e),
+                        }
+                    ).encode()
+                )
 
         elif action == "get_suppliers":
             rows = c.execute("SELECT * FROM suppliers").fetchall()
