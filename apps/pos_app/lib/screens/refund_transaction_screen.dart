@@ -21,10 +21,7 @@ TextEditingController _selectedTextController(String text) {
 class RefundTransactionScreen extends StatefulWidget {
   final int originalSaleId;
 
-  const RefundTransactionScreen({
-    super.key,
-    required this.originalSaleId,
-  });
+  const RefundTransactionScreen({super.key, required this.originalSaleId});
 
   @override
   State<RefundTransactionScreen> createState() =>
@@ -182,7 +179,8 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
 
   Future<void> _setSelectedQty(Map<String, dynamic> item) async {
     final barcode = (item['barcode'] ?? '').toString();
-    final refundableQty = ((item['refundable_quantity'] as num?) ?? 0).toDouble();
+    final refundableQty = ((item['refundable_quantity'] as num?) ?? 0)
+        .toDouble();
     final unitLabel = _unitLabelFor(item);
     final isWeighted = _isWeightedItem(item);
     final controller = _selectedTextController(
@@ -197,10 +195,13 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
           final parsed = isWeighted
               ? double.tryParse(raw)
               : int.tryParse(raw)?.toDouble();
-          if (parsed == null || parsed < 0 || parsed > refundableQty + 0.000001) {
+          if (parsed == null ||
+              parsed < 0 ||
+              parsed > refundableQty + 0.000001) {
             AppSnackBar.show(
               dialogContext,
-              message: 'Enter a valid quantity up to ${_formatQuantity(refundableQty)}.',
+              message:
+                  'Enter a valid quantity up to ${_formatQuantity(refundableQty)}.',
               backgroundColor: Colors.red,
             );
             return;
@@ -222,7 +223,9 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                 controller: controller,
                 autofocus: true,
                 textInputAction: TextInputAction.done,
-                keyboardType: TextInputType.numberWithOptions(decimal: isWeighted),
+                keyboardType: TextInputType.numberWithOptions(
+                  decimal: isWeighted,
+                ),
                 inputFormatters: [
                   isWeighted
                       ? FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
@@ -272,8 +275,9 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     required String refundReason,
   }) {
     final trimmedReason = refundReason.trim();
-    final safeReason =
-        trimmedReason.isEmpty ? 'No reason provided' : trimmedReason;
+    final safeReason = trimmedReason.isEmpty
+        ? 'No reason provided'
+        : trimmedReason;
 
     return 'Approved linked refund for sale #${widget.originalSaleId} '
         'requested by $requesterName '
@@ -308,8 +312,9 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     if (PosFeatureFlags.enableShiftManagement) {
       final cashierName =
           context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
-      final openShift =
-          await DatabaseHelper.instance.getOpenShiftForCashier(cashierName);
+      final openShift = await DatabaseHelper.instance.getOpenShiftForCashier(
+        cashierName,
+      );
 
       if (openShift == null) {
         if (!mounted) return;
@@ -330,8 +335,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
       context,
       () => _processRefundAfterApproval(selectedItems),
       title: 'Approval Required',
-      message:
-          'Enter an active manager or full-access PIN to approve this refund.',
+      message: 'Enter an active manager PIN to approve this refund.',
       requesterUserId: requester?.id,
       requesterUserName: requesterName,
       approvalDescription: _buildApprovalDescription(
@@ -470,7 +474,9 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: active ? tone.withOpacity(palette.isDark ? 0.18 : 0.10) : palette.soft,
+            color: active
+                ? tone.withOpacity(palette.isDark ? 0.18 : 0.10)
+                : palette.soft,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
               color: active ? tone.withOpacity(0.40) : palette.border,
@@ -482,9 +488,13 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                 width: 38,
                 height: 38,
                 decoration: BoxDecoration(
-                  color: active ? tone.withOpacity(palette.isDark ? 0.22 : 0.14) : palette.surface,
+                  color: active
+                      ? tone.withOpacity(palette.isDark ? 0.22 : 0.14)
+                      : palette.surface,
                   borderRadius: BorderRadius.circular(13),
-                  border: Border.all(color: active ? tone.withOpacity(0.30) : palette.border),
+                  border: Border.all(
+                    color: active ? tone.withOpacity(0.30) : palette.border,
+                  ),
                 ),
                 child: Center(
                   child: Text(
@@ -601,20 +611,21 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
           const SizedBox(width: 8),
           Text(
             label,
-            style: TextStyle(
-              color: tone,
-              fontWeight: FontWeight.w800,
-            ),
+            style: TextStyle(color: tone, fontWeight: FontWeight.w800),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildSaleOverview(_RefundPalette palette, Map<String, dynamic> summary) {
+  Widget _buildSaleOverview(
+    _RefundPalette palette,
+    Map<String, dynamic> summary,
+  ) {
     final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
-    final dateText =
-        _formatSummaryDateTime((summary['created_at'] ?? '').toString());
+    final dateText = _formatSummaryDateTime(
+      (summary['created_at'] ?? '').toString(),
+    );
     final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
 
     Widget tile({
@@ -765,7 +776,8 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
               _buildHeaderPill(
                 palette: palette,
                 icon: Icons.widgets_outlined,
-                label: '${_refundableItems.length} item${_refundableItems.length == 1 ? '' : 's'}',
+                label:
+                    '${_refundableItems.length} item${_refundableItems.length == 1 ? '' : 's'}',
                 tone: palette.accentBlue,
                 soft: palette.accentBlueSoft,
               ),
@@ -786,13 +798,17 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     );
   }
 
-  Widget _buildRefundItemCard(_RefundPalette palette, Map<String, dynamic> item) {
+  Widget _buildRefundItemCard(
+    _RefundPalette palette,
+    Map<String, dynamic> item,
+  ) {
     final barcode = (item['barcode'] ?? '').toString();
     final name = (item['product_name'] ?? 'Unknown').toString();
     final unitPrice = ((item['unit_price'] as num?) ?? 0).toDouble();
     final originalQty = ((item['original_quantity'] as num?) ?? 0).toDouble();
     final refundedQty = ((item['refunded_quantity'] as num?) ?? 0).toDouble();
-    final refundableQty = ((item['refundable_quantity'] as num?) ?? 0).toDouble();
+    final refundableQty = ((item['refundable_quantity'] as num?) ?? 0)
+        .toDouble();
     final unitLabel = _unitLabelFor(item);
     final isWeighted = _isWeightedItem(item);
     final selectedQty = _selectedFor(barcode);
@@ -841,7 +857,9 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
         color: hasSelection ? palette.brandSoftStrong : palette.surfaceAlt,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: hasSelection ? palette.brand.withOpacity(0.30) : palette.border,
+          color: hasSelection
+              ? palette.brand.withOpacity(0.30)
+              : palette.border,
         ),
         boxShadow: [
           BoxShadow(
@@ -904,7 +922,10 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
               ),
               const SizedBox(width: 10),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 7,
+                ),
                 decoration: BoxDecoration(
                   color: palette.dangerSoft,
                   borderRadius: BorderRadius.circular(999),
@@ -921,7 +942,10 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
               ),
               const SizedBox(width: 10),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: palette.surface,
                   borderRadius: BorderRadius.circular(16),
@@ -932,7 +956,9 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                     _buildQtyButton(
                       palette: palette,
                       icon: Icons.remove_rounded,
-                      onTap: selectedQty > 0 ? () => _decreaseQty(barcode) : null,
+                      onTap: selectedQty > 0
+                          ? () => _decreaseQty(barcode)
+                          : null,
                     ),
                     SizedBox(
                       width: isWeighted ? 82 : 34,
@@ -968,9 +994,15 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
               const SizedBox(width: 8),
               statChip('Sold', '${_formatQuantity(originalQty)} $unitLabel'),
               const SizedBox(width: 8),
-              statChip('Refunded', '${_formatQuantity(refundedQty)} $unitLabel'),
+              statChip(
+                'Refunded',
+                '${_formatQuantity(refundedQty)} $unitLabel',
+              ),
               const SizedBox(width: 8),
-              statChip('Remaining', '${_formatQuantity(refundableQty)} $unitLabel'),
+              statChip(
+                'Remaining',
+                '${_formatQuantity(refundableQty)} $unitLabel',
+              ),
             ],
           ),
         ],
@@ -1000,7 +1032,9 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
           child: Icon(
             icon,
             size: 18,
-            color: enabled ? palette.accentBlue : palette.textSecondary.withOpacity(0.45),
+            color: enabled
+                ? palette.accentBlue
+                : palette.textSecondary.withOpacity(0.45),
           ),
         ),
       ),
@@ -1065,7 +1099,10 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                   color: palette.dangerSoft,
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: Icon(Icons.assignment_return_rounded, color: palette.danger),
+                child: Icon(
+                  Icons.assignment_return_rounded,
+                  color: palette.danger,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1110,7 +1147,10 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                 stat('Selected Units', _formatQuantity(_selectedUnitsCount)),
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 14,
+                  ),
                   decoration: BoxDecoration(
                     color: palette.dangerSoft,
                     borderRadius: BorderRadius.circular(18),
@@ -1272,12 +1312,16 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: (!hasRefundableQty || _isProcessing) ? null : _processRefund,
+              onPressed: (!hasRefundableQty || _isProcessing)
+                  ? null
+                  : _processRefund,
               icon: Icon(
                 _isProcessing ? Icons.sync_rounded : Icons.lock_open_rounded,
                 size: 18,
               ),
-              label: Text(_isProcessing ? 'Processing...' : 'Process Linked Refund'),
+              label: Text(
+                _isProcessing ? 'Processing...' : 'Process Linked Refund',
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: palette.danger,
                 foregroundColor: Colors.white,
@@ -1335,7 +1379,11 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                 shape: BoxShape.circle,
                 border: Border.all(color: palette.border),
               ),
-              child: Icon(Icons.inventory_2_outlined, color: palette.textSecondary, size: 30),
+              child: Icon(
+                Icons.inventory_2_outlined,
+                color: palette.textSecondary,
+                size: 30,
+              ),
             ),
             const SizedBox(height: 16),
             Text(
@@ -1374,36 +1422,36 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
           child: _isLoading
               ? Center(child: CircularProgressIndicator(color: palette.brand))
               : summary == null
-                  ? _buildEmptyStatePage(palette, 'Transaction not found')
-                  : Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          _buildHeader(palette),
-                          const SizedBox(height: 14),
-                          _buildSaleOverview(palette, summary),
-                          const SizedBox(height: 16),
-                          Expanded(
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(
-                                  flex: 9,
-                                  child: SingleChildScrollView(
-                                    child: _buildItemsSection(palette),
-                                  ),
-                                ),
-                                const SizedBox(width: 16),
-                                SizedBox(
-                                  width: 360,
-                                  child: _buildSidebar(palette, hasRefundableQty),
-                                ),
-                              ],
+              ? _buildEmptyStatePage(palette, 'Transaction not found')
+              : Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      _buildHeader(palette),
+                      const SizedBox(height: 14),
+                      _buildSaleOverview(palette, summary),
+                      const SizedBox(height: 16),
+                      Expanded(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              flex: 9,
+                              child: SingleChildScrollView(
+                                child: _buildItemsSection(palette),
+                              ),
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 16),
+                            SizedBox(
+                              width: 360,
+                              child: _buildSidebar(palette, hasRefundableQty),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
+                    ],
+                  ),
+                ),
         ),
       ),
     );
@@ -1429,8 +1477,7 @@ class _RefundPalette {
       isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
   Color get surfaceAlt =>
       isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
-  Color get soft =>
-      isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get soft => isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
   Color get border =>
       isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
   Color get textPrimary =>

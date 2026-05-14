@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
+import '../providers/auth_provider.dart';
+import '../services/database_helper.dart';
+import '../services/permission_service.dart';
 import '../services/pricing_scheme_service.dart';
 import '../widgets/app_snackbar.dart';
+import '../widgets/permission_guard.dart';
 import 'customer_category_dialog.dart';
 
 class CustomerCategoriesScreen extends StatefulWidget {
@@ -36,6 +41,22 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
       _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
   Color get _textSecondary =>
       _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+
+  int? get _actorUserId {
+    try {
+      return context.read<AuthProvider>().currentUser?.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? get _actorName {
+    try {
+      return context.read<AuthProvider>().currentUser?.name;
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
   void initState() {
@@ -79,6 +100,15 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
     AppSnackBar.show(context, message: message, backgroundColor: color);
   }
 
+  Future<void> _logPricingUpdate(String description) async {
+    await DatabaseHelper.instance.logSensitiveAction(
+      actorUserId: _actorUserId,
+      actorName: _actorName,
+      actionType: 'pricing_update',
+      description: description,
+    );
+  }
+
   Future<void> _addCategory() async {
     final result = await showCustomerCategoryDialog(
       context: context,
@@ -91,6 +121,9 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
         name: result.name,
         description: result.description,
         defaultPricingSchemeId: result.defaultPricingSchemeId,
+      );
+      await _logPricingUpdate(
+        'Customer pricing category "${result.name}" added',
       );
       _showMessage('Customer category added.', color: _success);
       await _loadCategories();
@@ -115,6 +148,9 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
         defaultPricingSchemeId: result.defaultPricingSchemeId,
         isActive: result.isActive,
       );
+      await _logPricingUpdate(
+        'Customer pricing category "${result.name}" updated',
+      );
       _showMessage('Customer category updated.', color: _success);
       await _loadCategories();
     } catch (e) {
@@ -130,6 +166,9 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
       await PricingSchemeService.instance.setCustomerCategoryActive(
         id: id,
         isActive: !category.isActive,
+      );
+      await _logPricingUpdate(
+        'Customer pricing category "${category.displayName}" ${category.isActive ? 'deactivated' : 'reactivated'}',
       );
       _showMessage(
         category.isActive
@@ -334,6 +373,15 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!context.watch<AuthProvider>().can(PosPermission.pricingManage)) {
+      return const PermissionGuard(
+        permission: PosPermission.pricingManage,
+        title: 'Pricing access restricted',
+        message: 'Only managers or full-access users can manage pricing.',
+        child: SizedBox.shrink(),
+      );
+    }
+
     final activeCount = _categories
         .where((category) => category.isActive)
         .length;

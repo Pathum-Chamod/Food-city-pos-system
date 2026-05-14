@@ -11,6 +11,7 @@ class PosRouteNames {
   static const expiryAlerts = '/expiry-alerts';
   static const supplierManagement = '/supplier-management';
   static const userManagement = '/user-management';
+  static const backupRestore = '/backup-restore';
   static const customerManagement = '/customer-management';
   static const customerCreditReport = '/customer-credit-report';
   static const shiftManagement = '/shift-management';

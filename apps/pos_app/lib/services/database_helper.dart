@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
 import 'package:shared/models/customer.dart';
 import 'package:shared/models/product.dart';
+import 'package:shared/models/user.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/pos_supplier.dart';
@@ -24,6 +25,27 @@ class DatabaseHelper {
     if (_database != null) return _database!;
     _database = await _initDB('food_city_pos.db');
     return _database!;
+  }
+
+  Future<String> get databasePath async {
+    return _resolveStableDbPath('food_city_pos.db');
+  }
+
+  Future<void> checkpointDatabaseForBackup() async {
+    final db = await database;
+    try {
+      await db.rawQuery('PRAGMA wal_checkpoint(FULL)');
+    } catch (e) {
+      debugPrint('Could not checkpoint database before backup: $e');
+    }
+  }
+
+  Future<void> closeDatabaseForRestore() async {
+    final db = _database;
+    if (db == null) return;
+
+    await db.close();
+    _database = null;
   }
 
   Future<Database> _initDB(String filePath) async {
@@ -1830,9 +1852,8 @@ class DatabaseHelper {
   }
 
   String _normalizeUserRole(String? value) {
-    final normalized = (value ?? '').trim().toLowerCase();
-    if (normalized == 'manager') return 'manager';
-    return 'cashier';
+    final normalized = User.normalizeRole(value);
+    return normalized == User.managerRole ? User.managerRole : User.cashierRole;
   }
 
   List<Map<String, dynamic>> _decodeHeldCartItemsJson(String itemsJson) {
@@ -2017,7 +2038,7 @@ class DatabaseHelper {
     final rows = await executor.rawQuery('''
       SELECT COUNT(*) AS count
       FROM users
-      WHERE role = 'manager'
+      WHERE LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator')
         AND is_active = 1
         ${hasExclusion ? 'AND id != ?' : ''}
       ''', hasExclusion ? [excludingUserId] : const <Object?>[]);
@@ -3946,15 +3967,23 @@ class DatabaseHelper {
   }) async {
     final db = await database;
     final trimmedSearch = search.trim().toLowerCase();
-    final normalizedRole = role.trim().toLowerCase();
+    final rawRole = role.trim().toLowerCase();
+    final normalizedRole = _normalizeUserRole(role);
     final normalizedStatus = _normalizeUserStatusFilter(status);
 
     final whereClauses = <String>[];
     final whereArgs = <Object?>[];
 
-    if (normalizedRole == 'manager' || normalizedRole == 'cashier') {
-      whereClauses.add('role = ?');
-      whereArgs.add(normalizedRole);
+    if (rawRole != 'all' && rawRole.isNotEmpty) {
+      if (normalizedRole == User.managerRole) {
+        whereClauses.add(
+          "LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator')",
+        );
+      } else if (normalizedRole == User.cashierRole) {
+        whereClauses.add(
+          "LOWER(TRIM(role)) NOT IN ('manager', 'owner', 'admin', 'administrator')",
+        );
+      }
     }
 
     if (normalizedStatus == 'active') {
@@ -3992,8 +4021,8 @@ class DatabaseHelper {
       SELECT
         COUNT(*) AS total_users,
         COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_users,
-        COALESCE(SUM(CASE WHEN role = 'manager' THEN 1 ELSE 0 END), 0) AS managers,
-        COALESCE(SUM(CASE WHEN role = 'cashier' THEN 1 ELSE 0 END), 0) AS cashiers
+        COALESCE(SUM(CASE WHEN LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator') THEN 1 ELSE 0 END), 0) AS managers,
+        COALESCE(SUM(CASE WHEN LOWER(TRIM(role)) NOT IN ('manager', 'owner', 'admin', 'administrator') THEN 1 ELSE 0 END), 0) AS cashiers
       FROM users
       ''');
 
@@ -4483,6 +4512,27 @@ class DatabaseHelper {
       actorUserId: actorUserId,
       actorName: actorName,
       actionType: 'manager_approval',
+      targetUserId: targetUserId,
+      targetUserName: targetUserName,
+      description: description,
+    );
+  }
+
+  Future<void> logSensitiveAction({
+    int? actorUserId,
+    String? actorName,
+    required String actionType,
+    int? targetUserId,
+    String? targetUserName,
+    required String description,
+  }) async {
+    final db = await database;
+
+    await _insertUserLog(
+      db,
+      actorUserId: actorUserId,
+      actorName: actorName,
+      actionType: actionType,
       targetUserId: targetUserId,
       targetUserName: targetUserName,
       description: description,

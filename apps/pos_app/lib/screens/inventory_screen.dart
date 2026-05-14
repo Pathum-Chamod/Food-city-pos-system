@@ -11,6 +11,7 @@ import '../models/pos_supplier.dart';
 import '../models/supplier_product_mapping.dart';
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
+import '../services/permission_service.dart';
 import 'inventory_history_screen.dart';
 import 'stock_take_screen.dart';
 import 'supplier_receive_history_screen.dart';
@@ -1184,10 +1185,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 final role = (user['role'] ?? '').toString().toLowerCase();
                 final isActive =
                     ((user['is_active'] as num?) ?? 1).toInt() == 1;
-                final hasFullAccess =
-                    ((user['has_full_access'] as num?) ?? 0).toInt() == 1 ||
-                    (user['has_full_access'] == true);
-                final canApprove = role == 'manager' || hasFullAccess;
+                final canApprove = PermissionService.roleCan(
+                  role,
+                  PosPermission.settingsManage,
+                );
 
                 if (!isActive) {
                   setDialogState(() {
@@ -1200,8 +1201,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 if (!canApprove) {
                   setDialogState(() {
                     isVerifying = false;
-                    errorText =
-                        'PIN does not belong to a manager or full-access user.';
+                    errorText = 'PIN does not belong to a manager.';
                   });
                   return;
                 }
@@ -1252,7 +1252,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        'Enter manager or full-access PIN to $actionLabel.',
+                        'Enter manager PIN to $actionLabel.',
                         style: TextStyle(
                           color: _textSecondary,
                           fontWeight: FontWeight.w600,
@@ -4554,14 +4554,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final oldSelectedPrice = priceType == 'cost'
               ? product.costPrice
               : priceType == 'wholesale'
-                  ? product.wholesalePrice
-                  : priceType == 'sale'
-                      ? (product.salePrice ?? product.sellingPrice)
-                      : product.sellingPrice;
+              ? product.wholesalePrice
+              : priceType == 'sale'
+              ? (product.salePrice ?? product.sellingPrice)
+              : product.sellingPrice;
 
           final confirmed = await _confirmAction(
             title: 'Confirm Price Change',
-            message: priceType == 'selling' &&
+            message:
+                priceType == 'selling' &&
                     (oldSelectedPrice - newPrice).abs() > 0.000001
                 ? 'Update ${product.name} SELLING price to Rs. ${newPrice.toStringAsFixed(2)}?\n\nThe old price Rs. ${oldSelectedPrice.toStringAsFixed(2)} will be saved as an allowed old label price for checkout.'
                 : 'Update ${product.name} ${priceType.toUpperCase()} price to Rs. ${newPrice.toStringAsFixed(2)}?',

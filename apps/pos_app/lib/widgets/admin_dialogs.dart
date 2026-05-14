@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
+import '../services/permission_service.dart';
 import 'app_snackbar.dart';
 import 'premium_dialog.dart';
 
@@ -30,7 +31,8 @@ class AdminDialogs {
         auth.hasManagementAccess && currentUser?.id != null;
 
     if (canBypassWithCurrentUser) {
-      final bypassedSelfApproval = requireDifferentManager &&
+      final bypassedSelfApproval =
+          requireDifferentManager &&
           requesterUserId != null &&
           requesterUserId == currentUser!.id;
 
@@ -92,12 +94,17 @@ class AdminDialogs {
 
                 final userId = ((user['id'] as num?) ?? 0).toInt();
                 final userName = (user['name'] ?? 'Unknown').toString();
-                final role = (user['role'] ?? '').toString().toLowerCase();
-                final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+                final role = (user['role'] ?? '').toString();
+                final isActive =
+                    ((user['is_active'] as num?) ?? 1).toInt() == 1;
                 final hasFullAccess =
                     ((user['has_full_access'] as num?) ?? 0).toInt() == 1 ||
                     (user['has_full_access'] == true);
-                final canApprove = role == 'manager' || hasFullAccess;
+                final canApprove = PermissionService.roleCan(
+                  role,
+                  PosPermission.settingsManage,
+                  hasFullAccess: hasFullAccess,
+                );
 
                 if (!isActive) {
                   setState(() {
@@ -361,7 +368,6 @@ class AdminDialogs {
   }
 }
 
-
 class _EditPriceDialogContent extends StatefulWidget {
   const _EditPriceDialogContent({
     required this.rootContext,
@@ -378,7 +384,8 @@ class _EditPriceDialogContent extends StatefulWidget {
   final VoidCallback onComplete;
 
   @override
-  State<_EditPriceDialogContent> createState() => _EditPriceDialogContentState();
+  State<_EditPriceDialogContent> createState() =>
+      _EditPriceDialogContentState();
 }
 
 class _EditPriceDialogContentState extends State<_EditPriceDialogContent> {

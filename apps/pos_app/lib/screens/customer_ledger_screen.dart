@@ -5,6 +5,9 @@ import 'package:shared/models/customer_ledger_entry.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/customer_credit_service.dart';
+import '../services/database_helper.dart';
+import '../services/permission_service.dart';
+import '../widgets/admin_dialogs.dart';
 import '../widgets/app_snackbar.dart';
 import 'customer_payment_dialog.dart';
 import 'customer_payment_receipt_dialog.dart';
@@ -109,6 +112,13 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
   }
 
   Future<void> _receivePayment() async {
+    final allowed = await _requirePermission(
+      permission: PosPermission.customerCreditReceivePayment,
+      title: 'Receive Credit Payment Approval',
+      description: 'Receive customer credit payment for ${widget.customerName}',
+    );
+    if (!allowed || !mounted) return;
+
     final saved = await showCustomerPaymentDialog(
       context: context,
       customerId: widget.customerId,
@@ -144,6 +154,13 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
   }
 
   Future<void> _postAdjustment() async {
+    final allowed = await _requirePermission(
+      permission: PosPermission.customerCreditAdjust,
+      title: 'Credit Adjustment Approval',
+      description: 'Credit adjustment for ${widget.customerName}',
+    );
+    if (!allowed || !mounted) return;
+
     final saved = await showCustomerCreditAdjustmentDialog(
       context: context,
       customerId: widget.customerId,
@@ -152,12 +169,22 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
     );
 
     if (!mounted || !saved) return;
+    await _logSensitiveAction(
+      actionType: 'credit_adjustment',
+      description: 'Customer credit adjusted for ${widget.customerName}',
+    );
     await _loadLedger();
   }
 
   Future<void> _voidPayment(CustomerLedgerEntry entry) async {
     final paymentId = entry.paymentId;
     if (paymentId == null || paymentId <= 0 || entry.isVoided) return;
+    final allowed = await _requirePermission(
+      permission: PosPermission.customerCreditVoidPayment,
+      title: 'Void Credit Payment Approval',
+      description: 'Void payment #$paymentId for ${widget.customerName}',
+    );
+    if (!allowed || !mounted) return;
 
     final reasonController = TextEditingController();
 
@@ -223,8 +250,17 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
     try {
       await CustomerCreditService.instance.voidPayment(
         paymentId: paymentId,
-        voidedBy: 'Manager',
+        voidedBy:
+            context.read<AuthProvider>().currentUser?.name.trim().isNotEmpty ==
+                true
+            ? context.read<AuthProvider>().currentUser!.name.trim()
+            : 'Manager',
         reason: reason,
+      );
+      await _logSensitiveAction(
+        actionType: 'payment_void',
+        description:
+            'Voided customer payment #$paymentId for ${widget.customerName}',
       );
 
       if (!mounted) return;
@@ -243,6 +279,54 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
         backgroundColor: _danger,
       );
     }
+  }
+
+  Future<bool> _requirePermission({
+    required String permission,
+    required String title,
+    required String description,
+  }) async {
+    final auth = context.read<AuthProvider>();
+    if (auth.can(permission)) return true;
+    if (!PermissionService.requiresManagerApproval(
+      auth.currentUser,
+      permission,
+    )) {
+      AppSnackBar.show(
+        context,
+        message: 'You do not have permission for this action.',
+        backgroundColor: _danger,
+      );
+      return false;
+    }
+
+    var approved = false;
+    await AdminDialogs.showPinDialog(
+      context,
+      () {
+        approved = true;
+      },
+      title: title,
+      requesterUserId: auth.currentUser?.id,
+      requesterUserName: auth.currentUser?.name,
+      approvalDescription: description,
+    );
+    return approved;
+  }
+
+  Future<void> _logSensitiveAction({
+    required String actionType,
+    required String description,
+  }) async {
+    final auth = context.read<AuthProvider>();
+    await DatabaseHelper.instance.logSensitiveAction(
+      actorUserId: auth.currentUser?.id,
+      actorName: auth.currentUser?.name,
+      actionType: actionType,
+      targetUserId: widget.customerId,
+      targetUserName: widget.customerName,
+      description: description,
+    );
   }
 
   String _money(num value) {

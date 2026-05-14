@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:shared/models/customer.dart';
 import 'package:shared/models/loyalty_ledger_entry.dart';
 import 'package:shared/models/loyalty_settings.dart';
 
+import '../providers/auth_provider.dart';
+import '../services/database_helper.dart';
 import '../services/loyalty_service.dart';
+import '../services/permission_service.dart';
+import '../widgets/admin_dialogs.dart';
 import '../widgets/app_snackbar.dart';
 
 class CustomerLoyaltyLedgerScreen extends StatefulWidget {
@@ -70,6 +76,196 @@ class _CustomerLoyaltyLedgerScreenState
       AppSnackBar.show(
         context,
         message: 'Could not load loyalty ledger.',
+        backgroundColor: _danger,
+      );
+    }
+  }
+
+  Future<bool> _requireLoyaltyAdjustPermission() async {
+    final auth = context.read<AuthProvider>();
+    if (auth.can(PosPermission.loyaltyAdjust)) return true;
+    if (!PermissionService.requiresManagerApproval(
+      auth.currentUser,
+      PosPermission.loyaltyAdjust,
+    )) {
+      AppSnackBar.show(
+        context,
+        message: 'You do not have permission to adjust loyalty points.',
+        backgroundColor: _danger,
+      );
+      return false;
+    }
+
+    var approved = false;
+    await AdminDialogs.showPinDialog(
+      context,
+      () {
+        approved = true;
+      },
+      title: 'Loyalty Adjustment Approval',
+      message: 'Enter an active manager or full-access PIN to continue.',
+      requesterUserId: auth.currentUser?.id,
+      requesterUserName: auth.currentUser?.name,
+      approvalDescription:
+          'Manual loyalty adjustment for ${widget.customer.displayName}',
+    );
+    return approved;
+  }
+
+  Future<void> _logLoyaltyAdjustment({
+    required int pointsDelta,
+    required String reason,
+  }) async {
+    final auth = context.read<AuthProvider>();
+    await DatabaseHelper.instance.logSensitiveAction(
+      actorUserId: auth.currentUser?.id,
+      actorName: auth.currentUser?.name,
+      actionType: 'loyalty_adjustment',
+      targetUserId: widget.customer.id,
+      targetUserName: widget.customer.displayName,
+      description:
+          'Manual loyalty adjustment ${pointsDelta > 0 ? '+' : ''}$pointsDelta points for ${widget.customer.displayName}: $reason',
+    );
+  }
+
+  Future<void> _adjustPoints() async {
+    final customerId = widget.customer.id ?? 0;
+    if (customerId <= 0) return;
+    final allowed = await _requireLoyaltyAdjustPermission();
+    if (!allowed || !mounted) return;
+
+    final pointsController = TextEditingController();
+    final reasonController = TextEditingController();
+    var isIncrease = true;
+
+    final result = await showDialog<({int pointsDelta, String reason})>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: const Text('Adjust Loyalty Points'),
+            content: SizedBox(
+              width: 430,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                        value: true,
+                        icon: Icon(Icons.add_rounded),
+                        label: Text('Add'),
+                      ),
+                      ButtonSegment(
+                        value: false,
+                        icon: Icon(Icons.remove_rounded),
+                        label: Text('Remove'),
+                      ),
+                    ],
+                    selected: {isIncrease},
+                    onSelectionChanged: (selection) {
+                      setDialogState(() => isIncrease = selection.first);
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: pointsController,
+                    autofocus: true,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: const InputDecoration(
+                      labelText: 'Points',
+                      prefixIcon: Icon(Icons.stars_rounded),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: reasonController,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'Reason',
+                      hintText: 'Required',
+                      prefixIcon: Icon(Icons.notes_rounded),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              FilledButton.icon(
+                onPressed: () {
+                  final points =
+                      int.tryParse(pointsController.text.trim()) ?? 0;
+                  final reason = reasonController.text.trim();
+                  if (points <= 0) {
+                    AppSnackBar.show(
+                      dialogContext,
+                      message: 'Enter points greater than zero.',
+                      backgroundColor: _danger,
+                    );
+                    return;
+                  }
+                  if (reason.isEmpty) {
+                    AppSnackBar.show(
+                      dialogContext,
+                      message: 'Reason is required.',
+                      backgroundColor: _danger,
+                    );
+                    return;
+                  }
+                  Navigator.pop(dialogContext, (
+                    pointsDelta: isIncrease ? points : -points,
+                    reason: reason,
+                  ));
+                },
+                icon: const Icon(Icons.save_rounded),
+                label: const Text('Save Adjustment'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    pointsController.dispose();
+    reasonController.dispose();
+    if (result == null || !mounted) return;
+
+    try {
+      final auth = context.read<AuthProvider>();
+      final actorName = auth.currentUser?.name.trim().isNotEmpty == true
+          ? auth.currentUser!.name.trim()
+          : 'Manager';
+      await LoyaltyService.instance.addLedgerEntry(
+        customerId: customerId,
+        entryType: LoyaltyEntryType.manualAdjustment,
+        pointsDelta: result.pointsDelta,
+        description: result.reason,
+        createdBy: actorName,
+      );
+      await _logLoyaltyAdjustment(
+        pointsDelta: result.pointsDelta,
+        reason: result.reason,
+      );
+      if (!mounted) return;
+      AppSnackBar.show(
+        context,
+        message: 'Loyalty adjustment saved.',
+        backgroundColor: _success,
+      );
+      await _loadLedger();
+    } catch (e) {
+      if (!mounted) return;
+      AppSnackBar.show(
+        context,
+        message: e.toString().replaceFirst('Exception: ', ''),
         backgroundColor: _danger,
       );
     }
@@ -326,6 +522,11 @@ class _CustomerLoyaltyLedgerScreenState
       appBar: AppBar(
         title: const Text('Loyalty Ledger'),
         actions: [
+          TextButton.icon(
+            onPressed: _isLoading ? null : _adjustPoints,
+            icon: const Icon(Icons.tune_rounded),
+            label: const Text('Adjust Points'),
+          ),
           IconButton(
             tooltip: 'Refresh',
             onPressed: _isLoading ? null : _loadLedger,

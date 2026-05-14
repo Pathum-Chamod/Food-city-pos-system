@@ -10,12 +10,15 @@ import json
 import os
 import shutil
 import sqlite3
+import tempfile
+import zipfile
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(PROJECT_ROOT, "local_admin.db")
+SERVER_BACKUP_VERSION = 1
 LEGACY_POS_DB_PATH = os.path.join(
     PROJECT_ROOT,
     "apps",
@@ -4319,7 +4322,9 @@ def update_business_info(cursor, body):
 
 def _normalize_user_role(value):
     normalized = str(value or '').strip().lower()
-    return 'manager' if normalized == 'manager' else 'cashier'
+    if normalized in {'manager', 'owner', 'admin', 'administrator'}:
+        return 'manager'
+    return 'cashier'
 
 
 def _normalize_user_status_filter(value):
@@ -4438,8 +4443,8 @@ def get_owner_user_summary(cursor):
         SELECT
             COUNT(*) AS total_users,
             COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_users,
-            COALESCE(SUM(CASE WHEN role = 'manager' THEN 1 ELSE 0 END), 0) AS managers,
-            COALESCE(SUM(CASE WHEN role = 'cashier' THEN 1 ELSE 0 END), 0) AS cashiers
+            COALESCE(SUM(CASE WHEN LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator') THEN 1 ELSE 0 END), 0) AS managers,
+            COALESCE(SUM(CASE WHEN LOWER(TRIM(role)) NOT IN ('manager', 'owner', 'admin', 'administrator') THEN 1 ELSE 0 END), 0) AS cashiers
         FROM users
         """
     ).fetchone()
@@ -4453,15 +4458,18 @@ def get_owner_user_summary(cursor):
 
 def get_owner_users(cursor, params):
     search = str(params.get('search', [''])[0] or '').strip().lower()
-    role = _normalize_user_role(params.get('role', ['all'])[0]) if str(params.get('role', ['all'])[0] or '').strip().lower() in {'manager','cashier'} else 'all'
+    raw_role = str(params.get('role', ['all'])[0] or '').strip().lower()
+    role = _normalize_user_role(raw_role) if raw_role not in {'', 'all'} else 'all'
     status = _normalize_user_status_filter(params.get('status', ['all'])[0])
 
     where_clauses = []
     where_args = []
 
     if role in {'manager', 'cashier'}:
-        where_clauses.append('role = ?')
-        where_args.append(role)
+        if role == 'manager':
+            where_clauses.append("LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator')")
+        else:
+            where_clauses.append("LOWER(TRIM(role)) NOT IN ('manager', 'owner', 'admin', 'administrator')")
     if status == 'active':
         where_clauses.append('is_active = 1')
     elif status == 'inactive':
@@ -4737,11 +4745,229 @@ def build_data_backup(cursor):
     }
     return backup
 
+
+def _server_backup_directory():
+    user_profile = os.environ.get("USERPROFILE", "").strip()
+    if user_profile:
+        path = os.path.join(user_profile, "Documents", "FoodCityPOS", "ServerBackups")
+    else:
+        path = os.path.join(PROJECT_ROOT, "FoodCityPOS", "ServerBackups")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _server_backup_stamp():
+    return datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def _safe_server_backup_path(value):
+    name = os.path.basename(str(value or "").strip())
+    if not name or not name.lower().endswith(".zip"):
+        return None
+    path = os.path.abspath(os.path.join(_server_backup_directory(), name))
+    backup_dir = os.path.abspath(_server_backup_directory())
+    if os.path.commonpath([backup_dir, path]) != backup_dir:
+        return None
+    return path
+
+
+def _snapshot_sqlite_db(source_path, output_path):
+    if not os.path.exists(source_path):
+        return False
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    source = sqlite3.connect(source_path, timeout=10)
+    target = sqlite3.connect(output_path)
+    try:
+        source.backup(target)
+        target.commit()
+        return True
+    finally:
+        target.close()
+        source.close()
+
+
+def _server_backup_counts(export_data):
+    keys = [
+        "products",
+        "customers",
+        "sales",
+        "sale_items",
+        "customer_ledger",
+        "customer_payments",
+        "customer_product_prices",
+        "pricing_schemes",
+        "pricing_scheme_rules",
+        "loyalty_ledger",
+        "owner_users",
+    ]
+    return {key: len(export_data.get(key, []) or []) for key in keys}
+
+
+def _read_server_backup_metadata(zip_path):
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        if "backup_metadata.json" not in archive.namelist():
+            return None
+        return json.loads(archive.read("backup_metadata.json").decode("utf-8"))
+
+
+def validate_server_backup(zip_path):
+    if not zip_path or not os.path.exists(zip_path):
+        return {
+            "is_valid": False,
+            "message": "Backup file does not exist.",
+            "metadata": None,
+        }
+    try:
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            names = set(archive.namelist())
+            if "backup_metadata.json" not in names:
+                return {
+                    "is_valid": False,
+                    "message": "backup_metadata.json is missing.",
+                    "metadata": None,
+                }
+            metadata = json.loads(archive.read("backup_metadata.json").decode("utf-8"))
+            if metadata.get("app") != "Food City POS Local Server":
+                return {
+                    "is_valid": False,
+                    "message": "This is not a Food City POS local server backup.",
+                    "metadata": metadata,
+                }
+            if parse_int(metadata.get("backup_version"), 0) != SERVER_BACKUP_VERSION:
+                return {
+                    "is_valid": False,
+                    "message": f"Unsupported backup version {metadata.get('backup_version')}.",
+                    "metadata": metadata,
+                }
+            required = {"local_admin.db", "data_export.json"}
+            missing = sorted(required.difference(names))
+            if missing:
+                return {
+                    "is_valid": False,
+                    "message": f"Backup is missing: {', '.join(missing)}.",
+                    "metadata": metadata,
+                }
+            return {
+                "is_valid": True,
+                "message": "Backup is valid.",
+                "metadata": metadata,
+            }
+    except Exception as exc:
+        return {
+            "is_valid": False,
+            "message": f"Backup validation failed: {exc}",
+            "metadata": None,
+        }
+
+
+def list_server_backups():
+    backup_dir = _server_backup_directory()
+    backups = []
+    for name in os.listdir(backup_dir):
+        if not name.lower().endswith(".zip"):
+            continue
+        path = os.path.join(backup_dir, name)
+        if not os.path.isfile(path):
+            continue
+        stat = os.stat(path)
+        validation = validate_server_backup(path)
+        backups.append(
+            {
+                "file_name": name,
+                "path": os.path.abspath(path),
+                "size_bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
+                "is_valid": validation.get("is_valid", False),
+                "validation_message": validation.get("message", ""),
+                "metadata": validation.get("metadata"),
+            }
+        )
+    backups.sort(key=lambda item: item["modified_at"], reverse=True)
+    return backups
+
+
+def create_server_backup(cursor, created_by="Local Server", notes="Manual local server backup"):
+    backup_dir = _server_backup_directory()
+    now = datetime.now().astimezone()
+    export_data = build_data_backup(cursor)
+    try:
+        cursor.connection.commit()
+    except Exception:
+        pass
+    file_name = f"food_city_server_backup_{_server_backup_stamp()}.zip"
+    output_path = os.path.join(backup_dir, file_name)
+
+    metadata = {
+        "app": "Food City POS Local Server",
+        "backup_version": SERVER_BACKUP_VERSION,
+        "created_at": now.isoformat(),
+        "created_by": str(created_by or "Local Server").strip() or "Local Server",
+        "source": "local_server.py",
+        "contains": {
+            "local_admin_db": os.path.exists(DB_PATH),
+            "pos_db": os.path.exists(POS_DB_PATH),
+            "json_export": True,
+        },
+        "database_files": {
+            "local_admin_db": "local_admin.db",
+            "pos_db": "food_city_pos.db",
+        },
+        "paths": {
+            "local_admin_db": os.path.abspath(DB_PATH),
+            "pos_db": os.path.abspath(POS_DB_PATH),
+        },
+        "counts": _server_backup_counts(export_data),
+        "notes": str(notes or "").strip(),
+    }
+
+    with tempfile.TemporaryDirectory(prefix="food_city_server_backup_") as temp_dir:
+        admin_snapshot = os.path.join(temp_dir, "local_admin.db")
+        pos_snapshot = os.path.join(temp_dir, "food_city_pos.db")
+        has_admin_snapshot = _snapshot_sqlite_db(DB_PATH, admin_snapshot)
+        has_pos_snapshot = _snapshot_sqlite_db(POS_DB_PATH, pos_snapshot)
+
+        metadata["contains"]["local_admin_db"] = has_admin_snapshot
+        metadata["contains"]["pos_db"] = has_pos_snapshot
+
+        with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(
+                "backup_metadata.json",
+                json.dumps(metadata, indent=2, ensure_ascii=False),
+            )
+            archive.writestr(
+                "data_export.json",
+                json.dumps(export_data, indent=2, ensure_ascii=False),
+            )
+            archive.writestr(
+                "restore_instructions.txt",
+                "Food City POS local server backup.\n"
+                "Keep this ZIP safe. Restore support for local_server.py is handled by the Backup & Restore module.\n"
+                "Do not manually replace database files while POS or local_server.py is running.\n",
+            )
+            if has_admin_snapshot:
+                archive.write(admin_snapshot, "local_admin.db")
+            if has_pos_snapshot:
+                archive.write(pos_snapshot, "food_city_pos.db")
+
+    validation = validate_server_backup(output_path)
+    return {
+        "status": "success" if validation.get("is_valid") else "error",
+        "message": "Server backup created successfully." if validation.get("is_valid") else validation.get("message"),
+        "backup": {
+            "file_name": file_name,
+            "path": os.path.abspath(output_path),
+            "size_bytes": os.path.getsize(output_path) if os.path.exists(output_path) else 0,
+            "metadata": metadata,
+            "validation": validation,
+        },
+    }
+
 def _active_manager_count(cursor, excluding_user_id=None):
     query = """
         SELECT COUNT(*) AS count
         FROM users
-        WHERE role = 'manager' AND COALESCE(is_active, 1) = 1
+        WHERE LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator')
+          AND COALESCE(is_active, 1) = 1
     """
     args = []
     if excluding_user_id is not None:
@@ -5383,6 +5609,32 @@ class APIHandler(BaseHTTPRequestHandler):
             self._set_headers()
             self.wfile.write(json.dumps(backup).encode())
 
+        elif action == "list_server_backups":
+            self._set_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "status": "success",
+                        "backup_directory": _server_backup_directory(),
+                        "backups": list_server_backups(),
+                    }
+                ).encode()
+            )
+
+        elif action == "validate_server_backup":
+            file_name = params.get("file_name", params.get("name", [""]))[0]
+            backup_path = _safe_server_backup_path(file_name)
+            validation = validate_server_backup(backup_path)
+            self._set_headers(200 if validation.get("is_valid") else 400)
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "status": "success" if validation.get("is_valid") else "error",
+                        **validation,
+                    }
+                ).encode()
+            )
+
         elif action == "get_owner_dashboard":
             today_rows = _sales_rows_between(
                 c,
@@ -5637,6 +5889,15 @@ class APIHandler(BaseHTTPRequestHandler):
             )
             self._set_headers()
             self.wfile.write(json.dumps({"status": "success"}).encode())
+
+        elif action == "create_server_backup":
+            result = create_server_backup(
+                c,
+                created_by=body.get("created_by", "Local Server"),
+                notes=body.get("notes", "Manual local server backup"),
+            )
+            self._set_headers(200 if result.get("status") == "success" else 400)
+            self.wfile.write(json.dumps(result).encode())
 
         elif action == "pos_sync":
             sync_type = str(body.get("type", "")).strip().upper()

@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
+import '../providers/auth_provider.dart';
 import '../services/customer_pricing_service.dart';
 import '../services/database_helper.dart';
+import '../services/permission_service.dart';
 import '../widgets/app_snackbar.dart';
+import '../widgets/permission_guard.dart';
 import 'pricing_scheme_rule_dialog.dart';
 
 class CustomerProductPricesScreen extends StatefulWidget {
@@ -38,6 +42,22 @@ class _CustomerProductPricesScreenState
       _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
   Color get _textSecondary =>
       _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+
+  int? get _actorUserId {
+    try {
+      return context.read<AuthProvider>().currentUser?.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? get _actorName {
+    try {
+      return context.read<AuthProvider>().currentUser?.name;
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
   void initState() {
@@ -86,6 +106,17 @@ class _CustomerProductPricesScreenState
 
   String _money(num value) {
     return 'Rs. ${value.toDouble().toStringAsFixed(2)}';
+  }
+
+  Future<void> _logPricingUpdate(String description) async {
+    await DatabaseHelper.instance.logSensitiveAction(
+      actorUserId: _actorUserId,
+      actorName: _actorName,
+      actionType: 'pricing_update',
+      targetUserId: widget.customer.id,
+      targetUserName: widget.customer.displayName,
+      description: description,
+    );
   }
 
   List<String> get _categories {
@@ -138,6 +169,9 @@ class _CustomerProductPricesScreenState
         isActive: result.isActive,
         note: result.note,
       );
+      await _logPricingUpdate(
+        'Customer-specific pricing rule added for ${widget.customer.displayName}',
+      );
       if (!mounted) return;
       _showMessage('Customer-specific rule saved.', color: _success);
       await _loadData();
@@ -179,6 +213,9 @@ class _CustomerProductPricesScreenState
         isActive: result.isActive,
         note: result.note,
       );
+      await _logPricingUpdate(
+        'Customer-specific pricing rule updated for ${widget.customer.displayName}',
+      );
       if (!mounted) return;
       _showMessage('Customer-specific rule updated.', color: _success);
       await _loadData();
@@ -199,6 +236,9 @@ class _CustomerProductPricesScreenState
       await CustomerPricingService.instance.setCustomerRuleActive(
         id: id,
         isActive: !rule.isActive,
+      );
+      await _logPricingUpdate(
+        'Customer-specific pricing rule for ${widget.customer.displayName} ${rule.isActive ? 'deactivated' : 'reactivated'}',
       );
       if (!mounted) return;
       _showMessage(
@@ -239,6 +279,15 @@ class _CustomerProductPricesScreenState
 
   @override
   Widget build(BuildContext context) {
+    if (!context.watch<AuthProvider>().can(PosPermission.pricingManage)) {
+      return const PermissionGuard(
+        permission: PosPermission.pricingManage,
+        title: 'Pricing access restricted',
+        message: 'Only managers or full-access users can manage pricing.',
+        child: SizedBox.shrink(),
+      );
+    }
+
     final activeCount = _rules.where((rule) => rule.isActive).length;
 
     return Scaffold(

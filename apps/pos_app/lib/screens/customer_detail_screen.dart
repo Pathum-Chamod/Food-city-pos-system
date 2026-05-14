@@ -10,8 +10,11 @@ import '../providers/auth_provider.dart';
 import '../services/customer_credit_service.dart';
 import '../services/customer_pricing_service.dart';
 import '../services/customer_service.dart';
+import '../services/database_helper.dart';
 import '../services/loyalty_service.dart';
+import '../services/permission_service.dart';
 import '../services/pricing_scheme_service.dart';
+import '../widgets/admin_dialogs.dart';
 import '../widgets/app_snackbar.dart';
 import 'customer_category_assignment_dialog.dart';
 import 'customer_credit_settings_dialog.dart';
@@ -124,6 +127,54 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     AppSnackBar.show(context, message: message, backgroundColor: color);
   }
 
+  Future<bool> _requirePermission({
+    required String permission,
+    required String title,
+    required String description,
+  }) async {
+    final auth = context.read<AuthProvider>();
+    if (auth.can(permission)) return true;
+    if (!PermissionService.requiresManagerApproval(
+      auth.currentUser,
+      permission,
+    )) {
+      _showMessage(
+        'You do not have permission for this action.',
+        color: _danger,
+      );
+      return false;
+    }
+
+    var approved = false;
+    await AdminDialogs.showPinDialog(
+      context,
+      () {
+        approved = true;
+      },
+      title: title,
+      message: 'Enter an active manager or full-access PIN to continue.',
+      requesterUserId: auth.currentUser?.id,
+      requesterUserName: auth.currentUser?.name,
+      approvalDescription: description,
+    );
+    return approved;
+  }
+
+  Future<void> _logSensitiveAction({
+    required String actionType,
+    required String description,
+  }) async {
+    final auth = context.read<AuthProvider>();
+    await DatabaseHelper.instance.logSensitiveAction(
+      actorUserId: auth.currentUser?.id,
+      actorName: auth.currentUser?.name,
+      actionType: actionType,
+      targetUserId: _customer?.id,
+      targetUserName: _customer?.displayName,
+      description: description,
+    );
+  }
+
   Future<void> _editCustomer() async {
     final customer = _customer;
     if (customer == null) return;
@@ -141,6 +192,12 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   Future<void> _openCreditSettings() async {
     final customer = _customer;
     if (customer == null || customer.id == null) return;
+    final allowed = await _requirePermission(
+      permission: PosPermission.customerCreditManage,
+      title: 'Credit Settings Approval',
+      description: 'Credit settings opened for ${customer.displayName}',
+    );
+    if (!allowed || !mounted) return;
 
     final saved = await showCustomerCreditSettingsDialog(
       context: context,
@@ -150,6 +207,10 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     );
 
     if (!mounted || !saved) return;
+    await _logSensitiveAction(
+      actionType: 'credit_settings_update',
+      description: 'Credit settings updated for ${customer.displayName}',
+    );
     _showMessage('Credit settings updated.', color: _success);
     await _loadCustomer();
   }
@@ -157,6 +218,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   Future<void> _openProductPrices() async {
     final customer = _customer;
     if (customer == null || customer.id == null) return;
+    final allowed = await _requirePermission(
+      permission: PosPermission.pricingManage,
+      title: 'Customer Pricing Approval',
+      description:
+          'Customer-specific pricing opened for ${customer.displayName}',
+    );
+    if (!allowed || !mounted) return;
 
     await Navigator.push(
       context,
@@ -172,6 +240,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   Future<void> _openCategoryAssignment() async {
     final customer = _customer;
     if (customer == null || customer.id == null) return;
+    final allowed = await _requirePermission(
+      permission: PosPermission.pricingManage,
+      title: 'Customer Pricing Assignment Approval',
+      description:
+          'Customer category/scheme assignment for ${customer.displayName}',
+    );
+    if (!allowed || !mounted) return;
 
     final result = await showCustomerCategoryAssignmentDialog(
       context: context,
@@ -191,6 +266,11 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       await service.assignCustomerPricingScheme(
         customerId: customer.id!,
         pricingSchemeId: result.pricingSchemeId,
+      );
+      await _logSensitiveAction(
+        actionType: 'pricing_update',
+        description:
+            'Customer pricing assignment updated for ${customer.displayName}',
       );
       _showMessage('Customer category assignment updated.', color: _success);
       await _loadCustomer();
@@ -236,6 +316,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   Future<void> _setCustomerLoyaltyEnabled(bool enabled) async {
     final customer = _customer;
     if (customer == null || customer.id == null) return;
+    final allowed = await _requirePermission(
+      permission: PosPermission.loyaltyAdjust,
+      title: 'Loyalty Update Approval',
+      description:
+          'Loyalty ${enabled ? 'enabled' : 'disabled'} for ${customer.displayName}',
+    );
+    if (!allowed || !mounted) return;
 
     try {
       await LoyaltyService.instance.setCustomerLoyaltyEnabled(
@@ -249,6 +336,11 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             : 'Loyalty disabled for customer.',
         color: _success,
       );
+      await _logSensitiveAction(
+        actionType: 'loyalty_adjustment',
+        description:
+            'Loyalty ${enabled ? 'enabled' : 'disabled'} for ${customer.displayName}',
+      );
       await _loadCustomer();
     } catch (e) {
       if (!mounted) return;
@@ -259,6 +351,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   Future<void> _receiveCustomerPayment() async {
     final customer = _customer;
     if (customer == null || customer.id == null) return;
+    final allowed = await _requirePermission(
+      permission: PosPermission.customerCreditReceivePayment,
+      title: 'Receive Credit Payment Approval',
+      description:
+          'Receive customer credit payment for ${customer.displayName}',
+    );
+    if (!allowed || !mounted) return;
 
     final saved = await showCustomerPaymentDialog(
       context: context,

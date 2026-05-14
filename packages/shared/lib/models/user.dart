@@ -1,7 +1,11 @@
 class User {
+  static const String managerRole = 'manager';
+  static const String cashierRole = 'cashier';
+  static const String presentationRole = 'presentation';
+
   final int? id;
   final String name;
-  final String role; // manager | cashier | viewer
+  final String role; // manager | cashier, with old owner/admin normalized
   final String pin;
   final bool isActive;
   final bool hasFullAccess;
@@ -25,15 +29,44 @@ class User {
     this.updatedBy,
   });
 
-  String get normalizedRole => role.trim().toLowerCase();
+  static String normalizeRole(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    switch (normalized) {
+      case 'manager':
+      case 'owner':
+      case 'admin':
+      case 'administrator':
+        return managerRole;
+      case 'viewer':
+      case 'presentation':
+        return presentationRole;
+      case 'cashier':
+        return cashierRole;
+      default:
+        return cashierRole;
+    }
+  }
 
-  bool get isManager => normalizedRole == 'manager';
-  bool get isCashier => normalizedRole == 'cashier';
+  static String roleLabel(String? value) {
+    switch (normalizeRole(value)) {
+      case managerRole:
+        return 'Manager';
+      case presentationRole:
+        return 'Presentation';
+      default:
+        return 'Cashier';
+    }
+  }
+
+  String get normalizedRole => normalizeRole(role);
+
+  bool get isManager => normalizedRole == managerRole;
+  bool get isCashier => normalizedRole == cashierRole;
 
   /// Special login used for client demos / presentation privacy mode.
   /// This user can still run normal POS sales, but financial pages use a
   /// filtered presentation view instead of full real history.
-  bool get isViewer => normalizedRole == 'viewer' || normalizedRole == 'presentation';
+  bool get isViewer => normalizedRole == presentationRole;
   bool get isPresentationLogin => isViewer;
 
   bool get hasManagementAccess => isManager || hasFullAccess;

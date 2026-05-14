@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared/shared.dart';
 
 import '../services/database_helper.dart';
+import '../services/permission_service.dart';
 
 class AuthProvider with ChangeNotifier {
   User? _currentUser;
@@ -14,11 +15,15 @@ class AuthProvider with ChangeNotifier {
   bool get inactiveLoginAttempt => _inactiveLoginAttempt;
 
   bool get isLoggedIn => _currentUser != null;
-  bool get isManager => _currentUser?.isManager ?? false;
+  bool get isManager => PermissionService.isManagerRole(_currentUser?.role);
   bool get isPresentationLogin => _currentUser?.isPresentationLogin ?? false;
   bool get hasFullAccess => _currentUser?.hasFullAccess ?? false;
-  bool get hasManagementAccess => _currentUser?.hasManagementAccess ?? false;
+  bool get hasManagementAccess =>
+      PermissionService.hasManagementAccess(_currentUser);
   bool get shouldBypassManagerPin => hasManagementAccess;
+
+  bool can(String permission) =>
+      PermissionService.can(_currentUser, permission);
 
   /// Special presentation session start time.
   /// Used so sales performed during a demo login are always visible in the
@@ -46,7 +51,9 @@ class AuthProvider with ChangeNotifier {
     }
 
     try {
-      final existingUser = await DatabaseHelper.instance.findUserByPin(trimmedPin);
+      final existingUser = await DatabaseHelper.instance.findUserByPin(
+        trimmedPin,
+      );
 
       if (existingUser == null) {
         await DatabaseHelper.instance.logLoginFailed(

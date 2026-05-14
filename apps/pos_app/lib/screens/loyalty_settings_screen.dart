@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
+import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 import '../services/loyalty_service.dart';
+import '../services/permission_service.dart';
 import '../widgets/app_snackbar.dart';
+import '../widgets/permission_guard.dart';
 
 class LoyaltySettingsScreen extends StatefulWidget {
   const LoyaltySettingsScreen({super.key});
@@ -54,6 +58,22 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
       _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
   Color get _textSecondary =>
       _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+
+  int? get _actorUserId {
+    try {
+      return context.read<AuthProvider>().currentUser?.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? get _actorName {
+    try {
+      return context.read<AuthProvider>().currentUser?.name;
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
   void initState() {
@@ -112,6 +132,15 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
     }
   }
 
+  Future<void> _logLoyaltyUpdate(String description) async {
+    await DatabaseHelper.instance.logSensitiveAction(
+      actorUserId: _actorUserId,
+      actorName: _actorName,
+      actionType: 'loyalty_adjustment',
+      description: description,
+    );
+  }
+
   Future<void> _saveSettings() async {
     if (_isSaving) return;
     setState(() => _isSaving = true);
@@ -126,6 +155,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
         allowCreditSaleEarn: false,
         roundingMode: _roundingMode,
       );
+      await _logLoyaltyUpdate('Loyalty global settings updated');
       await _load();
       if (!mounted) return;
       AppSnackBar.show(
@@ -206,6 +236,9 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
         excludeEarning: excludeEarning,
         excludeRedemption: excludeRedemption,
         isActive: isActive,
+      );
+      await _logLoyaltyUpdate(
+        'Loyalty category rule updated for "${controller.text.trim()}"',
       );
       await _load();
     } catch (e) {
@@ -298,6 +331,9 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
         excludeRedemption: excludeRedemption,
         isActive: isActive,
       );
+      await _logLoyaltyUpdate(
+        'Loyalty product rule updated for "${product.name}"',
+      );
       _productSearchController.clear();
       await _load();
     } catch (e) {
@@ -365,6 +401,9 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
         excludeEarning: excludeEarning,
         excludeRedemption: excludeRedemption,
         isActive: isActive,
+      );
+      await _logLoyaltyUpdate(
+        'Loyalty product rule updated for "${exclusion.displayName}"',
       );
       await _load();
     } catch (e) {
@@ -1127,6 +1166,15 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (!context.watch<AuthProvider>().can(PosPermission.loyaltyAdjust)) {
+      return const PermissionGuard(
+        permission: PosPermission.loyaltyAdjust,
+        title: 'Loyalty access restricted',
+        message: 'Only managers or full-access users can manage loyalty rules.',
+        child: SizedBox.shrink(),
+      );
+    }
+
     return Scaffold(
       backgroundColor: _page,
       body: SafeArea(

@@ -4,8 +4,10 @@ import 'package:shared/shared.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
+import '../services/permission_service.dart';
 import '../services/pricing_scheme_service.dart';
 import '../widgets/app_snackbar.dart';
+import '../widgets/permission_guard.dart';
 import 'pricing_scheme_rule_dialog.dart';
 
 class PricingSchemeRulesScreen extends StatefulWidget {
@@ -45,6 +47,14 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
   int? get _actorUserId {
     try {
       return context.read<AuthProvider>().currentUser?.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? get _actorName {
+    try {
+      return context.read<AuthProvider>().currentUser?.name;
     } catch (_) {
       return null;
     }
@@ -106,6 +116,16 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
     return error.toString().replaceFirst('Exception: ', '');
   }
 
+  Future<void> _logPricingUpdate(String description) async {
+    await DatabaseHelper.instance.logSensitiveAction(
+      actorUserId: _actorUserId,
+      actorName: _actorName,
+      actionType: 'pricing_update',
+      targetUserName: widget.scheme.displayName,
+      description: description,
+    );
+  }
+
   Future<void> _addRule() async {
     final result = await showPricingSchemeRuleDialog(
       context: context,
@@ -150,6 +170,11 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
         note: result.note,
         userId: _actorUserId,
       );
+      await _logPricingUpdate(
+        existingRule == null
+            ? 'Pricing rule added to "${widget.scheme.displayName}"'
+            : 'Pricing rule updated in "${widget.scheme.displayName}"',
+      );
       _showMessage(
         existingRule == null ? 'Pricing rule added.' : 'Pricing rule updated.',
         color: _success,
@@ -169,6 +194,9 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
         id: id,
         isActive: !rule.isActive,
         updatedBy: _actorUserId,
+      );
+      await _logPricingUpdate(
+        'Pricing rule in "${widget.scheme.displayName}" ${rule.isActive ? 'deactivated' : 'reactivated'}',
       );
       _showMessage(
         rule.isActive
@@ -381,6 +409,15 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!context.watch<AuthProvider>().can(PosPermission.pricingManage)) {
+      return const PermissionGuard(
+        permission: PosPermission.pricingManage,
+        title: 'Pricing access restricted',
+        message: 'Only managers or full-access users can manage pricing.',
+        child: SizedBox.shrink(),
+      );
+    }
+
     final activeCount = _rules.where((rule) => rule.isActive).length;
 
     return Scaffold(

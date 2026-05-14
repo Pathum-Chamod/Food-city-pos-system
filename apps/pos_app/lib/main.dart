@@ -4,7 +4,9 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'services/backup_restore_service.dart';
 import 'services/database_helper.dart';
+import 'services/permission_service.dart';
 import 'services/sync_service.dart';
 import 'providers/cart_provider.dart';
 import 'providers/auth_provider.dart';
@@ -33,6 +35,10 @@ void main() async {
   // Initialize the local SQLite DB and inject mock data
   await DatabaseHelper.instance.database;
   await DatabaseHelper.instance.insertMockDataIfEmpty();
+
+  unawaited(
+    BackupRestoreService.instance.runAutoBackupIfDue(createdBy: 'POS Startup'),
+  );
 
   // Start the background sync worker (checks every 30 seconds)
   SyncService().startSyncWorker();
@@ -503,8 +509,11 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _runProtectedManagerAction(
-    Future<void> Function() action,
-  ) async {
+    Future<void> Function() action, {
+    String permission = PosPermission.settingsManage,
+    String title = 'Manager Approval Required',
+    String message = 'Enter a manager PIN to continue.',
+  }) async {
     final context = AppSnackBar.navigatorKey.currentContext;
     if (context == null) return;
 
@@ -518,21 +527,45 @@ class _PosAppState extends State<PosApp> {
       return;
     }
 
-    if (auth.hasManagementAccess) {
+    if (auth.can(permission)) {
       await action();
       return;
     }
 
-    await AdminDialogs.showPinDialog(context, action);
+    if (!PermissionService.requiresManagerApproval(
+      auth.currentUser,
+      permission,
+    )) {
+      AppSnackBar.show(
+        context,
+        message: 'You do not have permission to open this module.',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+
+    await AdminDialogs.showPinDialog(
+      context,
+      action,
+      title: title,
+      message: message,
+      requesterUserId: auth.currentUser?.id,
+      requesterUserName: auth.currentUser?.name,
+      approvalDescription: title,
+    );
   }
 
   Future<void> _openInventory() {
-    return _runProtectedManagerAction(() {
-      return _pushOrRevealRoute(
-        routeName: PosRouteNames.inventory,
-        builder: (context) => const InventoryScreen(),
-      );
-    });
+    return _runProtectedManagerAction(
+      () {
+        return _pushOrRevealRoute(
+          routeName: PosRouteNames.inventory,
+          builder: (context) => const InventoryScreen(),
+        );
+      },
+      permission: PosPermission.inventoryAdjust,
+      title: 'Open Inventory',
+    );
   }
 
   Future<void> _openTransactionHistory() {
@@ -570,34 +603,46 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _openSalesReport() {
-    return _runProtectedManagerAction(() {
-      return _pushOrRevealRoute(
-        routeName: PosRouteNames.salesReport,
-        builder: (context) => const SalesReportScreen(),
-      );
-    });
+    return _runProtectedManagerAction(
+      () {
+        return _pushOrRevealRoute(
+          routeName: PosRouteNames.salesReport,
+          builder: (context) => const SalesReportScreen(),
+        );
+      },
+      permission: PosPermission.reportsView,
+      title: 'Open Sales Report',
+    );
   }
 
   Future<void> _openExpiryAlerts() {
-    return _runProtectedManagerAction(() {
-      return _pushOrRevealRoute(
-        routeName: PosRouteNames.expiryAlerts,
-        builder: (context) => const ExpiryAlertsScreen(),
-      );
-    });
+    return _runProtectedManagerAction(
+      () {
+        return _pushOrRevealRoute(
+          routeName: PosRouteNames.expiryAlerts,
+          builder: (context) => const ExpiryAlertsScreen(),
+        );
+      },
+      permission: PosPermission.inventoryAdjust,
+      title: 'Open Expiry Alerts',
+    );
   }
 
   Future<void> _openUserManagement() {
-    return _runProtectedManagerAction(() async {
-      final context = AppSnackBar.navigatorKey.currentContext;
-      await _pushOrRevealRoute(
-        routeName: PosRouteNames.userManagement,
-        builder: (context) => const UserManagementScreen(),
-      );
+    return _runProtectedManagerAction(
+      () async {
+        final context = AppSnackBar.navigatorKey.currentContext;
+        await _pushOrRevealRoute(
+          routeName: PosRouteNames.userManagement,
+          builder: (context) => const UserManagementScreen(),
+        );
 
-      if (context == null) return;
-      await context.read<AuthProvider>().refreshCurrentUser();
-    });
+        if (context == null) return;
+        await context.read<AuthProvider>().refreshCurrentUser();
+      },
+      permission: PosPermission.usersManage,
+      title: 'Open User Management',
+    );
   }
 
   Future<void> _openPresentationSettings() {
@@ -605,7 +650,7 @@ class _PosAppState extends State<PosApp> {
     if (context == null) return Future<void>.value();
 
     final auth = context.read<AuthProvider>();
-    if (!auth.hasFullAccess) {
+    if (!auth.hasFullAccess && !auth.hasManagementAccess) {
       AppSnackBar.show(
         context,
         message: 'Only owner/full-access login can open Presentation Settings.',
@@ -621,18 +666,22 @@ class _PosAppState extends State<PosApp> {
   }
 
   Future<void> _openSupplierManagement() {
-    return _runProtectedManagerAction(() {
-      final context = AppSnackBar.navigatorKey.currentContext;
-      if (context == null) return Future<void>.value();
+    return _runProtectedManagerAction(
+      () {
+        final context = AppSnackBar.navigatorKey.currentContext;
+        if (context == null) return Future<void>.value();
 
-      final cashierName =
-          context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
-      return _pushOrRevealRoute(
-        routeName: PosRouteNames.supplierManagement,
-        builder: (context) =>
-            SupplierManagementScreen(cashierName: cashierName),
-      );
-    });
+        final cashierName =
+            context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+        return _pushOrRevealRoute(
+          routeName: PosRouteNames.supplierManagement,
+          builder: (context) =>
+              SupplierManagementScreen(cashierName: cashierName),
+        );
+      },
+      permission: PosPermission.inventoryAdjust,
+      title: 'Open Supplier Operations',
+    );
   }
 
   Future<void> _openHardwareSetup() async {

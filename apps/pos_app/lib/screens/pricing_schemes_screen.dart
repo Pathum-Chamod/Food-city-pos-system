@@ -3,8 +3,11 @@ import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
 import '../providers/auth_provider.dart';
+import '../services/database_helper.dart';
+import '../services/permission_service.dart';
 import '../services/pricing_scheme_service.dart';
 import '../widgets/app_snackbar.dart';
+import '../widgets/permission_guard.dart';
 import 'pricing_scheme_dialog.dart';
 import 'pricing_scheme_rules_screen.dart';
 
@@ -43,6 +46,14 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
   int? get _actorUserId {
     try {
       return context.read<AuthProvider>().currentUser?.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String? get _actorName {
+    try {
+      return context.read<AuthProvider>().currentUser?.name;
     } catch (_) {
       return null;
     }
@@ -97,6 +108,15 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
     return error.toString().replaceFirst('Exception: ', '');
   }
 
+  Future<void> _logPricingUpdate(String description) async {
+    await DatabaseHelper.instance.logSensitiveAction(
+      actorUserId: _actorUserId,
+      actorName: _actorName,
+      actionType: 'pricing_update',
+      description: description,
+    );
+  }
+
   Future<void> _addScheme() async {
     final result = await showPricingSchemeDialog(context: context);
     if (result == null) return;
@@ -109,6 +129,7 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
         priority: result.priority,
         userId: _actorUserId,
       );
+      await _logPricingUpdate('Pricing scheme "${result.name}" added');
       _showMessage('Pricing scheme added.', color: _success);
       await _loadSchemes();
     } catch (e) {
@@ -132,6 +153,7 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
         priority: result.priority,
         updatedBy: _actorUserId,
       );
+      await _logPricingUpdate('Pricing scheme "${result.name}" updated');
       _showMessage('Pricing scheme updated.', color: _success);
       await _loadSchemes();
     } catch (e) {
@@ -163,6 +185,9 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
         priority: result.priority,
         updatedBy: _actorUserId,
       );
+      await _logPricingUpdate(
+        'Pricing scheme "${scheme.displayName}" duplicated as "${result.name}"',
+      );
       _showMessage('Pricing scheme duplicated.', color: _success);
       await _loadSchemes();
     } catch (e) {
@@ -179,6 +204,9 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
         id: id,
         isActive: !scheme.isActive,
         updatedBy: _actorUserId,
+      );
+      await _logPricingUpdate(
+        'Pricing scheme "${scheme.displayName}" ${scheme.isActive ? 'deactivated' : 'reactivated'}',
       );
       _showMessage(
         scheme.isActive
@@ -394,6 +422,15 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!context.watch<AuthProvider>().can(PosPermission.pricingManage)) {
+      return const PermissionGuard(
+        permission: PosPermission.pricingManage,
+        title: 'Pricing access restricted',
+        message: 'Only managers or full-access users can manage pricing.',
+        child: SizedBox.shrink(),
+      );
+    }
+
     final activeCount = _schemes.where((scheme) => scheme.isActive).length;
     final totalRules = _ruleCounts.values.fold<int>(
       0,

@@ -17,12 +17,14 @@ import '../services/database_helper.dart';
 import '../services/customer_service.dart';
 import '../services/customer_credit_service.dart';
 import '../services/loyalty_service.dart';
+import '../services/permission_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import '../services/sync_service.dart';
 import '../widgets/admin_dialogs.dart';
 import '../widgets/premium_dialog.dart';
 import '../widgets/app_snackbar.dart';
+import 'backup_restore_screen.dart';
 import 'cart_discount_dialog.dart';
 import 'cashier_summary_screen.dart';
 import 'checkout_payment_dialog.dart';
@@ -1397,18 +1399,41 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _runProtectedManagerAction(
-    Future<void> Function() onApproved,
-  ) async {
+    Future<void> Function() onApproved, {
+    String permission = PosPermission.settingsManage,
+    String title = 'Manager Approval Required',
+    String message = 'Enter a manager PIN to continue.',
+  }) async {
     final auth = context.read<AuthProvider>();
 
-    if (auth.hasManagementAccess) {
+    if (auth.can(permission)) {
       await onApproved();
       return;
     }
 
-    await AdminDialogs.showPinDialog(context, () async {
-      await onApproved();
-    });
+    if (!PermissionService.requiresManagerApproval(
+      auth.currentUser,
+      permission,
+    )) {
+      _showInfoMessage(
+        'You do not have permission for this action.',
+        backgroundColor: _warningColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    await AdminDialogs.showPinDialog(
+      context,
+      () async {
+        await onApproved();
+      },
+      title: title,
+      message: message,
+      requesterUserId: auth.currentUser?.id,
+      requesterUserName: auth.currentUser?.name,
+      approvalDescription: title,
+    );
   }
 
   void _startAutoRefresh() {
@@ -1917,6 +1942,51 @@ class _PosScreenState extends State<PosScreen> {
     await _applyItemDiscount(cart, item);
   }
 
+  double _discountPercentForApproval({
+    required String discountType,
+    required double discountValue,
+    required double subtotal,
+  }) {
+    if (discountType == 'percent') return discountValue;
+    if (discountType == 'fixed' && subtotal > 0) {
+      return (discountValue / subtotal) * 100;
+    }
+    return 0;
+  }
+
+  Future<bool> _ensureDiscountAllowed({
+    required String discountType,
+    required double discountValue,
+    required double subtotal,
+    required String title,
+  }) async {
+    final percent = _discountPercentForApproval(
+      discountType: discountType,
+      discountValue: discountValue,
+      subtotal: subtotal,
+    );
+
+    final auth = context.read<AuthProvider>();
+    if (auth.can(PosPermission.posLargeDiscount)) return true;
+
+    if (auth.can(PosPermission.posApplySmallDiscount) &&
+        PermissionService.isDiscountWithinCashierLimit(percent)) {
+      return true;
+    }
+
+    var approved = false;
+    await _runProtectedManagerAction(
+      () async {
+        approved = true;
+      },
+      permission: PosPermission.posLargeDiscount,
+      title: title,
+      message:
+          'This discount is above the cashier limit. Enter a manager PIN to continue.',
+    );
+    return approved;
+  }
+
   Future<void> _applyLabelPriceToSelectedCartItem(CartProvider cart) async {
     final item = _selectedCartItem(cart);
     if (item == null) return;
@@ -1968,9 +2038,13 @@ class _PosScreenState extends State<PosScreen> {
 
     if (type == 'manual') {
       var approved = false;
-      await _runProtectedManagerAction(() async {
-        approved = true;
-      });
+      await _runProtectedManagerAction(
+        () async {
+          approved = true;
+        },
+        permission: PosPermission.posPriceOverride,
+        title: 'Manual Price Override',
+      );
 
       if (!mounted || !approved) {
         _focusBarcodeField();
@@ -3380,33 +3454,37 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    await _runProtectedManagerAction(() async {
-      _activeModalCount += 1;
-      Map<String, dynamic>? result;
+    _activeModalCount += 1;
+    Map<String, dynamic>? result;
 
-      try {
-        result = await showCartDiscountDialog(
-          context,
-          subtotal: cart.discountedSubtotal,
-          currentDiscountType: cart.discountType,
-          currentDiscountValue: cart.discountValue,
-          title: 'Apply Cart Discount',
-          amountLabel: 'Discountable Total',
-          totalLabel: 'Cart Total',
-        );
-      } finally {
-        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
-      }
-
-      if (!mounted || result == null) return;
-
-      cart.setDiscount(
-        discountType: (result['discount_type'] ?? 'none').toString(),
-        discountValue: ((result['discount_value'] as num?) ?? 0).toDouble(),
+    try {
+      result = await showCartDiscountDialog(
+        context,
+        subtotal: cart.discountedSubtotal,
+        currentDiscountType: cart.discountType,
+        currentDiscountValue: cart.discountValue,
+        title: 'Apply Cart Discount',
+        amountLabel: 'Discountable Total',
+        totalLabel: 'Cart Total',
       );
+    } finally {
+      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+    }
 
-      _focusBarcodeField();
-    });
+    if (!mounted || result == null) return;
+
+    final discountType = (result['discount_type'] ?? 'none').toString();
+    final discountValue = ((result['discount_value'] as num?) ?? 0).toDouble();
+    final approved = await _ensureDiscountAllowed(
+      discountType: discountType,
+      discountValue: discountValue,
+      subtotal: cart.discountedSubtotal,
+      title: 'Approve Cart Discount',
+    );
+    if (!mounted || !approved) return;
+
+    cart.setDiscount(discountType: discountType, discountValue: discountValue);
+    _focusBarcodeField();
   }
 
   Future<void> _applyItemDiscount(CartProvider cart, CartItem item) async {
@@ -3418,34 +3496,41 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    await _runProtectedManagerAction(() async {
-      _activeModalCount += 1;
-      Map<String, dynamic>? result;
+    _activeModalCount += 1;
+    Map<String, dynamic>? result;
 
-      try {
-        result = await showCartDiscountDialog(
-          context,
-          subtotal: item.baseTotal,
-          currentDiscountType: item.discountType,
-          currentDiscountValue: item.discountValue,
-          title: 'Apply Item Discount',
-          amountLabel: 'Item Total',
-          totalLabel: 'Line Total',
-        );
-      } finally {
-        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
-      }
-
-      if (!mounted || result == null) return;
-
-      cart.setItemDiscount(
-        item,
-        discountType: (result['discount_type'] ?? 'none').toString(),
-        discountValue: ((result['discount_value'] as num?) ?? 0).toDouble(),
+    try {
+      result = await showCartDiscountDialog(
+        context,
+        subtotal: item.baseTotal,
+        currentDiscountType: item.discountType,
+        currentDiscountValue: item.discountValue,
+        title: 'Apply Item Discount',
+        amountLabel: 'Item Total',
+        totalLabel: 'Line Total',
       );
+    } finally {
+      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+    }
 
-      _focusBarcodeField();
-    });
+    if (!mounted || result == null) return;
+
+    final discountType = (result['discount_type'] ?? 'none').toString();
+    final discountValue = ((result['discount_value'] as num?) ?? 0).toDouble();
+    final approved = await _ensureDiscountAllowed(
+      discountType: discountType,
+      discountValue: discountValue,
+      subtotal: item.baseTotal,
+      title: 'Approve Item Discount',
+    );
+    if (!mounted || !approved) return;
+
+    cart.setItemDiscount(
+      item,
+      discountType: discountType,
+      discountValue: discountValue,
+    );
+    _focusBarcodeField();
   }
 
   Future<void> _handleCheckout(CartProvider cart) async {
@@ -3912,24 +3997,30 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _openSupplierOperations() async {
-    await _runProtectedManagerAction(() async {
-      final cashierName =
-          context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+    await _runProtectedManagerAction(
+      () async {
+        final cashierName =
+            context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
 
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          settings: const RouteSettings(name: PosRouteNames.supplierManagement),
-          builder: (context) =>
-              SupplierManagementScreen(cashierName: cashierName),
-        ),
-      );
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(
+              name: PosRouteNames.supplierManagement,
+            ),
+            builder: (context) =>
+                SupplierManagementScreen(cashierName: cashierName),
+          ),
+        );
 
-      if (!mounted) return;
+        if (!mounted) return;
 
-      await _refreshProductsFromBackendAndReload(silentOnFailure: true);
-      _focusBarcodeField();
-    });
+        await _refreshProductsFromBackendAndReload(silentOnFailure: true);
+        _focusBarcodeField();
+      },
+      permission: PosPermission.inventoryAdjust,
+      title: 'Open Supplier Operations',
+    );
   }
 
   Future<void> _openShiftManagement() async {
@@ -4600,6 +4691,23 @@ class _PosScreenState extends State<PosScreen> {
       case 'user_management':
         await _openUserManagement();
         break;
+      case 'backup_restore':
+        await _runProtectedManagerAction(
+          () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                settings: const RouteSettings(
+                  name: PosRouteNames.backupRestore,
+                ),
+                builder: (context) => const BackupRestoreScreen(),
+              ),
+            );
+          },
+          permission: PosPermission.backupCreate,
+          title: 'Open Backup & Restore',
+        );
+        break;
       case 'sales_report':
         await Navigator.push(
           context,
@@ -4636,6 +4744,8 @@ class _PosScreenState extends State<PosScreen> {
         return Icons.receipt_long_outlined;
       case 'user_management':
         return Icons.manage_accounts_outlined;
+      case 'backup_restore':
+        return Icons.backup_rounded;
       case 'sales_report':
         return Icons.analytics_outlined;
       case 'shift_management':
@@ -4985,6 +5095,7 @@ class _PosScreenState extends State<PosScreen> {
                 const MapEntry('inventory', 'Inventory'),
                 const MapEntry('expiry_alerts', 'Expiry Alerts'),
                 const MapEntry('user_management', 'User Management'),
+                const MapEntry('backup_restore', 'Backup & Restore'),
                 const MapEntry('supplier_ops', 'Supplier Operations'),
                 const MapEntry('sales_report', 'Store Sales Report'),
                 if (PosFeatureFlags.enableShiftManagement)
@@ -5376,19 +5487,23 @@ class _PosScreenState extends State<PosScreen> {
       child: InkWell(
         onTap: () => _handleProductTap(product, cart),
         onLongPress: () async {
-          await _runProtectedManagerAction(() async {
-            await AdminDialogs.showEditPriceDialog(
-              context,
-              product.barcode,
-              product.name,
-              product.sellingPrice,
-              () async {
-                await _refreshProductsFromBackendAndReload(
-                  silentOnFailure: true,
-                );
-              },
-            );
-          });
+          await _runProtectedManagerAction(
+            () async {
+              await AdminDialogs.showEditPriceDialog(
+                context,
+                product.barcode,
+                product.name,
+                product.sellingPrice,
+                () async {
+                  await _refreshProductsFromBackendAndReload(
+                    silentOnFailure: true,
+                  );
+                },
+              );
+            },
+            permission: PosPermission.inventoryPriceUpdate,
+            title: 'Edit Product Price',
+          );
         },
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -5715,12 +5830,16 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    await _runProtectedManagerAction(() async {
-      context.read<CartProvider>().toggleRefundMode(true);
-      if (!mounted) return;
-      _showInfoMessage('Refund mode enabled.', backgroundColor: _dangerColor);
-      _focusBarcodeField();
-    });
+    await _runProtectedManagerAction(
+      () async {
+        context.read<CartProvider>().toggleRefundMode(true);
+        if (!mounted) return;
+        _showInfoMessage('Refund mode enabled.', backgroundColor: _dangerColor);
+        _focusBarcodeField();
+      },
+      permission: PosPermission.posRefund,
+      title: 'Enable Refund Mode',
+    );
   }
 
   Widget _buildCartEmptyState(CartProvider cart) {

@@ -44,6 +44,7 @@ dependencies:
   http: ^1.6.0
   file_picker: ^10.3.9
   pdf: ^3.11.3
+  archive: ^4.0.7
   csv: ^6.0.0
   shared_preferences: ^2.5.5
   esc_pos_utils_plus: ^2.0.3
