@@ -6,6 +6,15 @@ import 'package:flutter/material.dart';
 import '../services/database_helper.dart';
 import '../widgets/app_snackbar.dart';
 
+TextEditingController _selectedTextController(String text) {
+  return TextEditingController.fromValue(
+    TextEditingValue(
+      text: text,
+      selection: TextSelection(baseOffset: 0, extentOffset: text.length),
+    ),
+  );
+}
+
 class ShiftManagementScreen extends StatefulWidget {
   final String cashierName;
 
@@ -24,7 +33,7 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
   Map<String, dynamic>? _openShiftSummary;
 
   final TextEditingController _openingCashController =
-      TextEditingController(text: '0.00');
+      _selectedTextController('0.00');
   final TextEditingController _closingCashController = TextEditingController();
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
@@ -584,7 +593,11 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
                 const SizedBox(height: 16),
                 TextField(
                   controller: _openingCashController,
+                  textInputAction: TextInputAction.done,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  onSubmitted: (_) {
+                    if (!_isSubmitting) _openShift();
+                  },
                   decoration: _fieldDecoration(
                     hintText: '0.00',
                     labelText: 'Opening Cash',
@@ -834,7 +847,11 @@ class _ShiftManagementScreenState extends State<ShiftManagementScreen> {
                 const SizedBox(height: 16),
                 TextField(
                   controller: _closingCashController,
+                  textInputAction: TextInputAction.done,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  onSubmitted: (_) {
+                    if (!_isSubmitting) _closeShift();
+                  },
                   decoration: _fieldDecoration(
                     hintText: '0.00',
                     labelText: 'Counted Cash at Close',

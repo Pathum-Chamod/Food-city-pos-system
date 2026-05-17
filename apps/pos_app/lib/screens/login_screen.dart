@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/app_theme_provider.dart';
 import '../providers/auth_provider.dart';
+import '../navigation/pos_route_names.dart';
 import '../widgets/app_snackbar.dart';
 import 'pos_screen.dart';
 
@@ -20,6 +21,28 @@ class _LoginScreenState extends State<LoginScreen> {
   static const Color _brandColor = Color(0xFF2AAA8A);
   static const Color _accentColor = Color(0xFF7C9BFF);
   static const Color _warningColor = Color(0xFFF4A340);
+  static final Map<LogicalKeyboardKey, String> _digitKeys = {
+    LogicalKeyboardKey.digit0: '0',
+    LogicalKeyboardKey.digit1: '1',
+    LogicalKeyboardKey.digit2: '2',
+    LogicalKeyboardKey.digit3: '3',
+    LogicalKeyboardKey.digit4: '4',
+    LogicalKeyboardKey.digit5: '5',
+    LogicalKeyboardKey.digit6: '6',
+    LogicalKeyboardKey.digit7: '7',
+    LogicalKeyboardKey.digit8: '8',
+    LogicalKeyboardKey.digit9: '9',
+    LogicalKeyboardKey.numpad0: '0',
+    LogicalKeyboardKey.numpad1: '1',
+    LogicalKeyboardKey.numpad2: '2',
+    LogicalKeyboardKey.numpad3: '3',
+    LogicalKeyboardKey.numpad4: '4',
+    LogicalKeyboardKey.numpad5: '5',
+    LogicalKeyboardKey.numpad6: '6',
+    LogicalKeyboardKey.numpad7: '7',
+    LogicalKeyboardKey.numpad8: '8',
+    LogicalKeyboardKey.numpad9: '9',
+  };
 
   final FocusNode _keyboardFocusNode = FocusNode(debugLabel: 'login_screen');
   String _enteredPin = '';
@@ -109,9 +132,9 @@ class _LoginScreenState extends State<LoginScreen> {
       return KeyEventResult.ignored;
     }
 
-    final label = event.logicalKey.keyLabel;
-    if (RegExp(r'^\d$').hasMatch(label)) {
-      _onKeyPress(label);
+    final digit = _digitKeys[event.logicalKey];
+    if (digit != null) {
+      _onKeyPress(digit);
       return KeyEventResult.handled;
     }
 
@@ -178,8 +201,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Route<void> _buildPosRoute(String? userName) {
     return PageRouteBuilder<void>(
-      transitionDuration: const Duration(milliseconds: 720),
-      reverseTransitionDuration: const Duration(milliseconds: 360),
+      settings: const RouteSettings(name: PosRouteNames.pos),
+      transitionDuration: const Duration(milliseconds: 240),
+      reverseTransitionDuration: const Duration(milliseconds: 140),
       pageBuilder: (_, animation, secondaryAnimation) => PosScreen(
         showWelcomeAnimation: true,
         welcomeUserName: userName,
@@ -187,29 +211,20 @@ class _LoginScreenState extends State<LoginScreen> {
       transitionsBuilder: (_, animation, secondaryAnimation, child) {
         final fade = CurvedAnimation(
           parent: animation,
-          curve: const Interval(0.0, 0.78, curve: Curves.easeOut),
+          curve: Curves.easeOutCubic,
         );
         final slide = Tween<Offset>(
-          begin: const Offset(0, 0.045),
+          begin: const Offset(0, 0.018),
           end: Offset.zero,
         ).animate(
-          CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
-        );
-        final scale = Tween<double>(
-          begin: 0.985,
-          end: 1,
-        ).animate(
-          CurvedAnimation(parent: animation, curve: Curves.easeOutQuart),
+          CurvedAnimation(parent: animation, curve: Curves.easeOutQuad),
         );
 
         return FadeTransition(
           opacity: fade,
           child: SlideTransition(
             position: slide,
-            child: ScaleTransition(
-              scale: scale,
-              child: child,
-            ),
+            child: child,
           ),
         );
       },

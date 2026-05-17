@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
+import '../services/permission_service.dart';
 import 'app_snackbar.dart';
 import 'premium_dialog.dart';
 
@@ -30,7 +31,8 @@ class AdminDialogs {
         auth.hasManagementAccess && currentUser?.id != null;
 
     if (canBypassWithCurrentUser) {
-      final bypassedSelfApproval = requireDifferentManager &&
+      final bypassedSelfApproval =
+          requireDifferentManager &&
           requesterUserId != null &&
           requesterUserId == currentUser!.id;
 
@@ -92,12 +94,17 @@ class AdminDialogs {
 
                 final userId = ((user['id'] as num?) ?? 0).toInt();
                 final userName = (user['name'] ?? 'Unknown').toString();
-                final role = (user['role'] ?? '').toString().toLowerCase();
-                final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
+                final role = (user['role'] ?? '').toString();
+                final isActive =
+                    ((user['is_active'] as num?) ?? 1).toInt() == 1;
                 final hasFullAccess =
                     ((user['has_full_access'] as num?) ?? 0).toInt() == 1 ||
                     (user['has_full_access'] == true);
-                final canApprove = role == 'manager' || hasFullAccess;
+                final canApprove = PermissionService.roleCan(
+                  role,
+                  PosPermission.settingsManage,
+                  hasFullAccess: hasFullAccess,
+                );
 
                 if (!isActive) {
                   setState(() {
@@ -296,179 +303,22 @@ class AdminDialogs {
     double currentPrice,
     VoidCallback onComplete,
   ) async {
-    final TextEditingController priceController =
-        TextEditingController(text: currentPrice.toStringAsFixed(2));
-    final palette = _DialogPalette.of(context);
-    String? errorText;
-    bool isSaving = false;
-
+    // Keep the TextEditingController owned by the dialog widget itself.
+    // Do not create/dispose the controller in this outer async method, because
+    // showGeneralDialog can still build the dialog during its closing animation.
+    // Disposing the controller here can crash with:
+    // "A TextEditingController was used after being disposed."
     await showPremiumDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            Future<void> save() async {
-              if (isSaving) return;
-
-              final newPrice = double.tryParse(priceController.text.trim());
-              if (newPrice == null || newPrice <= 0) {
-                setState(() {
-                  errorText = 'Enter a valid price greater than zero.';
-                });
-                return;
-              }
-
-              setState(() {
-                isSaving = true;
-                errorText = null;
-              });
-
-              await DatabaseHelper.instance.updateProductPriceLocal(
-                barcode,
-                newPrice,
-              );
-
-              if (!context.mounted) return;
-              Navigator.pop(dialogContext);
-              onComplete();
-
-              AppSnackBar.show(
-                context,
-                message: 'Price updated locally and queued for sync!',
-                backgroundColor: Colors.green,
-              );
-            }
-
-            return Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 500),
-                child: Dialog(
-                  backgroundColor: Colors.transparent,
-                  insetPadding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 24,
-                  ),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: palette.surfaceAlt,
-                      borderRadius: BorderRadius.circular(28),
-                      border: Border.all(color: palette.border),
-                      boxShadow: [
-                        BoxShadow(
-                          color: palette.shadow,
-                          blurRadius: 28,
-                          offset: const Offset(0, 16),
-                        ),
-                      ],
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                width: 48,
-                                height: 48,
-                                decoration: BoxDecoration(
-                                  color: palette.warningSoft,
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: Icon(
-                                  Icons.sell_outlined,
-                                  color: palette.warning,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Edit Price',
-                                      style: TextStyle(
-                                        color: palette.textPrimary,
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.w900,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      currentName,
-                                      style: TextStyle(
-                                        color: palette.textSecondary,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 18),
-                          TextField(
-                            controller: priceController,
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            decoration: InputDecoration(
-                              labelText: 'New Price (Rs.)',
-                              prefixText: 'Rs. ',
-                              errorText: errorText,
-                              prefixIcon: Icon(
-                                Icons.currency_rupee_rounded,
-                                color: palette.brand,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: OutlinedButton(
-                                  onPressed: isSaving
-                                      ? null
-                                      : () => Navigator.pop(dialogContext),
-                                  child: const Text('Cancel'),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: palette.warning,
-                                  ),
-                                  onPressed: isSaving ? null : save,
-                                  child: isSaving
-                                      ? const SizedBox(
-                                          width: 18,
-                                          height: 18,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: Colors.white,
-                                          ),
-                                        )
-                                      : const Text('Save Price'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
+      builder: (dialogContext) => _EditPriceDialogContent(
+        rootContext: context,
+        barcode: barcode,
+        currentName: currentName,
+        currentPrice: currentPrice,
+        onComplete: onComplete,
+      ),
     );
-
-    priceController.dispose();
   }
 
   static String _buildApprovalDescription({
@@ -515,6 +365,259 @@ class AdminDialogs {
     }
 
     return 'Manager approval granted';
+  }
+}
+
+class _EditPriceDialogContent extends StatefulWidget {
+  const _EditPriceDialogContent({
+    required this.rootContext,
+    required this.barcode,
+    required this.currentName,
+    required this.currentPrice,
+    required this.onComplete,
+  });
+
+  final BuildContext rootContext;
+  final String barcode;
+  final String currentName;
+  final double currentPrice;
+  final VoidCallback onComplete;
+
+  @override
+  State<_EditPriceDialogContent> createState() =>
+      _EditPriceDialogContentState();
+}
+
+class _EditPriceDialogContentState extends State<_EditPriceDialogContent> {
+  late final TextEditingController _priceController;
+  late final FocusNode _priceFocusNode;
+  String? _errorText;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _priceController = TextEditingController(
+      text: _formatInitialPrice(widget.currentPrice),
+    );
+    _priceFocusNode = FocusNode();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _priceFocusNode.requestFocus();
+      _priceController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _priceController.text.length,
+      );
+    });
+  }
+
+  String _formatInitialPrice(double value) {
+    if ((value - value.roundToDouble()).abs() < 0.000001) {
+      return value.round().toString();
+    }
+
+    return value.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  @override
+  void dispose() {
+    _priceFocusNode.dispose();
+    _priceController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_isSaving) return;
+
+    final cleanedPriceText = _priceController.text
+        .trim()
+        .replaceAll(',', '')
+        .replaceAll(RegExp(r'[^0-9.]'), '');
+    final newPrice = double.tryParse(cleanedPriceText);
+    if (newPrice == null || newPrice <= 0) {
+      setState(() {
+        _errorText = 'Enter a valid price greater than zero.';
+      });
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _errorText = null;
+    });
+
+    try {
+      await DatabaseHelper.instance.updateProductPriceLocal(
+        widget.barcode,
+        newPrice,
+      );
+
+      if (!mounted) return;
+      Navigator.of(context).pop();
+
+      widget.onComplete();
+
+      final rootContext = widget.rootContext;
+      if (rootContext.mounted) {
+        AppSnackBar.show(
+          rootContext,
+          message: 'Price updated locally and queued for sync!',
+          backgroundColor: Colors.green,
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isSaving = false;
+        _errorText = 'Could not update price: $e';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = _DialogPalette.of(context);
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 500),
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 24,
+          ),
+          child: Container(
+            decoration: BoxDecoration(
+              color: palette.surfaceAlt,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: palette.border),
+              boxShadow: [
+                BoxShadow(
+                  color: palette.shadow,
+                  blurRadius: 28,
+                  offset: const Offset(0, 16),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: palette.warningSoft,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Icon(
+                          Icons.sell_outlined,
+                          color: palette.warning,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Edit Price',
+                              style: TextStyle(
+                                color: palette.textPrimary,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              widget.currentName,
+                              style: TextStyle(
+                                color: palette.textSecondary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  TextField(
+                    controller: _priceController,
+                    focusNode: _priceFocusNode,
+                    enabled: !_isSaving,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    textInputAction: TextInputAction.done,
+                    decoration: InputDecoration(
+                      labelText: 'New Price (Rs.)',
+                      hintText: 'Enter new price',
+                      prefixIcon: Icon(
+                        Icons.currency_rupee_rounded,
+                        color: palette.brand,
+                      ),
+                      errorText: _errorText,
+                    ),
+                    onTap: () {
+                      _priceController.selection = TextSelection(
+                        baseOffset: 0,
+                        extentOffset: _priceController.text.length,
+                      );
+                    },
+                    onChanged: (_) {
+                      if (_errorText == null) return;
+                      setState(() {
+                        _errorText = null;
+                      });
+                    },
+                    onSubmitted: (_) => _save(),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _isSaving
+                              ? null
+                              : () => Navigator.of(context).pop(),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: palette.warning,
+                          ),
+                          onPressed: _isSaving ? null : _save,
+                          child: _isSaving
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('Save Price'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

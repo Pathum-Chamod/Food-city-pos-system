@@ -8,6 +8,21 @@ import '../providers/admin_provider.dart';
 import '../widgets/app_snackbar.dart';
 import 'inventory_history_screen.dart';
 
+String _formatProductQuantity(Product product, num value) {
+  final quantity = value.toDouble().abs() < Product.quantityEpsilon
+      ? 0.0
+      : value.toDouble();
+
+  if (product.isWeighted) {
+    final formatted = quantity
+        .toStringAsFixed(3)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
+    return '$formatted ${product.unitLabel}';
+  }
+
+  return quantity.round().toString();
+}
+
 class OwnerInventoryScreen extends StatefulWidget {
   const OwnerInventoryScreen({super.key});
 
@@ -205,19 +220,15 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
                       background: statusColor.withOpacity(0.12),
                     ),
                     _InfoChip(
-                      label: 'Stock ${product.stock} ${product.unitLabel}',
+                      label: 'Stock ${_formatProductQuantity(product, product.stock)}',
                       color: const Color(0xFF0F3D91),
                       background: const Color(0xFFE7F0FF),
                     ),
                     _InfoChip(
-                      label: 'Min ${product.minStockLevel} ${product.unitLabel}',
+                      label:
+                          'Min ${_formatProductQuantity(product, product.minStockLevel)}',
                       color: const Color(0xFF7A5C00),
                       background: const Color(0xFFFFF4D6),
-                    ),
-                    _InfoChip(
-                      label: '${product.quantityType.label} (${product.unitLabel})',
-                      color: const Color(0xFF7C3AED),
-                      background: const Color(0xFFF3E8FF),
                     ),
                   ],
                 ),
@@ -1153,19 +1164,15 @@ class _ProductCard extends StatelessWidget {
                     background: _statusColor.withOpacity(0.12),
                   ),
                   _InfoChip(
-                    label: 'Stock ${product.stock} ${product.unitLabel}',
+                    label: 'Stock ${_formatProductQuantity(product, product.stock)}',
                     color: const Color(0xFF0F3D91),
                     background: const Color(0xFFE7F0FF),
                   ),
                   _InfoChip(
-                    label: 'Min ${product.minStockLevel} ${product.unitLabel}',
+                    label:
+                        'Min ${_formatProductQuantity(product, product.minStockLevel)}',
                     color: const Color(0xFF7A5C00),
                     background: const Color(0xFFFFF4D6),
-                  ),
-                  _InfoChip(
-                    label: '${product.quantityType.label} (${product.unitLabel})',
-                    color: const Color(0xFF7C3AED),
-                    background: const Color(0xFFF3E8FF),
                   ),
                 ],
               ),

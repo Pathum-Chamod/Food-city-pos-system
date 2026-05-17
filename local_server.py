@@ -10,12 +10,15 @@ import json
 import os
 import shutil
 import sqlite3
+import tempfile
+import zipfile
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(PROJECT_ROOT, "local_admin.db")
+SERVER_BACKUP_VERSION = 1
 LEGACY_POS_DB_PATH = os.path.join(
     PROJECT_ROOT,
     "apps",
@@ -177,6 +180,17 @@ def parse_int(value, default=0):
         return default
 
 
+def parse_pricing_scheme_selection(value):
+    if value is None:
+        return None
+    parsed = parse_int(value, 0)
+    if parsed == 0:
+        return 0
+    if parsed > 0:
+        return parsed
+    return None
+
+
 def parse_float(value, default=0.0):
     try:
         return float(value)
@@ -193,6 +207,10 @@ def format_quantity(value):
     return text or "0"
 
 
+def format_stock_with_unit(quantity_type, unit_label, value):
+    return f"{format_quantity(value)} {normalize_unit_label(quantity_type, unit_label)}"
+
+
 def normalize_quantity_type(value):
     return "weight" if str(value or "").strip().lower() == "weight" else "unit"
 
@@ -206,6 +224,2502 @@ def normalize_unit_label(quantity_type, value):
 
 def now_sql():
     return "datetime('now','localtime')"
+
+
+def normalize_customer_phone(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if text.startswith("+94"):
+        text = "0" + text[3:]
+    elif text.startswith("94") and len(text) == 11:
+        text = "0" + text[2:]
+    return "".join(ch for ch in text if ch.isdigit())
+
+
+def normalize_customer_type(value):
+    normalized = str(value or "regular").strip().lower()
+    if normalized in {"vip", "wholesale", "staff"}:
+        return normalized
+    return "regular"
+
+
+def normalize_price_type(value):
+    normalized = str(value or "selling").strip().lower()
+    if normalized in {"wholesale", "sale"}:
+        return normalized
+    return "selling"
+
+
+def create_customer_tables(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_code TEXT UNIQUE,
+            name TEXT NOT NULL,
+            phone TEXT,
+            phone_normalized TEXT,
+            email TEXT,
+            address TEXT,
+            customer_type TEXT NOT NULL DEFAULT 'regular',
+            notes TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by INTEGER,
+            updated_by INTEGER
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone_normalized)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_code ON customers(customer_code)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_active ON customers(is_active)")
+
+    ensure_column(cursor, "customers", "credit_enabled", "credit_enabled INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "credit_limit", "credit_limit REAL NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "current_credit_balance", "current_credit_balance REAL NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "credit_status", "credit_status TEXT NOT NULL DEFAULT 'normal'")
+    ensure_column(cursor, "customers", "credit_note", "credit_note TEXT")
+    ensure_column(cursor, "customers", "pricing_enabled", "pricing_enabled INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "default_price_type", "default_price_type TEXT NOT NULL DEFAULT 'selling'")
+    ensure_column(cursor, "customers", "default_discount_percent", "default_discount_percent REAL NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "pricing_note", "pricing_note TEXT")
+    ensure_column(cursor, "customers", "customer_category_id", "customer_category_id INTEGER")
+    ensure_column(cursor, "customers", "pricing_scheme_id", "pricing_scheme_id INTEGER")
+    ensure_column(cursor, "customers", "loyalty_enabled", "loyalty_enabled INTEGER NOT NULL DEFAULT 1")
+    ensure_column(cursor, "customers", "loyalty_points_balance", "loyalty_points_balance INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "loyalty_lifetime_earned", "loyalty_lifetime_earned INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "customers", "loyalty_lifetime_redeemed", "loyalty_lifetime_redeemed INTEGER NOT NULL DEFAULT 0")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_category ON customers(customer_category_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_pricing_scheme ON customers(pricing_scheme_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_loyalty ON customers(loyalty_enabled, loyalty_points_balance)")
+
+
+def create_loyalty_tables(cursor):
+    create_customer_tables(cursor)
+    ensure_customer_sales_columns(cursor)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loyalty_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            is_enabled INTEGER NOT NULL DEFAULT 1,
+            earn_rate_amount REAL NOT NULL DEFAULT 100,
+            earn_rate_points INTEGER NOT NULL DEFAULT 1,
+            point_value_amount REAL NOT NULL DEFAULT 1,
+            minimum_redeem_points INTEGER NOT NULL DEFAULT 100,
+            maximum_redeem_percent REAL NOT NULL DEFAULT 20,
+            allow_credit_sale_earn INTEGER NOT NULL DEFAULT 0,
+            rounding_mode TEXT NOT NULL DEFAULT 'floor',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    ensure_column(cursor, "loyalty_settings", "earn_rate_amount", "earn_rate_amount REAL NOT NULL DEFAULT 100")
+    ensure_column(cursor, "loyalty_settings", "earn_rate_points", "earn_rate_points INTEGER NOT NULL DEFAULT 1")
+    ensure_column(cursor, "loyalty_settings", "point_value_amount", "point_value_amount REAL NOT NULL DEFAULT 1")
+    ensure_column(cursor, "loyalty_settings", "allow_credit_sale_earn", "allow_credit_sale_earn INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "loyalty_settings", "rounding_mode", "rounding_mode TEXT NOT NULL DEFAULT 'floor'")
+    ensure_column(cursor, "loyalty_settings", "created_at", "created_at TEXT")
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loyalty_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pos_ledger_id INTEGER,
+            customer_id INTEGER NOT NULL,
+            entry_type TEXT NOT NULL,
+            points_delta INTEGER NOT NULL DEFAULT 0,
+            points_balance_after INTEGER NOT NULL DEFAULT 0,
+            money_value REAL NOT NULL DEFAULT 0,
+            sale_id INTEGER,
+            refund_sale_id INTEGER,
+            description TEXT,
+            created_at TEXT NOT NULL,
+            created_by TEXT,
+            voided_at TEXT,
+            voided_by TEXT,
+            void_reason TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loyalty_excluded_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_name TEXT NOT NULL UNIQUE,
+            exclude_earning INTEGER NOT NULL DEFAULT 1,
+            exclude_redemption INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS loyalty_excluded_products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            barcode TEXT NOT NULL UNIQUE,
+            product_name_snapshot TEXT,
+            exclude_earning INTEGER NOT NULL DEFAULT 1,
+            exclude_redemption INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    ensure_column(cursor, "loyalty_excluded_categories", "exclude_earning", "exclude_earning INTEGER NOT NULL DEFAULT 1")
+    ensure_column(cursor, "loyalty_excluded_categories", "exclude_redemption", "exclude_redemption INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "loyalty_excluded_products", "exclude_earning", "exclude_earning INTEGER NOT NULL DEFAULT 1")
+    ensure_column(cursor, "loyalty_excluded_products", "exclude_redemption", "exclude_redemption INTEGER NOT NULL DEFAULT 0")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_pos_id ON loyalty_ledger(pos_ledger_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_customer ON loyalty_ledger(customer_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_sale ON loyalty_ledger(sale_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_refund ON loyalty_ledger(refund_sale_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_type ON loyalty_ledger(entry_type, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_excluded_categories_active ON loyalty_excluded_categories(is_active, category_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_loyalty_excluded_products_active ON loyalty_excluded_products(is_active, barcode)")
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO loyalty_settings (
+            id, is_enabled, earn_rate_amount, earn_rate_points,
+            point_value_amount, minimum_redeem_points, maximum_redeem_percent,
+            allow_credit_sale_earn, rounding_mode, created_at, updated_at
+        ) VALUES (1, 1, 100, 1, 1, 100, 20, 0, 'floor', ?, ?)
+        """,
+        (datetime.now().astimezone().isoformat(), datetime.now().astimezone().isoformat()),
+    )
+
+
+def create_customer_product_prices_table(cursor):
+    create_customer_tables(cursor)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customer_product_prices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_id INTEGER NOT NULL,
+            barcode TEXT NOT NULL,
+            product_name_snapshot TEXT NOT NULL,
+            fixed_price REAL NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by INTEGER,
+            updated_by INTEGER,
+            UNIQUE(customer_id, barcode)
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_product_prices_customer ON customer_product_prices(customer_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_product_prices_barcode ON customer_product_prices(barcode)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_product_prices_active ON customer_product_prices(is_active)")
+
+
+def create_pricing_schemes_tables(cursor):
+    create_customer_tables(cursor)
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customer_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            default_pricing_scheme_id INTEGER,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pricing_schemes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            priority INTEGER NOT NULL DEFAULT 100,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by INTEGER,
+            updated_by INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pricing_scheme_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scheme_id INTEGER NOT NULL,
+            apply_to TEXT NOT NULL,
+            category TEXT,
+            barcode TEXT,
+            product_name_snapshot TEXT,
+            rule_type TEXT NOT NULL,
+            price_type TEXT,
+            discount_percent REAL NOT NULL DEFAULT 0,
+            fixed_price REAL,
+            priority INTEGER NOT NULL DEFAULT 100,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by INTEGER,
+            updated_by INTEGER
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_categories_name ON customer_categories(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_categories_active ON customer_categories(is_active)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_schemes_name ON pricing_schemes(name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_schemes_active ON pricing_schemes(is_active)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_scheme ON pricing_scheme_rules(scheme_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_active ON pricing_scheme_rules(is_active)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_target ON pricing_scheme_rules(apply_to, category, barcode)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_priority ON pricing_scheme_rules(scheme_id, priority, updated_at)")
+
+    now = datetime.now().astimezone().isoformat()
+    for name in ("Regular", "VIP", "Wholesale", "Staff"):
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO customer_categories (
+                name, description, default_pricing_scheme_id, is_active, created_at, updated_at
+            ) VALUES (?, NULL, NULL, 1, ?, ?)
+            """,
+            (name, now, now),
+        )
+
+
+def create_sale_items_table(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sale_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sale_id INTEGER NOT NULL,
+            barcode TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            unit_price REAL NOT NULL DEFAULT 0,
+            marked_price REAL NOT NULL DEFAULT 0,
+            price_category_used TEXT NOT NULL DEFAULT 'selling',
+            system_unit_price REAL NOT NULL DEFAULT 0,
+            price_override_type TEXT NOT NULL DEFAULT 'none',
+            price_override_reason TEXT NOT NULL DEFAULT '',
+            price_override_original_price REAL NOT NULL DEFAULT 0,
+            price_override_difference REAL NOT NULL DEFAULT 0,
+            price_history_id INTEGER,
+            price_override_approved_by TEXT,
+            cost_price_snapshot REAL NOT NULL DEFAULT 0,
+            quantity REAL NOT NULL DEFAULT 0,
+            base_line_total REAL NOT NULL DEFAULT 0,
+            item_discount_type TEXT NOT NULL DEFAULT 'none',
+            item_discount_value REAL NOT NULL DEFAULT 0,
+            explicit_item_discount_amount REAL NOT NULL DEFAULT 0,
+            cart_discount_amount REAL NOT NULL DEFAULT 0,
+            item_discount_amount REAL NOT NULL DEFAULT 0,
+            line_total REAL NOT NULL DEFAULT 0,
+            customer_pricing_applied INTEGER NOT NULL DEFAULT 0,
+            customer_pricing_type TEXT NOT NULL DEFAULT 'none',
+            customer_pricing_rule_id INTEGER,
+            customer_pricing_original_price REAL NOT NULL DEFAULT 0,
+            customer_pricing_final_price REAL NOT NULL DEFAULT 0,
+            customer_pricing_discount_amount REAL NOT NULL DEFAULT 0,
+            customer_pricing_note TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sale_items_barcode ON sale_items(barcode)")
+
+
+def ensure_customer_sales_columns(cursor):
+    create_customer_tables(cursor)
+    ensure_column(cursor, "sales", "customer_id", "customer_id INTEGER")
+    ensure_column(cursor, "sales", "customer_name_snapshot", "customer_name_snapshot TEXT")
+    ensure_column(cursor, "sales", "customer_phone_snapshot", "customer_phone_snapshot TEXT")
+    ensure_column(cursor, "sales", "customer_code_snapshot", "customer_code_snapshot TEXT")
+    ensure_column(cursor, "sales", "pos_sale_id", "pos_sale_id INTEGER")
+    ensure_column(cursor, "sales", "is_credit_sale", "is_credit_sale INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "sales", "credit_status", "credit_status TEXT")
+    ensure_column(cursor, "sales", "credit_ledger_id", "credit_ledger_id INTEGER")
+    ensure_column(cursor, "sales", "credit_approved_by", "credit_approved_by TEXT")
+    ensure_column(cursor, "sales", "credit_previous_balance", "credit_previous_balance REAL")
+    ensure_column(cursor, "sales", "credit_new_balance", "credit_new_balance REAL")
+    ensure_column(cursor, "sales", "credit_bill_amount", "credit_bill_amount REAL")
+    ensure_column(cursor, "sales", "credit_limit_snapshot", "credit_limit_snapshot REAL")
+    ensure_column(cursor, "sales", "loyalty_points_earned", "loyalty_points_earned INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "sales", "loyalty_points_redeemed", "loyalty_points_redeemed INTEGER NOT NULL DEFAULT 0")
+    ensure_column(cursor, "sales", "loyalty_redeemed_value", "loyalty_redeemed_value REAL NOT NULL DEFAULT 0")
+    ensure_column(cursor, "sales", "loyalty_earn_base_amount", "loyalty_earn_base_amount REAL NOT NULL DEFAULT 0")
+    ensure_column(cursor, "sales", "loyalty_status", "loyalty_status TEXT NOT NULL DEFAULT 'none'")
+    ensure_column(cursor, "sales", "loyalty_note", "loyalty_note TEXT")
+
+
+def generate_customer_code(customer_id):
+    return f"CUS-{parse_int(customer_id, 0):06d}"
+
+
+def clean_optional_text(value):
+    text = str(value or "").strip()
+    return text if text else None
+
+
+def fetch_customers(cursor, params):
+    create_customer_tables(cursor)
+
+    search = str(params.get("search", [""])[0] or params.get("query", [""])[0] or "").strip()
+    active_only = normalize_bool(params.get("active_only", ["1"])[0], True)
+    include_inactive = normalize_bool(params.get("include_inactive", ["0"])[0], False)
+    limit = parse_int(params.get("limit", ["100"])[0], 100)
+    if limit <= 0:
+        limit = 100
+    if limit > 500:
+        limit = 500
+
+    where = []
+    args = []
+
+    if active_only and not include_inactive:
+        where.append("COALESCE(is_active, 1) = 1")
+
+    if search:
+        phone_search = normalize_customer_phone(search)
+        like = f"%{search.lower()}%"
+        where.append(
+            """
+            (
+                LOWER(name) LIKE ?
+                OR LOWER(COALESCE(customer_code, '')) LIKE ?
+                OR LOWER(COALESCE(email, '')) LIKE ?
+                OR LOWER(COALESCE(address, '')) LIKE ?
+                OR COALESCE(phone, '') LIKE ?
+                OR COALESCE(phone_normalized, '') LIKE ?
+            )
+            """
+        )
+        args.extend([
+            like,
+            like,
+            like,
+            like,
+            f"%{search}%",
+            f"%{phone_search or search}%",
+        ])
+
+    query = """
+        SELECT
+            id,
+            customer_code,
+            name,
+            phone,
+            phone_normalized,
+            email,
+            address,
+            customer_type,
+            notes,
+            COALESCE(is_active, 1) AS is_active,
+            COALESCE(pricing_enabled, 0) AS pricing_enabled,
+            COALESCE(default_price_type, 'selling') AS default_price_type,
+            COALESCE(default_discount_percent, 0) AS default_discount_percent,
+            pricing_note,
+            customer_category_id,
+            pricing_scheme_id,
+            COALESCE(loyalty_enabled, 1) AS loyalty_enabled,
+            COALESCE(loyalty_points_balance, 0) AS loyalty_points_balance,
+            COALESCE(loyalty_lifetime_earned, 0) AS loyalty_lifetime_earned,
+            COALESCE(loyalty_lifetime_redeemed, 0) AS loyalty_lifetime_redeemed,
+            created_at,
+            updated_at,
+            created_by,
+            updated_by
+        FROM customers
+    """
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    query += " ORDER BY COALESCE(is_active, 1) DESC, name COLLATE NOCASE ASC LIMIT ?"
+    args.append(limit)
+
+    return [dict(row) for row in cursor.execute(query, args).fetchall()]
+
+
+def get_customer_by_id(cursor, customer_id):
+    create_customer_tables(cursor)
+    row = cursor.execute(
+        """
+        SELECT
+            id,
+            customer_code,
+            name,
+            phone,
+            phone_normalized,
+            email,
+            address,
+            customer_type,
+            notes,
+            COALESCE(is_active, 1) AS is_active,
+            COALESCE(pricing_enabled, 0) AS pricing_enabled,
+            COALESCE(default_price_type, 'selling') AS default_price_type,
+            COALESCE(default_discount_percent, 0) AS default_discount_percent,
+            pricing_note,
+            customer_category_id,
+            pricing_scheme_id,
+            COALESCE(loyalty_enabled, 1) AS loyalty_enabled,
+            COALESCE(loyalty_points_balance, 0) AS loyalty_points_balance,
+            COALESCE(loyalty_lifetime_earned, 0) AS loyalty_lifetime_earned,
+            COALESCE(loyalty_lifetime_redeemed, 0) AS loyalty_lifetime_redeemed,
+            created_at,
+            updated_at,
+            created_by,
+            updated_by
+        FROM customers
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (parse_int(customer_id, 0),),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def find_customer_by_phone(cursor, phone_normalized, excluding_id=None):
+    create_customer_tables(cursor)
+    phone_normalized = normalize_customer_phone(phone_normalized)
+    if not phone_normalized:
+        return None
+
+    query = "SELECT * FROM customers WHERE phone_normalized = ?"
+    args = [phone_normalized]
+    if excluding_id is not None:
+        query += " AND id != ?"
+        args.append(parse_int(excluding_id, 0))
+    query += " LIMIT 1"
+
+    row = cursor.execute(query, args).fetchone()
+    return dict(row) if row else None
+
+
+def create_customer(cursor, body):
+    create_customer_tables(cursor)
+
+    name = str(body.get("name", "") or "").strip()
+    phone = clean_optional_text(body.get("phone"))
+    phone_normalized = normalize_customer_phone(phone)
+    if not phone_normalized:
+        return False, "Phone number is required", None
+    existing = find_customer_by_phone(cursor, phone_normalized)
+    if existing:
+        return False, f"A customer with this phone already exists: {existing.get('name') or existing.get('phone')}", existing
+
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        """
+        INSERT INTO customers (
+            customer_code,
+            name,
+            phone,
+            phone_normalized,
+            email,
+            address,
+            customer_type,
+            notes,
+            is_active,
+            pricing_enabled,
+            default_price_type,
+            default_discount_percent,
+            pricing_note,
+            customer_category_id,
+            pricing_scheme_id,
+            created_at,
+            updated_at,
+            created_by,
+            updated_by
+        )
+        VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            name,
+            phone,
+            phone_normalized or None,
+            clean_optional_text(body.get("email")),
+            clean_optional_text(body.get("address")),
+            normalize_customer_type(body.get("customer_type")),
+            clean_optional_text(body.get("notes")),
+            1 if normalize_bool(body.get("pricing_enabled"), False) else 0,
+            normalize_price_type(body.get("default_price_type")),
+            max(0.0, min(parse_float(body.get("default_discount_percent"), 0.0), 100.0)),
+            clean_optional_text(body.get("pricing_note")),
+            parse_int(body.get("customer_category_id"), 0) or None,
+            parse_pricing_scheme_selection(body.get("pricing_scheme_id")),
+            now,
+            now,
+            parse_int(body.get("created_by"), 0) or None,
+            parse_int(body.get("created_by"), 0) or None,
+        ),
+    )
+
+    customer_id = cursor.lastrowid
+    code = generate_customer_code(customer_id)
+    cursor.execute(
+        "UPDATE customers SET customer_code = ?, updated_at = ? WHERE id = ?",
+        (code, now, customer_id),
+    )
+    return True, "success", get_customer_by_id(cursor, customer_id)
+
+
+def update_customer(cursor, body):
+    create_customer_tables(cursor)
+
+    customer_id = parse_int(body.get("id", body.get("customer_id", 0)), 0)
+    if customer_id <= 0:
+        return False, "Invalid customer", None
+
+    existing = get_customer_by_id(cursor, customer_id)
+    if not existing:
+        return False, "Customer not found", None
+
+    name = str(body.get("name", "") or "").strip()
+    phone = clean_optional_text(body.get("phone"))
+    phone_normalized = normalize_customer_phone(phone)
+    if not phone_normalized:
+        return False, "Phone number is required", None
+    duplicate = find_customer_by_phone(cursor, phone_normalized, excluding_id=customer_id)
+    if duplicate:
+        return False, f"A customer with this phone already exists: {duplicate.get('name') or duplicate.get('phone')}", duplicate
+
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        """
+        UPDATE customers
+        SET name = ?,
+            phone = ?,
+            phone_normalized = ?,
+            email = ?,
+            address = ?,
+            customer_type = ?,
+            notes = ?,
+            is_active = ?,
+            pricing_enabled = ?,
+            default_price_type = ?,
+            default_discount_percent = ?,
+            pricing_note = ?,
+            customer_category_id = ?,
+            pricing_scheme_id = ?,
+            updated_at = ?,
+            updated_by = ?
+        WHERE id = ?
+        """,
+        (
+            name,
+            phone,
+            phone_normalized or None,
+            clean_optional_text(body.get("email")),
+            clean_optional_text(body.get("address")),
+            normalize_customer_type(body.get("customer_type")),
+            clean_optional_text(body.get("notes")),
+            1 if normalize_bool(body.get("is_active"), True) else 0,
+            1 if normalize_bool(body.get("pricing_enabled"), existing.get("pricing_enabled", 0) == 1) else 0,
+            normalize_price_type(body.get("default_price_type", existing.get("default_price_type", "selling"))),
+            max(
+                0.0,
+                min(
+                    parse_float(
+                        body.get(
+                            "default_discount_percent",
+                            existing.get("default_discount_percent", 0.0),
+                        ),
+                        0.0,
+                    ),
+                    100.0,
+                ),
+            ),
+            clean_optional_text(body.get("pricing_note", existing.get("pricing_note"))),
+            parse_int(body.get("customer_category_id", existing.get("customer_category_id")), 0) or None,
+            parse_pricing_scheme_selection(
+                body.get("pricing_scheme_id", existing.get("pricing_scheme_id"))
+            ),
+            now,
+            parse_int(body.get("updated_by"), 0) or None,
+            customer_id,
+        ),
+    )
+    return True, "success", get_customer_by_id(cursor, customer_id)
+
+
+def set_customer_active_status(cursor, body, is_active):
+    create_customer_tables(cursor)
+
+    customer_id = parse_int(body.get("id", body.get("customer_id", 0)), 0)
+    if customer_id <= 0:
+        return False, "Invalid customer", None
+
+    existing = get_customer_by_id(cursor, customer_id)
+    if not existing:
+        return False, "Customer not found", None
+
+    now = datetime.now().astimezone().isoformat()
+    cursor.execute(
+        """
+        UPDATE customers
+        SET is_active = ?,
+            updated_at = ?,
+            updated_by = ?
+        WHERE id = ?
+        """,
+        (
+            1 if is_active else 0,
+            now,
+            parse_int(body.get("updated_by"), 0) or None,
+            customer_id,
+        ),
+    )
+    return True, "success", get_customer_by_id(cursor, customer_id)
+
+
+
+def create_customer_credit_tables(cursor):
+    create_customer_tables(cursor)
+    ensure_customer_sales_columns(cursor)
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customer_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pos_ledger_id INTEGER,
+            customer_id INTEGER NOT NULL,
+            entry_type TEXT NOT NULL,
+            debit REAL NOT NULL DEFAULT 0,
+            credit REAL NOT NULL DEFAULT 0,
+            balance_after REAL NOT NULL DEFAULT 0,
+            reference_type TEXT,
+            reference_id INTEGER,
+            sale_id INTEGER,
+            payment_id INTEGER,
+            description TEXT,
+            payment_method TEXT,
+            performed_by TEXT,
+            approved_by TEXT,
+            created_at TEXT NOT NULL,
+            voided_at TEXT,
+            voided_by TEXT,
+            void_reason TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customer_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pos_payment_id INTEGER,
+            customer_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            payment_method TEXT NOT NULL,
+            reference_note TEXT,
+            cashier_name TEXT,
+            received_by TEXT,
+            created_at TEXT NOT NULL,
+            voided_at TEXT,
+            voided_by TEXT,
+            void_reason TEXT
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_ledger_customer ON customer_ledger(customer_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_ledger_pos_id ON customer_ledger(pos_ledger_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_payments_customer ON customer_payments(customer_id, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_customer_payments_pos_id ON customer_payments(pos_payment_id)")
+
+
+def normalize_credit_status(value):
+    normalized = str(value or "normal").strip().lower()
+    if normalized in {"watchlist", "blocked"}:
+        return normalized
+    return "normal"
+
+
+def upsert_customer_from_sync(cursor, data):
+    create_customer_credit_tables(cursor)
+
+    customer_id = parse_int(data.get("customer_id") or data.get("id"), 0)
+    customer_code = clean_optional_text(data.get("customer_code") or data.get("customer_code_snapshot"))
+    name = clean_optional_text(
+        data.get("customer_name")
+        or data.get("name")
+        or data.get("customer_name_snapshot")
+    )
+    phone = clean_optional_text(
+        data.get("customer_phone")
+        or data.get("phone")
+        or data.get("customer_phone_snapshot")
+    )
+    phone_normalized = normalize_customer_phone(
+        data.get("customer_phone_normalized") or data.get("phone_normalized") or phone
+    )
+
+    existing = None
+    if customer_id > 0:
+        existing = cursor.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
+    if existing is None and customer_code:
+        existing = cursor.execute("SELECT * FROM customers WHERE customer_code = ?", (customer_code,)).fetchone()
+    if existing is None and phone_normalized:
+        existing = cursor.execute("SELECT * FROM customers WHERE phone_normalized = ?", (phone_normalized,)).fetchone()
+
+    now = datetime.now().astimezone().isoformat()
+    credit_enabled = 1 if normalize_bool(data.get("credit_enabled"), False) else 0
+    credit_limit = parse_float(data.get("credit_limit"), 0.0)
+    current_balance = parse_float(data.get("current_credit_balance"), 0.0)
+    credit_status = normalize_credit_status(data.get("credit_status"))
+    credit_note = clean_optional_text(data.get("credit_note"))
+    pricing_enabled = 1 if normalize_bool(data.get("pricing_enabled"), False) else 0
+    default_price_type = (
+        normalize_price_type(data.get("default_price_type"))
+        if data.get("default_price_type") is not None
+        else None
+    )
+    default_discount_percent = max(
+        0.0,
+        min(parse_float(data.get("default_discount_percent"), 0.0), 100.0),
+    )
+    pricing_note = clean_optional_text(data.get("pricing_note"))
+    customer_category_id = parse_int(data.get("customer_category_id"), 0) or None
+    pricing_scheme_id = parse_pricing_scheme_selection(data.get("pricing_scheme_id"))
+    loyalty_enabled = 1 if normalize_bool(data.get("loyalty_enabled"), True) else 0
+    loyalty_points_balance = parse_int(data.get("loyalty_points_balance"), 0)
+    loyalty_lifetime_earned = parse_int(data.get("loyalty_lifetime_earned"), 0)
+    loyalty_lifetime_redeemed = parse_int(data.get("loyalty_lifetime_redeemed"), 0)
+
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE customers
+            SET customer_code = COALESCE(?, customer_code),
+                name = COALESCE(?, name),
+                phone = COALESCE(?, phone),
+                phone_normalized = COALESCE(?, phone_normalized),
+                email = COALESCE(?, email),
+                address = COALESCE(?, address),
+                customer_type = COALESCE(?, customer_type),
+                notes = COALESCE(?, notes),
+                is_active = ?,
+                credit_enabled = CASE WHEN ? IS NULL THEN credit_enabled ELSE ? END,
+                credit_limit = CASE WHEN ? IS NULL THEN credit_limit ELSE ? END,
+                current_credit_balance = CASE WHEN ? IS NULL THEN current_credit_balance ELSE ? END,
+                credit_status = COALESCE(?, credit_status),
+                credit_note = COALESCE(?, credit_note),
+                pricing_enabled = CASE WHEN ? IS NULL THEN pricing_enabled ELSE ? END,
+                default_price_type = COALESCE(?, default_price_type),
+                default_discount_percent = CASE WHEN ? IS NULL THEN default_discount_percent ELSE ? END,
+                pricing_note = COALESCE(?, pricing_note),
+                customer_category_id = CASE WHEN ? IS NULL THEN customer_category_id ELSE ? END,
+                pricing_scheme_id = CASE WHEN ? IS NULL THEN pricing_scheme_id ELSE ? END,
+                loyalty_enabled = CASE WHEN ? IS NULL THEN loyalty_enabled ELSE ? END,
+                loyalty_points_balance = CASE WHEN ? IS NULL THEN loyalty_points_balance ELSE ? END,
+                loyalty_lifetime_earned = CASE WHEN ? IS NULL THEN loyalty_lifetime_earned ELSE ? END,
+                loyalty_lifetime_redeemed = CASE WHEN ? IS NULL THEN loyalty_lifetime_redeemed ELSE ? END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                customer_code,
+                name,
+                phone,
+                phone_normalized or None,
+                clean_optional_text(data.get("customer_email") or data.get("email")),
+                clean_optional_text(data.get("customer_address") or data.get("address")),
+                normalize_customer_type(data.get("customer_type")),
+                clean_optional_text(data.get("customer_notes") or data.get("notes")),
+                1 if normalize_bool(data.get("customer_is_active"), True) else 0,
+                data.get("credit_enabled"), credit_enabled,
+                data.get("credit_limit"), credit_limit,
+                data.get("current_credit_balance"), current_balance,
+                credit_status,
+                credit_note,
+                data.get("pricing_enabled"), pricing_enabled,
+                default_price_type,
+                data.get("default_discount_percent"), default_discount_percent,
+                pricing_note,
+                data.get("customer_category_id"), customer_category_id,
+                data.get("pricing_scheme_id"), pricing_scheme_id,
+                data.get("loyalty_enabled"), loyalty_enabled,
+                data.get("loyalty_points_balance"), loyalty_points_balance,
+                data.get("loyalty_lifetime_earned"), loyalty_lifetime_earned,
+                data.get("loyalty_lifetime_redeemed"), loyalty_lifetime_redeemed,
+                now,
+                resolved_id,
+            ),
+        )
+        return resolved_id
+
+    if not name:
+        name = f"Customer {customer_code or customer_id or 'Unknown'}"
+    if not customer_code and customer_id > 0:
+        customer_code = generate_customer_code(customer_id)
+
+    if customer_id > 0:
+        cursor.execute(
+            """
+            INSERT INTO customers (
+                id, customer_code, name, phone, phone_normalized, email, address,
+                customer_type, notes, is_active, credit_enabled, credit_limit,
+                current_credit_balance, credit_status, credit_note,
+                pricing_enabled, default_price_type, default_discount_percent, pricing_note,
+                customer_category_id, pricing_scheme_id,
+                loyalty_enabled, loyalty_points_balance, loyalty_lifetime_earned, loyalty_lifetime_redeemed,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                customer_id,
+                customer_code,
+                name,
+                phone,
+                phone_normalized or None,
+                clean_optional_text(data.get("customer_email") or data.get("email")),
+                clean_optional_text(data.get("customer_address") or data.get("address")),
+                normalize_customer_type(data.get("customer_type")),
+                clean_optional_text(data.get("customer_notes") or data.get("notes")),
+                1 if normalize_bool(data.get("customer_is_active"), True) else 0,
+                credit_enabled,
+                credit_limit,
+                current_balance,
+                credit_status,
+                credit_note,
+                pricing_enabled,
+                default_price_type or "selling",
+                default_discount_percent,
+                pricing_note,
+                customer_category_id,
+                pricing_scheme_id,
+                loyalty_enabled,
+                loyalty_points_balance,
+                loyalty_lifetime_earned,
+                loyalty_lifetime_redeemed,
+                now,
+                now,
+            ),
+        )
+        return customer_id
+
+    cursor.execute(
+        """
+        INSERT INTO customers (
+            customer_code, name, phone, phone_normalized, email, address,
+            customer_type, notes, is_active, credit_enabled, credit_limit,
+            current_credit_balance, credit_status, credit_note,
+            pricing_enabled, default_price_type, default_discount_percent, pricing_note,
+            customer_category_id, pricing_scheme_id,
+            loyalty_enabled, loyalty_points_balance, loyalty_lifetime_earned, loyalty_lifetime_redeemed,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            customer_code,
+            name,
+            phone,
+            phone_normalized or None,
+            clean_optional_text(data.get("customer_email") or data.get("email")),
+            clean_optional_text(data.get("customer_address") or data.get("address")),
+            normalize_customer_type(data.get("customer_type")),
+            clean_optional_text(data.get("customer_notes") or data.get("notes")),
+            1 if normalize_bool(data.get("customer_is_active"), True) else 0,
+            credit_enabled,
+            credit_limit,
+            current_balance,
+            credit_status,
+            credit_note,
+            pricing_enabled,
+            default_price_type or "selling",
+            default_discount_percent,
+            pricing_note,
+            customer_category_id,
+            pricing_scheme_id,
+            loyalty_enabled,
+            loyalty_points_balance,
+            loyalty_lifetime_earned,
+            loyalty_lifetime_redeemed,
+            now,
+            now,
+        ),
+    )
+    new_id = cursor.lastrowid
+    if not customer_code:
+        cursor.execute(
+            "UPDATE customers SET customer_code = ? WHERE id = ?",
+            (generate_customer_code(new_id), new_id),
+        )
+    return new_id
+
+
+def customer_credit_balance(cursor, customer_id):
+    create_customer_credit_tables(cursor)
+    row = cursor.execute(
+        """
+        SELECT COALESCE(SUM(COALESCE(debit, 0) - COALESCE(credit, 0)), 0) AS balance
+        FROM customer_ledger
+        WHERE customer_id = ?
+        """,
+        (parse_int(customer_id, 0),),
+    ).fetchone()
+    return round(parse_float(row["balance"] if row else 0, 0.0), 2)
+
+
+def update_customer_cached_credit_balance(cursor, customer_id, balance=None):
+    if balance is None:
+        balance = customer_credit_balance(cursor, customer_id)
+    cursor.execute(
+        "UPDATE customers SET current_credit_balance = ?, updated_at = ? WHERE id = ?",
+        (round(parse_float(balance, 0.0), 2), datetime.now().astimezone().isoformat(), parse_int(customer_id, 0)),
+    )
+    return round(parse_float(balance, 0.0), 2)
+
+
+def insert_credit_ledger_entry(cursor, data, customer_id=None):
+    create_customer_credit_tables(cursor)
+    ledger = data.get("ledger_entry") if isinstance(data.get("ledger_entry"), dict) else data
+    resolved_customer_id = parse_int(customer_id or data.get("customer_id") or ledger.get("customer_id"), 0)
+    if resolved_customer_id <= 0:
+        resolved_customer_id = upsert_customer_from_sync(cursor, data)
+
+    pos_ledger_id = parse_int(ledger.get("ledger_id") or ledger.get("pos_ledger_id"), 0) or None
+    entry_type = str(ledger.get("entry_type") or data.get("entry_type") or "adjustment").strip().lower()
+    sale_id = parse_int(ledger.get("sale_id") or data.get("sale_id") or data.get("refund_sale_id"), 0) or None
+    payment_id = parse_int(ledger.get("payment_id") or data.get("payment_id"), 0) or None
+
+    if pos_ledger_id:
+        existing = cursor.execute(
+            "SELECT id FROM customer_ledger WHERE pos_ledger_id = ? LIMIT 1",
+            (pos_ledger_id,),
+        ).fetchone()
+        if existing:
+            return parse_int(existing["id"], 0)
+
+    if entry_type in {"credit_sale", "refund"} and sale_id:
+        existing = cursor.execute(
+            "SELECT id FROM customer_ledger WHERE entry_type = ? AND sale_id = ? LIMIT 1",
+            (entry_type, sale_id),
+        ).fetchone()
+        if existing:
+            return parse_int(existing["id"], 0)
+
+    if entry_type == "payment" and payment_id:
+        existing = cursor.execute(
+            "SELECT id FROM customer_ledger WHERE entry_type = ? AND payment_id = ? LIMIT 1",
+            (entry_type, payment_id),
+        ).fetchone()
+        if existing:
+            return parse_int(existing["id"], 0)
+
+    cursor.execute(
+        """
+        INSERT INTO customer_ledger (
+            pos_ledger_id, customer_id, entry_type, debit, credit, balance_after,
+            reference_type, reference_id, sale_id, payment_id, description,
+            payment_method, performed_by, approved_by, created_at,
+            voided_at, voided_by, void_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pos_ledger_id,
+            resolved_customer_id,
+            entry_type,
+            parse_float(ledger.get("debit") if ledger.get("debit") is not None else data.get("debit"), 0.0),
+            parse_float(ledger.get("credit") if ledger.get("credit") is not None else data.get("credit"), 0.0),
+            parse_float(ledger.get("balance_after") if ledger.get("balance_after") is not None else data.get("credit_new_balance") or data.get("new_balance"), 0.0),
+            clean_optional_text(ledger.get("reference_type") or data.get("reference_type")),
+            parse_int(ledger.get("reference_id") or data.get("reference_id"), 0) or None,
+            sale_id,
+            payment_id,
+            clean_optional_text(ledger.get("description") or data.get("description")),
+            clean_optional_text(ledger.get("payment_method") or data.get("payment_method")),
+            clean_optional_text(ledger.get("performed_by") or data.get("performed_by")),
+            clean_optional_text(ledger.get("approved_by") or data.get("approved_by")),
+            clean_optional_text(ledger.get("created_at") or data.get("created_at")) or datetime.now().astimezone().isoformat(),
+            clean_optional_text(ledger.get("voided_at") or data.get("voided_at")),
+            clean_optional_text(ledger.get("voided_by") or data.get("voided_by")),
+            clean_optional_text(ledger.get("void_reason") or data.get("void_reason")),
+        ),
+    )
+    update_customer_cached_credit_balance(cursor, resolved_customer_id, data.get("credit_new_balance") or data.get("new_balance") or ledger.get("balance_after"))
+    return cursor.lastrowid
+
+
+def handle_credit_settings_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    cursor.execute(
+        """
+        UPDATE customers
+        SET credit_enabled = ?, credit_limit = ?, current_credit_balance = ?,
+            credit_status = ?, credit_note = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            1 if normalize_bool(data.get("credit_enabled"), False) else 0,
+            parse_float(data.get("credit_limit"), 0.0),
+            parse_float(data.get("current_credit_balance"), 0.0),
+            normalize_credit_status(data.get("credit_status")),
+            clean_optional_text(data.get("credit_note")),
+            clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat(),
+            customer_id,
+        ),
+    )
+    return customer_id
+
+
+def handle_customer_pricing_settings_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    cursor.execute(
+        """
+        UPDATE customers
+        SET pricing_enabled = ?,
+            default_price_type = ?,
+            default_discount_percent = ?,
+            pricing_note = ?,
+            customer_category_id = CASE WHEN ? THEN ? ELSE customer_category_id END,
+            pricing_scheme_id = CASE WHEN ? THEN ? ELSE pricing_scheme_id END,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            1 if normalize_bool(data.get("pricing_enabled"), False) else 0,
+            normalize_price_type(data.get("default_price_type")),
+            max(0.0, min(parse_float(data.get("default_discount_percent"), 0.0), 100.0)),
+            clean_optional_text(data.get("pricing_note")),
+            1 if "customer_category_id" in data else 0,
+            parse_int(data.get("customer_category_id"), 0) or None,
+            1 if "pricing_scheme_id" in data else 0,
+            parse_pricing_scheme_selection(data.get("pricing_scheme_id")),
+            datetime.now().astimezone().isoformat(),
+            customer_id,
+        ),
+    )
+    return customer_id
+
+
+def handle_customer_product_price_sync(cursor, data):
+    create_customer_product_prices_table(cursor)
+    customer_id = parse_int(data.get("customer_id"), 0)
+    if customer_id <= 0:
+        customer_id = upsert_customer_from_sync(cursor, data)
+    if customer_id <= 0:
+        raise ValueError("Invalid customer for product price sync")
+
+    barcode = str(data.get("barcode") or "").strip()
+    if not barcode:
+        raise ValueError("Product barcode is required")
+
+    product_name = str(data.get("product_name_snapshot") or data.get("product_name") or barcode).strip()
+    fixed_price = max(0.0, parse_float(data.get("fixed_price"), 0.0))
+    is_active = 1 if normalize_bool(data.get("is_active"), True) else 0
+    note = clean_optional_text(data.get("note"))
+    now = datetime.now().astimezone().isoformat()
+    created_at = str(data.get("created_at") or now)
+    updated_at = str(data.get("updated_at") or now)
+    remote_id = parse_int(data.get("customer_product_price_id") or data.get("id"), 0)
+
+    existing = None
+    if remote_id > 0:
+        existing = cursor.execute(
+            "SELECT id FROM customer_product_prices WHERE id = ? LIMIT 1",
+            (remote_id,),
+        ).fetchone()
+    if existing is None:
+        existing = cursor.execute(
+            "SELECT id FROM customer_product_prices WHERE customer_id = ? AND barcode = ? LIMIT 1",
+            (customer_id, barcode),
+        ).fetchone()
+
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE customer_product_prices
+            SET customer_id = ?,
+                barcode = ?,
+                product_name_snapshot = ?,
+                fixed_price = ?,
+                is_active = ?,
+                note = ?,
+                updated_at = ?,
+                updated_by = ?
+            WHERE id = ?
+            """,
+            (
+                customer_id,
+                barcode,
+                product_name,
+                fixed_price,
+                is_active,
+                note,
+                updated_at,
+                parse_int(data.get("updated_by"), 0) or None,
+                resolved_id,
+            ),
+        )
+        return resolved_id
+
+    if remote_id > 0:
+        cursor.execute(
+            """
+            INSERT INTO customer_product_prices (
+                id, customer_id, barcode, product_name_snapshot, fixed_price,
+                is_active, note, created_at, updated_at, created_by, updated_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                remote_id,
+                customer_id,
+                barcode,
+                product_name,
+                fixed_price,
+                is_active,
+                note,
+                created_at,
+                updated_at,
+                parse_int(data.get("created_by"), 0) or None,
+                parse_int(data.get("updated_by"), 0) or None,
+            ),
+        )
+        return remote_id
+
+    cursor.execute(
+        """
+        INSERT INTO customer_product_prices (
+            customer_id, barcode, product_name_snapshot, fixed_price,
+            is_active, note, created_at, updated_at, created_by, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            customer_id,
+            barcode,
+            product_name,
+            fixed_price,
+            is_active,
+            note,
+            created_at,
+            updated_at,
+            parse_int(data.get("created_by"), 0) or None,
+            parse_int(data.get("updated_by"), 0) or None,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def normalize_rule_apply_to(value):
+    normalized = str(value or "all").strip().lower()
+    if normalized in {"category", "product"}:
+        return normalized
+    return "all"
+
+
+def normalize_scheme_rule_type(value):
+    normalized = str(value or "price_type").strip().lower()
+    if normalized in {"percent_discount", "fixed_price", "no_discount"}:
+        return normalized
+    return "price_type"
+
+
+def handle_customer_category_sync(cursor, data):
+    create_pricing_schemes_tables(cursor)
+    category_id = parse_int(data.get("customer_category_id") or data.get("id"), 0)
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Customer category name is required")
+
+    now = datetime.now().astimezone().isoformat()
+    created_at = str(data.get("created_at") or now)
+    updated_at = str(data.get("updated_at") or now)
+    default_scheme_id = parse_int(data.get("default_pricing_scheme_id"), 0) or None
+    is_active = 1 if normalize_bool(data.get("is_active"), True) else 0
+
+    existing = None
+    if category_id > 0:
+        existing = cursor.execute(
+            "SELECT id FROM customer_categories WHERE id = ? LIMIT 1",
+            (category_id,),
+        ).fetchone()
+    if existing is None:
+        existing = cursor.execute(
+            "SELECT id FROM customer_categories WHERE LOWER(name) = LOWER(?) LIMIT 1",
+            (name,),
+        ).fetchone()
+
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE customer_categories
+            SET name = ?,
+                description = ?,
+                default_pricing_scheme_id = ?,
+                is_active = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                name,
+                clean_optional_text(data.get("description")),
+                default_scheme_id,
+                is_active,
+                updated_at,
+                resolved_id,
+            ),
+        )
+        return resolved_id
+
+    if category_id > 0:
+        cursor.execute(
+            """
+            INSERT INTO customer_categories (
+                id, name, description, default_pricing_scheme_id, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                category_id,
+                name,
+                clean_optional_text(data.get("description")),
+                default_scheme_id,
+                is_active,
+                created_at,
+                updated_at,
+            ),
+        )
+        return category_id
+
+    cursor.execute(
+        """
+        INSERT INTO customer_categories (
+            name, description, default_pricing_scheme_id, is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            name,
+            clean_optional_text(data.get("description")),
+            default_scheme_id,
+            is_active,
+            created_at,
+            updated_at,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def handle_pricing_scheme_sync(cursor, data):
+    create_pricing_schemes_tables(cursor)
+    scheme_id = parse_int(data.get("pricing_scheme_id") or data.get("id"), 0)
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Pricing scheme name is required")
+
+    now = datetime.now().astimezone().isoformat()
+    created_at = str(data.get("created_at") or now)
+    updated_at = str(data.get("updated_at") or now)
+    is_active = 1 if normalize_bool(data.get("is_active"), True) else 0
+    priority = parse_int(data.get("priority"), 100)
+
+    existing = None
+    if scheme_id > 0:
+        existing = cursor.execute(
+            "SELECT id FROM pricing_schemes WHERE id = ? LIMIT 1",
+            (scheme_id,),
+        ).fetchone()
+    if existing is None:
+        existing = cursor.execute(
+            "SELECT id FROM pricing_schemes WHERE LOWER(name) = LOWER(?) LIMIT 1",
+            (name,),
+        ).fetchone()
+
+    values = (
+        name,
+        clean_optional_text(data.get("description")),
+        is_active,
+        priority,
+        updated_at,
+        parse_int(data.get("updated_by"), 0) or None,
+    )
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE pricing_schemes
+            SET name = ?,
+                description = ?,
+                is_active = ?,
+                priority = ?,
+                updated_at = ?,
+                updated_by = ?
+            WHERE id = ?
+            """,
+            (*values, resolved_id),
+        )
+        return resolved_id
+
+    insert_values = (
+        scheme_id if scheme_id > 0 else None,
+        name,
+        clean_optional_text(data.get("description")),
+        is_active,
+        priority,
+        created_at,
+        updated_at,
+        parse_int(data.get("created_by"), 0) or None,
+        parse_int(data.get("updated_by"), 0) or None,
+    )
+    cursor.execute(
+        """
+        INSERT INTO pricing_schemes (
+            id, name, description, is_active, priority, created_at, updated_at, created_by, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        insert_values,
+    )
+    return scheme_id if scheme_id > 0 else cursor.lastrowid
+
+
+def handle_pricing_scheme_rule_sync(cursor, data):
+    create_pricing_schemes_tables(cursor)
+    rule_id = parse_int(data.get("pricing_scheme_rule_id") or data.get("id"), 0)
+    scheme_id = parse_int(data.get("scheme_id"), 0)
+    if scheme_id <= 0:
+        raise ValueError("Pricing scheme rule requires scheme_id")
+
+    now = datetime.now().astimezone().isoformat()
+    created_at = str(data.get("created_at") or now)
+    updated_at = str(data.get("updated_at") or now)
+    apply_to = normalize_rule_apply_to(data.get("apply_to"))
+    rule_type = normalize_scheme_rule_type(data.get("rule_type"))
+    price_type = normalize_price_type(data.get("price_type")) if data.get("price_type") else None
+    discount_percent = max(0.0, min(parse_float(data.get("discount_percent"), 0.0), 100.0))
+    fixed_price = data.get("fixed_price")
+    fixed_price = max(0.0, parse_float(fixed_price, 0.0)) if fixed_price is not None else None
+    is_active = 1 if normalize_bool(data.get("is_active"), True) else 0
+
+    existing = None
+    if rule_id > 0:
+        existing = cursor.execute(
+            "SELECT id FROM pricing_scheme_rules WHERE id = ? LIMIT 1",
+            (rule_id,),
+        ).fetchone()
+
+    row_values = (
+        scheme_id,
+        apply_to,
+        clean_optional_text(data.get("category")),
+        clean_optional_text(data.get("barcode")),
+        clean_optional_text(data.get("product_name_snapshot")),
+        rule_type,
+        price_type,
+        discount_percent,
+        fixed_price,
+        parse_int(data.get("priority"), 100),
+        is_active,
+        clean_optional_text(data.get("note")),
+        updated_at,
+        parse_int(data.get("updated_by"), 0) or None,
+    )
+
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE pricing_scheme_rules
+            SET scheme_id = ?,
+                apply_to = ?,
+                category = ?,
+                barcode = ?,
+                product_name_snapshot = ?,
+                rule_type = ?,
+                price_type = ?,
+                discount_percent = ?,
+                fixed_price = ?,
+                priority = ?,
+                is_active = ?,
+                note = ?,
+                updated_at = ?,
+                updated_by = ?
+            WHERE id = ?
+            """,
+            (*row_values, resolved_id),
+        )
+        return resolved_id
+
+    cursor.execute(
+        """
+        INSERT INTO pricing_scheme_rules (
+            id, scheme_id, apply_to, category, barcode, product_name_snapshot,
+            rule_type, price_type, discount_percent, fixed_price, priority,
+            is_active, note, created_at, updated_at, created_by, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            rule_id if rule_id > 0 else None,
+            *row_values[:12],
+            created_at,
+            updated_at,
+            parse_int(data.get("created_by"), 0) or None,
+            parse_int(data.get("updated_by"), 0) or None,
+        ),
+    )
+    return rule_id if rule_id > 0 else cursor.lastrowid
+
+
+def handle_customer_pricing_assignment_sync(cursor, data):
+    create_pricing_schemes_tables(cursor)
+    customer_id = upsert_customer_from_sync(cursor, data)
+    category_id = parse_int(data.get("customer_category_id"), 0) or None
+    scheme_id = parse_pricing_scheme_selection(data.get("pricing_scheme_id"))
+    cursor.execute(
+        """
+        UPDATE customers
+        SET customer_category_id = ?,
+            pricing_scheme_id = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            category_id,
+            scheme_id,
+            clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat(),
+            customer_id,
+        ),
+    )
+    return customer_id
+
+
+def update_customer_loyalty_cache(cursor, customer_id):
+    create_loyalty_tables(cursor)
+    row = cursor.execute(
+        """
+        SELECT
+            COALESCE(SUM(points_delta), 0) AS balance,
+            COALESCE(SUM(CASE
+                WHEN entry_type = 'earn' THEN points_delta
+                WHEN entry_type = 'refund_earn_reversal' THEN points_delta
+                ELSE 0
+            END), 0) AS lifetime_earned,
+            COALESCE(SUM(CASE
+                WHEN entry_type = 'redeem' THEN ABS(points_delta)
+                WHEN entry_type = 'refund_redeem_restore' THEN -ABS(points_delta)
+                ELSE 0
+            END), 0) AS lifetime_redeemed
+        FROM loyalty_ledger
+        WHERE customer_id = ? AND voided_at IS NULL
+        """,
+        (parse_int(customer_id, 0),),
+    ).fetchone()
+    if not row:
+        return
+    cursor.execute(
+        """
+        UPDATE customers
+        SET loyalty_points_balance = ?,
+            loyalty_lifetime_earned = ?,
+            loyalty_lifetime_redeemed = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            parse_int(row["balance"], 0),
+            max(0, parse_int(row["lifetime_earned"], 0)),
+            max(0, parse_int(row["lifetime_redeemed"], 0)),
+            datetime.now().astimezone().isoformat(),
+            parse_int(customer_id, 0),
+        ),
+    )
+
+
+def handle_customer_loyalty_settings_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    customer_id = upsert_customer_from_sync(cursor, data)
+    cursor.execute(
+        """
+        UPDATE customers
+        SET loyalty_enabled = ?,
+            loyalty_points_balance = ?,
+            loyalty_lifetime_earned = ?,
+            loyalty_lifetime_redeemed = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            1 if normalize_bool(data.get("loyalty_enabled"), True) else 0,
+            parse_int(data.get("loyalty_points_balance"), 0),
+            parse_int(data.get("loyalty_lifetime_earned"), 0),
+            parse_int(data.get("loyalty_lifetime_redeemed"), 0),
+            clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat(),
+            customer_id,
+        ),
+    )
+    return customer_id
+
+
+def handle_loyalty_settings_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    now = clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat()
+    created_at = clean_optional_text(data.get("created_at")) or now
+    rounding_mode = str(data.get("rounding_mode") or "floor").strip().lower()
+    if rounding_mode not in {"floor", "round", "ceil"}:
+        rounding_mode = "floor"
+    cursor.execute(
+        """
+        INSERT INTO loyalty_settings (
+            id, is_enabled, earn_rate_amount, earn_rate_points,
+            point_value_amount, minimum_redeem_points, maximum_redeem_percent,
+            allow_credit_sale_earn, rounding_mode, created_at, updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            is_enabled = excluded.is_enabled,
+            earn_rate_amount = excluded.earn_rate_amount,
+            earn_rate_points = excluded.earn_rate_points,
+            point_value_amount = excluded.point_value_amount,
+            minimum_redeem_points = excluded.minimum_redeem_points,
+            maximum_redeem_percent = excluded.maximum_redeem_percent,
+            allow_credit_sale_earn = excluded.allow_credit_sale_earn,
+            rounding_mode = excluded.rounding_mode,
+            updated_at = excluded.updated_at
+        """,
+        (
+            1 if normalize_bool(data.get("is_enabled"), True) else 0,
+            max(parse_float(data.get("earn_rate_amount"), 100.0), 0.01),
+            max(parse_int(data.get("earn_rate_points"), 1), 1),
+            max(parse_float(data.get("point_value_amount"), 1.0), 0.01),
+            max(parse_int(data.get("minimum_redeem_points"), 100), 0),
+            max(0.0, min(parse_float(data.get("maximum_redeem_percent"), 20.0), 100.0)),
+            1 if normalize_bool(data.get("allow_credit_sale_earn"), False) else 0,
+            rounding_mode,
+            created_at,
+            now,
+        ),
+    )
+    return 1
+
+
+def handle_loyalty_excluded_category_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    category_name = clean_optional_text(data.get("category_name"))
+    if not category_name:
+        raise ValueError("Category name is required")
+    exclusion_id = parse_int(data.get("id"), 0) or None
+    now = clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat()
+    created_at = clean_optional_text(data.get("created_at")) or now
+    existing = None
+    if exclusion_id:
+        existing = cursor.execute(
+            "SELECT id FROM loyalty_excluded_categories WHERE id = ? LIMIT 1",
+            (exclusion_id,),
+        ).fetchone()
+    if existing is None:
+        existing = cursor.execute(
+            "SELECT id FROM loyalty_excluded_categories WHERE LOWER(category_name) = LOWER(?) LIMIT 1",
+            (category_name,),
+        ).fetchone()
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE loyalty_excluded_categories
+            SET category_name = ?, exclude_earning = ?, exclude_redemption = ?,
+                is_active = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                category_name,
+                1 if normalize_bool(data.get("exclude_earning"), True) else 0,
+                1 if normalize_bool(data.get("exclude_redemption"), False) else 0,
+                1 if normalize_bool(data.get("is_active"), True) else 0,
+                now,
+                resolved_id,
+            ),
+        )
+        return resolved_id
+    cursor.execute(
+        """
+        INSERT INTO loyalty_excluded_categories (
+            category_name, exclude_earning, exclude_redemption,
+            is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            category_name,
+            1 if normalize_bool(data.get("exclude_earning"), True) else 0,
+            1 if normalize_bool(data.get("exclude_redemption"), False) else 0,
+            1 if normalize_bool(data.get("is_active"), True) else 0,
+            created_at,
+            now,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def handle_loyalty_excluded_product_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    barcode = clean_optional_text(data.get("barcode"))
+    if not barcode:
+        raise ValueError("Product barcode is required")
+    product_name = clean_optional_text(data.get("product_name_snapshot")) or barcode
+    exclusion_id = parse_int(data.get("id"), 0) or None
+    now = clean_optional_text(data.get("updated_at")) or datetime.now().astimezone().isoformat()
+    created_at = clean_optional_text(data.get("created_at")) or now
+    existing = None
+    if exclusion_id:
+        existing = cursor.execute(
+            "SELECT id FROM loyalty_excluded_products WHERE id = ? LIMIT 1",
+            (exclusion_id,),
+        ).fetchone()
+    if existing is None:
+        existing = cursor.execute(
+            "SELECT id FROM loyalty_excluded_products WHERE barcode = ? LIMIT 1",
+            (barcode,),
+        ).fetchone()
+    if existing:
+        resolved_id = parse_int(existing["id"], 0)
+        cursor.execute(
+            """
+            UPDATE loyalty_excluded_products
+            SET barcode = ?, product_name_snapshot = ?, exclude_earning = ?,
+                exclude_redemption = ?, is_active = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                barcode,
+                product_name,
+                1 if normalize_bool(data.get("exclude_earning"), True) else 0,
+                1 if normalize_bool(data.get("exclude_redemption"), False) else 0,
+                1 if normalize_bool(data.get("is_active"), True) else 0,
+                now,
+                resolved_id,
+            ),
+        )
+        return resolved_id
+    cursor.execute(
+        """
+        INSERT INTO loyalty_excluded_products (
+            barcode, product_name_snapshot, exclude_earning, exclude_redemption,
+            is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            barcode,
+            product_name,
+            1 if normalize_bool(data.get("exclude_earning"), True) else 0,
+            1 if normalize_bool(data.get("exclude_redemption"), False) else 0,
+            1 if normalize_bool(data.get("is_active"), True) else 0,
+            created_at,
+            now,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def handle_loyalty_sale_update_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    sale_id = parse_int(data.get("sale_id") or data.get("local_sale_id"), 0)
+    if sale_id <= 0:
+        return 0
+    cursor.execute(
+        """
+        UPDATE sales
+        SET customer_id = COALESCE(?, customer_id),
+            customer_name_snapshot = COALESCE(?, customer_name_snapshot),
+            customer_phone_snapshot = COALESCE(?, customer_phone_snapshot),
+            customer_code_snapshot = COALESCE(?, customer_code_snapshot),
+            loyalty_points_earned = ?,
+            loyalty_points_redeemed = ?,
+            loyalty_redeemed_value = ?,
+            loyalty_earn_base_amount = ?,
+            loyalty_status = ?,
+            loyalty_note = ?
+        WHERE id = ? OR pos_sale_id = ?
+        """,
+        (
+            parse_int(data.get("customer_id"), 0) or None,
+            clean_optional_text(data.get("customer_name_snapshot") or data.get("customer_name")),
+            clean_optional_text(data.get("customer_phone_snapshot") or data.get("customer_phone")),
+            clean_optional_text(data.get("customer_code_snapshot") or data.get("customer_code")),
+            parse_int(data.get("loyalty_points_earned"), 0),
+            parse_int(data.get("loyalty_points_redeemed"), 0),
+            parse_float(data.get("loyalty_redeemed_value"), 0.0),
+            parse_float(data.get("loyalty_earn_base_amount"), 0.0),
+            clean_optional_text(data.get("loyalty_status")) or "none",
+            clean_optional_text(data.get("loyalty_note")),
+            sale_id,
+            sale_id,
+        ),
+    )
+    return sale_id
+
+
+def handle_loyalty_ledger_entry_sync(cursor, data):
+    create_loyalty_tables(cursor)
+    customer_id = parse_int(data.get("customer_id"), 0)
+    if customer_id <= 0:
+        customer_id = upsert_customer_from_sync(cursor, data)
+    entry_type = str(data.get("entry_type") or "").strip().lower()
+    if entry_type not in {"earn", "redeem", "refund_earn_reversal", "refund_redeem_restore", "manual_adjustment"}:
+        raise ValueError("Invalid loyalty entry type")
+    pos_ledger_id = parse_int(data.get("pos_ledger_id") or data.get("id"), 0) or None
+    if pos_ledger_id:
+        existing = cursor.execute(
+            "SELECT id FROM loyalty_ledger WHERE pos_ledger_id = ? LIMIT 1",
+            (pos_ledger_id,),
+        ).fetchone()
+        if existing:
+            ledger_id = parse_int(existing["id"], 0)
+            cursor.execute(
+                """
+                UPDATE loyalty_ledger
+                SET customer_id = ?,
+                    entry_type = ?,
+                    points_delta = ?,
+                    points_balance_after = ?,
+                    money_value = ?,
+                    sale_id = ?,
+                    refund_sale_id = ?,
+                    description = ?,
+                    created_at = ?,
+                    created_by = ?,
+                    voided_at = ?,
+                    voided_by = ?,
+                    void_reason = ?
+                WHERE id = ?
+                """,
+                (
+                    customer_id,
+                    entry_type,
+                    parse_int(data.get("points_delta"), 0),
+                    parse_int(data.get("points_balance_after"), 0),
+                    parse_float(data.get("money_value"), 0.0),
+                    parse_int(data.get("sale_id"), 0) or None,
+                    parse_int(data.get("refund_sale_id"), 0) or None,
+                    clean_optional_text(data.get("description")),
+                    clean_optional_text(data.get("created_at")) or datetime.now().astimezone().isoformat(),
+                    clean_optional_text(data.get("created_by")),
+                    clean_optional_text(data.get("voided_at")),
+                    clean_optional_text(data.get("voided_by")),
+                    clean_optional_text(data.get("void_reason")),
+                    ledger_id,
+                ),
+            )
+            update_customer_loyalty_cache(cursor, customer_id)
+            return ledger_id
+    cursor.execute(
+        """
+        INSERT INTO loyalty_ledger (
+            pos_ledger_id, customer_id, entry_type, points_delta,
+            points_balance_after, money_value, sale_id, refund_sale_id,
+            description, created_at, created_by, voided_at, voided_by, void_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pos_ledger_id,
+            customer_id,
+            entry_type,
+            parse_int(data.get("points_delta"), 0),
+            parse_int(data.get("points_balance_after"), 0),
+            parse_float(data.get("money_value"), 0.0),
+            parse_int(data.get("sale_id"), 0) or None,
+            parse_int(data.get("refund_sale_id"), 0) or None,
+            clean_optional_text(data.get("description")),
+            clean_optional_text(data.get("created_at")) or datetime.now().astimezone().isoformat(),
+            clean_optional_text(data.get("created_by")),
+            clean_optional_text(data.get("voided_at")),
+            clean_optional_text(data.get("voided_by")),
+            clean_optional_text(data.get("void_reason")),
+        ),
+    )
+    ledger_id = cursor.lastrowid
+    update_customer_loyalty_cache(cursor, customer_id)
+    return ledger_id
+
+
+def handle_credit_sale_update_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    ledger_id = insert_credit_ledger_entry(cursor, data, customer_id=customer_id)
+    sale_id = parse_int(data.get("sale_id"), 0)
+    if sale_id > 0:
+        cursor.execute(
+            """
+            UPDATE sales
+            SET payment_method = 'customer_credit',
+                is_credit_sale = 1,
+                credit_status = ?,
+                credit_ledger_id = ?,
+                credit_approved_by = ?,
+                credit_previous_balance = ?,
+                credit_new_balance = ?,
+                credit_bill_amount = ?,
+                credit_limit_snapshot = ?,
+                customer_id = ?,
+                customer_name_snapshot = COALESCE(?, customer_name_snapshot),
+                customer_phone_snapshot = COALESCE(?, customer_phone_snapshot),
+                customer_code_snapshot = COALESCE(?, customer_code_snapshot)
+            WHERE id = ? OR pos_sale_id = ?
+            """,
+            (
+                clean_optional_text(data.get("credit_status")) or "posted",
+                ledger_id,
+                clean_optional_text(data.get("credit_approved_by")),
+                parse_float(data.get("credit_previous_balance"), 0.0),
+                parse_float(data.get("credit_new_balance"), 0.0),
+                parse_float(data.get("credit_bill_amount"), 0.0),
+                parse_float(data.get("credit_limit_snapshot"), 0.0),
+                customer_id,
+                clean_optional_text(data.get("customer_name") or data.get("customer_name_snapshot")),
+                clean_optional_text(data.get("customer_phone") or data.get("customer_phone_snapshot")),
+                clean_optional_text(data.get("customer_code") or data.get("customer_code_snapshot")),
+                sale_id,
+                sale_id,
+            ),
+        )
+    return ledger_id
+
+
+def handle_credit_refund_update_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    ledger_id = insert_credit_ledger_entry(cursor, data, customer_id=customer_id)
+    refund_sale_id = parse_int(data.get("refund_sale_id") or data.get("sale_id"), 0)
+    if refund_sale_id > 0:
+        cursor.execute(
+            """
+            UPDATE sales
+            SET payment_method = COALESCE(payment_method, 'customer_credit_refund'),
+                is_credit_sale = 1,
+                credit_status = ?,
+                credit_ledger_id = ?,
+                credit_approved_by = ?,
+                credit_previous_balance = ?,
+                credit_new_balance = ?,
+                credit_bill_amount = ?,
+                credit_limit_snapshot = ?,
+                customer_id = ?,
+                customer_name_snapshot = COALESCE(?, customer_name_snapshot),
+                customer_phone_snapshot = COALESCE(?, customer_phone_snapshot),
+                customer_code_snapshot = COALESCE(?, customer_code_snapshot)
+            WHERE id = ? OR pos_sale_id = ?
+            """,
+            (
+                clean_optional_text(data.get("credit_status")) or "refund_posted",
+                ledger_id,
+                clean_optional_text(data.get("credit_approved_by")),
+                parse_float(data.get("credit_previous_balance"), 0.0),
+                parse_float(data.get("credit_new_balance"), 0.0),
+                parse_float(data.get("credit_bill_amount"), 0.0),
+                parse_float(data.get("credit_limit_snapshot"), 0.0),
+                customer_id,
+                clean_optional_text(data.get("customer_name") or data.get("customer_name_snapshot")),
+                clean_optional_text(data.get("customer_phone") or data.get("customer_phone_snapshot")),
+                clean_optional_text(data.get("customer_code") or data.get("customer_code_snapshot")),
+                refund_sale_id,
+                refund_sale_id,
+            ),
+        )
+    return ledger_id
+
+
+def handle_customer_payment_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    pos_payment_id = parse_int(data.get("payment_id"), 0) or None
+    if pos_payment_id:
+        existing = cursor.execute(
+            "SELECT id FROM customer_payments WHERE pos_payment_id = ? LIMIT 1",
+            (pos_payment_id,),
+        ).fetchone()
+        if existing:
+            return parse_int(existing["id"], 0)
+
+    cursor.execute(
+        """
+        INSERT INTO customer_payments (
+            pos_payment_id, customer_id, amount, payment_method, reference_note,
+            cashier_name, received_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pos_payment_id,
+            customer_id,
+            parse_float(data.get("amount"), 0.0),
+            clean_optional_text(data.get("payment_method")) or "cash",
+            clean_optional_text(data.get("reference_note")),
+            clean_optional_text(data.get("cashier_name")),
+            clean_optional_text(data.get("received_by")),
+            clean_optional_text(data.get("created_at")) or datetime.now().astimezone().isoformat(),
+        ),
+    )
+    insert_credit_ledger_entry(cursor, data, customer_id=customer_id)
+    return cursor.lastrowid
+
+
+def handle_customer_payment_void_sync(cursor, data):
+    customer_id = upsert_customer_from_sync(cursor, data)
+    pos_payment_id = parse_int(data.get("payment_id"), 0)
+    if pos_payment_id > 0:
+        cursor.execute(
+            """
+            UPDATE customer_payments
+            SET voided_at = ?, voided_by = ?, void_reason = ?
+            WHERE pos_payment_id = ? OR id = ?
+            """,
+            (
+                clean_optional_text(data.get("voided_at")) or datetime.now().astimezone().isoformat(),
+                clean_optional_text(data.get("voided_by")),
+                clean_optional_text(data.get("void_reason")),
+                pos_payment_id,
+                pos_payment_id,
+            ),
+        )
+        cursor.execute(
+            """
+            UPDATE customer_ledger
+            SET voided_at = ?, voided_by = ?, void_reason = ?
+            WHERE entry_type = 'payment' AND (payment_id = ? OR pos_ledger_id = ?)
+            """,
+            (
+                clean_optional_text(data.get("voided_at")) or datetime.now().astimezone().isoformat(),
+                clean_optional_text(data.get("voided_by")),
+                clean_optional_text(data.get("void_reason")),
+                pos_payment_id,
+                pos_payment_id,
+            ),
+        )
+    return insert_credit_ledger_entry(cursor, data, customer_id=customer_id)
+
+
+def get_customer_ledger_rows(cursor, customer_id, limit=300):
+    create_customer_credit_tables(cursor)
+    return [
+        dict(row)
+        for row in cursor.execute(
+            """
+            SELECT *
+            FROM customer_ledger
+            WHERE customer_id = ?
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT ?
+            """,
+            (parse_int(customer_id, 0), parse_int(limit, 300)),
+        ).fetchall()
+    ]
+
+
+def get_credit_customers_report_rows(cursor, include_zero=False, limit=300):
+    create_customer_credit_tables(cursor)
+    where = "(COALESCE(c.credit_enabled, 0) = 1 OR ABS(COALESCE(c.current_credit_balance, 0)) > 0)" if include_zero else "ABS(COALESCE(c.current_credit_balance, 0)) > 0"
+    return [
+        dict(row)
+        for row in cursor.execute(
+            f"""
+            SELECT
+                c.id,
+                c.customer_code,
+                c.name,
+                c.phone,
+                c.customer_type,
+                c.is_active,
+                COALESCE(c.credit_enabled, 0) AS credit_enabled,
+                COALESCE(c.credit_limit, 0) AS credit_limit,
+                COALESCE(c.current_credit_balance, 0) AS current_credit_balance,
+                COALESCE(c.credit_status, 'normal') AS credit_status,
+                c.credit_note,
+                (
+                  SELECT MAX(l.created_at)
+                  FROM customer_ledger l
+                  WHERE l.customer_id = c.id AND l.entry_type = 'payment'
+                ) AS last_payment_at,
+                (
+                  SELECT MAX(l.created_at)
+                  FROM customer_ledger l
+                  WHERE l.customer_id = c.id AND l.entry_type = 'credit_sale'
+                ) AS last_credit_sale_at
+            FROM customers c
+            WHERE {where}
+            ORDER BY COALESCE(c.current_credit_balance, 0) DESC, c.name COLLATE NOCASE ASC
+            LIMIT ?
+            """,
+            (parse_int(limit, 300),),
+        ).fetchall()
+    ]
+
+def get_customer_summary(cursor, customer_id):
+    ensure_customer_sales_columns(cursor)
+    customer_id = parse_int(customer_id, 0)
+
+    row = cursor.execute(
+        """
+        SELECT
+            COUNT(*) AS transaction_count,
+            COALESCE(SUM(CASE
+                WHEN LOWER(COALESCE(transaction_type, 'sale')) = 'refund'
+                THEN -ABS(COALESCE(total_amount, 0))
+                ELSE ABS(COALESCE(total_amount, 0))
+            END), 0) AS net_total_spent,
+            COALESCE(SUM(CASE
+                WHEN LOWER(COALESCE(transaction_type, 'sale')) = 'refund'
+                THEN 1 ELSE 0
+            END), 0) AS refund_count,
+            COALESCE(SUM(CASE
+                WHEN LOWER(COALESCE(transaction_type, 'sale')) = 'refund'
+                THEN 0 ELSE 1
+            END), 0) AS sale_count,
+            MAX(created_at) AS last_purchase_at,
+            MIN(created_at) AS first_purchase_at
+        FROM sales
+        WHERE customer_id = ?
+        """,
+        (customer_id,),
+    ).fetchone()
+
+    sale_count = parse_int(row["sale_count"] if row else 0, 0)
+    net_total = parse_float(row["net_total_spent"] if row else 0, 0.0)
+
+    return {
+        "transaction_count": parse_int(row["transaction_count"] if row else 0, 0),
+        "sale_count": sale_count,
+        "refund_count": parse_int(row["refund_count"] if row else 0, 0),
+        "net_total_spent": round(net_total, 2),
+        "average_sale": round(net_total / sale_count, 2) if sale_count > 0 else 0.0,
+        "first_purchase_at": row["first_purchase_at"] if row else None,
+        "last_purchase_at": row["last_purchase_at"] if row else None,
+    }
+
+
+def get_customer_purchase_history(cursor, customer_id, limit=100):
+    ensure_customer_sales_columns(cursor)
+    customer_id = parse_int(customer_id, 0)
+    limit = parse_int(limit, 100)
+    if limit <= 0:
+        limit = 100
+    if limit > 500:
+        limit = 500
+
+    rows = cursor.execute(
+        """
+        SELECT *
+        FROM sales
+        WHERE customer_id = ?
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT ?
+        """,
+        (customer_id, limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _customer_monitor_prepare(cursor):
+    create_customer_credit_tables(cursor)
+    create_customer_product_prices_table(cursor)
+    create_pricing_schemes_tables(cursor)
+    create_loyalty_tables(cursor)
+    create_sale_items_table(cursor)
+
+
+def _monitor_loyalty_point_value(cursor):
+    _customer_monitor_prepare(cursor)
+    row = cursor.execute(
+        """
+        SELECT COALESCE(point_value_amount, 1) AS point_value_amount
+        FROM loyalty_settings
+        ORDER BY id ASC
+        LIMIT 1
+        """
+    ).fetchone()
+    return parse_float(row["point_value_amount"] if row else 1, 1.0)
+
+
+def _monitor_days_since(value):
+    if not value:
+        return None
+    text = str(value).strip()
+    parsed = None
+    for candidate in (
+        text,
+        text.replace("Z", "+00:00"),
+        text.split(".")[0],
+    ):
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            break
+        except Exception:
+            continue
+    if parsed is None:
+        try:
+            parsed = datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+    if parsed.tzinfo is not None:
+        now = datetime.now(parsed.tzinfo)
+    else:
+        now = datetime.now()
+    return max((now - parsed).days, 0)
+
+
+def _monitor_customer_label(row):
+    credit_status = str(row.get("credit_status") or "normal").strip().lower()
+    credit_balance = parse_float(row.get("credit_balance"), 0.0)
+    credit_limit = parse_float(row.get("credit_limit"), 0.0)
+    total_spent = parse_float(row.get("total_spent"), 0.0)
+    loyalty_value = parse_float(row.get("loyalty_value"), 0.0)
+    days_since_purchase = _monitor_days_since(row.get("last_purchase_at"))
+
+    if credit_status == "blocked":
+        return "Blocked"
+    if credit_limit > 0 and credit_balance > credit_limit:
+        return "Over Limit"
+    if credit_balance > 0:
+        return "Has Balance"
+    if days_since_purchase is not None and days_since_purchase <= 30:
+        return "Active"
+    if (days_since_purchase is None or days_since_purchase >= 90) and total_spent >= 50000:
+        return "Inactive High Value"
+    if loyalty_value >= 5000:
+        return "High Loyalty Balance"
+    return "Good Customer"
+
+
+def _monitor_attention_reasons(row):
+    reasons = []
+    credit_status = str(row.get("credit_status") or "normal").strip().lower()
+    credit_balance = parse_float(row.get("credit_balance"), 0.0)
+    credit_limit = parse_float(row.get("credit_limit"), 0.0)
+    total_spent = parse_float(row.get("total_spent"), 0.0)
+    loyalty_value = parse_float(row.get("loyalty_value"), 0.0)
+    days_since_purchase = _monitor_days_since(row.get("last_purchase_at"))
+    days_since_payment = _monitor_days_since(row.get("last_payment_at"))
+
+    if credit_status == "blocked":
+        reasons.append("Blocked")
+    if credit_status == "watchlist":
+        reasons.append("Watchlist")
+    if credit_limit > 0 and credit_balance > credit_limit:
+        reasons.append("Over Limit")
+    if credit_balance > 0 and (days_since_payment is None or days_since_payment >= 30):
+        reasons.append("No Payment 30 Days")
+    if (days_since_purchase is None or days_since_purchase >= 90) and total_spent >= 50000:
+        reasons.append("Inactive High Value")
+    if loyalty_value >= 5000:
+        reasons.append("High Loyalty")
+    return reasons
+
+
+def _monitor_customer_row(row):
+    data = dict(row)
+    data["credit_balance"] = round(parse_float(data.get("credit_balance"), 0.0), 2)
+    data["credit_limit"] = round(parse_float(data.get("credit_limit"), 0.0), 2)
+    data["loyalty_points"] = parse_int(data.get("loyalty_points"), 0)
+    data["loyalty_value"] = round(parse_float(data.get("loyalty_value"), 0.0), 2)
+    data["total_spent"] = round(parse_float(data.get("total_spent"), 0.0), 2)
+    data["purchase_count"] = parse_int(data.get("purchase_count"), 0)
+    data["product_override_count"] = parse_int(data.get("product_override_count"), 0)
+    data["health_label"] = _monitor_customer_label(data)
+    data["attention_reasons"] = _monitor_attention_reasons(data)
+    return data
+
+
+def _monitor_customer_select_sql():
+    return """
+        SELECT
+            c.id,
+            c.customer_code,
+            c.name,
+            c.phone,
+            c.customer_type,
+            COALESCE(c.is_active, 1) AS is_active,
+            c.customer_category_id,
+            c.pricing_scheme_id,
+            COALESCE(cc.name, '') AS category,
+            COALESCE(ps.name, '') AS direct_pricing_scheme,
+            COALESCE(cps.name, '') AS category_pricing_scheme,
+            CASE
+                WHEN COALESCE(ps.name, '') != '' THEN ps.name
+                WHEN COALESCE(cps.name, '') != '' THEN cps.name
+                ELSE ''
+            END AS pricing_scheme,
+            COALESCE(c.pricing_enabled, 0) AS simple_pricing_enabled,
+            COALESCE(c.default_price_type, 'selling') AS default_price_type,
+            COALESCE(c.default_discount_percent, 0) AS default_discount_percent,
+            COALESCE(c.current_credit_balance, 0) AS credit_balance,
+            COALESCE(c.credit_limit, 0) AS credit_limit,
+            COALESCE(c.credit_status, 'normal') AS credit_status,
+            COALESCE(c.credit_enabled, 0) AS credit_enabled,
+            COALESCE(c.loyalty_enabled, 1) AS loyalty_enabled,
+            COALESCE(c.loyalty_points_balance, 0) AS loyalty_points,
+            COALESCE(c.loyalty_lifetime_earned, 0) AS loyalty_lifetime_earned,
+            COALESCE(c.loyalty_lifetime_redeemed, 0) AS loyalty_lifetime_redeemed,
+            COALESCE(c.loyalty_points_balance, 0) * ? AS loyalty_value,
+            (
+                SELECT COUNT(*)
+                FROM customer_product_prices cpp
+                WHERE cpp.customer_id = c.id
+                  AND COALESCE(cpp.is_active, 1) = 1
+            ) AS product_override_count,
+            (
+                SELECT MAX(s.created_at)
+                FROM sales s
+                WHERE s.customer_id = c.id
+                  AND LOWER(COALESCE(s.transaction_type, 'sale')) = 'sale'
+            ) AS last_purchase_at,
+            (
+                SELECT MAX(p.created_at)
+                FROM customer_payments p
+                WHERE p.customer_id = c.id
+                  AND p.voided_at IS NULL
+            ) AS last_payment_at,
+            (
+                SELECT COALESCE(SUM(CASE
+                    WHEN LOWER(COALESCE(s.transaction_type, 'sale')) = 'refund'
+                    THEN -ABS(COALESCE(s.total_amount, 0))
+                    ELSE ABS(COALESCE(s.total_amount, 0))
+                END), 0)
+                FROM sales s
+                WHERE s.customer_id = c.id
+            ) AS total_spent,
+            (
+                SELECT COUNT(*)
+                FROM sales s
+                WHERE s.customer_id = c.id
+                  AND LOWER(COALESCE(s.transaction_type, 'sale')) = 'sale'
+            ) AS purchase_count
+        FROM customers c
+        LEFT JOIN customer_categories cc ON cc.id = c.customer_category_id
+        LEFT JOIN pricing_schemes ps ON ps.id = c.pricing_scheme_id
+        LEFT JOIN pricing_schemes cps ON cps.id = cc.default_pricing_scheme_id
+    """
+
+
+def get_customers_monitor(cursor, params):
+    _customer_monitor_prepare(cursor)
+    point_value = _monitor_loyalty_point_value(cursor)
+    query = str(params.get("query", params.get("search", [""]))[0] or "").strip()
+    filter_name = str(params.get("filter", ["all"])[0] or "all").strip().lower()
+    limit = parse_int(params.get("limit", ["100"])[0], 100)
+    if limit <= 0:
+        limit = 100
+    if limit > 500:
+        limit = 500
+
+    where = ["COALESCE(c.is_active, 1) = 1"]
+    args = [point_value]
+
+    if query:
+        phone_search = normalize_customer_phone(query)
+        like = f"%{query.lower()}%"
+        where.append(
+            """
+            (
+                LOWER(COALESCE(c.name, '')) LIKE ?
+                OR LOWER(COALESCE(c.customer_code, '')) LIKE ?
+                OR COALESCE(c.phone, '') LIKE ?
+                OR COALESCE(c.phone_normalized, '') LIKE ?
+            )
+            """
+        )
+        args.extend([like, like, f"%{query}%", f"%{phone_search or query}%"])
+
+    if filter_name == "credit_balance":
+        where.append("COALESCE(c.current_credit_balance, 0) > 0")
+    elif filter_name == "over_limit":
+        where.append("COALESCE(c.credit_limit, 0) > 0 AND COALESCE(c.current_credit_balance, 0) > COALESCE(c.credit_limit, 0)")
+    elif filter_name == "blocked":
+        where.append("LOWER(COALESCE(c.credit_status, 'normal')) = 'blocked'")
+    elif filter_name == "watchlist":
+        where.append("LOWER(COALESCE(c.credit_status, 'normal')) = 'watchlist'")
+    elif filter_name == "loyalty_members":
+        where.append("(COALESCE(c.loyalty_enabled, 1) = 1 OR COALESCE(c.loyalty_points_balance, 0) > 0)")
+    elif filter_name == "recently_active":
+        where.append(
+            """
+            EXISTS (
+                SELECT 1 FROM sales s
+                WHERE s.customer_id = c.id
+                  AND LOWER(COALESCE(s.transaction_type, 'sale')) = 'sale'
+                  AND datetime(s.created_at) >= datetime('now','localtime','-30 days')
+            )
+            """
+        )
+    elif filter_name == "inactive":
+        where.append(
+            """
+            NOT EXISTS (
+                SELECT 1 FROM sales s
+                WHERE s.customer_id = c.id
+                  AND LOWER(COALESCE(s.transaction_type, 'sale')) = 'sale'
+                  AND datetime(s.created_at) >= datetime('now','localtime','-90 days')
+            )
+            """
+        )
+
+    sql = _monitor_customer_select_sql()
+    sql += " WHERE " + " AND ".join(where)
+    if filter_name in {"credit_balance", "over_limit"}:
+        sql += " ORDER BY COALESCE(c.current_credit_balance, 0) DESC, c.name COLLATE NOCASE ASC"
+    elif filter_name == "loyalty_members":
+        sql += " ORDER BY COALESCE(c.loyalty_points_balance, 0) DESC, c.name COLLATE NOCASE ASC"
+    else:
+        sql += " ORDER BY last_purchase_at IS NULL, datetime(last_purchase_at) DESC, c.name COLLATE NOCASE ASC"
+    sql += " LIMIT ?"
+    args.append(limit)
+
+    return [_monitor_customer_row(row) for row in cursor.execute(sql, args).fetchall()]
+
+
+def get_customer_dashboard(cursor):
+    _customer_monitor_prepare(cursor)
+    point_value = _monitor_loyalty_point_value(cursor)
+    rows = get_customers_monitor(cursor, {"filter": ["all"], "limit": ["500"]})
+
+    total_customers = parse_int(
+        cursor.execute(
+            "SELECT COUNT(*) FROM customers WHERE COALESCE(is_active, 1) = 1"
+        ).fetchone()[0],
+        0,
+    )
+    active_customers = parse_int(
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT customer_id)
+            FROM sales
+            WHERE customer_id IS NOT NULL
+              AND LOWER(COALESCE(transaction_type, 'sale')) = 'sale'
+              AND datetime(created_at) >= datetime('now','localtime','-30 days')
+            """
+        ).fetchone()[0],
+        0,
+    )
+    summary_row = cursor.execute(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN COALESCE(current_credit_balance, 0) > 0 THEN 1 ELSE 0 END), 0) AS credit_customers,
+            COALESCE(SUM(CASE WHEN COALESCE(current_credit_balance, 0) > 0 THEN COALESCE(current_credit_balance, 0) ELSE 0 END), 0) AS total_outstanding,
+            COALESCE(SUM(CASE WHEN COALESCE(credit_limit, 0) > 0 AND COALESCE(current_credit_balance, 0) > COALESCE(credit_limit, 0) THEN 1 ELSE 0 END), 0) AS over_limit_count,
+            COALESCE(SUM(CASE WHEN COALESCE(loyalty_enabled, 1) = 1 OR COALESCE(loyalty_points_balance, 0) > 0 THEN 1 ELSE 0 END), 0) AS loyalty_members,
+            COALESCE(SUM(COALESCE(loyalty_points_balance, 0)), 0) AS total_loyalty_points
+        FROM customers
+        WHERE COALESCE(is_active, 1) = 1
+        """
+    ).fetchone()
+
+    summary = {
+        "total_customers": total_customers,
+        "active_customers": active_customers,
+        "credit_customers": parse_int(summary_row["credit_customers"], 0),
+        "total_outstanding": round(parse_float(summary_row["total_outstanding"], 0.0), 2),
+        "over_limit_count": parse_int(summary_row["over_limit_count"], 0),
+        "loyalty_members": parse_int(summary_row["loyalty_members"], 0),
+        "total_loyalty_points": parse_int(summary_row["total_loyalty_points"], 0),
+        "loyalty_liability": round(parse_int(summary_row["total_loyalty_points"], 0) * point_value, 2),
+    }
+
+    top_outstanding = sorted(
+        [row for row in rows if parse_float(row.get("credit_balance"), 0.0) > 0],
+        key=lambda row: parse_float(row.get("credit_balance"), 0.0),
+        reverse=True,
+    )[:8]
+    recent_customers = sorted(
+        [row for row in rows if row.get("last_purchase_at")],
+        key=lambda row: str(row.get("last_purchase_at") or ""),
+        reverse=True,
+    )[:8]
+    high_loyalty = sorted(
+        [row for row in rows if parse_int(row.get("loyalty_points"), 0) > 0],
+        key=lambda row: parse_int(row.get("loyalty_points"), 0),
+        reverse=True,
+    )[:8]
+    needs_attention = [
+        row for row in sorted(
+            rows,
+            key=lambda item: (
+                len(item.get("attention_reasons") or []),
+                parse_float(item.get("credit_balance"), 0.0),
+                parse_float(item.get("loyalty_value"), 0.0),
+            ),
+            reverse=True,
+        )
+        if row.get("attention_reasons")
+    ][:10]
+
+    return {
+        "summary": summary,
+        "top_outstanding": top_outstanding,
+        "recent_customers": recent_customers,
+        "high_loyalty": high_loyalty,
+        "needs_attention": needs_attention,
+    }
+
+
+def get_customer_monitor_profile(cursor, customer_id):
+    _customer_monitor_prepare(cursor)
+    customer_id = parse_int(customer_id, 0)
+    if customer_id <= 0:
+        raise ValueError("Invalid customer_id")
+
+    point_value = _monitor_loyalty_point_value(cursor)
+    row = cursor.execute(
+        _monitor_customer_select_sql() + " WHERE c.id = ? LIMIT 1",
+        (point_value, customer_id),
+    ).fetchone()
+    if not row:
+        raise ValueError("Customer not found")
+
+    customer = _monitor_customer_row(row)
+    purchase_summary = get_customer_summary(cursor, customer_id)
+    recent_transactions = get_customer_purchase_history(cursor, customer_id, limit=5)
+    recent_credit_ledger = get_customer_ledger_rows(cursor, customer_id, limit=5)
+    recent_loyalty_ledger = [
+        dict(item)
+        for item in cursor.execute(
+            """
+            SELECT *
+            FROM loyalty_ledger
+            WHERE customer_id = ?
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT 5
+            """,
+            (customer_id,),
+        ).fetchall()
+    ]
+
+    credit_summary = {
+        "customer_id": customer_id,
+        "credit_enabled": parse_int(customer.get("credit_enabled"), 0),
+        "credit_balance": customer["credit_balance"],
+        "credit_limit": customer["credit_limit"],
+        "available_credit": round(max(customer["credit_limit"] - customer["credit_balance"], 0), 2),
+        "credit_status": customer.get("credit_status") or "normal",
+        "last_payment_at": customer.get("last_payment_at"),
+    }
+    loyalty_summary = {
+        "customer_id": customer_id,
+        "loyalty_enabled": parse_int(customer.get("loyalty_enabled"), 1),
+        "points_balance": customer["loyalty_points"],
+        "point_value_amount": point_value,
+        "redeem_value": customer["loyalty_value"],
+        "lifetime_earned": parse_int(customer.get("loyalty_lifetime_earned"), 0),
+        "lifetime_redeemed": parse_int(customer.get("loyalty_lifetime_redeemed"), 0),
+    }
+    pricing_summary = {
+        "customer_category_id": customer.get("customer_category_id"),
+        "category": customer.get("category") or "No category",
+        "direct_pricing_scheme": customer.get("direct_pricing_scheme") or "",
+        "category_pricing_scheme": customer.get("category_pricing_scheme") or "",
+        "pricing_scheme": customer.get("pricing_scheme") or "No pricing scheme",
+        "product_override_count": customer["product_override_count"],
+        "simple_pricing_enabled": parse_int(customer.get("simple_pricing_enabled"), 0),
+        "default_price_type": customer.get("default_price_type") or "selling",
+        "default_discount_percent": parse_float(customer.get("default_discount_percent"), 0.0),
+    }
+
+    return {
+        "customer": customer,
+        "credit_summary": credit_summary,
+        "loyalty_summary": loyalty_summary,
+        "pricing_summary": pricing_summary,
+        "purchase_summary": purchase_summary,
+        "recent_transactions": recent_transactions,
+        "recent_credit_ledger": recent_credit_ledger,
+        "recent_loyalty_ledger": recent_loyalty_ledger,
+    }
+
 
 
 def get_product_row(cursor, barcode):
@@ -310,6 +2824,8 @@ def mirror_inventory_movement_to_pos(
             resolved_product_name = str((row["name"] if row else "Unknown product") or "Unknown product")
 
         safe_reference_type = str(reference_type or "backend_history").strip() or "backend_history"
+        mirror_created_at = created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         existing = cursor.execute(
             """
             SELECT id
@@ -323,6 +2839,55 @@ def mirror_inventory_movement_to_pos(
             (barcode, action_type, safe_reference_type, reference_id),
         ).fetchone()
         if existing:
+            return
+
+        # Prevent POS-origin movements from being mirrored back as duplicate
+        # Product History records.
+        #
+        # Example:
+        # 1) POS receives stock and immediately writes a local inventory movement.
+        # 2) POS sync sends the same receive to this local server.
+        # 3) The server updates local_admin.db and mirrors the backend history into
+        #    the POS DB again.
+        #
+        # The normal reference_id/reference_type duplicate check above will not catch
+        # that case because the local POS row and backend mirror row have different
+        # references. This second check compares the real movement details instead.
+        equivalent_existing = cursor.execute(
+            """
+            SELECT id
+            FROM inventory_movements
+            WHERE barcode = ?
+              AND action_type = ?
+              AND COALESCE(CAST(quantity_change AS REAL), -999999999.0) =
+                  COALESCE(CAST(? AS REAL), -999999999.0)
+              AND COALESCE(CAST(stock_before AS REAL), -999999999.0) =
+                  COALESCE(CAST(? AS REAL), -999999999.0)
+              AND COALESCE(CAST(stock_after AS REAL), -999999999.0) =
+                  COALESCE(CAST(? AS REAL), -999999999.0)
+              AND (
+                    COALESCE(
+                        ABS(
+                            strftime('%s', REPLACE(created_at, 'T', ' ')) -
+                            strftime('%s', REPLACE(?, 'T', ' '))
+                        ),
+                        999999999
+                    ) <= 120
+                    OR created_at = ?
+                  )
+            LIMIT 1
+            """,
+            (
+                barcode,
+                action_type,
+                quantity_change,
+                stock_before,
+                stock_after,
+                mirror_created_at,
+                mirror_created_at,
+            ),
+        ).fetchone()
+        if equivalent_existing:
             return
 
         cursor.execute(
@@ -359,7 +2924,7 @@ def mirror_inventory_movement_to_pos(
                 reference_id,
                 safe_reference_type,
                 str(performed_by or "Admin App").strip() or "Admin App",
-                created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                mirror_created_at,
             ),
         )
         conn.commit()
@@ -1089,6 +3654,99 @@ def _extract_item_cost_snapshot(item):
     return parse_float(product.get("cost_price"), 0.0)
 
 
+def _item_bool(value, default=False):
+    return 1 if normalize_bool(value, default) else 0
+
+
+def insert_sale_item_snapshots(cursor, sale_id, items, created_at):
+    create_sale_items_table(cursor)
+    cursor.execute("DELETE FROM sale_items WHERE sale_id = ?", (sale_id,))
+
+    for item in items:
+        product = item.get("product", {}) or {}
+        barcode = _extract_item_barcode(item)
+        product_name = _extract_item_name(item)
+        quantity = max(_extract_item_quantity(item), 0)
+        unit_price = parse_float(
+            item.get("unit_price_used", item.get("unit_price", item.get("price"))),
+            _extract_item_price(item),
+        )
+        system_unit_price = parse_float(item.get("system_unit_price"), unit_price)
+        marked_price = parse_float(product.get("selling_price", product.get("price")), unit_price)
+        base_line_total = parse_float(
+            item.get("base_line_total"),
+            unit_price * quantity,
+        )
+        item_discount = parse_float(item.get("item_discount_amount"), 0.0)
+        line_total = parse_float(
+            item.get("line_total"),
+            max(0.0, base_line_total - item_discount),
+        )
+        price_override_type = str(item.get("price_override_type") or "none").strip().lower()
+        if price_override_type not in {"none", "manual", "old_label"}:
+            price_override_type = "none"
+        customer_pricing_type = str(item.get("customer_pricing_type") or "none").strip().lower()
+        if customer_pricing_type not in {
+            "none",
+            "customer_product_price",
+            "customer_direct_scheme",
+            "customer_category_scheme",
+            "customer_default_price_type",
+            "customer_default_discount",
+        }:
+            customer_pricing_type = "none"
+
+        cursor.execute(
+            """
+            INSERT INTO sale_items (
+                sale_id, barcode, product_name, unit_price, marked_price,
+                price_category_used, system_unit_price, price_override_type,
+                price_override_reason, price_override_original_price,
+                price_override_difference, price_history_id,
+                price_override_approved_by, cost_price_snapshot, quantity,
+                base_line_total, item_discount_type, item_discount_value,
+                explicit_item_discount_amount, cart_discount_amount,
+                item_discount_amount, line_total, customer_pricing_applied,
+                customer_pricing_type, customer_pricing_rule_id,
+                customer_pricing_original_price, customer_pricing_final_price,
+                customer_pricing_discount_amount, customer_pricing_note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sale_id,
+                barcode,
+                product_name,
+                unit_price,
+                marked_price,
+                normalize_price_type(item.get("price_type_used") or item.get("price_category_used")),
+                system_unit_price,
+                price_override_type,
+                clean_optional_text(item.get("price_override_reason")) or "",
+                parse_float(item.get("price_override_original_price"), system_unit_price),
+                parse_float(item.get("price_override_difference"), unit_price - system_unit_price),
+                parse_int(item.get("price_history_id"), 0) or None,
+                clean_optional_text(item.get("price_override_approved_by")),
+                _extract_item_cost_snapshot(item),
+                quantity,
+                base_line_total,
+                str(item.get("item_discount_type") or "none"),
+                parse_float(item.get("item_discount_value"), 0.0),
+                parse_float(item.get("explicit_item_discount_amount"), 0.0),
+                parse_float(item.get("cart_discount_amount"), 0.0),
+                item_discount,
+                line_total,
+                _item_bool(item.get("customer_pricing_applied"), False),
+                customer_pricing_type,
+                parse_int(item.get("customer_pricing_rule_id"), 0) or None,
+                parse_float(item.get("customer_pricing_original_price"), 0.0),
+                parse_float(item.get("customer_pricing_final_price"), 0.0),
+                parse_float(item.get("customer_pricing_discount_amount"), 0.0),
+                clean_optional_text(item.get("customer_pricing_note")),
+                created_at,
+            ),
+        )
+
+
 def _extract_item_sales_amount(item):
     line_total = _extract_item_line_total(item)
     if line_total is not None:
@@ -1121,6 +3779,20 @@ def _extract_item_barcode(item):
     return str(product.get("barcode") or item.get("barcode") or "")
 
 
+def _extract_item_quantity_type(item):
+    product = item.get("product", {}) or {}
+    return normalize_quantity_type(product.get("quantity_type") or item.get("quantity_type"))
+
+
+def _extract_item_unit_label(item):
+    product = item.get("product", {}) or {}
+    quantity_type = _extract_item_quantity_type(item)
+    return normalize_unit_label(
+        quantity_type,
+        product.get("unit_label") or item.get("unit_label"),
+    )
+
+
 def _sales_rows_between(cursor, start_sql_expr, end_sql_expr):
     return cursor.execute(
         f"""
@@ -1148,6 +3820,8 @@ def _build_owner_summary_from_rows(rows):
             price = max(_extract_item_price(item), 0.0)
             name = _extract_item_name(item)
             barcode = _extract_item_barcode(item)
+            quantity_type = _extract_item_quantity_type(item)
+            unit_label = _extract_item_unit_label(item)
 
             items_sold += quantity
             product_key = barcode or name
@@ -1156,6 +3830,8 @@ def _build_owner_summary_from_rows(rows):
                 products[product_key] = {
                     "barcode": barcode,
                     "product_name": name,
+                    "quantity_type": quantity_type,
+                    "unit_label": unit_label,
                     "quantity_sold": 0,
                     "total_sales": 0.0,
                 }
@@ -1260,18 +3936,28 @@ def _top_sellers_last_days(cursor, days=30, limit=10):
 def _build_owner_alerts(cursor):
     alerts = []
 
+    def stock_text(product, value):
+        return format_stock_with_unit(
+            product.get("quantity_type"),
+            product.get("unit_label"),
+            value,
+        )
+
     products = fetch_products(cursor)
-    out_of_stock = [p for p in products if parse_int(p.get("stock", 0), 0) <= 0]
+    quantity_epsilon = 0.000001
+    out_of_stock = [
+        p for p in products if parse_float(p.get("stock", 0), 0.0) <= quantity_epsilon
+    ]
     low_stock = [
         p
         for p in products
-        if parse_int(p.get("stock", 0), 0) > 0
-        and parse_int(p.get("stock", 0), 0)
-        <= (parse_int(p.get("min_stock_level", 0), 0) or 10)
+        if parse_float(p.get("stock", 0), 0.0) > quantity_epsilon
+        and parse_float(p.get("stock", 0), 0.0)
+        <= (parse_float(p.get("min_stock_level", 0), 0.0) or 10.0)
     ]
 
     out_of_stock = sorted(out_of_stock, key=lambda item: item["name"])
-    low_stock = sorted(low_stock, key=lambda item: item["stock"])
+    low_stock = sorted(low_stock, key=lambda item: parse_float(item.get("stock", 0), 0.0))
 
     for product in out_of_stock[:6]:
         supplier_contact = _latest_supplier_contact_for_barcode(
@@ -1283,7 +3969,7 @@ def _build_owner_alerts(cursor):
                 "type": "out_of_stock",
                 "severity": "critical",
                 "title": f"{product['name']} is out of stock",
-                "subtitle": f"Barcode {product['barcode']} • stock 0",
+                "subtitle": f"Barcode {product['barcode']} - stock {stock_text(product, 0)}",
                 "barcode": product["barcode"],
                 **supplier_contact,
             }
@@ -1297,9 +3983,9 @@ def _build_owner_alerts(cursor):
         if not barcode or barcode not in product_by_barcode:
             continue
         product = product_by_barcode[barcode]
-        stock = parse_int(product.get("stock", 0), 0)
-        min_stock = parse_int(product.get("min_stock_level", 0), 0) or 10
-        if stock > 0 and stock <= min_stock:
+        stock = parse_float(product.get("stock", 0), 0.0)
+        min_stock = parse_float(product.get("min_stock_level", 0), 0.0) or 10.0
+        if stock > quantity_epsilon and stock <= min_stock:
             best_seller_risk.append((seller, product))
 
     for seller, product in best_seller_risk[:4]:
@@ -1312,7 +3998,10 @@ def _build_owner_alerts(cursor):
                 "type": "best_seller_low_stock",
                 "severity": "warning",
                 "title": f"Best seller low in stock: {product['name']}",
-                "subtitle": f"Sold {seller['quantity_sold']} recently • stock {product['stock']}",
+                "subtitle": (
+                    f"Sold {format_quantity(seller['quantity_sold'])} recently - "
+                    f"stock {stock_text(product, product.get('stock', 0))}"
+                ),
                 "barcode": product["barcode"],
                 **supplier_contact,
             }
@@ -1331,7 +4020,7 @@ def _build_owner_alerts(cursor):
                 "type": "low_stock",
                 "severity": "warning",
                 "title": f"{product['name']} is low in stock",
-                "subtitle": f"Barcode {product['barcode']} • stock {product['stock']}",
+                "subtitle": f"Barcode {product['barcode']} - stock {stock_text(product, product.get('stock', 0))}",
                 "barcode": product["barcode"],
                 **supplier_contact,
             }
@@ -1735,6 +4424,8 @@ def _build_owner_sales_report(cursor, params):
                 continue
             barcode = _extract_item_barcode(item)
             name = _extract_item_name(item)
+            quantity_type = _extract_item_quantity_type(item)
+            unit_label = _extract_item_unit_label(item)
             unit_cost = _extract_item_cost_snapshot(item)
             if unit_cost <= 0:
                 unit_cost = parse_float(product_by_barcode.get(barcode, {}).get("cost_price"), 0.0)
@@ -1744,6 +4435,8 @@ def _build_owner_sales_report(cursor, params):
                 {
                     "barcode": barcode,
                     "product_name": name,
+                    "quantity_type": quantity_type,
+                    "unit_label": unit_label,
                     "quantity_sold": 0,
                     "refunded_quantity": 0,
                     "net_quantity_sold": 0,
@@ -2044,7 +4737,9 @@ def update_business_info(cursor, body):
 
 def _normalize_user_role(value):
     normalized = str(value or '').strip().lower()
-    return 'manager' if normalized == 'manager' else 'cashier'
+    if normalized in {'manager', 'owner', 'admin', 'administrator'}:
+        return 'manager'
+    return 'cashier'
 
 
 def _normalize_user_status_filter(value):
@@ -2163,8 +4858,8 @@ def get_owner_user_summary(cursor):
         SELECT
             COUNT(*) AS total_users,
             COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_users,
-            COALESCE(SUM(CASE WHEN role = 'manager' THEN 1 ELSE 0 END), 0) AS managers,
-            COALESCE(SUM(CASE WHEN role = 'cashier' THEN 1 ELSE 0 END), 0) AS cashiers
+            COALESCE(SUM(CASE WHEN LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator') THEN 1 ELSE 0 END), 0) AS managers,
+            COALESCE(SUM(CASE WHEN LOWER(TRIM(role)) NOT IN ('manager', 'owner', 'admin', 'administrator') THEN 1 ELSE 0 END), 0) AS cashiers
         FROM users
         """
     ).fetchone()
@@ -2178,15 +4873,18 @@ def get_owner_user_summary(cursor):
 
 def get_owner_users(cursor, params):
     search = str(params.get('search', [''])[0] or '').strip().lower()
-    role = _normalize_user_role(params.get('role', ['all'])[0]) if str(params.get('role', ['all'])[0] or '').strip().lower() in {'manager','cashier'} else 'all'
+    raw_role = str(params.get('role', ['all'])[0] or '').strip().lower()
+    role = _normalize_user_role(raw_role) if raw_role not in {'', 'all'} else 'all'
     status = _normalize_user_status_filter(params.get('status', ['all'])[0])
 
     where_clauses = []
     where_args = []
 
     if role in {'manager', 'cashier'}:
-        where_clauses.append('role = ?')
-        where_args.append(role)
+        if role == 'manager':
+            where_clauses.append("LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator')")
+        else:
+            where_clauses.append("LOWER(TRIM(role)) NOT IN ('manager', 'owner', 'admin', 'administrator')")
     if status == 'active':
         where_clauses.append('is_active = 1')
     elif status == 'inactive':
@@ -2422,6 +5120,10 @@ def build_data_backup(cursor):
     create_business_info_table(cursor)
     seed_business_info_if_needed(cursor)
     create_user_tables(cursor)
+    create_customer_product_prices_table(cursor)
+    create_pricing_schemes_tables(cursor)
+    create_sale_items_table(cursor)
+    create_loyalty_tables(cursor)
 
     def query_rows(sql, args=()):
         return [dict(row) for row in cursor.execute(sql, args).fetchall()]
@@ -2436,21 +5138,251 @@ def build_data_backup(cursor):
             'pos_db_present': os.path.exists(POS_DB_PATH),
         },
         'business_info': get_business_info(cursor),
+        'customers': fetch_customers(cursor, {'include_inactive': ['1'], 'limit': ['500']}),
         'products': fetch_products(cursor),
         'suppliers': query_rows('SELECT * FROM suppliers ORDER BY name COLLATE NOCASE ASC'),
         'stock_receipts': query_rows('SELECT * FROM stock_receipts ORDER BY datetime(created_at) DESC, id DESC'),
         'inventory_history': query_rows('SELECT * FROM inventory_history ORDER BY datetime(created_at) DESC, id DESC'),
         'sales': query_rows('SELECT * FROM sales ORDER BY datetime(created_at) DESC, id DESC'),
+        'sale_items': query_rows('SELECT * FROM sale_items ORDER BY sale_id DESC, id ASC'),
+        'customer_product_prices': query_rows('SELECT * FROM customer_product_prices ORDER BY customer_id ASC, product_name_snapshot COLLATE NOCASE ASC'),
+        'customer_categories': query_rows('SELECT * FROM customer_categories ORDER BY is_active DESC, name COLLATE NOCASE ASC'),
+        'pricing_schemes': query_rows('SELECT * FROM pricing_schemes ORDER BY is_active DESC, priority ASC, name COLLATE NOCASE ASC'),
+        'pricing_scheme_rules': query_rows('SELECT * FROM pricing_scheme_rules ORDER BY scheme_id ASC, priority ASC, id ASC'),
+        'loyalty_settings': query_rows('SELECT * FROM loyalty_settings ORDER BY id ASC'),
+        'loyalty_ledger': query_rows('SELECT * FROM loyalty_ledger ORDER BY datetime(created_at) DESC, id DESC'),
+        'loyalty_excluded_categories': query_rows('SELECT * FROM loyalty_excluded_categories ORDER BY is_active DESC, category_name COLLATE NOCASE ASC'),
+        'loyalty_excluded_products': query_rows('SELECT * FROM loyalty_excluded_products ORDER BY is_active DESC, product_name_snapshot COLLATE NOCASE ASC'),
+        'customer_ledger': query_rows('SELECT * FROM customer_ledger ORDER BY datetime(created_at) DESC, id DESC'),
+        'customer_payments': query_rows('SELECT * FROM customer_payments ORDER BY datetime(created_at) DESC, id DESC'),
         'owner_users': get_owner_users(cursor, {'search': [''], 'role': ['all'], 'status': ['all']}),
         'owner_activity_logs': get_owner_activity_logs(cursor, {'search': [''], 'filter': ['all'], 'limit': ['500']}),
     }
     return backup
 
+
+def _server_backup_directory():
+    user_profile = os.environ.get("USERPROFILE", "").strip()
+    if user_profile:
+        path = os.path.join(user_profile, "Documents", "FoodCityPOS", "ServerBackups")
+    else:
+        path = os.path.join(PROJECT_ROOT, "FoodCityPOS", "ServerBackups")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _server_backup_stamp():
+    return datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def _safe_server_backup_path(value):
+    name = os.path.basename(str(value or "").strip())
+    if not name or not name.lower().endswith(".zip"):
+        return None
+    path = os.path.abspath(os.path.join(_server_backup_directory(), name))
+    backup_dir = os.path.abspath(_server_backup_directory())
+    if os.path.commonpath([backup_dir, path]) != backup_dir:
+        return None
+    return path
+
+
+def _snapshot_sqlite_db(source_path, output_path):
+    if not os.path.exists(source_path):
+        return False
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    source = sqlite3.connect(source_path, timeout=10)
+    target = sqlite3.connect(output_path)
+    try:
+        source.backup(target)
+        target.commit()
+        return True
+    finally:
+        target.close()
+        source.close()
+
+
+def _server_backup_counts(export_data):
+    keys = [
+        "products",
+        "customers",
+        "sales",
+        "sale_items",
+        "customer_ledger",
+        "customer_payments",
+        "customer_product_prices",
+        "pricing_schemes",
+        "pricing_scheme_rules",
+        "loyalty_ledger",
+        "owner_users",
+    ]
+    return {key: len(export_data.get(key, []) or []) for key in keys}
+
+
+def _read_server_backup_metadata(zip_path):
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        if "backup_metadata.json" not in archive.namelist():
+            return None
+        return json.loads(archive.read("backup_metadata.json").decode("utf-8"))
+
+
+def validate_server_backup(zip_path):
+    if not zip_path or not os.path.exists(zip_path):
+        return {
+            "is_valid": False,
+            "message": "Backup file does not exist.",
+            "metadata": None,
+        }
+    try:
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            names = set(archive.namelist())
+            if "backup_metadata.json" not in names:
+                return {
+                    "is_valid": False,
+                    "message": "backup_metadata.json is missing.",
+                    "metadata": None,
+                }
+            metadata = json.loads(archive.read("backup_metadata.json").decode("utf-8"))
+            if metadata.get("app") != "Food City POS Local Server":
+                return {
+                    "is_valid": False,
+                    "message": "This is not a Food City POS local server backup.",
+                    "metadata": metadata,
+                }
+            if parse_int(metadata.get("backup_version"), 0) != SERVER_BACKUP_VERSION:
+                return {
+                    "is_valid": False,
+                    "message": f"Unsupported backup version {metadata.get('backup_version')}.",
+                    "metadata": metadata,
+                }
+            required = {"local_admin.db", "data_export.json"}
+            missing = sorted(required.difference(names))
+            if missing:
+                return {
+                    "is_valid": False,
+                    "message": f"Backup is missing: {', '.join(missing)}.",
+                    "metadata": metadata,
+                }
+            return {
+                "is_valid": True,
+                "message": "Backup is valid.",
+                "metadata": metadata,
+            }
+    except Exception as exc:
+        return {
+            "is_valid": False,
+            "message": f"Backup validation failed: {exc}",
+            "metadata": None,
+        }
+
+
+def list_server_backups():
+    backup_dir = _server_backup_directory()
+    backups = []
+    for name in os.listdir(backup_dir):
+        if not name.lower().endswith(".zip"):
+            continue
+        path = os.path.join(backup_dir, name)
+        if not os.path.isfile(path):
+            continue
+        stat = os.stat(path)
+        validation = validate_server_backup(path)
+        backups.append(
+            {
+                "file_name": name,
+                "path": os.path.abspath(path),
+                "size_bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(),
+                "is_valid": validation.get("is_valid", False),
+                "validation_message": validation.get("message", ""),
+                "metadata": validation.get("metadata"),
+            }
+        )
+    backups.sort(key=lambda item: item["modified_at"], reverse=True)
+    return backups
+
+
+def create_server_backup(cursor, created_by="Local Server", notes="Manual local server backup"):
+    backup_dir = _server_backup_directory()
+    now = datetime.now().astimezone()
+    export_data = build_data_backup(cursor)
+    try:
+        cursor.connection.commit()
+    except Exception:
+        pass
+    file_name = f"food_city_server_backup_{_server_backup_stamp()}.zip"
+    output_path = os.path.join(backup_dir, file_name)
+
+    metadata = {
+        "app": "Food City POS Local Server",
+        "backup_version": SERVER_BACKUP_VERSION,
+        "created_at": now.isoformat(),
+        "created_by": str(created_by or "Local Server").strip() or "Local Server",
+        "source": "local_server.py",
+        "contains": {
+            "local_admin_db": os.path.exists(DB_PATH),
+            "pos_db": os.path.exists(POS_DB_PATH),
+            "json_export": True,
+        },
+        "database_files": {
+            "local_admin_db": "local_admin.db",
+            "pos_db": "food_city_pos.db",
+        },
+        "paths": {
+            "local_admin_db": os.path.abspath(DB_PATH),
+            "pos_db": os.path.abspath(POS_DB_PATH),
+        },
+        "counts": _server_backup_counts(export_data),
+        "notes": str(notes or "").strip(),
+    }
+
+    with tempfile.TemporaryDirectory(prefix="food_city_server_backup_") as temp_dir:
+        admin_snapshot = os.path.join(temp_dir, "local_admin.db")
+        pos_snapshot = os.path.join(temp_dir, "food_city_pos.db")
+        has_admin_snapshot = _snapshot_sqlite_db(DB_PATH, admin_snapshot)
+        has_pos_snapshot = _snapshot_sqlite_db(POS_DB_PATH, pos_snapshot)
+
+        metadata["contains"]["local_admin_db"] = has_admin_snapshot
+        metadata["contains"]["pos_db"] = has_pos_snapshot
+
+        with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(
+                "backup_metadata.json",
+                json.dumps(metadata, indent=2, ensure_ascii=False),
+            )
+            archive.writestr(
+                "data_export.json",
+                json.dumps(export_data, indent=2, ensure_ascii=False),
+            )
+            archive.writestr(
+                "restore_instructions.txt",
+                "Food City POS local server backup.\n"
+                "Keep this ZIP safe. Restore support for local_server.py is handled by the Backup & Restore module.\n"
+                "Do not manually replace database files while POS or local_server.py is running.\n",
+            )
+            if has_admin_snapshot:
+                archive.write(admin_snapshot, "local_admin.db")
+            if has_pos_snapshot:
+                archive.write(pos_snapshot, "food_city_pos.db")
+
+    validation = validate_server_backup(output_path)
+    return {
+        "status": "success" if validation.get("is_valid") else "error",
+        "message": "Server backup created successfully." if validation.get("is_valid") else validation.get("message"),
+        "backup": {
+            "file_name": file_name,
+            "path": os.path.abspath(output_path),
+            "size_bytes": os.path.getsize(output_path) if os.path.exists(output_path) else 0,
+            "metadata": metadata,
+            "validation": validation,
+        },
+    }
+
 def _active_manager_count(cursor, excluding_user_id=None):
     query = """
         SELECT COUNT(*) AS count
         FROM users
-        WHERE role = 'manager' AND COALESCE(is_active, 1) = 1
+        WHERE LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator')
+          AND COALESCE(is_active, 1) = 1
     """
     args = []
     if excluding_user_id is not None:
@@ -2785,6 +5717,12 @@ def init_db():
     ensure_column(c, "sales", "transaction_type", "transaction_type TEXT DEFAULT 'sale'")
     ensure_column(c, "sales", "items_count", "items_count INTEGER DEFAULT 0")
     ensure_column(c, "sales", "gross_profit", "gross_profit REAL DEFAULT 0")
+    ensure_customer_sales_columns(c)
+    create_customer_credit_tables(c)
+    create_customer_product_prices_table(c)
+    create_pricing_schemes_tables(c)
+    create_sale_items_table(c)
+    create_loyalty_tables(c)
 
     c.execute(
         """
@@ -3086,6 +6024,32 @@ class APIHandler(BaseHTTPRequestHandler):
             self._set_headers()
             self.wfile.write(json.dumps(backup).encode())
 
+        elif action == "list_server_backups":
+            self._set_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "status": "success",
+                        "backup_directory": _server_backup_directory(),
+                        "backups": list_server_backups(),
+                    }
+                ).encode()
+            )
+
+        elif action == "validate_server_backup":
+            file_name = params.get("file_name", params.get("name", [""]))[0]
+            backup_path = _safe_server_backup_path(file_name)
+            validation = validate_server_backup(backup_path)
+            self._set_headers(200 if validation.get("is_valid") else 400)
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "status": "success" if validation.get("is_valid") else "error",
+                        **validation,
+                    }
+                ).encode()
+            )
+
         elif action == "get_owner_dashboard":
             today_rows = _sales_rows_between(
                 c,
@@ -3131,11 +6095,221 @@ class APIHandler(BaseHTTPRequestHandler):
                 ).encode()
             )
 
+        elif action == "get_customer_dashboard":
+            try:
+                dashboard = get_customer_dashboard(c)
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "success": True,
+                            **dashboard,
+                        }
+                    ).encode()
+                )
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "success": False,
+                            "message": str(e),
+                        }
+                    ).encode()
+                )
+
+        elif action == "get_customers_monitor":
+            try:
+                customers = get_customers_monitor(c, params)
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "success": True,
+                            "customers": customers,
+                        }
+                    ).encode()
+                )
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "success": False,
+                            "message": str(e),
+                            "customers": [],
+                        }
+                    ).encode()
+                )
+
+        elif action == "get_customer_monitor_profile":
+            customer_id = parse_int(params.get("customer_id", params.get("id", ["0"]))[0], 0)
+            try:
+                profile = get_customer_monitor_profile(c, customer_id)
+                self._set_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "success",
+                            "success": True,
+                            **profile,
+                        }
+                    ).encode()
+                )
+            except ValueError as e:
+                self._set_headers(404)
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "success": False,
+                            "message": str(e),
+                        }
+                    ).encode()
+                )
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(
+                    json.dumps(
+                        {
+                            "status": "error",
+                            "success": False,
+                            "message": str(e),
+                        }
+                    ).encode()
+                )
+
         elif action == "get_suppliers":
             rows = c.execute("SELECT * FROM suppliers").fetchall()
             result = [dict(r) for r in rows]
             self._set_headers()
             self.wfile.write(json.dumps(result).encode())
+
+        elif action == "get_customers":
+            result = fetch_customers(c, params)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "customers": result}).encode()
+            )
+
+        elif action == "get_customer_product_prices":
+            create_customer_product_prices_table(c)
+            customer_id = parse_int(params.get("customer_id", params.get("id", ["0"]))[0], 0)
+            active_only = normalize_bool(params.get("active_only", ["0"])[0], False)
+            query = "SELECT * FROM customer_product_prices WHERE customer_id = ?"
+            args = [customer_id]
+            if active_only:
+                query += " AND COALESCE(is_active, 1) = 1"
+            query += " ORDER BY COALESCE(is_active, 1) DESC, product_name_snapshot COLLATE NOCASE ASC"
+            result = [dict(row) for row in c.execute(query, args).fetchall()]
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "product_prices": result}).encode()
+            )
+
+        elif action == "get_customer_categories":
+            create_pricing_schemes_tables(c)
+            active_only = normalize_bool(params.get("active_only", ["0"])[0], False)
+            query = "SELECT * FROM customer_categories"
+            if active_only:
+                query += " WHERE COALESCE(is_active, 1) = 1"
+            query += " ORDER BY COALESCE(is_active, 1) DESC, name COLLATE NOCASE ASC"
+            result = [dict(row) for row in c.execute(query).fetchall()]
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "categories": result}).encode())
+
+        elif action == "get_pricing_schemes":
+            create_pricing_schemes_tables(c)
+            active_only = normalize_bool(params.get("active_only", ["0"])[0], False)
+            query = "SELECT * FROM pricing_schemes"
+            if active_only:
+                query += " WHERE COALESCE(is_active, 1) = 1"
+            query += " ORDER BY COALESCE(is_active, 1) DESC, priority ASC, name COLLATE NOCASE ASC"
+            result = [dict(row) for row in c.execute(query).fetchall()]
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "schemes": result}).encode())
+
+        elif action == "get_pricing_scheme_rules":
+            create_pricing_schemes_tables(c)
+            scheme_id = parse_int(params.get("scheme_id", ["0"])[0], 0)
+            active_only = normalize_bool(params.get("active_only", ["0"])[0], False)
+            query = "SELECT * FROM pricing_scheme_rules"
+            args = []
+            where = []
+            if scheme_id > 0:
+                where.append("scheme_id = ?")
+                args.append(scheme_id)
+            if active_only:
+                where.append("COALESCE(is_active, 1) = 1")
+            if where:
+                query += " WHERE " + " AND ".join(where)
+            query += " ORDER BY COALESCE(is_active, 1) DESC, priority ASC, updated_at DESC, id DESC"
+            result = [dict(row) for row in c.execute(query, args).fetchall()]
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "rules": result}).encode())
+
+        elif action == "get_customer_summary":
+            customer_id = params.get("customer_id", params.get("id", ["0"]))[0]
+            summary = get_customer_summary(c, customer_id)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "summary": summary}).encode()
+            )
+
+        elif action == "get_customer_purchase_history":
+            customer_id = params.get("customer_id", params.get("id", ["0"]))[0]
+            limit = params.get("limit", ["100"])[0]
+            history = get_customer_purchase_history(c, customer_id, limit=limit)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "history": history}).encode()
+            )
+
+
+        elif action == "get_customer_ledger":
+            customer_id = params.get("customer_id", params.get("id", ["0"]))[0]
+            limit = params.get("limit", ["300"])[0]
+            ledger = get_customer_ledger_rows(c, customer_id, limit=limit)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "ledger": ledger}).encode()
+            )
+
+        elif action == "get_customer_credit_summary":
+            customer_id = parse_int(params.get("customer_id", params.get("id", ["0"]))[0], 0)
+            balance = update_customer_cached_credit_balance(c, customer_id)
+            row = c.execute(
+                """
+                SELECT id AS customer_id,
+                       COALESCE(credit_enabled, 0) AS credit_enabled,
+                       COALESCE(credit_limit, 0) AS credit_limit,
+                       COALESCE(current_credit_balance, 0) AS current_credit_balance,
+                       COALESCE(credit_status, 'normal') AS credit_status,
+                       credit_note
+                FROM customers
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (customer_id,),
+            ).fetchone()
+            result = dict(row) if row else {"customer_id": customer_id, "current_credit_balance": balance}
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "summary": result}).encode()
+            )
+
+        elif action == "get_credit_customers_report":
+            include_zero = normalize_bool(params.get("include_zero", ["0"])[0], False)
+            limit = params.get("limit", ["300"])[0]
+            rows = get_credit_customers_report_rows(c, include_zero=include_zero, limit=limit)
+            self._set_headers()
+            self.wfile.write(
+                json.dumps({"status": "success", "customers": rows}).encode()
+            )
 
         elif action == "get_inventory_history":
             barcode = params.get("barcode", [""])[0].strip()
@@ -3218,6 +6392,15 @@ class APIHandler(BaseHTTPRequestHandler):
             )
             self._set_headers()
             self.wfile.write(json.dumps({"status": "success"}).encode())
+
+        elif action == "create_server_backup":
+            result = create_server_backup(
+                c,
+                created_by=body.get("created_by", "Local Server"),
+                notes=body.get("notes", "Manual local server backup"),
+            )
+            self._set_headers(200 if result.get("status") == "success" else 400)
+            self.wfile.write(json.dumps(result).encode())
 
         elif action == "pos_sync":
             sync_type = str(body.get("type", "")).strip().upper()
@@ -3305,6 +6488,24 @@ class APIHandler(BaseHTTPRequestHandler):
                     gross_profit += (unit_price - unit_cost) * quantity
 
                 created_at = str(data.get("created_at", "") or "").strip() or datetime.now().astimezone().isoformat()
+                pos_sale_id = parse_int(data.get("id", data.get("sale_id", 0)), 0) or None
+                ensure_customer_sales_columns(c)
+                customer_id = parse_int(data.get("customer_id"), 0) or None
+                customer_name_snapshot = clean_optional_text(
+                    data.get("customer_name_snapshot")
+                    or data.get("customer_name")
+                    or data.get("selected_customer_name")
+                )
+                customer_phone_snapshot = clean_optional_text(
+                    data.get("customer_phone_snapshot")
+                    or data.get("customer_phone")
+                    or data.get("selected_customer_phone")
+                )
+                customer_code_snapshot = clean_optional_text(
+                    data.get("customer_code_snapshot")
+                    or data.get("customer_code")
+                    or data.get("selected_customer_code")
+                )
 
                 c.execute(
                     """
@@ -3321,9 +6522,20 @@ class APIHandler(BaseHTTPRequestHandler):
                         branch,
                         vendor,
                         items,
-                        created_at
+                        created_at,
+                        pos_sale_id,
+                        customer_id,
+                        customer_name_snapshot,
+                        customer_phone_snapshot,
+                        customer_code_snapshot,
+                        loyalty_points_earned,
+                        loyalty_points_redeemed,
+                        loyalty_redeemed_value,
+                        loyalty_earn_base_amount,
+                        loyalty_status,
+                        loyalty_note
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         total_amount,
@@ -3339,9 +6551,21 @@ class APIHandler(BaseHTTPRequestHandler):
                         data.get("vendor", ""),
                         json.dumps(items),
                         created_at,
+                        pos_sale_id,
+                        customer_id,
+                        customer_name_snapshot,
+                        customer_phone_snapshot,
+                        customer_code_snapshot,
+                        parse_int(data.get("loyalty_points_earned"), 0),
+                        parse_int(data.get("loyalty_points_redeemed"), 0),
+                        parse_float(data.get("loyalty_redeemed_value"), 0.0),
+                        parse_float(data.get("loyalty_earn_base_amount"), 0.0),
+                        clean_optional_text(data.get("loyalty_status")) or "none",
+                        clean_optional_text(data.get("loyalty_note")),
                     ),
                 )
                 sale_id = c.lastrowid
+                insert_sale_item_snapshots(c, sale_id, items, created_at)
 
                 for item in items:
                     product = item.get("product", {})
@@ -3380,6 +6604,147 @@ class APIHandler(BaseHTTPRequestHandler):
                 print(
                     f"  ✅ {transaction_type.upper()} synced: Rs.{data.get('total_amount', 0)} by {data.get('cashier', 'Unknown')}"
                 )
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+
+            elif sync_type == "CUSTOMER_CREDIT_SETTINGS":
+                customer_id = handle_credit_settings_sync(c, data)
+                conn.commit()
+                print(f"  ✅ CUSTOMER_CREDIT_SETTINGS synced: customer #{customer_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CUSTOMER_PRICING_SETTINGS":
+                customer_id = handle_customer_pricing_settings_sync(c, data)
+                conn.commit()
+                print(f"  CUSTOMER_PRICING_SETTINGS synced: customer #{customer_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"CUSTOMER_PRODUCT_PRICE_UPSERT", "CUSTOMER_PRODUCT_PRICE"}:
+                price_id = handle_customer_product_price_sync(c, data)
+                conn.commit()
+                print(f"  CUSTOMER_PRODUCT_PRICE synced: rule #{price_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"CUSTOMER_CATEGORY_UPSERT", "CUSTOMER_CATEGORY"}:
+                category_id = handle_customer_category_sync(c, data)
+                conn.commit()
+                print(f"  CUSTOMER_CATEGORY synced: category #{category_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"PRICING_SCHEME_UPSERT", "PRICING_SCHEME"}:
+                scheme_id = handle_pricing_scheme_sync(c, data)
+                conn.commit()
+                print(f"  PRICING_SCHEME synced: scheme #{scheme_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"PRICING_SCHEME_RULE_UPSERT", "PRICING_SCHEME_RULE"}:
+                rule_id = handle_pricing_scheme_rule_sync(c, data)
+                conn.commit()
+                print(f"  PRICING_SCHEME_RULE synced: rule #{rule_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CUSTOMER_PRICING_ASSIGNMENT":
+                try:
+                    customer_id = handle_customer_pricing_assignment_sync(c, data)
+                    conn.commit()
+                    print(f"  CUSTOMER_PRICING_ASSIGNMENT synced: customer #{customer_id}")
+                    self._set_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                except Exception as exc:
+                    conn.rollback()
+                    print(f"  CUSTOMER_PRICING_ASSIGNMENT failed: {exc}")
+                    self._set_headers(500)
+                    self.wfile.write(
+                        json.dumps(
+                            {
+                                "status": "error",
+                                "message": f"CUSTOMER_PRICING_ASSIGNMENT failed: {exc}",
+                            }
+                        ).encode()
+                    )
+
+            elif sync_type == "CUSTOMER_LOYALTY_SETTINGS":
+                customer_id = handle_customer_loyalty_settings_sync(c, data)
+                conn.commit()
+                print(f"  CUSTOMER_LOYALTY_SETTINGS synced: customer #{customer_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "LOYALTY_SETTINGS":
+                settings_id = handle_loyalty_settings_sync(c, data)
+                conn.commit()
+                print(f"  LOYALTY_SETTINGS synced: settings #{settings_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "LOYALTY_EXCLUDED_CATEGORY":
+                exclusion_id = handle_loyalty_excluded_category_sync(c, data)
+                conn.commit()
+                print(f"  LOYALTY_EXCLUDED_CATEGORY synced: exclusion #{exclusion_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "LOYALTY_EXCLUDED_PRODUCT":
+                exclusion_id = handle_loyalty_excluded_product_sync(c, data)
+                conn.commit()
+                print(f"  LOYALTY_EXCLUDED_PRODUCT synced: exclusion #{exclusion_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "LOYALTY_SALE_UPDATE":
+                sale_id = handle_loyalty_sale_update_sync(c, data)
+                conn.commit()
+                print(f"  LOYALTY_SALE_UPDATE synced: sale #{sale_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "LOYALTY_LEDGER_ENTRY":
+                ledger_id = handle_loyalty_ledger_entry_sync(c, data)
+                conn.commit()
+                print(f"  LOYALTY_LEDGER_ENTRY synced: entry #{ledger_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CREDIT_SALE_UPDATE":
+                ledger_id = handle_credit_sale_update_sync(c, data)
+                conn.commit()
+                print(f"  ✅ CREDIT_SALE_UPDATE synced: ledger #{ledger_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CREDIT_REFUND_UPDATE":
+                ledger_id = handle_credit_refund_update_sync(c, data)
+                conn.commit()
+                print(f"  ✅ CREDIT_REFUND_UPDATE synced: ledger #{ledger_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CUSTOMER_PAYMENT":
+                payment_id = handle_customer_payment_sync(c, data)
+                conn.commit()
+                print(f"  ✅ CUSTOMER_PAYMENT synced: payment #{payment_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CUSTOMER_LEDGER_ADJUSTMENT":
+                customer_id = upsert_customer_from_sync(c, data)
+                ledger_id = insert_credit_ledger_entry(c, data, customer_id=customer_id)
+                conn.commit()
+                print(f"  ✅ CUSTOMER_LEDGER_ADJUSTMENT synced: ledger #{ledger_id}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type == "CUSTOMER_PAYMENT_VOID":
+                ledger_id = handle_customer_payment_void_sync(c, data)
+                conn.commit()
+                print(f"  ✅ CUSTOMER_PAYMENT_VOID synced: ledger #{ledger_id}")
                 self._set_headers()
                 self.wfile.write(json.dumps({"status": "success"}).encode())
 
@@ -3765,6 +7130,145 @@ class APIHandler(BaseHTTPRequestHandler):
             finally:
                 _close_user_db_connections(conns)
 
+
+        elif action == "create_customer":
+            ok, message, customer = create_customer(c, body)
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message, "customer": customer}).encode())
+            else:
+                conn.commit()
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+
+        elif action == "update_customer":
+            ok, message, customer = update_customer(c, body)
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message, "customer": customer}).encode())
+            else:
+                conn.commit()
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+
+        elif action == "deactivate_customer":
+            ok, message, customer = set_customer_active_status(c, body, False)
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+
+        elif action == "reactivate_customer":
+            ok, message, customer = set_customer_active_status(c, body, True)
+            if not ok:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+            else:
+                conn.commit()
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+
+
+        elif action == "update_customer_credit_settings":
+            customer_id = handle_credit_settings_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+
+        elif action == "update_customer_pricing_settings":
+            customer_id = handle_customer_pricing_settings_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+
+        elif action == "upsert_customer_product_price":
+            price_id = handle_customer_product_price_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": price_id}).encode())
+
+        elif action == "upsert_customer_category":
+            category_id = handle_customer_category_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": category_id}).encode())
+
+        elif action == "upsert_pricing_scheme":
+            scheme_id = handle_pricing_scheme_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": scheme_id}).encode())
+
+        elif action == "upsert_pricing_scheme_rule":
+            rule_id = handle_pricing_scheme_rule_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": rule_id}).encode())
+
+        elif action == "update_customer_pricing_assignment":
+            customer_id = handle_customer_pricing_assignment_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+
+        elif action == "update_customer_loyalty_settings":
+            customer_id = handle_customer_loyalty_settings_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+
+        elif action == "update_loyalty_settings":
+            settings_id = handle_loyalty_settings_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": settings_id}).encode())
+
+        elif action == "upsert_loyalty_excluded_category":
+            exclusion_id = handle_loyalty_excluded_category_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": exclusion_id}).encode())
+
+        elif action == "upsert_loyalty_excluded_product":
+            exclusion_id = handle_loyalty_excluded_product_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "id": exclusion_id}).encode())
+
+        elif action == "update_loyalty_sale":
+            sale_id = handle_loyalty_sale_update_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "sale_id": sale_id}).encode())
+
+        elif action == "upsert_loyalty_ledger_entry":
+            ledger_id = handle_loyalty_ledger_entry_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "ledger_id": ledger_id}).encode())
+
+        elif action == "receive_customer_payment":
+            payment_id = handle_customer_payment_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "payment_id": payment_id}).encode())
+
+        elif action == "customer_ledger_adjustment":
+            customer_id = upsert_customer_from_sync(c, body)
+            ledger_id = insert_credit_ledger_entry(c, body, customer_id=customer_id)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "ledger_id": ledger_id}).encode())
+
+        elif action == "void_customer_payment":
+            ledger_id = handle_customer_payment_void_sync(c, body)
+            conn.commit()
+            self._set_headers()
+            self.wfile.write(json.dumps({"status": "success", "ledger_id": ledger_id}).encode())
+
         elif action == "add_product":
             ok, message = create_or_update_product(
                 c,
@@ -4015,6 +7519,8 @@ def main():
 ║     GET  ?action=get_owner_alerts        → Owner alerts  ║
 ║     GET  ?action=get_owner_sales_report  → Sales report  ║
 ║     GET  ?action=get_suppliers           → Suppliers     ║
+║     GET  ?action=get_customers           → Customers     ║
+║     GET  ?action=get_credit_customers_report → Credit     ║
 ║     GET  ?action=get_inventory_history   → History       ║
 ║     POST ?action=pos_sync                → POS sync      ║
 ║     POST ?action=update_price            → Price update  ║

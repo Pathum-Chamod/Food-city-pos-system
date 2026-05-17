@@ -1,6 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../widgets/premium_dialog.dart';
+
+TextEditingController _selectedTextController(String text) {
+  return TextEditingController.fromValue(
+    TextEditingValue(
+      text: text,
+      selection: TextSelection(baseOffset: 0, extentOffset: text.length),
+    ),
+  );
+}
 
 Future<Map<String, dynamic>?> showCartDiscountDialog(
   BuildContext context, {
@@ -26,8 +36,8 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
   final textSecondary =
       isDark ? const Color(0xFF9FB0C8) : const Color(0xFF607089);
 
-  final valueController = TextEditingController(
-    text: currentDiscountType == 'none'
+  final valueController = _selectedTextController(
+    currentDiscountType == 'none'
         ? ''
         : currentDiscountValue.toStringAsFixed(
             currentDiscountValue % 1 == 0 ? 0 : 2,
@@ -79,6 +89,46 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
           );
           final total = subtotal - discountAmount;
           final canClear = selectedType != 'none';
+
+          void setSelectedDiscountValue(double value) {
+            final text = value.toStringAsFixed(value % 1 == 0 ? 0 : 2);
+            valueController.value = TextEditingValue(
+              text: text,
+              selection: TextSelection(baseOffset: 0, extentOffset: text.length),
+            );
+          }
+
+          void submitDiscount() {
+            final rawText = valueController.text.trim();
+            final parsedValue = rawText.isEmpty ? 0.0 : double.tryParse(rawText);
+
+            if (selectedType != 'none' && parsedValue == null) {
+              setState(() {
+                errorText = 'Enter a valid discount value.';
+              });
+              return;
+            }
+
+            final safeValue = parsedValue ?? 0.0;
+            if (safeValue < 0) {
+              setState(() {
+                errorText = 'Discount cannot be negative.';
+              });
+              return;
+            }
+
+            final normalizedValue = selectedType == 'fixed'
+                ? safeValue.clamp(0.0, subtotal)
+                : selectedType == 'percent'
+                    ? safeValue.clamp(0.0, 100.0)
+                    : 0.0;
+
+            Navigator.pop(context, {
+              'discount_type': selectedType,
+              'discount_value':
+                  selectedType == 'none' ? 0.0 : normalizedValue.toDouble(),
+            });
+          }
 
           InputDecoration fieldDecoration({
             required String label,
@@ -219,13 +269,31 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
             );
           }
 
-          return Dialog(
-            backgroundColor: Colors.transparent,
-            insetPadding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 24,
-            ),
-            child: Container(
+          return Focus(
+            onKeyEvent: (node, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+                  event.logicalKey == LogicalKeyboardKey.numpadEnter;
+              if (isEnterKey) {
+                submitDiscount();
+                return KeyEventResult.handled;
+              }
+
+              if (event.logicalKey == LogicalKeyboardKey.escape) {
+                Navigator.pop(context);
+                return KeyEventResult.handled;
+              }
+
+              return KeyEventResult.ignored;
+            },
+            child: Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
+              child: Container(
               constraints: const BoxConstraints(maxWidth: 540),
               decoration: BoxDecoration(
                 color: bg,
@@ -374,6 +442,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
                             controller: valueController,
                             autofocus: selectedType != 'none',
                             enabled: selectedType != 'none',
+                            textInputAction: TextInputAction.done,
                             keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
                             ),
@@ -399,6 +468,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
                                 errorText = null;
                               });
                             },
+                            onSubmitted: (_) => submitDiscount(),
                           ),
                           const SizedBox(height: 14),
                           Wrap(
@@ -425,10 +495,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
                                     onTap: selectedType == 'none'
                                         ? null
                                         : () {
-                                            valueController.text = value
-                                                .toStringAsFixed(
-                                                  value % 1 == 0 ? 0 : 2,
-                                                );
+                                            setSelectedDiscountValue(value);
                                             setState(() {
                                               errorText = null;
                                             });
@@ -499,40 +566,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
                         const SizedBox(width: 12),
                         Expanded(
                           child: ElevatedButton.icon(
-                            onPressed: () {
-                              final rawText = valueController.text.trim();
-                              final parsedValue = rawText.isEmpty
-                                  ? 0.0
-                                  : double.tryParse(rawText);
-
-                              if (selectedType != 'none' && parsedValue == null) {
-                                setState(() {
-                                  errorText = 'Enter a valid discount value.';
-                                });
-                                return;
-                              }
-
-                              final safeValue = parsedValue ?? 0.0;
-                              if (safeValue < 0) {
-                                setState(() {
-                                  errorText = 'Discount cannot be negative.';
-                                });
-                                return;
-                              }
-
-                              final normalizedValue = selectedType == 'fixed'
-                                  ? safeValue.clamp(0.0, subtotal)
-                                  : selectedType == 'percent'
-                                      ? safeValue.clamp(0.0, 100.0)
-                                      : 0.0;
-
-                              Navigator.pop(context, {
-                                'discount_type': selectedType,
-                                'discount_value': selectedType == 'none'
-                                    ? 0.0
-                                    : normalizedValue.toDouble(),
-                              });
-                            },
+                            onPressed: submitDiscount,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: brand,
                               foregroundColor: Colors.white,
@@ -560,6 +594,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
                   ],
                 ),
               ),
+              ),
             ),
           );
         },
@@ -567,6 +602,7 @@ Future<Map<String, dynamic>?> showCartDiscountDialog(
     },
   );
 
+  await Future<void>.delayed(const Duration(milliseconds: 280));
   valueController.dispose();
   return result;
 }

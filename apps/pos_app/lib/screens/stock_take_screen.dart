@@ -1,4 +1,3 @@
-
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -8,14 +7,19 @@ import 'package:shared/models/product.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
+import '../services/permission_service.dart';
 import '../widgets/app_snackbar.dart';
 
-enum StockTakeFilter {
-  all,
-  counted,
-  discrepancies,
-  uncounted,
+TextEditingController _selectedTextController(String text) {
+  return TextEditingController.fromValue(
+    TextEditingValue(
+      text: text,
+      selection: TextSelection(baseOffset: 0, extentOffset: text.length),
+    ),
+  );
 }
+
+enum StockTakeFilter { all, counted, discrepancies, uncounted }
 
 class _StockTakeApprovalResult {
   const _StockTakeApprovalResult({
@@ -59,17 +63,28 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   Map<String, double> _countedQuantities = {};
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
-  Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
-  Color get _pageAlt => _isDark ? const Color(0xFF0B1729) : const Color(0xFFFFFFFF);
-  Color get _surface => _isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
-  Color get _surfaceSoft => _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
-  Color get _surfaceAlt => _isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
-  Color get _inputFill => _isDark ? const Color(0xFF0B1628) : const Color(0xFFF7F9FC);
-  Color get _border => _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
-  Color get _borderStrong => _isDark ? const Color(0xFF31445E) : const Color(0xFFCED9E5);
-  Color get _textPrimary => _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
-  Color get _textSecondary => _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
-  Color get _textMuted => _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
+  Color get _page =>
+      _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _pageAlt =>
+      _isDark ? const Color(0xFF0B1729) : const Color(0xFFFFFFFF);
+  Color get _surface =>
+      _isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
+  Color get _surfaceSoft =>
+      _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get _surfaceAlt =>
+      _isDark ? const Color(0xFF0A1627) : const Color(0xFFFBFCFE);
+  Color get _inputFill =>
+      _isDark ? const Color(0xFF0B1628) : const Color(0xFFF7F9FC);
+  Color get _border =>
+      _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get _borderStrong =>
+      _isDark ? const Color(0xFF31445E) : const Color(0xFFCED9E5);
+  Color get _textPrimary =>
+      _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get _textSecondary =>
+      _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get _textMuted =>
+      _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
   Color get _brand => const Color(0xFF2AAA8A);
   Color get _brandSoft => _brand.withOpacity(_isDark ? 0.16 : 0.10);
   Color get _blue => const Color(0xFF4B8DFF);
@@ -105,9 +120,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     try {
       final products = await DatabaseHelper.instance.getProducts();
-      final session = await DatabaseHelper.instance.getOrCreateOpenStockTakeSession();
+      final session = await DatabaseHelper.instance
+          .getOrCreateOpenStockTakeSession();
       final sessionId = (session['id'] as num).toInt();
-      final items = await DatabaseHelper.instance.getStockTakeSessionItems(sessionId);
+      final items = await DatabaseHelper.instance.getStockTakeSessionItems(
+        sessionId,
+      );
 
       final counted = <String, double>{};
       for (final item in items) {
@@ -127,7 +145,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         _isLoading = false;
       });
 
-      if (widget.initialBarcode != null && widget.initialBarcode!.trim().isNotEmpty) {
+      if (widget.initialBarcode != null &&
+          widget.initialBarcode!.trim().isNotEmpty) {
         _barcodeController.text = widget.initialBarcode!.trim();
       }
     } catch (e) {
@@ -198,7 +217,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         borderSide: BorderSide(color: _brand, width: 1.4),
       ),
       labelStyle: TextStyle(color: _textSecondary, fontWeight: FontWeight.w600),
-      hintStyle: TextStyle(color: _textSecondary.withOpacity(0.84), fontWeight: FontWeight.w500),
+      hintStyle: TextStyle(
+        color: _textSecondary.withOpacity(0.84),
+        fontWeight: FontWeight.w500,
+      ),
     );
   }
 
@@ -211,6 +233,13 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     Color? tone,
   }) async {
     final actionTone = tone ?? (destructive ? _danger : _brand);
+    var didChoose = false;
+
+    void choose(BuildContext dialogContext, bool value) {
+      if (didChoose) return;
+      didChoose = true;
+      Navigator.pop(dialogContext, value);
+    }
 
     final result = await showGeneralDialog<bool>(
       context: context,
@@ -219,108 +248,124 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       barrierColor: Colors.black.withOpacity(_isDark ? 0.34 : 0.22),
       transitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (dialogContext, animation, secondaryAnimation) {
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Material(
-                color: Colors.transparent,
-                child: Container(
-                  constraints: const BoxConstraints(maxWidth: 500),
-                  padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
-                  decoration: _panelDecoration(color: _surface),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Center(
-                        child: Container(
-                          width: 46,
-                          height: 5,
-                          decoration: BoxDecoration(
-                            color: _border,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      Row(
-                        children: [
-                          Container(
-                            width: 50,
-                            height: 50,
+        return Focus(
+          autofocus: true,
+          onKeyEvent: (node, event) {
+            if (event is! KeyDownEvent) return KeyEventResult.ignored;
+            final isEnterKey =
+                event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.numpadEnter;
+            if (!isEnterKey) return KeyEventResult.ignored;
+            choose(dialogContext, true);
+            return KeyEventResult.handled;
+          },
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 500),
+                    padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
+                    decoration: _panelDecoration(color: _surface),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 46,
+                            height: 5,
                             decoration: BoxDecoration(
-                              color: actionTone.withOpacity(_isDark ? 0.18 : 0.12),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: actionTone.withOpacity(0.24)),
+                              color: _border,
+                              borderRadius: BorderRadius.circular(999),
                             ),
-                            child: Icon(icon, color: actionTone, size: 24),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Text(
-                              title,
-                              style: TextStyle(
-                                color: _textPrimary,
-                                fontSize: 24,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 18),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(16),
-                        decoration: _softDecoration(color: _surfaceSoft),
-                        child: Text(
-                          message,
-                          style: TextStyle(
-                            color: _textSecondary,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            height: 1.5,
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 18),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () => Navigator.pop(dialogContext, false),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: _textPrimary,
-                                side: BorderSide(color: _borderStrong),
-                                minimumSize: const Size.fromHeight(52),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
+                        const SizedBox(height: 18),
+                        Row(
+                          children: [
+                            Container(
+                              width: 50,
+                              height: 50,
+                              decoration: BoxDecoration(
+                                color: actionTone.withOpacity(
+                                  _isDark ? 0.18 : 0.12,
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: actionTone.withOpacity(0.24),
                                 ),
                               ),
-                              child: const Text('Cancel'),
+                              child: Icon(icon, color: actionTone, size: 24),
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () => Navigator.pop(dialogContext, true),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: actionTone,
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                minimumSize: const Size.fromHeight(52),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Text(
+                                title,
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w900,
                                 ),
                               ),
-                              child: Text(confirmText),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 18),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: _softDecoration(color: _surfaceSoft),
+                          child: Text(
+                            message,
+                            style: TextStyle(
+                              color: _textSecondary,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              height: 1.5,
                             ),
                           ),
-                        ],
-                      ),
-                    ],
+                        ),
+                        const SizedBox(height: 18),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => choose(dialogContext, false),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: _textPrimary,
+                                  side: BorderSide(color: _borderStrong),
+                                  minimumSize: const Size.fromHeight(52),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                ),
+                                child: const Text('Cancel'),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton(
+                                onPressed: () => choose(dialogContext, true),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: actionTone,
+                                  foregroundColor: Colors.white,
+                                  elevation: 0,
+                                  minimumSize: const Size.fromHeight(52),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                ),
+                                child: Text(confirmText),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -329,7 +374,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         );
       },
       transitionBuilder: (context, animation, secondaryAnimation, child) {
-        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
         return FadeTransition(
           opacity: curved,
           child: ScaleTransition(
@@ -450,7 +498,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
               final pin = pinController.text.trim();
               if (pin.isEmpty) {
                 setDialogState(() {
-                  errorText = 'Enter manager or full-access PIN.';
+                  errorText = 'Enter manager PIN.';
                 });
                 return;
               }
@@ -476,9 +524,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                 final userId = ((user['id'] as num?) ?? 0).toInt();
                 final userName = (user['name'] ?? 'Manager').toString();
                 final role = (user['role'] ?? '').toString().toLowerCase();
-                final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
-                final hasFullAccess = ((user['has_full_access'] as num?) ?? 0).toInt() == 1;
-                final hasManagementAccess = role == 'manager' || hasFullAccess;
+                final isActive =
+                    ((user['is_active'] as num?) ?? 1).toInt() == 1;
+                final hasManagementAccess = PermissionService.roleCan(
+                  role,
+                  PosPermission.settingsManage,
+                );
 
                 if (!isActive) {
                   setDialogState(() {
@@ -491,7 +542,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                 if (!hasManagementAccess) {
                   setDialogState(() {
                     isVerifying = false;
-                    errorText = 'PIN does not belong to a manager or full-access user.';
+                    errorText = 'PIN does not belong to a manager.';
                   });
                   return;
                 }
@@ -555,9 +606,15 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                 decoration: BoxDecoration(
                                   color: _warningSoft,
                                   borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: _warning.withOpacity(0.24)),
+                                  border: Border.all(
+                                    color: _warning.withOpacity(0.24),
+                                  ),
                                 ),
-                                child: Icon(Icons.verified_user_outlined, color: _warning, size: 24),
+                                child: Icon(
+                                  Icons.verified_user_outlined,
+                                  color: _warning,
+                                  size: 24,
+                                ),
                               ),
                               const SizedBox(width: 14),
                               Expanded(
@@ -574,7 +631,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      'Enter manager or full-access PIN to $actionLabel.',
+                                      'Enter manager PIN to $actionLabel.',
                                       style: TextStyle(
                                         color: _textSecondary,
                                         fontSize: 13,
@@ -611,7 +668,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                 child: OutlinedButton(
                                   onPressed: isVerifying
                                       ? null
-                                      : () => Navigator.pop(dialogContext, null),
+                                      : () =>
+                                            Navigator.pop(dialogContext, null),
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: _textPrimary,
                                     side: BorderSide(color: _borderStrong),
@@ -640,7 +698,9 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                       ? const SizedBox(
                                           height: 18,
                                           width: 18,
-                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
                                         )
                                       : const Text('Approve'),
                                 ),
@@ -658,7 +718,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         );
       },
       transitionBuilder: (context, animation, secondaryAnimation, child) {
-        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
         return FadeTransition(
           opacity: curved,
           child: ScaleTransition(
@@ -687,7 +750,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       final hasDiscrepancy =
           hasCount && !_quantitiesEqual(countedQty, product.stock);
 
-      final matchesSearch = query.isEmpty ||
+      final matchesSearch =
+          query.isEmpty ||
           product.name.toLowerCase().contains(query) ||
           product.barcode.toLowerCase().contains(query) ||
           product.category.toLowerCase().contains(query);
@@ -709,20 +773,21 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
   int get _countedItems => _countedQuantities.length;
   int get _discrepancyItems => _products.where((product) {
-        final countedQty = _countedQuantities[product.barcode];
-        return countedQty != null && !_quantitiesEqual(countedQty, product.stock);
-      }).length;
+    final countedQty = _countedQuantities[product.barcode];
+    return countedQty != null && !_quantitiesEqual(countedQty, product.stock);
+  }).length;
   int get _matchedItems => _products.where((product) {
-        final countedQty = _countedQuantities[product.barcode];
-        return countedQty != null && _quantitiesEqual(countedQty, product.stock);
-      }).length;
+    final countedQty = _countedQuantities[product.barcode];
+    return countedQty != null && _quantitiesEqual(countedQty, product.stock);
+  }).length;
   int get _uncountedItems => _products.length - _countedItems;
 
   Future<void> _renameSession() async {
     if (_sessionId == null) return;
     final controller = TextEditingController(text: _sessionNameController.text);
 
-    final saved = await showGeneralDialog<bool>(
+    final saved =
+        await showGeneralDialog<bool>(
           context: context,
           barrierLabel: 'Rename session',
           barrierDismissible: true,
@@ -763,9 +828,15 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                 decoration: BoxDecoration(
                                   color: _brandSoft,
                                   borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: _brand.withOpacity(0.24)),
+                                  border: Border.all(
+                                    color: _brand.withOpacity(0.24),
+                                  ),
                                 ),
-                                child: Icon(Icons.edit_note_rounded, color: _brand, size: 24),
+                                child: Icon(
+                                  Icons.edit_note_rounded,
+                                  color: _brand,
+                                  size: 24,
+                                ),
                               ),
                               const SizedBox(width: 14),
                               Expanded(
@@ -809,7 +880,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                             children: [
                               Expanded(
                                 child: OutlinedButton(
-                                  onPressed: () => Navigator.pop(dialogContext, false),
+                                  onPressed: () =>
+                                      Navigator.pop(dialogContext, false),
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: _textPrimary,
                                     side: BorderSide(color: _borderStrong),
@@ -826,7 +898,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                 child: ElevatedButton(
                                   onPressed: () {
                                     if (controller.text.trim().isEmpty) {
-                                      _showMessage('Session name cannot be empty.', isError: true);
+                                      _showMessage(
+                                        'Session name cannot be empty.',
+                                        isError: true,
+                                      );
                                       return;
                                     }
                                     Navigator.pop(dialogContext, true);
@@ -854,7 +929,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
             );
           },
           transitionBuilder: (context, animation, secondaryAnimation, child) {
-            final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+            final curved = CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+            );
             return FadeTransition(
               opacity: curved,
               child: ScaleTransition(
@@ -972,8 +1050,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
   Future<void> _setCountDialog(Product product) async {
     final existingCount = _countedQuantities[product.barcode];
-    final controller = TextEditingController(
-      text: existingCount == null ? '' : _formatQuantity(existingCount),
+    final controller = _selectedTextController(
+      existingCount == null ? '' : _formatQuantity(existingCount),
     );
 
     await showGeneralDialog<void>(
@@ -983,6 +1061,31 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       barrierColor: Colors.black.withOpacity(_isDark ? 0.34 : 0.22),
       transitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        Future<void> submitCount() async {
+          final error = _validateCount(
+            controller.text,
+            quantityType: product.quantityType,
+          );
+          if (error != null) {
+            _showMessage(error, isError: true);
+            return;
+          }
+          final qty = _parseCount(controller.text, product.quantityType);
+          final confirmed = await _showDecisionDialog(
+            title: 'Save Count?',
+            message:
+                'Set counted quantity for ${product.name} to ${_formatProductQuantity(product, qty)}?',
+            confirmText: 'Save',
+            icon: Icons.done_rounded,
+            tone: _brand,
+          );
+          if (!confirmed) return;
+          if (dialogContext.mounted) {
+            Navigator.pop(dialogContext);
+          }
+          await _saveCount(product, qty);
+        }
+
         return BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
           child: Center(
@@ -1017,9 +1120,15 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                             decoration: BoxDecoration(
                               color: _blueSoft,
                               borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: _blue.withOpacity(0.24)),
+                              border: Border.all(
+                                color: _blue.withOpacity(0.24),
+                              ),
                             ),
-                            child: Icon(Icons.edit_outlined, color: _blue, size: 24),
+                            child: Icon(
+                              Icons.edit_outlined,
+                              color: _blue,
+                              size: 24,
+                            ),
                           ),
                           const SizedBox(width: 14),
                           Expanded(
@@ -1052,21 +1161,28 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                       TextField(
                         controller: controller,
                         autofocus: true,
+                        textInputAction: TextInputAction.done,
                         keyboardType: TextInputType.numberWithOptions(
-                          decimal: product.quantityType == ProductQuantityType.weight,
+                          decimal:
+                              product.quantityType ==
+                              ProductQuantityType.weight,
                         ),
                         inputFormatters: [
                           product.quantityType == ProductQuantityType.weight
-                              ? FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
+                              ? FilteringTextInputFormatter.allow(
+                                  RegExp(r'[0-9.]'),
+                                )
                               : FilteringTextInputFormatter.digitsOnly,
                         ],
                         decoration: _fieldDecoration(
                           hintText: 'Counted Quantity',
-                          labelText: product.quantityType == ProductQuantityType.weight
+                          labelText:
+                              product.quantityType == ProductQuantityType.weight
                               ? 'Counted ${product.unitLabel}'
                               : 'Counted Quantity',
                           icon: Icons.numbers_rounded,
                         ),
+                        onSubmitted: (_) => submitCount(),
                       ),
                       const SizedBox(height: 18),
                       Row(
@@ -1079,7 +1195,9 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                               },
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: _danger,
-                                side: BorderSide(color: _danger.withOpacity(0.28)),
+                                side: BorderSide(
+                                  color: _danger.withOpacity(0.28),
+                                ),
                                 minimumSize: const Size.fromHeight(52),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(16),
@@ -1106,33 +1224,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: ElevatedButton(
-                              onPressed: () async {
-                                final error = _validateCount(
-                                  controller.text,
-                                  quantityType: product.quantityType,
-                                );
-                                if (error != null) {
-                                  _showMessage(error, isError: true);
-                                  return;
-                                }
-                                final qty = _parseCount(
-                                  controller.text,
-                                  product.quantityType,
-                                );
-                                final confirmed = await _showDecisionDialog(
-                                  title: 'Save Count?',
-                                  message:
-                                      'Set counted quantity for ${product.name} to ${_formatProductQuantity(product, qty)}?',
-                                  confirmText: 'Save',
-                                  icon: Icons.done_rounded,
-                                  tone: _brand,
-                                );
-                                if (!confirmed) return;
-                                if (dialogContext.mounted) {
-                                  Navigator.pop(dialogContext);
-                                }
-                                await _saveCount(product, qty);
-                              },
+                              onPressed: submitCount,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: _brand,
                                 foregroundColor: Colors.white,
@@ -1156,7 +1248,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         );
       },
       transitionBuilder: (context, animation, secondaryAnimation, child) {
-        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
         return FadeTransition(
           opacity: curved,
           child: ScaleTransition(
@@ -1166,19 +1261,23 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         );
       },
     );
+    await Future<void>.delayed(const Duration(milliseconds: 260));
+    controller.dispose();
   }
 
   Future<void> _discardDraft() async {
     if (_sessionId == null) return;
     final approval = await _requireManagerApproval(
       actionLabel: 'discard this stock take draft',
-      description: 'Approved stock take draft discard for ${_sessionNameController.text.trim()} requested by $_currentUserName',
+      description:
+          'Approved stock take draft discard for ${_sessionNameController.text.trim()} requested by $_currentUserName',
     );
     if (approval == null) return;
 
     final confirmed = await _showDecisionDialog(
       title: 'Discard Current Draft?',
-      message: 'This will remove the current stock take draft and all counted quantities in it.',
+      message:
+          'This will remove the current stock take draft and all counted quantities in it.',
       confirmText: 'Discard',
       destructive: true,
       icon: Icons.delete_outline_rounded,
@@ -1187,7 +1286,9 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     if (!confirmed) return;
 
-    final ok = await DatabaseHelper.instance.discardOpenStockTakeSession(_sessionId!);
+    final ok = await DatabaseHelper.instance.discardOpenStockTakeSession(
+      _sessionId!,
+    );
     if (!mounted) return;
 
     if (ok) {
@@ -1199,7 +1300,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   }
 
   Future<void> _openHistorySheet() async {
-    final sessions = await DatabaseHelper.instance.getCompletedStockTakeSessions();
+    final sessions = await DatabaseHelper.instance
+        .getCompletedStockTakeSessions();
     if (!mounted) return;
 
     await showModalBottomSheet<void>(
@@ -1254,22 +1356,30 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                         ? Center(
                             child: Text(
                               'No completed stock take sessions yet.',
-                              style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w700),
+                              style: TextStyle(
+                                color: _textSecondary,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           )
                         : ListView.separated(
                             itemCount: sessions.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 10),
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 10),
                             itemBuilder: (context, index) {
                               final session = sessions[index];
                               return Container(
                                 padding: const EdgeInsets.all(16),
-                                decoration: _softDecoration(color: _surfaceSoft),
+                                decoration: _softDecoration(
+                                  color: _surfaceSoft,
+                                ),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      (session['session_name'] ?? 'Stock Take Session').toString(),
+                                      (session['session_name'] ??
+                                              'Stock Take Session')
+                                          .toString(),
                                       style: TextStyle(
                                         color: _textPrimary,
                                         fontWeight: FontWeight.w800,
@@ -1279,21 +1389,36 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                     const SizedBox(height: 8),
                                     Text(
                                       'Started • ${_formatDateTime(session['started_at']?.toString())}',
-                                      style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w600),
+                                      style: TextStyle(
+                                        color: _textSecondary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
                                       'Completed • ${_formatDateTime(session['completed_at']?.toString())}',
-                                      style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w600),
+                                      style: TextStyle(
+                                        color: _textSecondary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                     const SizedBox(height: 10),
                                     Wrap(
                                       spacing: 8,
                                       runSpacing: 8,
                                       children: [
-                                        _buildMiniChip('${session['counted_items'] ?? 0} counted', _blue),
-                                        _buildMiniChip('${session['discrepancy_items'] ?? 0} discrepancies', _warning),
-                                        _buildMiniChip('${session['applied_items'] ?? 0} applied', _success),
+                                        _buildMiniChip(
+                                          '${session['counted_items'] ?? 0} counted',
+                                          _blue,
+                                        ),
+                                        _buildMiniChip(
+                                          '${session['discrepancy_items'] ?? 0} discrepancies',
+                                          _warning,
+                                        ),
+                                        _buildMiniChip(
+                                          '${session['applied_items'] ?? 0} applied',
+                                          _success,
+                                        ),
                                       ],
                                     ),
                                   ],
@@ -1320,7 +1445,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     final approval = await _requireManagerApproval(
       actionLabel: 'apply this stock take reconciliation',
-      description: 'Approved stock take reconciliation for ${_sessionNameController.text.trim()} requested by $_currentUserName',
+      description:
+          'Approved stock take reconciliation for ${_sessionNameController.text.trim()} requested by $_currentUserName',
     );
     if (approval == null) return;
 
@@ -1395,7 +1521,9 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         decoration: BoxDecoration(
           color: selected ? _brandSoft : _surfaceSoft,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: selected ? _brand.withOpacity(0.26) : _border),
+          border: Border.all(
+            color: selected ? _brand.withOpacity(0.26) : _border,
+          ),
         ),
         child: Text(
           label,
@@ -1517,7 +1645,11 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                           borderRadius: BorderRadius.circular(18),
                           border: Border.all(color: _border),
                         ),
-                        child: Icon(Icons.fact_check_outlined, color: _brand, size: 26),
+                        child: Icon(
+                          Icons.fact_check_outlined,
+                          color: _brand,
+                          size: 26,
+                        ),
                       ),
                       const SizedBox(width: 14),
                       Expanded(
@@ -1647,11 +1779,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
               final columns = constraints.maxWidth >= 1000
                   ? 4
                   : constraints.maxWidth >= 560
-                      ? 2
-                      : 1;
+                  ? 2
+                  : 1;
               final itemWidth = columns == 1
                   ? constraints.maxWidth
-                  : (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+                  : (constraints.maxWidth - (spacing * (columns - 1))) /
+                        columns;
 
               return Wrap(
                 spacing: spacing,
@@ -1749,7 +1882,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                     _searchQuery = '';
                                   });
                                 },
-                                icon: Icon(Icons.close_rounded, color: _textMuted),
+                                icon: Icon(
+                                  Icons.close_rounded,
+                                  color: _textMuted,
+                                ),
                               ),
                       ),
                       onChanged: (value) {
@@ -1782,7 +1918,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                     _searchQuery = '';
                                   });
                                 },
-                                icon: Icon(Icons.close_rounded, color: _textMuted),
+                                icon: Icon(
+                                  Icons.close_rounded,
+                                  color: _textMuted,
+                                ),
                               ),
                       ),
                       onChanged: (value) {
@@ -1807,7 +1946,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                 const SizedBox(width: 8),
                 _buildFilterPill('Counted', StockTakeFilter.counted),
                 const SizedBox(width: 8),
-                _buildFilterPill('Discrepancies', StockTakeFilter.discrepancies),
+                _buildFilterPill(
+                  'Discrepancies',
+                  StockTakeFilter.discrepancies,
+                ),
                 const SizedBox(width: 8),
                 _buildFilterPill('Uncounted', StockTakeFilter.uncounted),
               ],
@@ -1853,10 +1995,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     final diffText = difference == null
         ? null
         : _quantitiesEqual(difference, 0)
-            ? 'Diff 0'
-            : difference > 0
-                ? 'Diff +${_formatQuantity(difference)}'
-                : 'Diff ${_formatQuantity(difference)}';
+        ? 'Diff 0'
+        : difference > 0
+        ? 'Diff +${_formatQuantity(difference)}'
+        : 'Diff ${_formatQuantity(difference)}';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1877,7 +2019,11 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                       color: accent.withOpacity(_isDark ? 0.18 : 0.10),
                       borderRadius: BorderRadius.circular(15),
                     ),
-                    child: Icon(Icons.inventory_2_outlined, color: accent, size: 22),
+                    child: Icon(
+                      Icons.inventory_2_outlined,
+                      color: accent,
+                      size: 22,
+                    ),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -1904,7 +2050,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: accent.withOpacity(_isDark ? 0.18 : 0.10),
                       borderRadius: BorderRadius.circular(999),
@@ -1969,7 +2118,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                   backgroundColor: _brand,
                   foregroundColor: Colors.white,
                   elevation: 0,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
@@ -1982,7 +2134,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                 style: OutlinedButton.styleFrom(
                   foregroundColor: _textPrimary,
                   side: BorderSide(color: _borderStrong),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
@@ -1996,7 +2151,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: _danger,
                     side: BorderSide(color: _danger.withOpacity(0.24)),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -2008,11 +2166,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                content,
-                const SizedBox(height: 14),
-                actions,
-              ],
+              children: [content, const SizedBox(height: 14), actions],
             );
           }
 
@@ -2023,10 +2177,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
               const SizedBox(width: 16),
               SizedBox(
                 width: 370,
-                child: Align(
-                  alignment: Alignment.topRight,
-                  child: actions,
-                ),
+                child: Align(alignment: Alignment.topRight, child: actions),
               ),
             ],
           );
@@ -2038,11 +2189,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   Widget _inlineMeta(String text, Color color) {
     return Text(
       text,
-      style: TextStyle(
-        color: color,
-        fontWeight: FontWeight.w700,
-        fontSize: 13,
-      ),
+      style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 13),
     );
   }
 

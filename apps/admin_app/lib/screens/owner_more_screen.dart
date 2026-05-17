@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/admin_provider.dart';
 import '../widgets/app_snackbar.dart';
 import 'business_info_screen.dart';
+import 'customer_monitor_screen.dart';
 import 'users_activity_screen.dart';
 import 'settings_screen.dart';
 
@@ -24,6 +25,21 @@ class OwnerMoreScreen extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           _FeatureTile(
+            icon: Icons.manage_accounts_outlined,
+            color: const Color(0xFF0F3D91),
+            title: 'Customer Monitor',
+            subtitle: 'Credit, loyalty, pricing, and customer health overview.',
+            enabled: true,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const CustomerMonitorScreen(),
+                ),
+              );
+            },
+          ),
+          _FeatureTile(
             icon: Icons.store_outlined,
             color: const Color(0xFF0F3D91),
             title: 'Business Info',
@@ -32,9 +48,7 @@ class OwnerMoreScreen extends StatelessWidget {
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => const BusinessInfoScreen(),
-                ),
+                MaterialPageRoute(builder: (_) => const BusinessInfoScreen()),
               );
             },
           ),
@@ -47,9 +61,7 @@ class OwnerMoreScreen extends StatelessWidget {
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => const UsersActivityScreen(),
-                ),
+                MaterialPageRoute(builder: (_) => const UsersActivityScreen()),
               );
             },
           ),
@@ -62,9 +74,7 @@ class OwnerMoreScreen extends StatelessWidget {
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => const SettingsScreen(),
-                ),
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
               );
             },
           ),
@@ -75,7 +85,8 @@ class OwnerMoreScreen extends StatelessWidget {
             subtitle: 'End this admin session and return to the login screen.',
             enabled: true,
             onTap: () async {
-              final confirmed = await showDialog<bool>(
+              final confirmed =
+                  await showDialog<bool>(
                     context: context,
                     builder: (dialogContext) {
                       return AlertDialog(
@@ -85,7 +96,8 @@ class OwnerMoreScreen extends StatelessWidget {
                         ),
                         actions: [
                           TextButton(
-                            onPressed: () => Navigator.pop(dialogContext, false),
+                            onPressed: () =>
+                                Navigator.pop(dialogContext, false),
                             child: const Text('Cancel'),
                           ),
                           FilledButton(
@@ -170,10 +182,7 @@ class _HeaderCard extends StatelessWidget {
 }
 
 class _SectionTitle extends StatelessWidget {
-  const _SectionTitle({
-    required this.title,
-    required this.subtitle,
-  });
+  const _SectionTitle({required this.title, required this.subtitle});
 
   final String title;
   final String subtitle;

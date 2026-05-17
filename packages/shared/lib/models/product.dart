@@ -1,13 +1,6 @@
-enum ProductPriceType {
-  selling,
-  wholesale,
-  sale,
-}
+enum ProductPriceType { selling, wholesale, sale }
 
-enum ProductQuantityType {
-  unit,
-  weight,
-}
+enum ProductQuantityType { unit, weight }
 
 extension ProductPriceTypeX on ProductPriceType {
   String get dbValue {
@@ -103,6 +96,8 @@ class Product {
 
   final double stock;
   final int minStockLevel;
+  final bool trackExpiry;
+  final int expiryAlertDays;
   final bool isActive;
 
   final String updatedAt;
@@ -122,14 +117,16 @@ class Product {
     this.saleEnabled = false,
     required this.stock,
     this.minStockLevel = 0,
+    this.trackExpiry = false,
+    this.expiryAlertDays = 30,
     this.isActive = true,
     required this.updatedAt,
     this.lastPriceUpdatedAt,
-  })  : unitLabel = _normalizeUnitLabel(
-          quantityType: quantityType,
-          rawValue: unitLabel,
-        ),
-        wholesalePrice = wholesalePrice ?? sellingPrice;
+  }) : unitLabel = _normalizeUnitLabel(
+         quantityType: quantityType,
+         rawValue: unitLabel,
+       ),
+       wholesalePrice = wholesalePrice ?? sellingPrice;
 
   /// Legacy compatibility for current POS screens that still call product.price
   double get price => sellingPrice;
@@ -168,6 +165,8 @@ class Product {
     bool? saleEnabled,
     double? stock,
     int? minStockLevel,
+    bool? trackExpiry,
+    int? expiryAlertDays,
     bool? isActive,
     String? updatedAt,
     String? lastPriceUpdatedAt,
@@ -186,6 +185,8 @@ class Product {
       saleEnabled: saleEnabled ?? this.saleEnabled,
       stock: stock ?? this.stock,
       minStockLevel: minStockLevel ?? this.minStockLevel,
+      trackExpiry: trackExpiry ?? this.trackExpiry,
+      expiryAlertDays: expiryAlertDays ?? this.expiryAlertDays,
       isActive: isActive ?? this.isActive,
       updatedAt: updatedAt ?? this.updatedAt,
       lastPriceUpdatedAt: lastPriceUpdatedAt ?? this.lastPriceUpdatedAt,
@@ -211,6 +212,8 @@ class Product {
 
       'stock': stock,
       'min_stock_level': minStockLevel,
+      'track_expiry': trackExpiry ? 1 : 0,
+      'expiry_alert_days': expiryAlertDays,
       'is_active': isActive ? 1 : 0,
       'updated_at': updatedAt,
       'last_price_updated_at': lastPriceUpdatedAt,
@@ -235,16 +238,14 @@ class Product {
       sellingPrice: (rawSelling as num).toDouble(),
       wholesalePrice: (rawWholesale as num).toDouble(),
       salePrice: rawSale == null ? null : (rawSale as num).toDouble(),
-      saleEnabled: _readBool(
-        map['sale_enabled'],
-        fallback: rawSale != null,
-      ),
+      saleEnabled: _readBool(map['sale_enabled'], fallback: rawSale != null),
       stock: (map['stock'] as num?)?.toDouble() ?? 0,
       minStockLevel: (map['min_stock_level'] as num?)?.toInt() ?? 0,
-      isActive: _readBool(
-        map['is_active'],
-        fallback: true,
-      ),
+      trackExpiry: _readBool(map['track_expiry'], fallback: false),
+      expiryAlertDays: ((map['expiry_alert_days'] as num?)?.toInt() ?? 30)
+          .clamp(1, 3650)
+          .toInt(),
+      isActive: _readBool(map['is_active'], fallback: true),
       updatedAt: (map['updated_at'] ?? DateTime.now().toIso8601String())
           .toString(),
       lastPriceUpdatedAt: map['last_price_updated_at']?.toString(),

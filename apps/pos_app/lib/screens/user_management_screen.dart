@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared/shared.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
@@ -60,7 +61,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Future<void> _loadAll({bool keepUserActivityFilter = true}) async {
     if (!mounted) return;
 
-    final relatedUserId = keepUserActivityFilter ? _selectedActivityUserId : null;
+    final relatedUserId = keepUserActivityFilter
+        ? _selectedActivityUserId
+        : null;
 
     setState(() {
       _isLoading = true;
@@ -119,11 +122,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   }
 
   String _formatRole(String role) {
-    final normalized = role.trim().toLowerCase();
-    if (normalized == 'manager') return 'Manager';
-    if (normalized == 'cashier') return 'Cashier';
-    if (normalized.isEmpty) return 'Unknown';
-    return normalized[0].toUpperCase() + normalized.substring(1);
+    return User.roleLabel(role);
   }
 
   String _formatLastLogin(dynamic value) {
@@ -134,7 +133,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     if (dateTime == null) return raw;
 
     final local = dateTime.toLocal();
-    final hour = local.hour == 0 ? 12 : (local.hour > 12 ? local.hour - 12 : local.hour);
+    final hour = local.hour == 0
+        ? 12
+        : (local.hour > 12 ? local.hour - 12 : local.hour);
     final minute = local.minute.toString().padLeft(2, '0');
     final suffix = local.hour >= 12 ? 'PM' : 'AM';
 
@@ -172,27 +173,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       default:
         return actionType
             .split('_')
-            .map((part) => part.isEmpty
-                ? part
-                : '${part[0].toUpperCase()}${part.substring(1)}')
+            .map(
+              (part) => part.isEmpty
+                  ? part
+                  : '${part[0].toUpperCase()}${part.substring(1)}',
+            )
             .join(' ');
-    }
-  }
-
-  String _formatLogFilterLabel(String filter) {
-    switch (filter) {
-      case 'all':
-        return 'All';
-      case 'logins':
-        return 'Logins';
-      case 'user_changes':
-        return 'User Changes';
-      case 'pin_changes':
-        return 'PIN Changes';
-      case 'approvals':
-        return 'Approvals';
-      default:
-        return filter;
     }
   }
 
@@ -232,7 +218,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       hintText: hintText,
       labelText: labelText,
       counterText: counterText,
-      prefixIcon: icon == null ? null : Icon(icon, size: 20, color: ui.textMuted),
+      prefixIcon: icon == null
+          ? null
+          : Icon(icon, size: 20, color: ui.textMuted),
       suffixIcon: suffixIcon,
       filled: true,
       fillColor: ui.inputFill,
@@ -260,7 +248,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       text: (user?['name'] ?? '').toString(),
     );
     final pinController = TextEditingController();
-    var role = (user?['role'] ?? 'cashier').toString().trim().toLowerCase();
+    var role = User.normalizeRole((user?['role'] ?? 'cashier').toString());
+    if (role == User.presentationRole) role = User.cashierRole;
 
     await showDialog<void>(
       context: context,
@@ -269,7 +258,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         final ui = UserModulePalette.of(dialogContext);
         return Dialog(
           backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 24,
+          ),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
             child: StatefulBuilder(
@@ -281,7 +273,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     border: Border.all(color: ui.border),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(ui.isDark ? 0.34 : 0.08),
+                        color: Colors.black.withOpacity(
+                          ui.isDark ? 0.34 : 0.08,
+                        ),
                         blurRadius: 36,
                         offset: const Offset(0, 22),
                       ),
@@ -351,7 +345,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                               onPressed: _isSaving
                                   ? null
                                   : () => Navigator.of(dialogContext).pop(),
-                              icon: Icon(Icons.close_rounded, color: ui.textMuted),
+                              icon: Icon(
+                                Icons.close_rounded,
+                                color: ui.textMuted,
+                              ),
                             ),
                           ],
                         ),
@@ -370,8 +367,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                         DropdownButtonFormField<String>(
                           initialValue: role,
                           items: const [
-                            DropdownMenuItem(value: 'manager', child: Text('Manager')),
-                            DropdownMenuItem(value: 'cashier', child: Text('Cashier')),
+                            DropdownMenuItem(
+                              value: 'manager',
+                              child: Text('Manager'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'cashier',
+                              child: Text('Cashier'),
+                            ),
                           ],
                           onChanged: (value) {
                             if (value == null) return;
@@ -432,7 +435,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: ui.textPrimary,
                                   side: BorderSide(color: ui.borderStrong),
-                                  padding: const EdgeInsets.symmetric(vertical: 15),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 15,
+                                  ),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                   ),
@@ -477,12 +482,16 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: ui.brand,
                                   foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 15),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 15,
+                                  ),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                   ),
                                 ),
-                                child: Text(isEdit ? 'Save Changes' : 'Create User'),
+                                child: Text(
+                                  isEdit ? 'Save Changes' : 'Create User',
+                                ),
                               ),
                             ),
                           ],
@@ -506,8 +515,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     required String role,
     String? pin,
   }) async {
-    final previousRole =
-        (user?['role'] ?? 'cashier').toString().trim().toLowerCase();
+    final previousRole = (user?['role'] ?? 'cashier')
+        .toString()
+        .trim()
+        .toLowerCase();
     final roleChanged = isEdit && previousRole != role;
 
     setState(() {
@@ -539,8 +550,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       _showMessage(
         isEdit
             ? (roleChanged
-                ? 'User role updated successfully.'
-                : 'User details updated successfully.')
+                  ? 'User role updated successfully.'
+                  : 'User details updated successfully.')
             : 'User created successfully.',
         backgroundColor: _ui.success,
       );
@@ -892,13 +903,24 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     }
   }
 
+  void _viewUserActivity(Map<String, dynamic> user) {
+    setState(() {
+      _selectedActivityUserId = ((user['id'] as num?) ?? 0).toInt();
+      _selectedActivityUserName = (user['name'] ?? '').toString();
+      _logSearchController.clear();
+      _logFilter = 'all';
+      _showLogsView = true;
+    });
+    _loadAll();
+  }
+
   Future<void> _toggleUserFullAccess(Map<String, dynamic> user) async {
     final userId = ((user['id'] as num?) ?? 0).toInt();
     final userName = (user['name'] ?? 'User').toString();
-    final role = (user['role'] ?? 'cashier').toString().trim().toLowerCase();
+    final role = User.normalizeRole((user['role'] ?? 'cashier').toString());
     final hasFullAccess = ((user['has_full_access'] as num?) ?? 0).toInt() == 1;
 
-    if (role == 'manager') {
+    if (role == User.managerRole) {
       _showMessage(
         'Managers already have full access by role.',
         backgroundColor: _ui.warning,
@@ -929,6 +951,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         actorName: _actorName,
       );
       await _loadAll();
+      if (!mounted) return;
       _showMessage(
         !hasFullAccess
             ? 'Full access granted to $userName.'
@@ -951,17 +974,6 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         });
       }
     }
-  }
-
-  void _viewUserActivity(Map<String, dynamic> user) {
-    setState(() {
-      _selectedActivityUserId = ((user['id'] as num?) ?? 0).toInt();
-      _selectedActivityUserName = (user['name'] ?? '').toString();
-      _logSearchController.clear();
-      _logFilter = 'all';
-      _showLogsView = true;
-    });
-    _loadAll();
   }
 
   Widget _buildPageHeader() {
@@ -1042,7 +1054,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: ui.textPrimary,
                       side: BorderSide(color: ui.borderStrong),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                       ),
@@ -1062,7 +1077,11 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: [Expanded(child: left), const SizedBox(width: 16), right],
+                children: [
+                  Expanded(child: left),
+                  const SizedBox(width: 16),
+                  right,
+                ],
               );
             },
           ),
@@ -1073,11 +1092,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               final columns = constraints.maxWidth >= 1180
                   ? 4
                   : constraints.maxWidth >= 700
-                      ? 2
-                      : 1;
+                  ? 2
+                  : 1;
               final width = columns == 1
                   ? constraints.maxWidth
-                  : (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+                  : (constraints.maxWidth - (spacing * (columns - 1))) /
+                        columns;
 
               return Wrap(
                 spacing: spacing,
@@ -1087,7 +1107,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Total Users',
-                      value: ((_summary['total_users'] as num?) ?? 0).toInt().toString(),
+                      value: ((_summary['total_users'] as num?) ?? 0)
+                          .toInt()
+                          .toString(),
                       subtitle: 'All POS accounts',
                       icon: Icons.group_outlined,
                       color: ui.blue,
@@ -1097,7 +1119,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Active Users',
-                      value: ((_summary['active_users'] as num?) ?? 0).toInt().toString(),
+                      value: ((_summary['active_users'] as num?) ?? 0)
+                          .toInt()
+                          .toString(),
                       subtitle: 'Can log in now',
                       icon: Icons.verified_user_outlined,
                       color: ui.success,
@@ -1107,7 +1131,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Managers',
-                      value: ((_summary['managers'] as num?) ?? 0).toInt().toString(),
+                      value: ((_summary['managers'] as num?) ?? 0)
+                          .toInt()
+                          .toString(),
                       subtitle: 'Management access accounts',
                       icon: Icons.admin_panel_settings_outlined,
                       color: ui.purple,
@@ -1117,7 +1143,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Cashiers',
-                      value: ((_summary['cashiers'] as num?) ?? 0).toInt().toString(),
+                      value: ((_summary['cashiers'] as num?) ?? 0)
+                          .toInt()
+                          .toString(),
                       subtitle: 'Sales-floor users',
                       icon: Icons.point_of_sale_outlined,
                       color: ui.warning,
@@ -1207,11 +1235,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     final ui = _ui;
     final child = Row(
       mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 18),
-        const SizedBox(width: 8),
-        Text(label),
-      ],
+      children: [Icon(icon, size: 18), const SizedBox(width: 8), Text(label)],
     );
 
     if (primary) {
@@ -1235,9 +1259,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         foregroundColor: ui.textPrimary,
         side: BorderSide(color: ui.borderStrong),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
       child: child,
     );
@@ -1446,7 +1468,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 decoration: _fieldDecoration(
                   hintText: 'Search activity, user, or approval details',
                   icon: Icons.search_rounded,
-                  suffixIcon: (_logSearchController.text.isEmpty &&
+                  suffixIcon:
+                      (_logSearchController.text.isEmpty &&
                           _selectedActivityUserName == null)
                       ? null
                       : IconButton(
@@ -1480,9 +1503,18 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   items: const [
                     DropdownMenuItem(value: 'all', child: Text('All Activity')),
                     DropdownMenuItem(value: 'logins', child: Text('Logins')),
-                    DropdownMenuItem(value: 'user_changes', child: Text('User Changes')),
-                    DropdownMenuItem(value: 'pin_changes', child: Text('PIN Changes')),
-                    DropdownMenuItem(value: 'approvals', child: Text('Approvals')),
+                    DropdownMenuItem(
+                      value: 'user_changes',
+                      child: Text('User Changes'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'pin_changes',
+                      child: Text('PIN Changes'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'approvals',
+                      child: Text('Approvals'),
+                    ),
                   ],
                   onChanged: (value) {
                     setState(() {
@@ -1534,12 +1566,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      const Spacer(),
-                      backButton(),
-                    ],
-                  ),
+                  Row(children: [const Spacer(), backButton()]),
                 ],
               );
             }
@@ -1604,7 +1631,6 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     );
   }
 
-  
   Widget _buildUsersTab() {
     final ui = _ui;
     return Container(
@@ -1680,28 +1706,29 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Widget _buildUserRow(Map<String, dynamic> user) {
     final ui = _ui;
     final name = (user['name'] ?? 'User').toString();
-    final role = (user['role'] ?? 'cashier').toString().trim().toLowerCase();
+    final role = User.normalizeRole((user['role'] ?? 'cashier').toString());
     final isActive = ((user['is_active'] as num?) ?? 1).toInt() == 1;
     final initial = name.trim().isEmpty ? 'U' : name.trim()[0].toUpperCase();
     final userId = ((user['id'] as num?) ?? 0).toInt();
     final isSelf = _actorUserId == userId;
     final hasFullAccess = ((user['has_full_access'] as num?) ?? 0).toInt() == 1;
     final activeManagerCount = _users.where((entry) {
-      final entryRole =
-          (entry['role'] ?? 'cashier').toString().trim().toLowerCase();
+      final entryRole = User.normalizeRole(
+        (entry['role'] ?? 'cashier').toString(),
+      );
       final entryActive = ((entry['is_active'] as num?) ?? 1).toInt() == 1;
-      return entryRole == 'manager' && entryActive;
+      return entryRole == User.managerRole && entryActive;
     }).length;
     final isLastActiveManager =
-        role == 'manager' && isActive && activeManagerCount <= 1;
+        role == User.managerRole && isActive && activeManagerCount <= 1;
     final toggleDisabled = isActive && (isSelf || isLastActiveManager);
     final statusColor = isActive ? ui.success : ui.danger;
-    final roleColor = role == 'manager' ? ui.purple : ui.brand;
-    final accessText = role == 'manager'
-        ? 'Management access by role'
+    final roleColor = role == User.managerRole ? ui.purple : ui.brand;
+    final accessText = role == User.managerRole
+        ? 'Full management access'
         : hasFullAccess
-            ? 'Extended full access'
-            : 'Standard cashier access';
+        ? 'Extended full access'
+        : 'Cashier billing access';
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1823,14 +1850,15 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   }
                 },
                 itemBuilder: (context) => [
-                  const PopupMenuItem(
-                    value: 'pin',
-                    child: Text('Reset PIN'),
-                  ),
-                  if (role != 'manager')
+                  const PopupMenuItem(value: 'pin', child: Text('Reset PIN')),
+                  if (role != User.managerRole)
                     PopupMenuItem(
                       value: 'full_access',
-                      child: Text(hasFullAccess ? 'Remove Full Access' : 'Give Full Access'),
+                      child: Text(
+                        hasFullAccess
+                            ? 'Remove Full Access'
+                            : 'Give Full Access',
+                      ),
                     ),
                   PopupMenuItem(
                     value: 'toggle',
@@ -1838,10 +1866,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     child: Text(
                       isActive
                           ? (isSelf
-                              ? 'Cannot deactivate yourself'
-                              : isLastActiveManager
-                                  ? 'Cannot deactivate last manager'
-                                  : 'Deactivate')
+                                ? 'Cannot deactivate yourself'
+                                : isLastActiveManager
+                                ? 'Cannot deactivate last manager'
+                                : 'Deactivate')
                           : 'Reactivate',
                     ),
                   ),
@@ -1948,7 +1976,6 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     );
   }
 
-  
   Widget _buildLogsTab() {
     final ui = _ui;
     return Container(
@@ -2004,7 +2031,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               child: _buildEmptyState(
                 icon: Icons.history_toggle_off,
                 title: 'No log records found',
-                subtitle: 'User activity will appear here once actions are recorded.',
+                subtitle:
+                    'User activity will appear here once actions are recorded.',
               ),
             )
           else
@@ -2029,7 +2057,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     final description = (log['description'] ?? '').toString().trim();
     final color = _actionColor(actionType);
     final formattedTime = _formatLastLogin(log['created_at']);
-    final title = description.isEmpty ? _formatActionLabel(actionType) : description;
+    final title = description.isEmpty
+        ? _formatActionLabel(actionType)
+        : description;
     final details = _buildLogDetails(
       actionType: actionType,
       actorName: actorName,
@@ -2114,7 +2144,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                         color: ui.textSecondary,
                       ),
                     if (targetName.isNotEmpty &&
-                        targetName.toLowerCase() != actorName.toLowerCase()) ...[
+                        targetName.toLowerCase() !=
+                            actorName.toLowerCase()) ...[
                       _buildMetaDivider(),
                       _buildInlineMeta(
                         icon: Icons.badge_outlined,
@@ -2169,7 +2200,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     required String targetName,
   }) {
     final hasTarget =
-        targetName.isNotEmpty && targetName.toLowerCase() != actorName.toLowerCase();
+        targetName.isNotEmpty &&
+        targetName.toLowerCase() != actorName.toLowerCase();
 
     switch (actionType) {
       case 'login_success':
@@ -2189,7 +2221,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             ? '$targetName account details were updated.'
             : 'User account details were updated.';
       case 'pin_reset':
-        return hasTarget ? '$targetName now has an updated PIN.' : 'A user PIN was reset.';
+        return hasTarget
+            ? '$targetName now has an updated PIN.'
+            : 'A user PIN was reset.';
       case 'full_access_granted':
         return hasTarget
             ? '$targetName can now access manager-only modules and protected actions.'
@@ -2207,7 +2241,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             ? '$targetName can sign in again and use the system.'
             : 'A user account was reactivated.';
       case 'role_changed':
-        return hasTarget ? '$targetName role permissions were changed.' : 'A user role was changed.';
+        return hasTarget
+            ? '$targetName role permissions were changed.'
+            : 'A user role was changed.';
       case 'manager_approval':
         return hasTarget
             ? 'This action was approved by a manager for $targetName.'
@@ -2306,13 +2342,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     if (!auth.hasManagementAccess) {
       return Scaffold(
         backgroundColor: ui.page,
-        appBar: AppBar(
-          title: const Text('User Management'),
-        ),
+        appBar: AppBar(title: const Text('User Management')),
         body: _buildEmptyState(
           icon: Icons.lock_outline,
           title: 'Access restricted',
-          subtitle: 'Only managers or full-access users can access this module.',
+          subtitle:
+              'Only managers or full-access users can access this module.',
         ),
       );
     }
@@ -2331,13 +2366,18 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             return SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
               child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight - 30),
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight - 30,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _buildPageHeader(),
                     const SizedBox(height: 16),
-                    if (_showLogsView) _buildLogsInlineToolbar() else _buildUsersInlineToolbar(),
+                    if (_showLogsView)
+                      _buildLogsInlineToolbar()
+                    else
+                      _buildUsersInlineToolbar(),
                     const SizedBox(height: 16),
                     if (_isLoading)
                       Padding(

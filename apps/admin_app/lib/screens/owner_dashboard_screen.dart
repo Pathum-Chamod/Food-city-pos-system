@@ -17,6 +17,17 @@ class OwnerDashboardScreen extends StatelessWidget {
     return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
+  String _formatSoldQuantity(Map<String, dynamic> row, num value) {
+    final quantityType = (row['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final unitLabel = (row['unit_label'] ?? '').toString().trim();
+    final formattedQuantity = _formatQuantity(value);
+    if (quantityType == 'weight') {
+      final suffix = unitLabel.isEmpty ? 'kg' : unitLabel;
+      return '$formattedQuantity $suffix sold';
+    }
+    return '$formattedQuantity sold';
+  }
+
   String _formatCompactMoney(num value) {
     if (value.abs() >= 1000000) {
       return 'Rs. ${(value / 1000000).toStringAsFixed(1)}M';
@@ -593,6 +604,17 @@ class _ProductPreviewTile extends StatelessWidget {
     return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
+  String _formatSoldQuantity(Map<String, dynamic> row, num value) {
+    final quantityType = (row['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final unitLabel = (row['unit_label'] ?? '').toString().trim();
+    final formattedQuantity = _formatQuantity(value);
+    if (quantityType == 'weight') {
+      final suffix = unitLabel.isEmpty ? 'kg' : unitLabel;
+      return '$formattedQuantity $suffix sold';
+    }
+    return '$formattedQuantity sold';
+  }
+
   @override
   Widget build(BuildContext context) {
     final productName = (product['product_name'] ?? 'Unknown item').toString();
@@ -639,7 +661,7 @@ class _ProductPreviewTile extends StatelessWidget {
               ),
               const SizedBox(height: 3),
               Text(
-                '${_formatQuantity(quantity)} sold',
+                _formatSoldQuantity(product, quantity),
                 style: const TextStyle(
                   color: Color(0xFF6B7482),
                   fontWeight: FontWeight.w600,

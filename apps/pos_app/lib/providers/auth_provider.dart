@@ -2,21 +2,33 @@ import 'package:flutter/material.dart';
 import 'package:shared/shared.dart';
 
 import '../services/database_helper.dart';
+import '../services/permission_service.dart';
 
 class AuthProvider with ChangeNotifier {
   User? _currentUser;
   String? _loginError;
   bool _inactiveLoginAttempt = false;
+  DateTime? _presentationSessionStartedAt;
 
   User? get currentUser => _currentUser;
   String? get loginError => _loginError;
   bool get inactiveLoginAttempt => _inactiveLoginAttempt;
 
   bool get isLoggedIn => _currentUser != null;
-  bool get isManager => _currentUser?.isManager ?? false;
+  bool get isManager => PermissionService.isManagerRole(_currentUser?.role);
+  bool get isPresentationLogin => _currentUser?.isPresentationLogin ?? false;
   bool get hasFullAccess => _currentUser?.hasFullAccess ?? false;
-  bool get hasManagementAccess => _currentUser?.hasManagementAccess ?? false;
+  bool get hasManagementAccess =>
+      PermissionService.hasManagementAccess(_currentUser);
   bool get shouldBypassManagerPin => hasManagementAccess;
+
+  bool can(String permission) =>
+      PermissionService.can(_currentUser, permission);
+
+  /// Special presentation session start time.
+  /// Used so sales performed during a demo login are always visible in the
+  /// filtered transaction list, even when they do not match the interval rule.
+  DateTime? get presentationSessionStartedAt => _presentationSessionStartedAt;
 
   void clearLoginState() {
     _loginError = null;
@@ -29,6 +41,7 @@ class AuthProvider with ChangeNotifier {
 
     _loginError = null;
     _inactiveLoginAttempt = false;
+    _presentationSessionStartedAt = null;
 
     if (!RegExp(r'^\d{4}$').hasMatch(trimmedPin)) {
       _currentUser = null;
@@ -38,7 +51,9 @@ class AuthProvider with ChangeNotifier {
     }
 
     try {
-      final existingUser = await DatabaseHelper.instance.findUserByPin(trimmedPin);
+      final existingUser = await DatabaseHelper.instance.findUserByPin(
+        trimmedPin,
+      );
 
       if (existingUser == null) {
         await DatabaseHelper.instance.logLoginFailed(
@@ -70,6 +85,10 @@ class AuthProvider with ChangeNotifier {
       }
 
       _currentUser = User.fromMap(existingUser);
+      if (_currentUser?.isPresentationLogin ?? false) {
+        _presentationSessionStartedAt = DateTime.now();
+      }
+
       await DatabaseHelper.instance.logLoginSuccess(
         userId: userId,
         userName: userName,
@@ -79,6 +98,7 @@ class AuthProvider with ChangeNotifier {
     } catch (e) {
       debugPrint('Login error: $e');
       _currentUser = null;
+      _presentationSessionStartedAt = null;
       _loginError = 'Login failed. Please try again.';
       notifyListeners();
       return false;
@@ -102,6 +122,7 @@ class AuthProvider with ChangeNotifier {
     _currentUser = null;
     _loginError = null;
     _inactiveLoginAttempt = false;
+    _presentationSessionStartedAt = null;
     notifyListeners();
   }
 
@@ -114,9 +135,15 @@ class AuthProvider with ChangeNotifier {
 
       if (updated == null) {
         _currentUser = null;
+        _presentationSessionStartedAt = null;
       } else {
         final isActive = ((updated['is_active'] as num?) ?? 1).toInt() == 1;
         _currentUser = isActive ? User.fromMap(updated) : null;
+        if (!(_currentUser?.isPresentationLogin ?? false)) {
+          _presentationSessionStartedAt = null;
+        } else {
+          _presentationSessionStartedAt ??= DateTime.now();
+        }
       }
     } catch (e) {
       debugPrint('Refresh current user error: $e');

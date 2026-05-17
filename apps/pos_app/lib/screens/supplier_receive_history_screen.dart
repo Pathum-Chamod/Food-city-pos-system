@@ -6,10 +6,7 @@ import '../services/supplier_service.dart';
 import '../widgets/app_snackbar.dart';
 
 class SupplierReceiveHistoryScreen extends StatefulWidget {
-  const SupplierReceiveHistoryScreen({
-    super.key,
-    this.supplier,
-  });
+  const SupplierReceiveHistoryScreen({super.key, this.supplier});
 
   final PosSupplier? supplier;
 
@@ -107,6 +104,17 @@ class _SupplierReceiveHistoryScreenState
     }
   }
 
+  String _formatDateOnly(String raw) {
+    if (raw.trim().isEmpty) return 'No date';
+    try {
+      final date = DateTime.parse(raw).toLocal();
+      String two(int value) => value.toString().padLeft(2, '0');
+      return '${two(date.day)}/${two(date.month)}/${date.year}';
+    } catch (_) {
+      return raw;
+    }
+  }
+
   String _formatCurrency(num value) => 'Rs. ${value.toStringAsFixed(2)}';
 
   String _formatQuantity(num value, {int maxDecimals = 3}) {
@@ -118,7 +126,6 @@ class _SupplierReceiveHistoryScreenState
         .toStringAsFixed(maxDecimals)
         .replaceFirst(RegExp(r'\.?0+$'), '');
   }
-
 
   List<StockReceiptRecord> get _filteredReceipts {
     final rawQuery = _searchController.text.trim().toLowerCase();
@@ -137,12 +144,21 @@ class _SupplierReceiveHistoryScreenState
           .replaceAll(':', '')
           .replaceAll(' ', '');
       final rawCreatedAt = receipt.createdAt.toLowerCase();
+      final expiryText = _formatDateOnly(receipt.expiryDate).toLowerCase();
+      final compactExpiryText = expiryText
+          .replaceAll('/', '')
+          .replaceAll('-', '')
+          .replaceAll(' ', '');
       final haystack = <String>[
         receipt.productName.toLowerCase(),
         receipt.barcode.toLowerCase(),
         receipt.supplierName.toLowerCase(),
         receipt.cashierName.toLowerCase(),
         receipt.referenceNote.toLowerCase(),
+        receipt.batchNumber.toLowerCase(),
+        receipt.expiryDate.toLowerCase(),
+        expiryText,
+        compactExpiryText,
         createdAtText,
         compactDateText,
         rawCreatedAt,
@@ -188,7 +204,9 @@ class _SupplierReceiveHistoryScreenState
     return InputDecoration(
       hintText: hintText,
       labelText: labelText,
-      prefixIcon: icon == null ? null : Icon(icon, size: 20, color: ui.textMuted),
+      prefixIcon: icon == null
+          ? null
+          : Icon(icon, size: 20, color: ui.textMuted),
       suffixIcon: suffixIcon,
       filled: true,
       fillColor: ui.inputFill,
@@ -295,9 +313,7 @@ class _SupplierReceiveHistoryScreenState
 
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: left),
-                ],
+                children: [Expanded(child: left)],
               );
             },
           ),
@@ -308,11 +324,12 @@ class _SupplierReceiveHistoryScreenState
               final columns = constraints.maxWidth >= 1080
                   ? 3
                   : constraints.maxWidth >= 700
-                      ? 2
-                      : 1;
+                  ? 2
+                  : 1;
               final width = columns == 1
                   ? constraints.maxWidth
-                  : (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+                  : (constraints.maxWidth - (spacing * (columns - 1))) /
+                        columns;
 
               return Wrap(
                 spacing: spacing,
@@ -322,7 +339,10 @@ class _SupplierReceiveHistoryScreenState
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Receipts',
-                      value: (((visibleSummary['receipt_count'] as num?) ?? 0).toInt()).toString(),
+                      value:
+                          (((visibleSummary['receipt_count'] as num?) ?? 0)
+                                  .toInt())
+                              .toString(),
                       subtitle: 'Logged receive entries',
                       icon: Icons.receipt_long_outlined,
                       color: ui.blue,
@@ -332,7 +352,9 @@ class _SupplierReceiveHistoryScreenState
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Units Received',
-                      value: _formatQuantity((visibleSummary['total_units'] as num?) ?? 0),
+                      value: _formatQuantity(
+                        (visibleSummary['total_units'] as num?) ?? 0,
+                      ),
                       subtitle: 'Total stock units added',
                       icon: Icons.inventory_2_outlined,
                       color: ui.success,
@@ -342,7 +364,10 @@ class _SupplierReceiveHistoryScreenState
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Supplier Spend',
-                      value: _formatCurrency(((visibleSummary['total_cost'] as num?) ?? 0).toDouble()),
+                      value: _formatCurrency(
+                        ((visibleSummary['total_cost'] as num?) ?? 0)
+                            .toDouble(),
+                      ),
                       subtitle: 'Recorded receiving cost',
                       icon: Icons.payments_outlined,
                       color: ui.purple,
@@ -441,7 +466,8 @@ class _SupplierReceiveHistoryScreenState
                 TextField(
                   controller: _searchController,
                   decoration: _fieldDecoration(
-                    hintText: 'Search by product, supplier, barcode, cashier, note, or date',
+                    hintText:
+                        'Search by product, supplier, barcode, cashier, note, or date',
                     icon: Icons.search_rounded,
                     suffixIcon: _searchController.text.isEmpty
                         ? null
@@ -451,7 +477,10 @@ class _SupplierReceiveHistoryScreenState
                               setState(() {});
                               _loadData();
                             },
-                            icon: Icon(Icons.close_rounded, color: ui.textMuted),
+                            icon: Icon(
+                              Icons.close_rounded,
+                              color: ui.textMuted,
+                            ),
                           ),
                   ),
                   onChanged: (_) => setState(() {}),
@@ -493,7 +522,8 @@ class _SupplierReceiveHistoryScreenState
                 child: TextField(
                   controller: _searchController,
                   decoration: _fieldDecoration(
-                    hintText: 'Search by product, supplier, barcode, cashier, note, or date',
+                    hintText:
+                        'Search by product, supplier, barcode, cashier, note, or date',
                     icon: Icons.search_rounded,
                     suffixIcon: _searchController.text.isEmpty
                         ? null
@@ -503,7 +533,10 @@ class _SupplierReceiveHistoryScreenState
                               setState(() {});
                               _loadData();
                             },
-                            icon: Icon(Icons.close_rounded, color: ui.textMuted),
+                            icon: Icon(
+                              Icons.close_rounded,
+                              color: ui.textMuted,
+                            ),
                           ),
                   ),
                   onChanged: (_) => setState(() {}),
@@ -516,7 +549,10 @@ class _SupplierReceiveHistoryScreenState
                 style: OutlinedButton.styleFrom(
                   foregroundColor: ui.textPrimary,
                   side: BorderSide(color: ui.borderStrong),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
@@ -601,7 +637,8 @@ class _SupplierReceiveHistoryScreenState
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
               itemCount: _filteredReceipts.length,
               separatorBuilder: (_, __) => Divider(height: 1, color: ui.border),
-              itemBuilder: (context, index) => _buildReceiptRow(_filteredReceipts[index]),
+              itemBuilder: (context, index) =>
+                  _buildReceiptRow(_filteredReceipts[index]),
             ),
         ],
       ),
@@ -632,7 +669,10 @@ class _SupplierReceiveHistoryScreenState
               ),
               const SizedBox(width: 12),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: ui.successSoft,
                   borderRadius: BorderRadius.circular(999),
@@ -672,6 +712,22 @@ class _SupplierReceiveHistoryScreenState
                 text: _formatDate(receipt.createdAt),
                 color: ui.textSecondary,
               ),
+              if (receipt.batchNumber.trim().isNotEmpty) ...[
+                _buildMetaDivider(),
+                _buildInlineMeta(
+                  icon: Icons.sell_outlined,
+                  text: 'Batch ${receipt.batchNumber.trim()}',
+                  color: ui.blue,
+                ),
+              ],
+              if (receipt.expiryDate.trim().isNotEmpty) ...[
+                _buildMetaDivider(),
+                _buildInlineMeta(
+                  icon: Icons.event_available_outlined,
+                  text: 'Exp ${_formatDateOnly(receipt.expiryDate)}',
+                  color: ui.warning,
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 10),
@@ -791,7 +847,11 @@ class _SupplierReceiveHistoryScreenState
                 borderRadius: BorderRadius.circular(24),
                 border: Border.all(color: ui.border),
               ),
-              child: Icon(Icons.history_toggle_off, size: 36, color: ui.textMuted),
+              child: Icon(
+                Icons.history_toggle_off,
+                size: 36,
+                color: ui.textMuted,
+              ),
             ),
             const SizedBox(height: 14),
             Text(
@@ -836,9 +896,7 @@ class _SupplierReceiveHistoryScreenState
         title: Text(title),
       ),
       body: _isLoading
-          ? Center(
-              child: CircularProgressIndicator(color: ui.brand),
-            )
+          ? Center(child: CircularProgressIndicator(color: ui.brand))
           : SafeArea(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),

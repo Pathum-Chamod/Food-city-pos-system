@@ -1,22 +1,61 @@
 import 'package:flutter/material.dart';
-import 'package:shared/shared.dart';
+import 'package:shared/models/customer.dart';
+import 'package:shared/models/customer_pricing_result.dart';
+import 'package:shared/models/product.dart';
+
+import '../services/customer_pricing_service.dart';
 
 class CartItem {
   final Product product;
   double quantity;
   double unitPrice;
+  double systemUnitPrice;
   ProductPriceType priceType;
   String discountType;
   double discountValue;
+  String priceOverrideType;
+  String priceOverrideReason;
+  double priceOverrideOriginalPrice;
+  int? priceHistoryId;
+  String? priceOverrideApprovedBy;
+  bool customerPricingApplied;
+  CustomerPricingType customerPricingType;
+  int? customerPricingRuleId;
+  double customerPricingOriginalPrice;
+  double customerPricingFinalPrice;
+  double customerPricingDiscountAmount;
+  String? customerPricingNote;
 
   CartItem({
     required this.product,
     required this.unitPrice,
     required this.priceType,
+    double? systemUnitPrice,
     this.quantity = 1.0,
     this.discountType = 'none',
     this.discountValue = 0.0,
-  });
+    this.priceOverrideType = 'none',
+    this.priceOverrideReason = '',
+    double? priceOverrideOriginalPrice,
+    this.priceHistoryId,
+    this.priceOverrideApprovedBy,
+    this.customerPricingApplied = false,
+    this.customerPricingType = CustomerPricingType.none,
+    this.customerPricingRuleId,
+    double? customerPricingOriginalPrice,
+    double? customerPricingFinalPrice,
+    this.customerPricingDiscountAmount = 0.0,
+    this.customerPricingNote,
+  }) : systemUnitPrice = systemUnitPrice ?? unitPrice,
+       priceOverrideOriginalPrice = priceOverrideOriginalPrice ?? unitPrice,
+       customerPricingOriginalPrice = customerPricingOriginalPrice ?? unitPrice,
+       customerPricingFinalPrice = customerPricingFinalPrice ?? unitPrice;
+
+  bool get hasPriceOverride => priceOverrideType != 'none';
+
+  double get priceOverrideDifference {
+    return unitPrice - systemUnitPrice;
+  }
 
   double get baseTotal => unitPrice * quantity;
 
@@ -52,12 +91,35 @@ class CartProvider with ChangeNotifier {
   double _discountValue = 0.0;
 
   ProductPriceType _selectedPriceType = ProductPriceType.selling;
+  Customer? _selectedCustomer;
 
   List<CartItem> get items => List.unmodifiable(_items);
   bool get isRefundMode => _isRefundMode;
   String get discountType => _discountType;
   double get discountValue => _discountValue;
   ProductPriceType get selectedPriceType => _selectedPriceType;
+  Customer? get selectedCustomer => _selectedCustomer;
+  bool get hasSelectedCustomer => _selectedCustomer != null;
+
+  String get customerDisplayName {
+    final customer = _selectedCustomer;
+    if (customer == null) return 'Walk-in Customer';
+    return customer.displayName;
+  }
+
+  String get customerDisplaySubtitle {
+    final customer = _selectedCustomer;
+    if (customer == null) return 'No customer attached';
+    final parts = <String>[];
+    if (customer.displayCode.trim().isNotEmpty) {
+      parts.add(customer.displayCode);
+    }
+    if (customer.hasPhone) {
+      parts.add(customer.displayPhone);
+    }
+    parts.add(customer.typeLabel);
+    return parts.join(' • ');
+  }
 
   double get subtotal {
     return _items.fold(0.0, (sum, item) => sum + item.baseTotal);
@@ -99,28 +161,46 @@ class CartProvider with ChangeNotifier {
     return total < 0 ? 0 : total;
   }
 
+  Future<void> selectCustomer(Customer customer) async {
+    _selectedCustomer = customer;
+    await _repriceAllItemsForCustomer();
+    notifyListeners();
+  }
+
+  Future<void> clearCustomer() async {
+    if (_selectedCustomer == null) return;
+    _selectedCustomer = null;
+    await _repriceAllItemsForCustomer();
+    notifyListeners();
+  }
+
   void toggleRefundMode(bool value) {
     _isRefundMode = value;
     _items.clear();
     _selectedPriceType = ProductPriceType.selling;
     _discountType = 'none';
     _discountValue = 0.0;
+    _selectedCustomer = null;
     notifyListeners();
   }
 
-  void setPriceType(
+  Future<void> setPriceType(
     ProductPriceType value, {
-    bool applyToExistingItems = true,
-  }) {
-    if (_selectedPriceType == value) return;
+    bool applyToExistingItems = false,
+  }) async {
+    if (_selectedPriceType == value && !applyToExistingItems) return;
 
     _selectedPriceType = value;
 
     if (applyToExistingItems) {
       for (final item in _items) {
         item.priceType = value;
-        item.unitPrice = item.product.resolvePrice(value);
+        item.priceOverrideType = 'none';
+        item.priceOverrideReason = '';
+        item.priceHistoryId = null;
+        item.priceOverrideApprovedBy = null;
       }
+      await _repriceAllItemsForCustomer();
     }
 
     notifyListeners();
@@ -161,6 +241,44 @@ class CartProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  void applyPriceOverride(
+    CartItem target, {
+    required double overridePrice,
+    required String overrideType,
+    required String reason,
+    int? priceHistoryId,
+    String? approvedBy,
+  }) {
+    if (_isRefundMode) return;
+
+    final index = _items.indexOf(target);
+    if (index == -1) return;
+
+    final safePrice = overridePrice < 0 ? 0.0 : overridePrice;
+    final normalizedType = _normalizePriceOverrideType(overrideType);
+
+    _items[index].priceOverrideOriginalPrice = _items[index].systemUnitPrice;
+    _items[index].unitPrice = safePrice;
+    _items[index].priceOverrideType = normalizedType;
+    _items[index].priceOverrideReason = reason.trim();
+    _items[index].priceHistoryId = priceHistoryId;
+    _items[index].priceOverrideApprovedBy = approvedBy?.trim();
+    notifyListeners();
+  }
+
+  void clearPriceOverride(CartItem target) {
+    final index = _items.indexOf(target);
+    if (index == -1) return;
+
+    _items[index].unitPrice = _items[index].systemUnitPrice;
+    _items[index].priceOverrideType = 'none';
+    _items[index].priceOverrideReason = '';
+    _items[index].priceOverrideOriginalPrice = _items[index].systemUnitPrice;
+    _items[index].priceHistoryId = null;
+    _items[index].priceOverrideApprovedBy = null;
+    notifyListeners();
+  }
+
   void clearDiscount() {
     _discountType = 'none';
     _discountValue = 0.0;
@@ -172,14 +290,30 @@ class CartProvider with ChangeNotifier {
     return 'none';
   }
 
-  void addToCart(Product product, {double quantity = 1.0}) {
+  String _normalizePriceOverrideType(String value) {
+    final normalized = value.trim().toLowerCase();
+    if (normalized == 'old_label') return 'old_label';
+    if (normalized == 'manual') return 'manual';
+    return 'none';
+  }
+
+  Future<void> addToCart(Product product, {double quantity = 1.0}) async {
     final safeQuantity = quantity <= _quantityEpsilon ? 0.0 : quantity;
     if (safeQuantity <= 0) return;
+
+    final pricing = await _resolvePricingForProduct(
+      product,
+      _selectedPriceType,
+    );
+    final resolvedPriceType = _priceTypeForPricingResult(pricing);
 
     final index = _items.indexWhere(
       (item) =>
           item.product.barcode == product.barcode &&
-          item.priceType == _selectedPriceType,
+          item.priceType == resolvedPriceType &&
+          item.customerPricingType == pricing.type &&
+          item.customerPricingRuleId == pricing.ruleId &&
+          !item.hasPriceOverride,
     );
 
     if (index >= 0) {
@@ -189,8 +323,16 @@ class CartProvider with ChangeNotifier {
         CartItem(
           product: product,
           quantity: safeQuantity,
-          unitPrice: product.resolvePrice(_selectedPriceType),
-          priceType: _selectedPriceType,
+          unitPrice: pricing.finalPrice,
+          systemUnitPrice: pricing.finalPrice,
+          priceType: resolvedPriceType,
+          customerPricingApplied: pricing.applied,
+          customerPricingType: pricing.type,
+          customerPricingRuleId: pricing.ruleId,
+          customerPricingOriginalPrice: pricing.originalPrice,
+          customerPricingFinalPrice: pricing.finalPrice,
+          customerPricingDiscountAmount: pricing.discountAmount,
+          customerPricingNote: pricing.note,
         ),
       );
     }
@@ -271,6 +413,16 @@ class CartProvider with ChangeNotifier {
     _selectedPriceType = ProductPriceType.selling;
     _discountType = 'none';
     _discountValue = 0.0;
+    _selectedCustomer = null;
+    notifyListeners();
+  }
+
+  void clearCartItemsOnly() {
+    _items.clear();
+    _isRefundMode = false;
+    _selectedPriceType = ProductPriceType.selling;
+    _discountType = 'none';
+    _discountValue = 0.0;
     notifyListeners();
   }
 
@@ -280,6 +432,7 @@ class CartProvider with ChangeNotifier {
     String discountType = 'none',
     double discountValue = 0.0,
     String? selectedPriceType,
+    Customer? selectedCustomer,
   }) {
     _items.clear();
     _isRefundMode = isRefundMode;
@@ -287,14 +440,30 @@ class CartProvider with ChangeNotifier {
         ? ProductPriceType.selling
         : ProductPriceTypeX.fromDb(selectedPriceType);
 
-    _discountType = isRefundMode ? 'none' : _normalizeDiscountType(discountType);
-    _discountValue = isRefundMode ? 0.0 : (discountValue < 0 ? 0.0 : discountValue);
+    _selectedCustomer = selectedCustomer;
+
+    _discountType = isRefundMode
+        ? 'none'
+        : _normalizeDiscountType(discountType);
+    _discountValue = isRefundMode
+        ? 0.0
+        : (discountValue < 0 ? 0.0 : discountValue);
 
     for (final rawItem in items) {
       final item = Map<String, dynamic>.from(rawItem);
-      final productMap = Map<String, dynamic>.from(item['product'] as Map);
+      final rawProduct = item['product'];
+      if (rawProduct is! Map) continue;
+      final productMap = Map<String, dynamic>.from(rawProduct);
+      final barcode = (productMap['barcode'] ?? '').toString().trim();
+      final name = (productMap['name'] ?? '').toString().trim();
+      if (barcode.isEmpty || name.isEmpty) continue;
 
-      final product = Product.fromMap(productMap);
+      Product product;
+      try {
+        product = Product.fromMap(productMap);
+      } catch (_) {
+        continue;
+      }
       final quantity = (item['quantity'] as num?)?.toDouble() ?? 1.0;
 
       if (quantity <= _quantityEpsilon) continue;
@@ -303,16 +472,67 @@ class CartProvider with ChangeNotifier {
         item['price_type_used']?.toString(),
       );
 
-      final unitPriceUsed =
-          (item['unit_price_used'] as num?)?.toDouble() ??
+      final systemUnitPrice =
+          (item['system_unit_price'] as num?)?.toDouble() ??
           product.resolvePrice(itemPriceType);
+      final unitPriceUsed =
+          (item['unit_price_used'] as num?)?.toDouble() ?? systemUnitPrice;
+      final customerPricingType = CustomerPricingTypeX.fromDb(
+        item['customer_pricing_type']?.toString(),
+      );
 
       _items.add(
         CartItem(
           product: product,
           quantity: quantity,
           unitPrice: unitPriceUsed,
+          systemUnitPrice: systemUnitPrice,
           priceType: itemPriceType,
+          priceOverrideType: isRefundMode
+              ? 'none'
+              : _normalizePriceOverrideType(
+                  item['price_override_type']?.toString() ?? 'none',
+                ),
+          priceOverrideReason: isRefundMode
+              ? ''
+              : (item['price_override_reason'] ?? '').toString(),
+          priceOverrideOriginalPrice: isRefundMode
+              ? systemUnitPrice
+              : ((item['price_override_original_price'] as num?)?.toDouble() ??
+                    systemUnitPrice),
+          priceHistoryId: isRefundMode
+              ? null
+              : (item['price_history_id'] as num?)?.toInt(),
+          priceOverrideApprovedBy: isRefundMode
+              ? null
+              : item['price_override_approved_by']?.toString(),
+          customerPricingApplied:
+              !isRefundMode &&
+              (((item['customer_pricing_applied'] as num?)?.toInt() ?? 0) ==
+                      1 ||
+                  customerPricingType != CustomerPricingType.none),
+          customerPricingType: isRefundMode
+              ? CustomerPricingType.none
+              : customerPricingType,
+          customerPricingRuleId: isRefundMode
+              ? null
+              : (item['customer_pricing_rule_id'] as num?)?.toInt(),
+          customerPricingOriginalPrice: isRefundMode
+              ? unitPriceUsed
+              : ((item['customer_pricing_original_price'] as num?)
+                        ?.toDouble() ??
+                    systemUnitPrice),
+          customerPricingFinalPrice: isRefundMode
+              ? unitPriceUsed
+              : ((item['customer_pricing_final_price'] as num?)?.toDouble() ??
+                    unitPriceUsed),
+          customerPricingDiscountAmount: isRefundMode
+              ? 0.0
+              : ((item['customer_pricing_discount_amount'] as num?) ?? 0)
+                    .toDouble(),
+          customerPricingNote: isRefundMode
+              ? null
+              : item['customer_pricing_note']?.toString(),
           discountType: isRefundMode
               ? 'none'
               : _normalizeDiscountType(
@@ -335,6 +555,22 @@ class CartProvider with ChangeNotifier {
             'product': item.product.toMap(),
             'quantity': item.quantity,
             'unit_price_used': item.unitPrice,
+            'system_unit_price': item.systemUnitPrice,
+            'price_override_type': item.priceOverrideType,
+            'price_override_reason': item.priceOverrideReason,
+            'price_override_original_price': item.priceOverrideOriginalPrice,
+            'price_override_difference': item.priceOverrideDifference,
+            'price_history_id': item.priceHistoryId,
+            'price_override_approved_by': item.priceOverrideApprovedBy,
+            'customer_pricing_applied': item.customerPricingApplied ? 1 : 0,
+            'customer_pricing_type': item.customerPricingType.dbValue,
+            'customer_pricing_rule_id': item.customerPricingRuleId,
+            'customer_pricing_original_price':
+                item.customerPricingOriginalPrice,
+            'customer_pricing_final_price': item.customerPricingFinalPrice,
+            'customer_pricing_discount_amount':
+                item.customerPricingDiscountAmount,
+            'customer_pricing_note': item.customerPricingNote,
             'price_type_used': item.priceType.dbValue,
             'base_line_total': item.baseTotal,
             'item_discount_type': item.discountType,
@@ -344,5 +580,71 @@ class CartProvider with ChangeNotifier {
           },
         )
         .toList();
+  }
+
+  Future<double> resolveUnitPriceForProduct(Product product) async {
+    final pricing = await _resolvePricingForProduct(
+      product,
+      _selectedPriceType,
+    );
+    return pricing.finalPrice;
+  }
+
+  Future<void> _repriceAllItemsForCustomer() async {
+    if (_isRefundMode) return;
+
+    for (final item in _items) {
+      final pricing = await _resolvePricingForProduct(
+        item.product,
+        _selectedPriceType,
+      );
+      final resolvedPriceType = _priceTypeForPricingResult(pricing);
+
+      item.priceType = resolvedPriceType;
+      item.systemUnitPrice = pricing.finalPrice;
+      item.customerPricingApplied = pricing.applied;
+      item.customerPricingType = pricing.type;
+      item.customerPricingRuleId = pricing.ruleId;
+      item.customerPricingOriginalPrice = pricing.originalPrice;
+      item.customerPricingFinalPrice = pricing.finalPrice;
+      item.customerPricingDiscountAmount = pricing.discountAmount;
+      item.customerPricingNote = pricing.note;
+
+      if (!item.hasPriceOverride) {
+        item.unitPrice = pricing.finalPrice;
+        item.priceOverrideOriginalPrice = pricing.finalPrice;
+      }
+    }
+  }
+
+  Future<CustomerPricingResult> _resolvePricingForProduct(
+    Product product,
+    ProductPriceType basePriceType,
+  ) async {
+    final basePrice = product.resolvePrice(basePriceType);
+    if (_isRefundMode || _selectedCustomer == null) {
+      return CustomerPricingResult(
+        originalPrice: basePrice,
+        finalPrice: basePrice,
+      );
+    }
+
+    return CustomerPricingService.instance.resolvePriceForProduct(
+      customer: _selectedCustomer,
+      product: product,
+      currentUnitPrice: basePrice,
+      currentPriceType: basePriceType.dbValue,
+    );
+  }
+
+  ProductPriceType _priceTypeForPricingResult(CustomerPricingResult pricing) {
+    final resolvedPriceType = pricing.priceType;
+    if (resolvedPriceType != null) return resolvedPriceType;
+
+    if (pricing.type == CustomerPricingType.customerDefaultPriceType) {
+      final customer = _selectedCustomer;
+      if (customer != null) return customer.defaultPriceType;
+    }
+    return _selectedPriceType;
   }
 }

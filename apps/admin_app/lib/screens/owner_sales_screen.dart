@@ -107,6 +107,17 @@ class _OwnerSalesScreenState extends State<OwnerSalesScreen> {
     return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
+  String _formatQuantityWithUnit(Map<String, dynamic> data, num value) {
+    final quantityType = (data['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final unitLabel = (data['unit_label'] ?? '').toString().trim();
+    final formattedQuantity = _formatQuantity(value);
+    if (quantityType == 'weight') {
+      final suffix = unitLabel.isEmpty ? 'kg' : unitLabel;
+      return '$formattedQuantity $suffix';
+    }
+    return formattedQuantity;
+  }
+
   String _formatDateLong(DateTime date) =>
       '${date.day} ${_monthShort(date.month)} ${date.year}';
 
@@ -2433,6 +2444,17 @@ class _TopProductTile extends StatelessWidget {
     return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
+  String _formatQuantityWithUnit(Map<String, dynamic> data, num value) {
+    final quantityType = (data['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final unitLabel = (data['unit_label'] ?? '').toString().trim();
+    final formattedQuantity = _formatQuantity(value);
+    if (quantityType == 'weight') {
+      final suffix = unitLabel.isEmpty ? 'kg' : unitLabel;
+      return '$formattedQuantity $suffix';
+    }
+    return formattedQuantity;
+  }
+
   @override
   Widget build(BuildContext context) {
     final sales =
@@ -2525,13 +2547,13 @@ class _TopProductTile extends StatelessWidget {
             runSpacing: 8,
             children: [
               _TagPill(
-                label: 'Sold ${_formatQuantity(soldQty)}',
+                label: 'Sold ${_formatQuantityWithUnit(row, soldQty)}',
                 color: const Color(0xFF172433),
                 background: Colors.white,
               ),
               if (refundedQty > 0)
                 _TagPill(
-                  label: 'Refunded ${_formatQuantity(refundedQty)}',
+                  label: 'Refunded ${_formatQuantityWithUnit(row, refundedQty)}',
                   color: _SalesPalette.danger,
                   background: const Color(0xFFFEE4E2),
                 ),
@@ -2574,6 +2596,17 @@ class _SlowMoverTile extends StatelessWidget {
       return quantity.round().toString();
     }
     return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _formatQuantityWithUnit(Map<String, dynamic> data, num value) {
+    final quantityType = (data['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final unitLabel = (data['unit_label'] ?? '').toString().trim();
+    final formattedQuantity = _formatQuantity(value);
+    if (quantityType == 'weight') {
+      final suffix = unitLabel.isEmpty ? 'kg' : unitLabel;
+      return '$formattedQuantity $suffix';
+    }
+    return formattedQuantity;
   }
 
   @override
@@ -2664,12 +2697,12 @@ class _SlowMoverTile extends StatelessWidget {
             runSpacing: 8,
             children: [
               _TagPill(
-                label: 'Sold ${_formatQuantity(sold)}',
+                label: 'Sold ${_formatQuantityWithUnit(row, sold)}',
                 color: const Color(0xFF172433),
                 background: Colors.white,
               ),
               _TagPill(
-                label: 'Stock ${_formatQuantity(stock)}',
+                label: 'Stock ${_formatQuantityWithUnit(row, stock)}',
                 color: _SalesPalette.warning,
                 background: const Color(0xFFFFF8EB),
               ),

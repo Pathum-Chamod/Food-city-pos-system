@@ -3,16 +3,20 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart';
+import 'package:shared/models/customer.dart';
 import 'package:shared/models/product.dart';
+import 'package:shared/models/user.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/pos_supplier.dart';
+import '../models/expiry_batch.dart';
 import '../models/supplier_product_mapping.dart';
 import '../models/stock_receipt_record.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static const double _quantityEpsilon = 0.000001;
+  static const int _maxActiveLabelPricesPerProduct = 2;
   static Database? _database;
 
   DatabaseHelper._init();
@@ -23,13 +27,37 @@ class DatabaseHelper {
     return _database!;
   }
 
+  Future<String> get databasePath async {
+    return _resolveStableDbPath('food_city_pos.db');
+  }
+
+  Future<void> checkpointDatabaseForBackup() async {
+    final db = await database;
+    try {
+      await db.rawQuery('PRAGMA wal_checkpoint(FULL)');
+    } catch (e) {
+      debugPrint('Could not checkpoint database before backup: $e');
+    }
+  }
+
+  Future<void> closeDatabaseForRestore() async {
+    final db = _database;
+    if (db == null) return;
+
+    await db.close();
+    _database = null;
+  }
+
   Future<Database> _initDB(String filePath) async {
     sqfliteFfiInit();
     final databaseFactory = databaseFactoryFfi;
 
     final legacyPath = await _resolveLegacyDbPath(databaseFactory, filePath);
     final stablePath = await _resolveStableDbPath(filePath);
-    await _migrateLegacyDbIfNeeded(legacyPath: legacyPath, stablePath: stablePath);
+    await _migrateLegacyDbIfNeeded(
+      legacyPath: legacyPath,
+      stablePath: stablePath,
+    );
 
     debugPrint('POS local DB legacy path: $legacyPath');
     debugPrint('POS local DB stable path: $stablePath');
@@ -37,7 +65,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 21,
+        version: 27,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -91,7 +119,10 @@ class DatabaseHelper {
     debugPrint('Migrated POS DB from legacy path to stable path.');
   }
 
-  Future<void> _copySidecarDbFileIfExists(String sourcePath, String targetPath) async {
+  Future<void> _copySidecarDbFileIfExists(
+    String sourcePath,
+    String targetPath,
+  ) async {
     final sourceFile = File(sourcePath);
     if (!await sourceFile.exists()) return;
 
@@ -121,9 +152,15 @@ class DatabaseHelper {
   }
 
   String _formatQuantityValue(num value) {
-    final safeValue =
-        value.toDouble().abs() < _quantityEpsilon ? 0.0 : value.toDouble();
+    final safeValue = value.toDouble().abs() < _quantityEpsilon
+        ? 0.0
+        : value.toDouble();
     return safeValue.toStringAsFixed(3).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _formatDateOnly(DateTime value) {
+    final normalized = DateTime(value.year, value.month, value.day);
+    return normalized.toIso8601String().split('T').first;
   }
 
   String _normalizeDiscountType(String? value) {
@@ -151,6 +188,31 @@ class DatabaseHelper {
     }
 
     return 0.0;
+  }
+
+  Future<void> _createProductPriceHistoryTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS product_price_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        price_type TEXT NOT NULL DEFAULT 'selling',
+        label_price REAL NOT NULL,
+        old_price REAL NOT NULL DEFAULT 0,
+        new_price REAL NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT,
+        reason TEXT,
+        effective_from TEXT NOT NULL,
+        effective_to TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_product_price_history_barcode ON product_price_history(barcode, price_type, is_active)',
+    );
   }
 
   Future<void> _createSupplierTables(Database db) async {
@@ -198,6 +260,9 @@ class DatabaseHelper {
         invoice_number TEXT,
         delivery_note_number TEXT,
         grn_reference TEXT,
+        expiry_batch_id INTEGER,
+        batch_number TEXT NOT NULL DEFAULT '',
+        expiry_date TEXT,
         cashier_name TEXT,
         is_reversed INTEGER NOT NULL DEFAULT 0,
         reversed_at TEXT NOT NULL DEFAULT '',
@@ -208,6 +273,46 @@ class DatabaseHelper {
     ''');
   }
 
+  Future<void> _createExpiryTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS expiry_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        receipt_id INTEGER,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        batch_number TEXT NOT NULL DEFAULT '',
+        supplier_id INTEGER,
+        supplier_name TEXT NOT NULL DEFAULT '',
+        received_quantity REAL NOT NULL,
+        remaining_quantity REAL NOT NULL,
+        expiry_date TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        last_checked_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS expiry_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_id INTEGER NOT NULL,
+        action_type TEXT NOT NULL,
+        quantity REAL,
+        note TEXT NOT NULL DEFAULT '',
+        performed_by TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (batch_id) REFERENCES expiry_batches(id) ON DELETE CASCADE
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_expiry_batches_barcode ON expiry_batches(barcode)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_expiry_batches_expiry_date ON expiry_batches(expiry_date)',
+    );
+  }
 
   Future<void> _createPurchaseOrderTables(Database db) async {
     await db.execute('''
@@ -317,6 +422,8 @@ class DatabaseHelper {
         sale_enabled INTEGER NOT NULL DEFAULT 0,
         stock INTEGER NOT NULL,
         min_stock_level INTEGER NOT NULL DEFAULT 0,
+        track_expiry INTEGER NOT NULL DEFAULT 0,
+        expiry_alert_days INTEGER NOT NULL DEFAULT 30,
         is_active INTEGER NOT NULL DEFAULT 1,
         updated_at TEXT NOT NULL,
         last_price_updated_at TEXT
@@ -349,16 +456,37 @@ class DatabaseHelper {
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
         unit_price REAL NOT NULL,
+        marked_price REAL NOT NULL DEFAULT 0,
         price_category_used TEXT NOT NULL DEFAULT 'selling',
+        system_unit_price REAL NOT NULL DEFAULT 0,
+        price_override_type TEXT NOT NULL DEFAULT 'none',
+        price_override_reason TEXT NOT NULL DEFAULT '',
+        price_override_original_price REAL NOT NULL DEFAULT 0,
+        price_override_difference REAL NOT NULL DEFAULT 0,
+        price_history_id INTEGER,
+        price_override_approved_by TEXT,
+        customer_pricing_applied INTEGER NOT NULL DEFAULT 0,
+        customer_pricing_type TEXT NOT NULL DEFAULT 'none',
+        customer_pricing_rule_id INTEGER,
+        customer_pricing_original_price REAL NOT NULL DEFAULT 0,
+        customer_pricing_final_price REAL NOT NULL DEFAULT 0,
+        customer_pricing_discount_amount REAL NOT NULL DEFAULT 0,
+        customer_pricing_note TEXT,
         cost_price_snapshot REAL NOT NULL DEFAULT 0,
         quantity INTEGER NOT NULL,
         base_line_total REAL NOT NULL DEFAULT 0,
+        item_discount_type TEXT NOT NULL DEFAULT 'none',
+        item_discount_value REAL NOT NULL DEFAULT 0,
+        explicit_item_discount_amount REAL NOT NULL DEFAULT 0,
+        cart_discount_amount REAL NOT NULL DEFAULT 0,
         item_discount_amount REAL NOT NULL DEFAULT 0,
         line_total REAL NOT NULL,
         created_at TEXT NOT NULL,
         FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE
       )
     ''');
+
+    await _createProductPriceHistoryTable(db);
 
     await db.execute('''
       CREATE TABLE inventory_movements (
@@ -381,8 +509,6 @@ class DatabaseHelper {
         created_at TEXT NOT NULL
       )
     ''');
-
-
 
     await db.execute('''
       CREATE TABLE stock_take_sessions (
@@ -440,6 +566,10 @@ class DatabaseHelper {
         selected_price_type TEXT NOT NULL DEFAULT 'selling',
         discount_type TEXT NOT NULL DEFAULT 'none',
         discount_value REAL NOT NULL DEFAULT 0,
+        customer_id INTEGER,
+        customer_name_snapshot TEXT,
+        customer_phone_snapshot TEXT,
+        customer_code_snapshot TEXT,
         items_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -456,10 +586,16 @@ class DatabaseHelper {
       )
     ''');
 
+    await _createCustomersTable(db);
+    await _ensureCustomerPricingSchema(db);
+    await _ensurePricingSchemesSchema(db);
+    await _ensureLoyaltySchema(db);
+
     await _createUserTables(db);
 
     await _createSupplierTables(db);
     await _createPurchaseOrderTables(db);
+    await _createExpiryTables(db);
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -588,12 +724,50 @@ class DatabaseHelper {
       await _createSupplierTables(db);
     }
 
+    if (oldVersion < 22) {
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'marked_price',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'item_discount_type',
+        "TEXT NOT NULL DEFAULT 'none'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'item_discount_value',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'explicit_item_discount_amount',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'cart_discount_amount',
+        "REAL NOT NULL DEFAULT 0",
+      );
+    }
+
     if (oldVersion < 9) {
       await _createPurchaseOrderTables(db);
     }
 
     if (oldVersion < 10) {
-      await _addColumnIfMissing(db, 'stock_receipts', 'purchase_order_id', 'INTEGER');
+      await _addColumnIfMissing(
+        db,
+        'stock_receipts',
+        'purchase_order_id',
+        'INTEGER',
+      );
       await _addColumnIfMissing(
         db,
         'stock_receipts',
@@ -626,9 +800,7 @@ class DatabaseHelper {
 
         await db.update(
           'purchase_orders',
-          {
-            'received_units': receivedUnits,
-          },
+          {'received_units': receivedUnits},
           where: 'id = ?',
           whereArgs: [orderId],
         );
@@ -691,11 +863,31 @@ class DatabaseHelper {
       ''');
 
       await _addColumnIfMissing(db, 'stock_receipts', 'invoice_number', 'TEXT');
-      await _addColumnIfMissing(db, 'stock_receipts', 'delivery_note_number', 'TEXT');
+      await _addColumnIfMissing(
+        db,
+        'stock_receipts',
+        'delivery_note_number',
+        'TEXT',
+      );
       await _addColumnIfMissing(db, 'stock_receipts', 'grn_reference', 'TEXT');
-      await _addColumnIfMissing(db, 'purchase_order_receipts', 'invoice_number', 'TEXT');
-      await _addColumnIfMissing(db, 'purchase_order_receipts', 'delivery_note_number', 'TEXT');
-      await _addColumnIfMissing(db, 'purchase_order_receipts', 'grn_reference', 'TEXT');
+      await _addColumnIfMissing(
+        db,
+        'purchase_order_receipts',
+        'invoice_number',
+        'TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        'purchase_order_receipts',
+        'delivery_note_number',
+        'TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        'purchase_order_receipts',
+        'grn_reference',
+        'TEXT',
+      );
     }
 
     if (oldVersion < 13) {
@@ -747,7 +939,12 @@ class DatabaseHelper {
     }
 
     if (oldVersion < 14) {
-      await _addColumnIfMissing(db, 'stock_receipts', 'purchase_order_receipt_id', 'INTEGER');
+      await _addColumnIfMissing(
+        db,
+        'stock_receipts',
+        'purchase_order_receipt_id',
+        'INTEGER',
+      );
       await _addColumnIfMissing(
         db,
         'stock_receipts',
@@ -898,7 +1095,6 @@ class DatabaseHelper {
       );
     }
 
-
     if (oldVersion < 16) {
       await db.execute('''
         CREATE TABLE IF NOT EXISTS stock_take_sessions (
@@ -944,11 +1140,19 @@ class DatabaseHelper {
     }
 
     if (oldVersion < 20) {
-      await _addColumnIfMissing(db, 'inventory_movements', 'supplier_id', 'INTEGER');
-      await _addColumnIfMissing(db, 'inventory_movements', 'supplier_name', 'TEXT');
+      await _addColumnIfMissing(
+        db,
+        'inventory_movements',
+        'supplier_id',
+        'INTEGER',
+      );
+      await _addColumnIfMissing(
+        db,
+        'inventory_movements',
+        'supplier_name',
+        'TEXT',
+      );
     }
-
-
 
     if (oldVersion < 21) {
       await _addColumnIfMissing(
@@ -978,7 +1182,6 @@ class DatabaseHelper {
           END
       ''');
     }
-
 
     if (oldVersion < 17) {
       await _createUserTables(db);
@@ -1016,14 +1219,558 @@ class DatabaseHelper {
         "INTEGER NOT NULL DEFAULT 0",
       );
 
-      await db.execute(
-        '''
+      await db.execute('''
         UPDATE users
         SET has_full_access = COALESCE(has_full_access, 0)
-        ''',
-      );
+        ''');
     }
 
+    if (oldVersion < 23) {
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'track_expiry',
+        "INTEGER NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'products',
+        'expiry_alert_days',
+        "INTEGER NOT NULL DEFAULT 30",
+      );
+      await _addColumnIfMissing(
+        db,
+        'stock_receipts',
+        'expiry_batch_id',
+        'INTEGER',
+      );
+      await _addColumnIfMissing(
+        db,
+        'stock_receipts',
+        'batch_number',
+        "TEXT NOT NULL DEFAULT ''",
+      );
+      await _addColumnIfMissing(db, 'stock_receipts', 'expiry_date', 'TEXT');
+      await _createExpiryTables(db);
+    }
+
+    if (oldVersion < 24) {
+      await _createProductPriceHistoryTable(db);
+
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'system_unit_price',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_override_type',
+        "TEXT NOT NULL DEFAULT 'none'",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_override_reason',
+        "TEXT NOT NULL DEFAULT ''",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_override_original_price',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_override_difference',
+        "REAL NOT NULL DEFAULT 0",
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_history_id',
+        'INTEGER',
+      );
+      await _addColumnIfMissing(
+        db,
+        'sale_items',
+        'price_override_approved_by',
+        'TEXT',
+      );
+
+      await db.execute('''
+        UPDATE sale_items
+        SET system_unit_price = CASE
+              WHEN COALESCE(system_unit_price, 0) <= 0 THEN COALESCE(unit_price, 0)
+              ELSE system_unit_price
+            END,
+            price_override_original_price = CASE
+              WHEN COALESCE(price_override_original_price, 0) <= 0
+              THEN COALESCE(unit_price, 0)
+              ELSE price_override_original_price
+            END,
+            price_override_type = COALESCE(NULLIF(price_override_type, ''), 'none'),
+            price_override_reason = COALESCE(price_override_reason, ''),
+            price_override_difference = COALESCE(unit_price, 0) - COALESCE(system_unit_price, COALESCE(unit_price, 0))
+      ''');
+    }
+
+    if (oldVersion < 25) {
+      await _createCustomersTable(db);
+      await _ensureCustomerPricingSchema(db);
+      await _ensureHeldCartCustomerSchema(db);
+    }
+
+    if (oldVersion < 26) {
+      await _createCustomersTable(db);
+      await _ensurePricingSchemesSchema(db);
+    }
+
+    if (oldVersion < 27) {
+      await _createCustomersTable(db);
+      await _ensureLoyaltySchema(db);
+    }
+  }
+
+  Future<void> _createCustomersTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS customers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_code TEXT UNIQUE,
+        name TEXT NOT NULL,
+        phone TEXT,
+        phone_normalized TEXT,
+        email TEXT,
+        address TEXT,
+        customer_type TEXT NOT NULL DEFAULT 'regular',
+        notes TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        credit_enabled INTEGER NOT NULL DEFAULT 0,
+        credit_limit REAL NOT NULL DEFAULT 0,
+        current_credit_balance REAL NOT NULL DEFAULT 0,
+        credit_status TEXT NOT NULL DEFAULT 'normal',
+        credit_note TEXT,
+        customer_category_id INTEGER,
+        pricing_scheme_id INTEGER,
+        pricing_enabled INTEGER NOT NULL DEFAULT 0,
+        default_price_type TEXT NOT NULL DEFAULT 'selling',
+        default_discount_percent REAL NOT NULL DEFAULT 0,
+        pricing_note TEXT,
+        loyalty_enabled INTEGER NOT NULL DEFAULT 1,
+        loyalty_points_balance INTEGER NOT NULL DEFAULT 0,
+        loyalty_lifetime_earned INTEGER NOT NULL DEFAULT 0,
+        loyalty_lifetime_redeemed INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by INTEGER,
+        updated_by INTEGER
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone_normalized)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_code ON customers(customer_code)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_active ON customers(is_active)',
+    );
+  }
+
+  Future<void> _ensurePricingSchemesSchema(Database db) async {
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'customer_category_id',
+      'INTEGER',
+    );
+    await _addColumnIfMissing(db, 'customers', 'pricing_scheme_id', 'INTEGER');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS customer_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        default_pricing_scheme_id INTEGER,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS pricing_schemes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        priority INTEGER NOT NULL DEFAULT 100,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by INTEGER,
+        updated_by INTEGER
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS pricing_scheme_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scheme_id INTEGER NOT NULL,
+        apply_to TEXT NOT NULL,
+        category TEXT,
+        barcode TEXT,
+        product_name_snapshot TEXT,
+        rule_type TEXT NOT NULL,
+        price_type TEXT,
+        discount_percent REAL NOT NULL DEFAULT 0,
+        fixed_price REAL,
+        priority INTEGER NOT NULL DEFAULT 100,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by INTEGER,
+        updated_by INTEGER,
+        FOREIGN KEY (scheme_id) REFERENCES pricing_schemes(id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_categories_name
+      ON customer_categories(name)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_categories_active
+      ON customer_categories(is_active)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_schemes_name
+      ON pricing_schemes(name)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_schemes_active
+      ON pricing_schemes(is_active)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_scheme
+      ON pricing_scheme_rules(scheme_id)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_active
+      ON pricing_scheme_rules(is_active)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_target
+      ON pricing_scheme_rules(apply_to, category, barcode)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_pricing_scheme_rules_priority
+      ON pricing_scheme_rules(scheme_id, priority, updated_at)
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_category ON customers(customer_category_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_pricing_scheme ON customers(pricing_scheme_id)',
+    );
+
+    await _seedDefaultCustomerCategories(db);
+  }
+
+  Future<void> _seedDefaultCustomerCategories(Database db) async {
+    final now = DateTime.now().toIso8601String();
+    const names = ['Regular', 'VIP', 'Wholesale', 'Staff'];
+    for (final name in names) {
+      await db.insert('customer_categories', {
+        'name': name,
+        'description': null,
+        'default_pricing_scheme_id': null,
+        'is_active': 1,
+        'created_at': now,
+        'updated_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+  }
+
+  Future<void> _ensureCustomerPricingSchema(Database db) async {
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'pricing_enabled',
+      "INTEGER NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'default_price_type',
+      "TEXT NOT NULL DEFAULT 'selling'",
+    );
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'default_discount_percent',
+      "REAL NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(db, 'customers', 'pricing_note', 'TEXT');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS customer_product_prices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id INTEGER NOT NULL,
+        barcode TEXT NOT NULL,
+        product_name_snapshot TEXT NOT NULL,
+        fixed_price REAL NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        created_by INTEGER,
+        updated_by INTEGER,
+        UNIQUE(customer_id, barcode),
+        FOREIGN KEY (customer_id) REFERENCES customers(id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_product_prices_customer
+      ON customer_product_prices(customer_id)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_product_prices_barcode
+      ON customer_product_prices(barcode)
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_customer_product_prices_active
+      ON customer_product_prices(is_active)
+    ''');
+
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_applied',
+      "INTEGER NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_type',
+      "TEXT NOT NULL DEFAULT 'none'",
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_rule_id',
+      'INTEGER',
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_original_price',
+      "REAL NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_final_price',
+      "REAL NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_discount_amount',
+      "REAL NOT NULL DEFAULT 0",
+    );
+    await _addColumnIfMissing(
+      db,
+      'sale_items',
+      'customer_pricing_note',
+      'TEXT',
+    );
+  }
+
+  Future<void> _ensureLoyaltySchema(Database db) async {
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'loyalty_enabled',
+      'INTEGER NOT NULL DEFAULT 1',
+    );
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'loyalty_points_balance',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'loyalty_lifetime_earned',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'customers',
+      'loyalty_lifetime_redeemed',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+
+    await _addColumnIfMissing(
+      db,
+      'sales',
+      'loyalty_points_earned',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'sales',
+      'loyalty_points_redeemed',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'sales',
+      'loyalty_redeemed_value',
+      'REAL NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'sales',
+      'loyalty_earn_base_amount',
+      'REAL NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'sales',
+      'loyalty_status',
+      "TEXT NOT NULL DEFAULT 'none'",
+    );
+    await _addColumnIfMissing(db, 'sales', 'loyalty_note', 'TEXT');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS loyalty_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        is_enabled INTEGER NOT NULL DEFAULT 1,
+        earn_rate_amount REAL NOT NULL DEFAULT 100,
+        earn_rate_points INTEGER NOT NULL DEFAULT 1,
+        point_value_amount REAL NOT NULL DEFAULT 1,
+        minimum_redeem_points INTEGER NOT NULL DEFAULT 100,
+        maximum_redeem_percent REAL NOT NULL DEFAULT 20,
+        allow_credit_sale_earn INTEGER NOT NULL DEFAULT 0,
+        rounding_mode TEXT NOT NULL DEFAULT 'floor',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS loyalty_ledger (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id INTEGER NOT NULL,
+        entry_type TEXT NOT NULL,
+        points_delta INTEGER NOT NULL,
+        points_balance_after INTEGER NOT NULL,
+        money_value REAL NOT NULL DEFAULT 0,
+        sale_id INTEGER,
+        refund_sale_id INTEGER,
+        description TEXT,
+        created_at TEXT NOT NULL,
+        created_by TEXT,
+        voided_at TEXT,
+        voided_by TEXT,
+        void_reason TEXT,
+        FOREIGN KEY (customer_id) REFERENCES customers(id)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS loyalty_excluded_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category_name TEXT NOT NULL UNIQUE,
+        exclude_earning INTEGER NOT NULL DEFAULT 1,
+        exclude_redemption INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS loyalty_excluded_products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        barcode TEXT NOT NULL UNIQUE,
+        product_name_snapshot TEXT NOT NULL,
+        exclude_earning INTEGER NOT NULL DEFAULT 1,
+        exclude_redemption INTEGER NOT NULL DEFAULT 0,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_customers_loyalty ON customers(loyalty_enabled, loyalty_points_balance)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_customer ON loyalty_ledger(customer_id, created_at)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_sale ON loyalty_ledger(sale_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_refund ON loyalty_ledger(refund_sale_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_ledger_type ON loyalty_ledger(entry_type, created_at)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_excluded_categories_active ON loyalty_excluded_categories(is_active, category_name)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_loyalty_excluded_products_active ON loyalty_excluded_products(is_active, barcode)',
+    );
+
+    final now = DateTime.now().toIso8601String();
+    await db.insert('loyalty_settings', {
+      'id': 1,
+      'is_enabled': 1,
+      'earn_rate_amount': 100.0,
+      'earn_rate_points': 1,
+      'point_value_amount': 1.0,
+      'minimum_redeem_points': 100,
+      'maximum_redeem_percent': 20.0,
+      'allow_credit_sale_earn': 0,
+      'rounding_mode': 'floor',
+      'created_at': now,
+      'updated_at': now,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  Future<void> _ensureHeldCartCustomerSchema(Database db) async {
+    await _addColumnIfMissing(db, 'held_carts', 'customer_id', 'INTEGER');
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'customer_name_snapshot',
+      'TEXT',
+    );
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'customer_phone_snapshot',
+      'TEXT',
+    );
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'customer_code_snapshot',
+      'TEXT',
+    );
   }
 
   Future<void> _addColumnIfMissing(
@@ -1032,6 +1779,12 @@ class DatabaseHelper {
     String column,
     String definition,
   ) async {
+    final tableRows = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      [table],
+    );
+    if (tableRows.isEmpty) return;
+
     final columns = await db.rawQuery('PRAGMA table_info($table)');
     final exists = columns.any((c) => c['name'] == column);
 
@@ -1039,7 +1792,6 @@ class DatabaseHelper {
       await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
     }
   }
-
 
   double _parseDouble(dynamic value, {double fallback = 0.0}) {
     if (value == null) return fallback;
@@ -1051,6 +1803,33 @@ class DatabaseHelper {
     if (value == null) return fallback;
     if (value is num) return value.toInt();
     return int.tryParse(value.toString()) ?? fallback;
+  }
+
+  int? _parseOptionalInt(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toInt();
+    return int.tryParse(value.toString());
+  }
+
+  String _normalizePriceOverrideType(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    if (normalized == 'old_label') return 'old_label';
+    if (normalized == 'manual') return 'manual';
+    return 'none';
+  }
+
+  String _normalizeCustomerPricingType(String? value) {
+    final normalized = (value ?? '').trim().toLowerCase();
+    switch (normalized) {
+      case 'customer_product_price':
+      case 'customer_direct_scheme':
+      case 'customer_category_scheme':
+      case 'customer_default_price_type':
+      case 'customer_default_discount':
+        return normalized;
+      default:
+        return 'none';
+    }
   }
 
   String _normalizeProductQuantityType(dynamic value) {
@@ -1073,9 +1852,56 @@ class DatabaseHelper {
   }
 
   String _normalizeUserRole(String? value) {
-    final normalized = (value ?? '').trim().toLowerCase();
-    if (normalized == 'manager') return 'manager';
-    return 'cashier';
+    final normalized = User.normalizeRole(value);
+    return normalized == User.managerRole ? User.managerRole : User.cashierRole;
+  }
+
+  List<Map<String, dynamic>> _decodeHeldCartItemsJson(String itemsJson) {
+    try {
+      final decoded = jsonDecode(itemsJson);
+      if (decoded is! List) return const <Map<String, dynamic>>[];
+
+      return decoded
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .where((item) => item['product'] is Map)
+          .toList();
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  Map<String, dynamic>? _tryCastMap(dynamic value) {
+    if (value is! Map) return null;
+    return Map<String, dynamic>.from(value);
+  }
+
+  List<Map<String, dynamic>> _decodePendingSaleItems(dynamic rawItems) {
+    if (rawItems is! List) return const <Map<String, dynamic>>[];
+
+    return rawItems
+        .whereType<Map>()
+        .map((rawItem) => Map<String, dynamic>.from(rawItem))
+        .where((item) => _tryCastMap(item['product']) != null)
+        .toList(growable: false);
+  }
+
+  Map<String, dynamic> _requireCartItemProductMap(
+    Map<String, dynamic> item, {
+    String fallbackName = 'This cart item',
+  }) {
+    final productMap = _tryCastMap(item['product']);
+    if (productMap == null) {
+      throw Exception('$fallbackName is missing valid product data.');
+    }
+
+    final barcode = productMap['barcode']?.toString().trim() ?? '';
+    final productName = productMap['name']?.toString().trim() ?? '';
+    if (barcode.isEmpty || productName.isEmpty) {
+      throw Exception('$fallbackName is missing required product details.');
+    }
+
+    return productMap;
   }
 
   String _normalizeUserStatusFilter(String? value) {
@@ -1204,26 +2030,21 @@ class DatabaseHelper {
     }
   }
 
-
   Future<int> _getActiveManagerCountExecutor(
     DatabaseExecutor executor, {
     int? excludingUserId,
   }) async {
     final hasExclusion = excludingUserId != null && excludingUserId > 0;
-    final rows = await executor.rawQuery(
-      '''
+    final rows = await executor.rawQuery('''
       SELECT COUNT(*) AS count
       FROM users
-      WHERE role = 'manager'
+      WHERE LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator')
         AND is_active = 1
         ${hasExclusion ? 'AND id != ?' : ''}
-      ''',
-      hasExclusion ? [excludingUserId] : const <Object?>[],
-    );
+      ''', hasExclusion ? [excludingUserId] : const <Object?>[]);
 
     return _parseInt(rows.first['count']);
   }
-
 
   double _resolveCartItemUnitPrice(Map<String, dynamic> item) {
     final explicitUnitPrice = item['unit_price_used'];
@@ -1231,7 +2052,13 @@ class DatabaseHelper {
       return _parseDouble(explicitUnitPrice);
     }
 
-    final productMap = Map<String, dynamic>.from(item['product'] as Map);
+    final fallbackName = item['product_name']?.toString().trim();
+    final productMap = _requireCartItemProductMap(
+      item,
+      fallbackName: fallbackName == null || fallbackName.isEmpty
+          ? 'This cart item'
+          : fallbackName,
+    );
     final priceType = _normalizePriceType(item['price_type_used']?.toString());
 
     final sellingPrice = _parseDouble(
@@ -1499,29 +2326,27 @@ class DatabaseHelper {
       final batch = txn.batch();
 
       for (final product in backendProducts) {
-        batch.insert(
-          'products',
-          {
-            'barcode': product.barcode,
-            'name': product.name,
-            'category': product.category,
-            'quantity_type': product.quantityType.dbValue,
-            'unit_label': product.unitLabel,
-            'price': product.sellingPrice,
-            'cost_price': product.costPrice,
-            'selling_price': product.sellingPrice,
-            'wholesale_price': product.wholesalePrice,
-            'sale_price': product.salePrice,
-            'sale_enabled': product.saleEnabled ? 1 : 0,
-            'stock': product.stock,
-            'min_stock_level': product.minStockLevel,
-            'is_active': product.isActive ? 1 : 0,
-            'updated_at': product.updatedAt,
-            'last_price_updated_at':
-                product.lastPriceUpdatedAt ?? product.updatedAt,
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+        batch.insert('products', {
+          'barcode': product.barcode,
+          'name': product.name,
+          'category': product.category,
+          'quantity_type': product.quantityType.dbValue,
+          'unit_label': product.unitLabel,
+          'price': product.sellingPrice,
+          'cost_price': product.costPrice,
+          'selling_price': product.sellingPrice,
+          'wholesale_price': product.wholesalePrice,
+          'sale_price': product.salePrice,
+          'sale_enabled': product.saleEnabled ? 1 : 0,
+          'stock': product.stock,
+          'min_stock_level': product.minStockLevel,
+          'track_expiry': product.trackExpiry ? 1 : 0,
+          'expiry_alert_days': product.expiryAlertDays,
+          'is_active': product.isActive ? 1 : 0,
+          'updated_at': product.updatedAt,
+          'last_price_updated_at':
+              product.lastPriceUpdatedAt ?? product.updatedAt,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
 
       await batch.commit(noResult: true);
@@ -1545,17 +2370,18 @@ class DatabaseHelper {
         }
 
         if (type == 'SALE') {
-          final data = Map<String, dynamic>.from(decodedData as Map);
+          if (decodedData is! Map) {
+            continue;
+          }
+          final data = Map<String, dynamic>.from(decodedData);
           final transactionType = (data['transaction_type'] ?? 'sale')
               .toString()
               .toLowerCase();
-          final items = (data['items'] as List?) ?? [];
+          final items = _decodePendingSaleItems(data['items']);
 
-          for (final rawItem in items) {
-            final item = Map<String, dynamic>.from(rawItem as Map);
-            final productMap = Map<String, dynamic>.from(
-              item['product'] as Map,
-            );
+          for (final item in items) {
+            final productMap = _tryCastMap(item['product']);
+            if (productMap == null) continue;
 
             final barcode = productMap['barcode']?.toString() ?? '';
             final quantity = _parseQuantity(item['quantity']);
@@ -1712,7 +2538,10 @@ class DatabaseHelper {
         } else if (type == 'MIN_STOCK_UPDATE') {
           final data = Map<String, dynamic>.from(decodedData as Map);
           final barcode = data['barcode']?.toString() ?? '';
-          final minStockLevel = _parseInt(data['min_stock_level'], fallback: -1);
+          final minStockLevel = _parseInt(
+            data['min_stock_level'],
+            fallback: -1,
+          );
 
           if (barcode.isEmpty || minStockLevel < 0) continue;
 
@@ -1736,37 +2565,40 @@ class DatabaseHelper {
             final name = row['name']?.toString().trim() ?? '';
             if (barcode.isEmpty || name.isEmpty) continue;
 
-            final sellingPrice = _roundMoney(_parseDouble(row['selling_price'] ?? row['price']));
+            final sellingPrice = _roundMoney(
+              _parseDouble(row['selling_price'] ?? row['price']),
+            );
             final wholesalePrice = _roundMoney(
               _parseDouble(row['wholesale_price'], fallback: sellingPrice),
             );
             final salePriceRaw = row['sale_price'];
-            final salePrice = salePriceRaw == null ? null : _roundMoney(_parseDouble(salePriceRaw));
+            final salePrice = salePriceRaw == null
+                ? null
+                : _roundMoney(_parseDouble(salePriceRaw));
             final saleEnabled = row['sale_enabled'] == null
                 ? (salePrice != null ? 1 : 0)
-                : ((_parseInt(row['sale_enabled']) == 1 || row['sale_enabled'] == true) ? 1 : 0);
+                : ((_parseInt(row['sale_enabled']) == 1 ||
+                          row['sale_enabled'] == true)
+                      ? 1
+                      : 0);
             final stock = _parseInt(row['stock'] ?? row['opening_stock']);
 
-            await txn.insert(
-              'products',
-              {
-                'barcode': barcode,
-                'name': name,
-                'category': (row['category'] ?? 'General').toString(),
-                'price': sellingPrice,
-                'cost_price': _roundMoney(_parseDouble(row['cost_price'])),
-                'selling_price': sellingPrice,
-                'wholesale_price': wholesalePrice,
-                'sale_price': salePrice,
-                'sale_enabled': saleEnabled,
-                'stock': stock,
-                'min_stock_level': _parseInt(row['min_stock_level']),
-                'is_active': 1,
-                'updated_at': now,
-                'last_price_updated_at': now,
-              },
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            );
+            await txn.insert('products', {
+              'barcode': barcode,
+              'name': name,
+              'category': (row['category'] ?? 'General').toString(),
+              'price': sellingPrice,
+              'cost_price': _roundMoney(_parseDouble(row['cost_price'])),
+              'selling_price': sellingPrice,
+              'wholesale_price': wholesalePrice,
+              'sale_price': salePrice,
+              'sale_enabled': saleEnabled,
+              'stock': stock,
+              'min_stock_level': _parseInt(row['min_stock_level']),
+              'is_active': 1,
+              'updated_at': now,
+              'last_price_updated_at': now,
+            }, conflictAlgorithm: ConflictAlgorithm.replace);
           }
         } else if (type == 'PRODUCT_CREATE' || type == 'PRODUCT_UPDATE') {
           final data = Map<String, dynamic>.from(decodedData as Map);
@@ -1775,36 +2607,39 @@ class DatabaseHelper {
           if (barcode.isEmpty || name.isEmpty) continue;
 
           final now = DateTime.now().toIso8601String();
-          final sellingPrice = _roundMoney(_parseDouble(data['selling_price'] ?? data['price']));
+          final sellingPrice = _roundMoney(
+            _parseDouble(data['selling_price'] ?? data['price']),
+          );
           final wholesalePrice = _roundMoney(
             _parseDouble(data['wholesale_price'], fallback: sellingPrice),
           );
           final salePriceRaw = data['sale_price'];
-          final salePrice = salePriceRaw == null ? null : _roundMoney(_parseDouble(salePriceRaw));
+          final salePrice = salePriceRaw == null
+              ? null
+              : _roundMoney(_parseDouble(salePriceRaw));
           final saleEnabled = data['sale_enabled'] == null
               ? (salePrice != null ? 1 : 0)
-              : ((_parseInt(data['sale_enabled']) == 1 || data['sale_enabled'] == true) ? 1 : 0);
+              : ((_parseInt(data['sale_enabled']) == 1 ||
+                        data['sale_enabled'] == true)
+                    ? 1
+                    : 0);
 
-          await txn.insert(
-            'products',
-            {
-              'barcode': barcode,
-              'name': name,
-              'category': (data['category'] ?? 'General').toString(),
-              'price': sellingPrice,
-              'cost_price': _roundMoney(_parseDouble(data['cost_price'])),
-              'selling_price': sellingPrice,
-              'wholesale_price': wholesalePrice,
-              'sale_price': salePrice,
-              'sale_enabled': saleEnabled,
-              'stock': _parseInt(data['opening_stock'] ?? data['stock']),
-              'min_stock_level': _parseInt(data['min_stock_level']),
-              'is_active': 1,
-              'updated_at': now,
-              'last_price_updated_at': now,
-            },
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
+          await txn.insert('products', {
+            'barcode': barcode,
+            'name': name,
+            'category': (data['category'] ?? 'General').toString(),
+            'price': sellingPrice,
+            'cost_price': _roundMoney(_parseDouble(data['cost_price'])),
+            'selling_price': sellingPrice,
+            'wholesale_price': wholesalePrice,
+            'sale_price': salePrice,
+            'sale_enabled': saleEnabled,
+            'stock': _parseInt(data['opening_stock'] ?? data['stock']),
+            'min_stock_level': _parseInt(data['min_stock_level']),
+            'is_active': 1,
+            'updated_at': now,
+            'last_price_updated_at': now,
+          }, conflictAlgorithm: ConflictAlgorithm.replace);
         } else if (type == 'PRODUCT_DELETE') {
           final data = Map<String, dynamic>.from(decodedData as Map);
           final barcode = data['barcode']?.toString().trim() ?? '';
@@ -1880,12 +2715,63 @@ class DatabaseHelper {
         double explicitItemDiscountTotal = 0.0;
 
         for (final item in cartItems) {
-          final productMap = Map<String, dynamic>.from(item['product'] as Map);
+          final productMap = _requireCartItemProductMap(item);
           final barcode = productMap['barcode']?.toString() ?? '';
           final productName =
               productMap['name']?.toString() ?? 'Unknown product';
           final unitPrice = _resolveCartItemUnitPrice(item);
+          final systemUnitPrice = _parseDouble(
+            item['system_unit_price'],
+            fallback: unitPrice,
+          );
+          final priceOverrideType = _normalizePriceOverrideType(
+            item['price_override_type']?.toString(),
+          );
+          final priceOverrideReason = (item['price_override_reason'] ?? '')
+              .toString()
+              .trim();
+          final priceOverrideOriginalPrice = _parseDouble(
+            item['price_override_original_price'],
+            fallback: systemUnitPrice,
+          );
+          final priceOverrideDifference = _roundMoney(
+            unitPrice - systemUnitPrice,
+          );
+          final priceHistoryId = _parseOptionalInt(item['price_history_id']);
+          final priceOverrideApprovedBy = item['price_override_approved_by']
+              ?.toString()
+              .trim();
+          final customerPricingType = _normalizeCustomerPricingType(
+            item['customer_pricing_type']?.toString(),
+          );
+          final customerPricingEffective =
+              priceOverrideType == 'none' &&
+              customerPricingType != 'none' &&
+              _parseInt(item['customer_pricing_applied']) == 1;
+          final customerPricingOriginalPrice = customerPricingEffective
+              ? _parseDouble(
+                  item['customer_pricing_original_price'],
+                  fallback: systemUnitPrice,
+                )
+              : 0.0;
+          final customerPricingFinalPrice = customerPricingEffective
+              ? _parseDouble(
+                  item['customer_pricing_final_price'],
+                  fallback: unitPrice,
+                )
+              : 0.0;
+          final customerPricingDiscountAmount = customerPricingEffective
+              ? _roundMoney(
+                  _parseDouble(item['customer_pricing_discount_amount']),
+                )
+              : 0.0;
+          final customerPricingNote = customerPricingEffective
+              ? item['customer_pricing_note']?.toString().trim()
+              : null;
           final priceTypeUsed = _resolveCartItemPriceType(item);
+          final markedPrice = _parseDouble(productMap['selling_price']) > 0
+              ? _parseDouble(productMap['selling_price'])
+              : unitPrice;
           final costPriceSnapshot = _parseDouble(productMap['cost_price']);
           final quantity = _parseQuantity(item['quantity']);
           final computedBaseLineTotal = _roundMoney(unitPrice * quantity);
@@ -1893,10 +2779,16 @@ class DatabaseHelper {
             ((item['base_line_total'] as num?) ?? computedBaseLineTotal)
                 .toDouble(),
           );
-          final providedItemDiscount = ((item['item_discount_amount'] as num?) ?? 0)
+          final providedItemDiscount =
+              ((item['item_discount_amount'] as num?) ?? 0).toDouble();
+          final itemDiscountType = _normalizeDiscountType(
+            item['item_discount_type']?.toString() ?? 'none',
+          );
+          final itemDiscountValue = ((item['item_discount_value'] as num?) ?? 0)
               .toDouble();
           final providedLineTotal =
-              ((item['line_total'] as num?) ?? (baseLineTotal - providedItemDiscount))
+              ((item['line_total'] as num?) ??
+                      (baseLineTotal - providedItemDiscount))
                   .toDouble();
 
           final safeItemDiscount = providedItemDiscount < 0
@@ -1920,10 +2812,36 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'system_unit_price': systemUnitPrice,
+            'price_override_type': priceOverrideType,
+            'price_override_reason': priceOverrideReason,
+            'price_override_original_price': priceOverrideOriginalPrice,
+            'price_override_difference': priceOverrideDifference,
+            'price_history_id': priceHistoryId,
+            'price_override_approved_by': priceOverrideApprovedBy,
+            'customer_pricing_applied': customerPricingEffective ? 1 : 0,
+            'customer_pricing_type': customerPricingEffective
+                ? customerPricingType
+                : 'none',
+            'customer_pricing_rule_id': customerPricingEffective
+                ? _parseOptionalInt(item['customer_pricing_rule_id'])
+                : null,
+            'customer_pricing_original_price': customerPricingOriginalPrice,
+            'customer_pricing_final_price': customerPricingFinalPrice,
+            'customer_pricing_discount_amount': customerPricingDiscountAmount,
+            'customer_pricing_note':
+                customerPricingNote == null || customerPricingNote.isEmpty
+                ? null
+                : customerPricingNote,
+            'marked_price': markedPrice,
             'price_category_used': priceTypeUsed,
             'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': baseLineTotal,
+            'item_discount_type': itemDiscountType,
+            'item_discount_value': itemDiscountValue < 0
+                ? 0.0
+                : itemDiscountValue,
             'explicit_item_discount_amount': safeItemDiscount,
             'net_line_total_before_cart_discount': netLineTotal,
           });
@@ -1932,14 +2850,17 @@ class DatabaseHelper {
         final fallbackDiscountAmount = isRefund
             ? 0.0
             : _calculateDiscountAmount(
-                subtotal: _roundMoney(resolvedSubtotal - explicitItemDiscountTotal),
+                subtotal: _roundMoney(
+                  resolvedSubtotal - explicitItemDiscountTotal,
+                ),
                 discountType: resolvedDiscountType,
                 discountValue: resolvedDiscountValue,
               );
         final resolvedDiscountAmount = isRefund
             ? 0.0
             : _roundMoney(
-                (discountAmount ?? (explicitItemDiscountTotal + fallbackDiscountAmount))
+                (discountAmount ??
+                        (explicitItemDiscountTotal + fallbackDiscountAmount))
                     .abs(),
               );
         final resolvedFinalTotal = isRefund
@@ -1974,9 +2895,7 @@ class DatabaseHelper {
           }
 
           for (final item in cartItems) {
-            final productMap = Map<String, dynamic>.from(
-              item['product'] as Map,
-            );
+            final productMap = _requireCartItemProductMap(item);
             final barcode = productMap['barcode']?.toString() ?? '';
             final productName =
                 productMap['name']?.toString() ?? 'Unknown product';
@@ -2043,11 +2962,47 @@ class DatabaseHelper {
           final barcode = item['barcode'] as String;
           final productName = item['product_name'] as String;
           final unitPrice = item['unit_price'] as double;
-          final priceTypeUsed = (item['price_category_used'] ?? 'selling').toString();
+          final systemUnitPrice =
+              (item['system_unit_price'] as num?)?.toDouble() ?? unitPrice;
+          final priceOverrideType = (item['price_override_type'] ?? 'none')
+              .toString();
+          final priceOverrideReason = (item['price_override_reason'] ?? '')
+              .toString();
+          final priceOverrideOriginalPrice =
+              (item['price_override_original_price'] as num?)?.toDouble() ??
+              systemUnitPrice;
+          final priceOverrideDifference =
+              (item['price_override_difference'] as num?)?.toDouble() ??
+              (unitPrice - systemUnitPrice);
+          final priceHistoryId = item['price_history_id'] as int?;
+          final priceOverrideApprovedBy = item['price_override_approved_by']
+              ?.toString();
+          final customerPricingApplied =
+              ((item['customer_pricing_applied'] as num?)?.toInt() ?? 0) == 1;
+          final customerPricingType = (item['customer_pricing_type'] ?? 'none')
+              .toString();
+          final customerPricingRuleId =
+              item['customer_pricing_rule_id'] as int?;
+          final customerPricingOriginalPrice =
+              (item['customer_pricing_original_price'] as num?)?.toDouble() ??
+              0.0;
+          final customerPricingFinalPrice =
+              (item['customer_pricing_final_price'] as num?)?.toDouble() ?? 0.0;
+          final customerPricingDiscountAmount =
+              (item['customer_pricing_discount_amount'] as num?)?.toDouble() ??
+              0.0;
+          final customerPricingNote = item['customer_pricing_note']?.toString();
+          final markedPrice = item['marked_price'] as double;
+          final priceTypeUsed = (item['price_category_used'] ?? 'selling')
+              .toString();
           final costPriceSnapshot =
               (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
           final quantity = (item['quantity'] as num).toDouble();
           final baseLineTotal = item['base_line_total'] as double;
+          final itemDiscountType = (item['item_discount_type'] ?? 'none')
+              .toString();
+          final itemDiscountValue =
+              (item['item_discount_value'] as num?)?.toDouble() ?? 0.0;
           final explicitItemDiscount =
               (item['explicit_item_discount_amount'] as num).toDouble();
           final netLineTotalBeforeCartDiscount =
@@ -2064,14 +3019,17 @@ class DatabaseHelper {
                   0.0,
                   (sum, current) =>
                       sum +
-                      ((current['net_line_total_before_cart_discount'] as num?) ?? 0)
+                      ((current['net_line_total_before_cart_discount']
+                                  as num?) ??
+                              0)
                           .toDouble(),
                 ),
               );
               final share = totalNetBeforeCartDiscount <= 0
                   ? 0.0
                   : remainingCartDiscountToAllocate *
-                      (netLineTotalBeforeCartDiscount / totalNetBeforeCartDiscount);
+                        (netLineTotalBeforeCartDiscount /
+                            totalNetBeforeCartDiscount);
               cartLevelItemDiscount = _roundMoney(share);
 
               if (cartLevelItemDiscount > remainingCartDiscountToAllocate) {
@@ -2084,8 +3042,9 @@ class DatabaseHelper {
             explicitItemDiscount + cartLevelItemDiscount,
           );
           final maxDiscount = baseLineTotal;
-          final safeItemDiscount =
-              itemDiscount > maxDiscount ? maxDiscount : itemDiscount;
+          final safeItemDiscount = itemDiscount > maxDiscount
+              ? maxDiscount
+              : itemDiscount;
           remainingCartDiscountToAllocate = _roundMoney(
             remainingCartDiscountToAllocate - cartLevelItemDiscount,
           );
@@ -2098,10 +3057,31 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'system_unit_price': systemUnitPrice,
+            'price_override_type': priceOverrideType,
+            'price_override_reason': priceOverrideReason,
+            'price_override_original_price': priceOverrideOriginalPrice,
+            'price_override_difference': priceOverrideDifference,
+            'price_history_id': priceHistoryId,
+            'price_override_approved_by': priceOverrideApprovedBy,
+            'customer_pricing_applied': customerPricingApplied ? 1 : 0,
+            'customer_pricing_type': customerPricingType,
+            'customer_pricing_rule_id': customerPricingRuleId,
+            'customer_pricing_original_price': customerPricingOriginalPrice,
+            'customer_pricing_final_price': customerPricingFinalPrice,
+            'customer_pricing_discount_amount': customerPricingDiscountAmount,
+            'customer_pricing_note': customerPricingNote,
+            'marked_price': markedPrice,
             'price_category_used': priceTypeUsed,
             'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': baseLineTotal,
+            'item_discount_type': itemDiscountType,
+            'item_discount_value': itemDiscountValue,
+            'explicit_item_discount_amount': isRefund
+                ? 0.0
+                : explicitItemDiscount,
+            'cart_discount_amount': isRefund ? 0.0 : cartLevelItemDiscount,
             'item_discount_amount': isRefund ? 0.0 : safeItemDiscount,
             'line_total': finalLineTotal,
           });
@@ -2111,12 +3091,53 @@ class DatabaseHelper {
           final barcode = item['barcode'] as String;
           final productName = item['product_name'] as String;
           final unitPrice = item['unit_price'] as double;
-          final priceCategoryUsed =
-              (item['price_category_used'] ?? 'selling').toString();
+          final systemUnitPrice =
+              (item['system_unit_price'] as num?)?.toDouble() ?? unitPrice;
+          final priceOverrideType = (item['price_override_type'] ?? 'none')
+              .toString();
+          final priceOverrideReason = (item['price_override_reason'] ?? '')
+              .toString();
+          final priceOverrideOriginalPrice =
+              (item['price_override_original_price'] as num?)?.toDouble() ??
+              systemUnitPrice;
+          final priceOverrideDifference =
+              (item['price_override_difference'] as num?)?.toDouble() ??
+              (unitPrice - systemUnitPrice);
+          final priceHistoryId = item['price_history_id'] as int?;
+          final priceOverrideApprovedBy = item['price_override_approved_by']
+              ?.toString();
+          final customerPricingApplied =
+              ((item['customer_pricing_applied'] as num?)?.toInt() ?? 0) == 1;
+          final customerPricingType = (item['customer_pricing_type'] ?? 'none')
+              .toString();
+          final customerPricingRuleId =
+              item['customer_pricing_rule_id'] as int?;
+          final customerPricingOriginalPrice =
+              (item['customer_pricing_original_price'] as num?)?.toDouble() ??
+              0.0;
+          final customerPricingFinalPrice =
+              (item['customer_pricing_final_price'] as num?)?.toDouble() ?? 0.0;
+          final customerPricingDiscountAmount =
+              (item['customer_pricing_discount_amount'] as num?)?.toDouble() ??
+              0.0;
+          final customerPricingNote = item['customer_pricing_note']?.toString();
+          final markedPrice =
+              (item['marked_price'] as num?)?.toDouble() ?? unitPrice;
+          final priceCategoryUsed = (item['price_category_used'] ?? 'selling')
+              .toString();
           final costPriceSnapshot =
               (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
           final quantity = (item['quantity'] as num).toDouble();
           final baseLineTotal = item['base_line_total'] as double;
+          final itemDiscountType = (item['item_discount_type'] ?? 'none')
+              .toString();
+          final itemDiscountValue =
+              (item['item_discount_value'] as num?)?.toDouble() ?? 0.0;
+          final explicitItemDiscount =
+              (item['explicit_item_discount_amount'] as num?)?.toDouble() ??
+              0.0;
+          final cartDiscount =
+              (item['cart_discount_amount'] as num?)?.toDouble() ?? 0.0;
           final itemDiscount = item['item_discount_amount'] as double;
           final finalLineTotal = item['line_total'] as double;
 
@@ -2148,15 +3169,43 @@ class DatabaseHelper {
             );
           }
 
+          if (!isRefund) {
+            await _deductExpiryBatchesForSale(
+              txn,
+              barcode: barcode,
+              quantity: quantity,
+              updatedAt: now,
+            );
+          }
+
           await txn.insert('sale_items', {
             'sale_id': saleId,
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'system_unit_price': systemUnitPrice,
+            'price_override_type': priceOverrideType,
+            'price_override_reason': priceOverrideReason,
+            'price_override_original_price': priceOverrideOriginalPrice,
+            'price_override_difference': priceOverrideDifference,
+            'price_history_id': priceHistoryId,
+            'price_override_approved_by': priceOverrideApprovedBy,
+            'customer_pricing_applied': customerPricingApplied ? 1 : 0,
+            'customer_pricing_type': customerPricingType,
+            'customer_pricing_rule_id': customerPricingRuleId,
+            'customer_pricing_original_price': customerPricingOriginalPrice,
+            'customer_pricing_final_price': customerPricingFinalPrice,
+            'customer_pricing_discount_amount': customerPricingDiscountAmount,
+            'customer_pricing_note': customerPricingNote,
+            'marked_price': markedPrice,
             'price_category_used': priceCategoryUsed,
             'cost_price_snapshot': costPriceSnapshot,
             'quantity': quantity,
             'base_line_total': baseLineTotal,
+            'item_discount_type': itemDiscountType,
+            'item_discount_value': itemDiscountValue,
+            'explicit_item_discount_amount': explicitItemDiscount,
+            'cart_discount_amount': cartDiscount,
             'item_discount_amount': itemDiscount,
             'line_total': finalLineTotal,
             'created_at': now,
@@ -2178,37 +3227,88 @@ class DatabaseHelper {
           );
         }
 
-        final syncItems = saleItemInputs.map((item) {
-          final barcode = item['barcode'] as String;
-          final productName = item['product_name'] as String;
-          final unitPrice = (item['unit_price'] as num).toDouble();
-          final priceCategoryUsed =
-              (item['price_category_used'] ?? 'selling').toString();
-          final costPriceSnapshot =
-              (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
-          final quantity = (item['quantity'] as num).toDouble();
-          final baseLineTotal = (item['base_line_total'] as num).toDouble();
-          final itemDiscount =
-              (item['item_discount_amount'] as num?)?.toDouble() ?? 0.0;
-          final finalLineTotal = (item['line_total'] as num).toDouble();
+        final syncItems = saleItemInputs
+            .map((item) {
+              final barcode = item['barcode'] as String;
+              final productName = item['product_name'] as String;
+              final unitPrice = (item['unit_price'] as num).toDouble();
+              final systemUnitPrice =
+                  (item['system_unit_price'] as num?)?.toDouble() ?? unitPrice;
+              final priceOverrideType = (item['price_override_type'] ?? 'none')
+                  .toString();
+              final priceOverrideReason = (item['price_override_reason'] ?? '')
+                  .toString();
+              final priceOverrideOriginalPrice =
+                  (item['price_override_original_price'] as num?)?.toDouble() ??
+                  systemUnitPrice;
+              final priceOverrideDifference =
+                  (item['price_override_difference'] as num?)?.toDouble() ??
+                  (unitPrice - systemUnitPrice);
+              final priceHistoryId = item['price_history_id'];
+              final priceOverrideApprovedBy = item['price_override_approved_by']
+                  ?.toString();
+              final customerPricingApplied =
+                  ((item['customer_pricing_applied'] as num?)?.toInt() ?? 0) ==
+                  1;
+              final customerPricingType =
+                  (item['customer_pricing_type'] ?? 'none').toString();
+              final customerPricingRuleId = item['customer_pricing_rule_id'];
+              final customerPricingOriginalPrice =
+                  (item['customer_pricing_original_price'] as num?)
+                      ?.toDouble() ??
+                  0.0;
+              final customerPricingFinalPrice =
+                  (item['customer_pricing_final_price'] as num?)?.toDouble() ??
+                  0.0;
+              final customerPricingDiscountAmount =
+                  (item['customer_pricing_discount_amount'] as num?)
+                      ?.toDouble() ??
+                  0.0;
+              final customerPricingNote = item['customer_pricing_note']
+                  ?.toString();
+              final priceCategoryUsed =
+                  (item['price_category_used'] ?? 'selling').toString();
+              final costPriceSnapshot =
+                  (item['cost_price_snapshot'] as num?)?.toDouble() ?? 0.0;
+              final quantity = (item['quantity'] as num).toDouble();
+              final baseLineTotal = (item['base_line_total'] as num).toDouble();
+              final itemDiscount =
+                  (item['item_discount_amount'] as num?)?.toDouble() ?? 0.0;
+              final finalLineTotal = (item['line_total'] as num).toDouble();
 
-          return {
-            'product': {
-              'barcode': barcode,
-              'name': productName,
-              'price': unitPrice,
-              'selling_price': unitPrice,
-              'cost_price': costPriceSnapshot,
-            },
-            'quantity': quantity,
-            'unit_price_used': unitPrice,
-            'price_type_used': priceCategoryUsed,
-            'cost_price_snapshot': costPriceSnapshot,
-            'base_line_total': baseLineTotal,
-            'item_discount_amount': itemDiscount,
-            'line_total': finalLineTotal,
-          };
-        }).toList(growable: false);
+              return {
+                'product': {
+                  'barcode': barcode,
+                  'name': productName,
+                  'price': unitPrice,
+                  'selling_price': unitPrice,
+                  'cost_price': costPriceSnapshot,
+                },
+                'quantity': quantity,
+                'unit_price_used': unitPrice,
+                'system_unit_price': systemUnitPrice,
+                'price_override_type': priceOverrideType,
+                'price_override_reason': priceOverrideReason,
+                'price_override_original_price': priceOverrideOriginalPrice,
+                'price_override_difference': priceOverrideDifference,
+                'price_history_id': priceHistoryId,
+                'price_override_approved_by': priceOverrideApprovedBy,
+                'customer_pricing_applied': customerPricingApplied ? 1 : 0,
+                'customer_pricing_type': customerPricingType,
+                'customer_pricing_rule_id': customerPricingRuleId,
+                'customer_pricing_original_price': customerPricingOriginalPrice,
+                'customer_pricing_final_price': customerPricingFinalPrice,
+                'customer_pricing_discount_amount':
+                    customerPricingDiscountAmount,
+                'customer_pricing_note': customerPricingNote,
+                'price_type_used': priceCategoryUsed,
+                'cost_price_snapshot': costPriceSnapshot,
+                'base_line_total': baseLineTotal,
+                'item_discount_amount': itemDiscount,
+                'line_total': finalLineTotal,
+              };
+            })
+            .toList(growable: false);
 
         final syncData = jsonEncode({
           'local_sale_id': saleId,
@@ -2330,7 +3430,9 @@ class DatabaseHelper {
             );
           }
 
-          final refundableQty = _parseQuantity(refundableData['refundable_quantity']);
+          final refundableQty = _parseQuantity(
+            refundableData['refundable_quantity'],
+          );
           final remainingRefundableTotal =
               ((refundableData['remaining_refundable_total'] as num?) ?? 0)
                   .toDouble();
@@ -2352,6 +3454,27 @@ class DatabaseHelper {
               (refundableData['price_category_used'] ?? 'selling').toString();
           final costPriceSnapshot =
               ((refundableData['cost_price_snapshot'] as num?) ?? 0).toDouble();
+          final customerPricingApplied =
+              ((refundableData['customer_pricing_applied'] as num?)?.toInt() ??
+                  0) ==
+              1;
+          final customerPricingType = _normalizeCustomerPricingType(
+            refundableData['customer_pricing_type']?.toString(),
+          );
+          final customerPricingRuleId = _parseOptionalInt(
+            refundableData['customer_pricing_rule_id'],
+          );
+          final customerPricingOriginalPrice = _parseDouble(
+            refundableData['customer_pricing_original_price'],
+          );
+          final customerPricingFinalPrice = _parseDouble(
+            refundableData['customer_pricing_final_price'],
+          );
+          final customerPricingDiscountAmount = _parseDouble(
+            refundableData['customer_pricing_discount_amount'],
+          );
+          final customerPricingNote = refundableData['customer_pricing_note']
+              ?.toString();
 
           final stockRows = await txn.query(
             'products',
@@ -2395,10 +3518,34 @@ class DatabaseHelper {
             'barcode': barcode,
             'product_name': productName,
             'unit_price': unitPrice,
+            'marked_price': unitPrice,
             'price_category_used': originalPriceCategory,
             'cost_price_snapshot': costPriceSnapshot,
+            'customer_pricing_applied': customerPricingApplied ? 1 : 0,
+            'customer_pricing_type': customerPricingApplied
+                ? customerPricingType
+                : 'none',
+            'customer_pricing_rule_id': customerPricingApplied
+                ? customerPricingRuleId
+                : null,
+            'customer_pricing_original_price': customerPricingApplied
+                ? customerPricingOriginalPrice
+                : 0.0,
+            'customer_pricing_final_price': customerPricingApplied
+                ? customerPricingFinalPrice
+                : 0.0,
+            'customer_pricing_discount_amount': customerPricingApplied
+                ? customerPricingDiscountAmount
+                : 0.0,
+            'customer_pricing_note': customerPricingApplied
+                ? customerPricingNote
+                : null,
             'quantity': quantity,
             'base_line_total': refundLineTotal,
+            'item_discount_type': 'none',
+            'item_discount_value': 0.0,
+            'explicit_item_discount_amount': 0.0,
+            'cart_discount_amount': 0.0,
             'item_discount_amount': 0.0,
             'line_total': -refundLineTotal,
             'created_at': now,
@@ -2430,6 +3577,25 @@ class DatabaseHelper {
             'quantity': quantity,
             'unit_price_used': unitPrice,
             'price_type_used': originalPriceCategory,
+            'customer_pricing_applied': customerPricingApplied ? 1 : 0,
+            'customer_pricing_type': customerPricingApplied
+                ? customerPricingType
+                : 'none',
+            'customer_pricing_rule_id': customerPricingApplied
+                ? customerPricingRuleId
+                : null,
+            'customer_pricing_original_price': customerPricingApplied
+                ? customerPricingOriginalPrice
+                : 0.0,
+            'customer_pricing_final_price': customerPricingApplied
+                ? customerPricingFinalPrice
+                : 0.0,
+            'customer_pricing_discount_amount': customerPricingApplied
+                ? customerPricingDiscountAmount
+                : 0.0,
+            'customer_pricing_note': customerPricingApplied
+                ? customerPricingNote
+                : null,
             'line_total': -refundLineTotal,
           });
         }
@@ -2521,10 +3687,10 @@ class DatabaseHelper {
         final oldPrice = normalizedPriceType == 'cost'
             ? _parseDouble(row['cost_price'])
             : normalizedPriceType == 'wholesale'
-                ? _parseDouble(row['wholesale_price'])
-                : normalizedPriceType == 'sale'
-                    ? _parseDouble(row['sale_price'])
-                    : _parseDouble(row['selling_price'] ?? row['price']);
+            ? _parseDouble(row['wholesale_price'])
+            : normalizedPriceType == 'sale'
+            ? _parseDouble(row['sale_price'])
+            : _parseDouble(row['selling_price'] ?? row['price']);
 
         final updates = <String, Object?>{
           'updated_at': now,
@@ -2571,6 +3737,23 @@ class DatabaseHelper {
           createdAt: now,
         );
 
+        if (normalizedPriceType == 'selling' &&
+            oldPrice > 0 &&
+            (oldPrice - newPrice).abs() > 0.000001) {
+          await _upsertProductLabelPriceHistory(
+            txn,
+            barcode: barcode,
+            productName: productName,
+            labelPrice: oldPrice,
+            oldPrice: oldPrice,
+            newPrice: newPrice,
+            priceType: normalizedPriceType,
+            changedBy: changedBy,
+            reason: reason,
+            createdAt: now,
+          );
+        }
+
         final syncData = jsonEncode({
           'barcode': barcode,
           'new_price': newPrice,
@@ -2597,6 +3780,134 @@ class DatabaseHelper {
     }
   }
 
+  Future<void> _upsertProductLabelPriceHistory(
+    DatabaseExecutor executor, {
+    required String barcode,
+    required String productName,
+    required double labelPrice,
+    required double oldPrice,
+    required double newPrice,
+    required String priceType,
+    String? changedBy,
+    String? reason,
+    required String createdAt,
+  }) async {
+    final normalizedPriceType = _normalizePriceType(priceType);
+    final roundedLabelPrice = _roundMoney(labelPrice);
+    final existing = await executor.query(
+      'product_price_history',
+      columns: ['id'],
+      where:
+          'barcode = ? AND price_type = ? AND ABS(label_price - ?) < 0.000001 AND is_active = 1',
+      whereArgs: [barcode, normalizedPriceType, roundedLabelPrice],
+      limit: 1,
+    );
+
+    final row = {
+      'barcode': barcode,
+      'product_name': productName,
+      'price_type': normalizedPriceType,
+      'label_price': roundedLabelPrice,
+      'old_price': _roundMoney(oldPrice),
+      'new_price': _roundMoney(newPrice),
+      'is_active': 1,
+      'created_by': changedBy?.trim(),
+      'reason': reason?.trim(),
+      'effective_from': createdAt,
+      'updated_at': createdAt,
+    };
+
+    if (existing.isEmpty) {
+      await executor.insert('product_price_history', {
+        ...row,
+        'created_at': createdAt,
+      });
+    } else {
+      await executor.update(
+        'product_price_history',
+        row,
+        where: 'id = ?',
+        whereArgs: [existing.first['id']],
+      );
+    }
+
+    await _limitActiveProductLabelPrices(
+      executor,
+      barcode: barcode,
+      priceType: normalizedPriceType,
+    );
+  }
+
+  Future<void> _limitActiveProductLabelPrices(
+    DatabaseExecutor executor, {
+    required String barcode,
+    required String priceType,
+    int keepLatest = _maxActiveLabelPricesPerProduct,
+  }) async {
+    final safeLimit = keepLatest < 0 ? 0 : keepLatest;
+    final normalizedPriceType = _normalizePriceType(priceType);
+    final activeRows = await executor.query(
+      'product_price_history',
+      columns: ['id'],
+      where: 'barcode = ? AND price_type = ? AND is_active = 1',
+      whereArgs: [barcode, normalizedPriceType],
+      orderBy: 'datetime(updated_at) DESC, datetime(created_at) DESC, id DESC',
+    );
+
+    if (activeRows.length <= safeLimit) return;
+
+    final idsToDeactivate = <int>[];
+    for (final row in activeRows.skip(safeLimit)) {
+      final id = (row['id'] as num?)?.toInt();
+      if (id != null) {
+        idsToDeactivate.add(id);
+      }
+    }
+
+    if (idsToDeactivate.isEmpty) return;
+
+    final now = DateTime.now().toIso8601String();
+    final placeholders = List.filled(idsToDeactivate.length, '?').join(',');
+
+    await executor.update(
+      'product_price_history',
+      {'is_active': 0, 'effective_to': now, 'updated_at': now},
+      where: 'id IN ($placeholders)',
+      whereArgs: idsToDeactivate,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getActiveLabelPricesForProduct(
+    String barcode, {
+    String priceType = 'selling',
+    int limit = _maxActiveLabelPricesPerProduct,
+  }) async {
+    final db = await database;
+    final normalizedPriceType = _normalizePriceType(priceType);
+    final safeLimit = limit < 0 ? 0 : limit;
+
+    final rows = await db.query(
+      'product_price_history',
+      where: 'barcode = ? AND price_type = ? AND is_active = 1',
+      whereArgs: [barcode, normalizedPriceType],
+      orderBy: 'datetime(updated_at) DESC, datetime(created_at) DESC, id DESC',
+      limit: safeLimit == 0 ? null : safeLimit,
+    );
+
+    return rows.map((row) => Map<String, dynamic>.from(row)).toList();
+  }
+
+  Future<bool> deactivateLabelPrice(int id) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    final updated = await db.update(
+      'product_price_history',
+      {'is_active': 0, 'effective_to': now, 'updated_at': now},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    return updated > 0;
+  }
 
   Future<Map<String, dynamic>?> findUserByPin(String pin) async {
     final db = await database;
@@ -2656,15 +3967,23 @@ class DatabaseHelper {
   }) async {
     final db = await database;
     final trimmedSearch = search.trim().toLowerCase();
-    final normalizedRole = role.trim().toLowerCase();
+    final rawRole = role.trim().toLowerCase();
+    final normalizedRole = _normalizeUserRole(role);
     final normalizedStatus = _normalizeUserStatusFilter(status);
 
     final whereClauses = <String>[];
     final whereArgs = <Object?>[];
 
-    if (normalizedRole == 'manager' || normalizedRole == 'cashier') {
-      whereClauses.add('role = ?');
-      whereArgs.add(normalizedRole);
+    if (rawRole != 'all' && rawRole.isNotEmpty) {
+      if (normalizedRole == User.managerRole) {
+        whereClauses.add(
+          "LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator')",
+        );
+      } else if (normalizedRole == User.cashierRole) {
+        whereClauses.add(
+          "LOWER(TRIM(role)) NOT IN ('manager', 'owner', 'admin', 'administrator')",
+        );
+      }
     }
 
     if (normalizedStatus == 'active') {
@@ -2688,7 +4007,8 @@ class DatabaseHelper {
       'users',
       where: whereClauses.isEmpty ? null : whereClauses.join(' AND '),
       whereArgs: whereArgs.isEmpty ? null : whereArgs,
-      orderBy: 'is_active DESC, role ASC, has_full_access DESC, name COLLATE NOCASE ASC',
+      orderBy:
+          'is_active DESC, role ASC, has_full_access DESC, name COLLATE NOCASE ASC',
     );
 
     return rows.map((row) => Map<String, dynamic>.from(row)).toList();
@@ -2697,16 +4017,14 @@ class DatabaseHelper {
   Future<Map<String, dynamic>> getUserSummaryCounts() async {
     final db = await database;
 
-    final rows = await db.rawQuery(
-      '''
+    final rows = await db.rawQuery('''
       SELECT
         COUNT(*) AS total_users,
         COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active_users,
-        COALESCE(SUM(CASE WHEN role = 'manager' THEN 1 ELSE 0 END), 0) AS managers,
-        COALESCE(SUM(CASE WHEN role = 'cashier' THEN 1 ELSE 0 END), 0) AS cashiers
+        COALESCE(SUM(CASE WHEN LOWER(TRIM(role)) IN ('manager', 'owner', 'admin', 'administrator') THEN 1 ELSE 0 END), 0) AS managers,
+        COALESCE(SUM(CASE WHEN LOWER(TRIM(role)) NOT IN ('manager', 'owner', 'admin', 'administrator') THEN 1 ELSE 0 END), 0) AS cashiers
       FROM users
-      ''',
-    );
+      ''');
 
     final row = rows.first;
     return {
@@ -2823,10 +4141,15 @@ class DatabaseHelper {
 
         final roleChanged = oldRole != normalizedRole;
 
-        if (roleChanged && oldRole == 'manager' && normalizedRole != 'manager' && isActive) {
+        if (roleChanged &&
+            oldRole == 'manager' &&
+            normalizedRole != 'manager' &&
+            isActive) {
           final activeManagerCount = await _getActiveManagerCountExecutor(txn);
           if (activeManagerCount <= 1) {
-            throw Exception('You cannot change the last active manager to cashier.');
+            throw Exception(
+              'You cannot change the last active manager to cashier.',
+            );
           }
         }
 
@@ -2853,8 +4176,8 @@ class DatabaseHelper {
           description: roleChanged
               ? 'Changed role for $trimmedName from ${_formatUserRoleLabel(oldRole)} to ${_formatUserRoleLabel(normalizedRole)}'
               : oldName == trimmedName
-                  ? 'Updated user $trimmedName (${_formatUserRoleLabel(normalizedRole)}) details'
-                  : 'Renamed user $oldName to $trimmedName',
+              ? 'Updated user $trimmedName (${_formatUserRoleLabel(normalizedRole)}) details'
+              : 'Renamed user $oldName to $trimmedName',
           createdAt: now,
         );
       });
@@ -2910,11 +4233,7 @@ class DatabaseHelper {
 
         await txn.update(
           'users',
-          {
-            'pin': trimmedPin,
-            'updated_at': now,
-            'updated_by': actorUserId,
-          },
+          {'pin': trimmedPin, 'updated_at': now, 'updated_by': actorUserId},
           where: 'id = ?',
           whereArgs: [userId],
         );
@@ -2973,7 +4292,9 @@ class DatabaseHelper {
         }
 
         if (!isActive && actorUserId != null && actorUserId == userId) {
-          throw Exception('You cannot deactivate your own account while logged in.');
+          throw Exception(
+            'You cannot deactivate your own account while logged in.',
+          );
         }
 
         if (!isActive && currentActive && currentRole == 'manager') {
@@ -3071,7 +4392,9 @@ class DatabaseHelper {
           txn,
           actorUserId: actorUserId,
           actorName: actorName,
-          actionType: hasFullAccess ? 'full_access_granted' : 'full_access_revoked',
+          actionType: hasFullAccess
+              ? 'full_access_granted'
+              : 'full_access_revoked',
           targetUserId: userId,
           targetUserName: targetName,
           description: _buildUserActionDescription(
@@ -3095,10 +4418,7 @@ class DatabaseHelper {
 
     await db.update(
       'users',
-      {
-        'last_login_at': now,
-        'updated_at': now,
-      },
+      {'last_login_at': now, 'updated_at': now},
       where: 'id = ?',
       whereArgs: [userId],
     );
@@ -3114,10 +4434,7 @@ class DatabaseHelper {
     await db.transaction((txn) async {
       await txn.update(
         'users',
-        {
-          'last_login_at': now,
-          'updated_at': now,
-        },
+        {'last_login_at': now, 'updated_at': now},
         where: 'id = ?',
         whereArgs: [userId],
       );
@@ -3147,8 +4464,8 @@ class DatabaseHelper {
     final resolvedDescription = description?.trim().isNotEmpty == true
         ? description!.trim()
         : pinHint.isEmpty
-            ? 'Failed login attempt'
-            : 'Failed login attempt for PIN $pinHint';
+        ? 'Failed login attempt'
+        : 'Failed login attempt for PIN $pinHint';
 
     await _insertUserLog(
       db,
@@ -3195,6 +4512,27 @@ class DatabaseHelper {
       actorUserId: actorUserId,
       actorName: actorName,
       actionType: 'manager_approval',
+      targetUserId: targetUserId,
+      targetUserName: targetUserName,
+      description: description,
+    );
+  }
+
+  Future<void> logSensitiveAction({
+    int? actorUserId,
+    String? actorName,
+    required String actionType,
+    int? targetUserId,
+    String? targetUserName,
+    required String description,
+  }) async {
+    final db = await database;
+
+    await _insertUserLog(
+      db,
+      actorUserId: actorUserId,
+      actorName: actorName,
+      actionType: actionType,
       targetUserId: targetUserId,
       targetUserName: targetUserName,
       description: description,
@@ -3284,20 +4622,37 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> getRecentTransactions({
     String? transactionType,
-    int limit = 50,
+    DateTime? start,
+    DateTime? end,
+    int? limit = 50,
   }) async {
     final db = await database;
 
-    String whereClause = '';
-    List<Object?> whereArgs = [];
+    final whereParts = <String>[];
+    final whereArgs = <Object?>[];
 
     if (transactionType != null && transactionType.isNotEmpty) {
-      whereClause = 'WHERE s.transaction_type = ?';
-      whereArgs = [transactionType];
+      whereParts.add('s.transaction_type = ?');
+      whereArgs.add(transactionType);
     }
 
-    final rows = await db.rawQuery(
-      '''
+    if (start != null) {
+      whereParts.add('datetime(s.created_at) >= datetime(?)');
+      whereArgs.add(start.toIso8601String());
+    }
+
+    if (end != null) {
+      whereParts.add('datetime(s.created_at) <= datetime(?)');
+      whereArgs.add(end.toIso8601String());
+    }
+
+    final whereClause = whereParts.isEmpty
+        ? ''
+        : 'WHERE ${whereParts.join(' AND ')}';
+    final limitClause = limit == null ? '' : 'LIMIT ?';
+    final queryArgs = <Object?>[...whereArgs, if (limit != null) limit];
+
+    final rows = await db.rawQuery('''
       SELECT
         s.id,
         s.subtotal_amount,
@@ -3312,6 +4667,12 @@ class DatabaseHelper {
         s.payment_method,
         s.amount_tendered,
         s.change_amount,
+        s.loyalty_points_earned,
+        s.loyalty_points_redeemed,
+        s.loyalty_redeemed_value,
+        s.loyalty_earn_base_amount,
+        s.loyalty_status,
+        s.loyalty_note,
         s.created_at,
         COUNT(si.id) AS item_line_count,
         COALESCE(SUM(si.quantity), 0) AS item_quantity_total
@@ -3332,12 +4693,16 @@ class DatabaseHelper {
         s.payment_method,
         s.amount_tendered,
         s.change_amount,
+        s.loyalty_points_earned,
+        s.loyalty_points_redeemed,
+        s.loyalty_redeemed_value,
+        s.loyalty_earn_base_amount,
+        s.loyalty_status,
+        s.loyalty_note,
         s.created_at
       ORDER BY datetime(s.created_at) DESC, s.id DESC
-      LIMIT ?
-      ''',
-      [...whereArgs, limit],
-    );
+      $limitClause
+      ''', queryArgs);
 
     return rows
         .map(
@@ -3355,6 +4720,12 @@ class DatabaseHelper {
             'payment_method': row['payment_method'],
             'amount_tendered': row['amount_tendered'],
             'change_amount': row['change_amount'],
+            'loyalty_points_earned': row['loyalty_points_earned'],
+            'loyalty_points_redeemed': row['loyalty_points_redeemed'],
+            'loyalty_redeemed_value': row['loyalty_redeemed_value'],
+            'loyalty_earn_base_amount': row['loyalty_earn_base_amount'],
+            'loyalty_status': row['loyalty_status'],
+            'loyalty_note': row['loyalty_note'],
             'created_at': row['created_at'],
             'item_line_count': row['item_line_count'],
             'item_quantity_total': row['item_quantity_total'],
@@ -3382,6 +4753,12 @@ class DatabaseHelper {
         s.payment_method,
         s.amount_tendered,
         s.change_amount,
+        s.loyalty_points_earned,
+        s.loyalty_points_redeemed,
+        s.loyalty_redeemed_value,
+        s.loyalty_earn_base_amount,
+        s.loyalty_status,
+        s.loyalty_note,
         s.created_at,
         COUNT(si.id) AS item_line_count,
         COALESCE(SUM(si.quantity), 0) AS item_quantity_total
@@ -3402,6 +4779,12 @@ class DatabaseHelper {
         s.payment_method,
         s.amount_tendered,
         s.change_amount,
+        s.loyalty_points_earned,
+        s.loyalty_points_redeemed,
+        s.loyalty_redeemed_value,
+        s.loyalty_earn_base_amount,
+        s.loyalty_status,
+        s.loyalty_note,
         s.created_at
       LIMIT 1
       ''',
@@ -3426,6 +4809,12 @@ class DatabaseHelper {
       'payment_method': row['payment_method'],
       'amount_tendered': row['amount_tendered'],
       'change_amount': row['change_amount'],
+      'loyalty_points_earned': row['loyalty_points_earned'],
+      'loyalty_points_redeemed': row['loyalty_points_redeemed'],
+      'loyalty_redeemed_value': row['loyalty_redeemed_value'],
+      'loyalty_earn_base_amount': row['loyalty_earn_base_amount'],
+      'loyalty_status': row['loyalty_status'],
+      'loyalty_note': row['loyalty_note'],
       'created_at': row['created_at'],
       'item_line_count': row['item_line_count'],
       'item_quantity_total': row['item_quantity_total'],
@@ -3435,11 +4824,50 @@ class DatabaseHelper {
   Future<List<Map<String, dynamic>>> getTransactionItems(int saleId) async {
     final db = await database;
 
-    final rows = await db.query(
-      'sale_items',
-      where: 'sale_id = ?',
-      whereArgs: [saleId],
-      orderBy: 'id ASC',
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        si.id,
+        si.sale_id,
+        si.barcode,
+        si.product_name,
+        si.unit_price,
+        si.system_unit_price,
+        si.price_override_type,
+        si.price_override_reason,
+        si.price_override_original_price,
+        si.price_override_difference,
+        si.price_history_id,
+        si.price_override_approved_by,
+        si.customer_pricing_applied,
+        si.customer_pricing_type,
+        si.customer_pricing_rule_id,
+        si.customer_pricing_original_price,
+        si.customer_pricing_final_price,
+        si.customer_pricing_discount_amount,
+        si.customer_pricing_note,
+        CASE
+          WHEN COALESCE(si.marked_price, 0) > 0 THEN si.marked_price
+          WHEN COALESCE(p.selling_price, 0) > 0 THEN p.selling_price
+          ELSE si.unit_price
+        END AS marked_price,
+        si.price_category_used,
+        si.cost_price_snapshot,
+        si.quantity,
+        si.base_line_total,
+        si.item_discount_type,
+        si.item_discount_value,
+        si.explicit_item_discount_amount,
+        si.cart_discount_amount,
+        si.item_discount_amount,
+        si.line_total,
+        si.created_at
+      FROM sale_items si
+      LEFT JOIN products p ON p.barcode = si.barcode
+      WHERE si.sale_id = ?
+      ORDER BY si.id ASC
+      ''',
+      [saleId],
     );
 
     return rows
@@ -3450,10 +4878,33 @@ class DatabaseHelper {
             'barcode': row['barcode'],
             'product_name': row['product_name'],
             'unit_price': row['unit_price'],
+            'system_unit_price': row['system_unit_price'],
+            'price_override_type': row['price_override_type'],
+            'price_override_reason': row['price_override_reason'],
+            'price_override_original_price':
+                row['price_override_original_price'],
+            'price_override_difference': row['price_override_difference'],
+            'price_history_id': row['price_history_id'],
+            'price_override_approved_by': row['price_override_approved_by'],
+            'customer_pricing_applied': row['customer_pricing_applied'],
+            'customer_pricing_type': row['customer_pricing_type'],
+            'customer_pricing_rule_id': row['customer_pricing_rule_id'],
+            'customer_pricing_original_price':
+                row['customer_pricing_original_price'],
+            'customer_pricing_final_price': row['customer_pricing_final_price'],
+            'customer_pricing_discount_amount':
+                row['customer_pricing_discount_amount'],
+            'customer_pricing_note': row['customer_pricing_note'],
+            'marked_price': row['marked_price'],
             'price_category_used': row['price_category_used'],
             'cost_price_snapshot': row['cost_price_snapshot'],
             'quantity': row['quantity'],
             'base_line_total': row['base_line_total'],
+            'item_discount_type': row['item_discount_type'],
+            'item_discount_value': row['item_discount_value'],
+            'explicit_item_discount_amount':
+                row['explicit_item_discount_amount'],
+            'cart_discount_amount': row['cart_discount_amount'],
             'item_discount_amount': row['item_discount_amount'],
             'line_total': row['line_total'],
             'created_at': row['created_at'],
@@ -3500,6 +4951,13 @@ class DatabaseHelper {
         si.unit_price,
         si.price_category_used,
         si.cost_price_snapshot,
+        si.customer_pricing_applied,
+        si.customer_pricing_type,
+        si.customer_pricing_rule_id,
+        si.customer_pricing_original_price,
+        si.customer_pricing_final_price,
+        si.customer_pricing_discount_amount,
+        si.customer_pricing_note,
         CASE
           WHEN LOWER(COALESCE(MAX(p.quantity_type), '')) = 'weight' THEN 'weight'
           ELSE 'unit'
@@ -3521,7 +4979,14 @@ class DatabaseHelper {
         si.product_name,
         si.unit_price,
         si.price_category_used,
-        si.cost_price_snapshot
+        si.cost_price_snapshot,
+        si.customer_pricing_applied,
+        si.customer_pricing_type,
+        si.customer_pricing_rule_id,
+        si.customer_pricing_original_price,
+        si.customer_pricing_final_price,
+        si.customer_pricing_discount_amount,
+        si.customer_pricing_note
       ORDER BY si.product_name ASC
       ''',
       [saleId],
@@ -3557,7 +5022,8 @@ class DatabaseHelper {
           .toDouble();
 
       final refundedQty =
-          (refundedMap[barcode]?['refunded_quantity'] as num?)?.toDouble() ?? 0.0;
+          (refundedMap[barcode]?['refunded_quantity'] as num?)?.toDouble() ??
+          0.0;
       final refundedTotal =
           (refundedMap[barcode]?['refunded_total'] as double?) ?? 0.0;
 
@@ -3576,6 +5042,15 @@ class DatabaseHelper {
         'unit_price': row['unit_price'],
         'price_category_used': row['price_category_used'],
         'cost_price_snapshot': row['cost_price_snapshot'],
+        'customer_pricing_applied': row['customer_pricing_applied'],
+        'customer_pricing_type': row['customer_pricing_type'],
+        'customer_pricing_rule_id': row['customer_pricing_rule_id'],
+        'customer_pricing_original_price':
+            row['customer_pricing_original_price'],
+        'customer_pricing_final_price': row['customer_pricing_final_price'],
+        'customer_pricing_discount_amount':
+            row['customer_pricing_discount_amount'],
+        'customer_pricing_note': row['customer_pricing_note'],
         'quantity_type': row['quantity_type'],
         'unit_label': row['unit_label'],
         'original_quantity': originalQty,
@@ -3851,7 +5326,6 @@ class DatabaseHelper {
     };
   }
 
-
   Future<Map<String, dynamic>> getCashierSalesSummary({
     String? cashierName,
     DateTime? start,
@@ -3879,8 +5353,7 @@ class DatabaseHelper {
 
     final whereBase = conditions.join(' AND ');
 
-    final saleRow = (await db.rawQuery(
-      '''
+    final saleRow = (await db.rawQuery('''
       SELECT
         COUNT(*) AS sale_count,
         COALESCE(SUM(ABS(s.subtotal_amount)), 0) AS gross_sales,
@@ -3897,24 +5370,18 @@ class DatabaseHelper {
       FROM sales s
       WHERE s.transaction_type = 'sale'
         AND $whereBase
-      ''',
-      args,
-    )).first;
+      ''', args)).first;
 
-    final refundRow = (await db.rawQuery(
-      '''
+    final refundRow = (await db.rawQuery('''
       SELECT
         COUNT(*) AS refund_count,
         COALESCE(SUM(ABS(s.total_amount)), 0) AS refund_total
       FROM sales s
       WHERE s.transaction_type = 'refund'
         AND $whereBase
-      ''',
-      args,
-    )).first;
+      ''', args)).first;
 
-    final itemRow = (await db.rawQuery(
-      '''
+    final itemRow = (await db.rawQuery('''
       SELECT
         COALESCE(SUM(si.quantity), 0) AS items_sold,
         COUNT(si.id) AS item_line_count
@@ -3922,12 +5389,9 @@ class DatabaseHelper {
       INNER JOIN sale_items si ON si.sale_id = s.id
       WHERE s.transaction_type = 'sale'
         AND $whereBase
-      ''',
-      args,
-    )).first;
+      ''', args)).first;
 
-    final costRow = (await db.rawQuery(
-      '''
+    final costRow = (await db.rawQuery('''
       SELECT
         COALESCE(
           SUM(
@@ -3942,13 +5406,11 @@ class DatabaseHelper {
       INNER JOIN sale_items si ON si.sale_id = s.id
       WHERE s.transaction_type IN ('sale', 'refund')
         AND $whereBase
-      ''',
-      args,
-    )).first;
+      ''', args)).first;
 
     final grossSales = ((saleRow['gross_sales'] as num?) ?? 0).toDouble();
-    final totalDiscounts =
-        ((saleRow['total_discounts'] as num?) ?? 0).toDouble();
+    final totalDiscounts = ((saleRow['total_discounts'] as num?) ?? 0)
+        .toDouble();
     final netSales = ((saleRow['net_sales'] as num?) ?? 0).toDouble();
     final cashSales = ((saleRow['cash_sales'] as num?) ?? 0).toDouble();
     final cardSales = ((saleRow['card_sales'] as num?) ?? 0).toDouble();
@@ -3957,8 +5419,8 @@ class DatabaseHelper {
     final refundCount = (refundRow['refund_count'] as num?)?.toInt() ?? 0;
     final itemsSold = (itemRow['items_sold'] as num?)?.toInt() ?? 0;
     final itemLineCount = (itemRow['item_line_count'] as num?)?.toInt() ?? 0;
-    final netCostAmount =
-        ((costRow['net_cost_amount'] as num?) ?? 0).toDouble();
+    final netCostAmount = ((costRow['net_cost_amount'] as num?) ?? 0)
+        .toDouble();
     final netAfterRefunds = netSales - refundTotal;
     final estimatedProfit = _roundMoney(netAfterRefunds - netCostAmount);
     final marginPercent = netAfterRefunds <= 0
@@ -4056,17 +5518,16 @@ class DatabaseHelper {
             'quantity_type': row['quantity_type'],
             'unit_label': row['unit_label'],
             'quantity_sold': ((row['quantity_sold'] as num?) ?? 0).toDouble(),
-            'gross_sales_amount':
-                ((row['gross_sales_amount'] as num?) ?? 0).toDouble(),
-            'discount_amount':
-                ((row['discount_amount'] as num?) ?? 0).toDouble(),
-            'net_sales_amount':
-                ((row['net_sales_amount'] as num?) ?? 0).toDouble(),
+            'gross_sales_amount': ((row['gross_sales_amount'] as num?) ?? 0)
+                .toDouble(),
+            'discount_amount': ((row['discount_amount'] as num?) ?? 0)
+                .toDouble(),
+            'net_sales_amount': ((row['net_sales_amount'] as num?) ?? 0)
+                .toDouble(),
           },
         )
         .toList();
   }
-
 
   Future<List<Map<String, dynamic>>> getCashierBreakdownSummary({
     DateTime? start,
@@ -4130,31 +5591,26 @@ class DatabaseHelper {
       [startTime.toIso8601String(), endTime.toIso8601String(), limit],
     );
 
-    return rows
-        .map(
-          (row) {
-            final netSales = ((row['net_sales'] as num?) ?? 0).toDouble();
-            final refundTotal = ((row['refund_total'] as num?) ?? 0).toDouble();
+    return rows.map((row) {
+      final netSales = ((row['net_sales'] as num?) ?? 0).toDouble();
+      final refundTotal = ((row['refund_total'] as num?) ?? 0).toDouble();
 
-            return {
-              'cashier_name': row['cashier_name'],
-              'sale_count': (row['sale_count'] as num?)?.toInt() ?? 0,
-              'refund_count': (row['refund_count'] as num?)?.toInt() ?? 0,
-              'transaction_count':
-                  ((row['sale_count'] as num?)?.toInt() ?? 0) +
-                  ((row['refund_count'] as num?)?.toInt() ?? 0),
-              'gross_sales': ((row['gross_sales'] as num?) ?? 0).toDouble(),
-              'total_discounts':
-                  ((row['total_discounts'] as num?) ?? 0).toDouble(),
-              'net_sales': netSales,
-              'refund_total': refundTotal,
-              'net_after_refunds': _roundMoney(netSales - refundTotal),
-              'cash_sales': ((row['cash_sales'] as num?) ?? 0).toDouble(),
-              'card_sales': ((row['card_sales'] as num?) ?? 0).toDouble(),
-            };
-          },
-        )
-        .toList();
+      return {
+        'cashier_name': row['cashier_name'],
+        'sale_count': (row['sale_count'] as num?)?.toInt() ?? 0,
+        'refund_count': (row['refund_count'] as num?)?.toInt() ?? 0,
+        'transaction_count':
+            ((row['sale_count'] as num?)?.toInt() ?? 0) +
+            ((row['refund_count'] as num?)?.toInt() ?? 0),
+        'gross_sales': ((row['gross_sales'] as num?) ?? 0).toDouble(),
+        'total_discounts': ((row['total_discounts'] as num?) ?? 0).toDouble(),
+        'net_sales': netSales,
+        'refund_total': refundTotal,
+        'net_after_refunds': _roundMoney(netSales - refundTotal),
+        'cash_sales': ((row['cash_sales'] as num?) ?? 0).toDouble(),
+        'card_sales': ((row['card_sales'] as num?) ?? 0).toDouble(),
+      };
+    }).toList();
   }
 
   Future<int> saveHeldCart({
@@ -4165,8 +5621,10 @@ class DatabaseHelper {
     required double discountValue,
     required List<Map<String, dynamic>> items,
     String selectedPriceType = 'selling',
+    Customer? selectedCustomer,
   }) async {
     final db = await database;
+    await _ensureHeldCartCustomerSchema(db);
 
     if (items.isEmpty) {
       throw Exception('Cannot hold an empty cart.');
@@ -4186,6 +5644,12 @@ class DatabaseHelper {
           ? 'none'
           : _normalizeDiscountType(discountType),
       'discount_value': isRefundMode ? 0.0 : discountValue,
+      'customer_id': selectedCustomer?.id,
+      'customer_name_snapshot': selectedCustomer?.displayName,
+      'customer_phone_snapshot': selectedCustomer?.hasPhone == true
+          ? selectedCustomer?.phone?.trim()
+          : null,
+      'customer_code_snapshot': selectedCustomer?.displayCode,
       'items_json': jsonEncode(items),
       'created_at': now,
       'updated_at': now,
@@ -4206,19 +5670,13 @@ class DatabaseHelper {
 
     return rows.map((row) {
       final itemsJson = (row['items_json'] ?? '[]').toString();
-      List<dynamic> decoded;
-
-      try {
-        decoded = jsonDecode(itemsJson) as List<dynamic>;
-      } catch (_) {
-        decoded = [];
-      }
+      final decoded = _decodeHeldCartItemsJson(itemsJson);
 
       double itemCount = 0.0;
       double subtotal = 0;
 
       for (final raw in decoded) {
-        final item = Map<String, dynamic>.from(raw as Map);
+        final item = Map<String, dynamic>.from(raw);
         final quantity = _parseQuantity(item['quantity']);
         final lineTotal = ((item['line_total'] as num?) ?? 0).toDouble();
 
@@ -4247,6 +5705,10 @@ class DatabaseHelper {
             .toString(),
         'discount_type': discountType,
         'discount_value': discountValue,
+        'customer_id': row['customer_id'],
+        'customer_name_snapshot': row['customer_name_snapshot'],
+        'customer_phone_snapshot': row['customer_phone_snapshot'],
+        'customer_code_snapshot': row['customer_code_snapshot'],
         'item_count': itemCount,
         'total_amount': _roundMoney(subtotal - discountAmount),
         'created_at': row['created_at'],
@@ -4278,16 +5740,15 @@ class DatabaseHelper {
 
       final row = Map<String, dynamic>.from(rows.first);
       final itemsJson = (row['items_json'] ?? '[]').toString();
+      final decodedItems = _decodeHeldCartItemsJson(itemsJson);
+      final hadStoredItems =
+          itemsJson.trim().isNotEmpty && itemsJson.trim() != '[]';
 
-      List<Map<String, dynamic>> decodedItems = [];
-
-      try {
-        final decoded = jsonDecode(itemsJson) as List<dynamic>;
-        decodedItems = decoded
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-      } catch (_) {
-        decodedItems = [];
+      if (hadStoredItems && decodedItems.isEmpty) {
+        result = {
+          'resume_error': 'This held cart contains invalid saved item data.',
+        };
+        return;
       }
 
       await txn.delete(
@@ -4305,6 +5766,10 @@ class DatabaseHelper {
             .toString(),
         'discount_type': (row['discount_type'] ?? 'none').toString(),
         'discount_value': ((row['discount_value'] as num?) ?? 0).toDouble(),
+        'customer_id': row['customer_id'],
+        'customer_name_snapshot': row['customer_name_snapshot'],
+        'customer_phone_snapshot': row['customer_phone_snapshot'],
+        'customer_code_snapshot': row['customer_code_snapshot'],
         'items': decodedItems,
         'created_at': row['created_at'],
         'updated_at': row['updated_at'],
@@ -4327,7 +5792,6 @@ class DatabaseHelper {
     );
   }
 
-
   Future<void> replaceSuppliers(List<PosSupplier> suppliers) async {
     final db = await database;
     final now = DateTime.now().toIso8601String();
@@ -4349,16 +5813,12 @@ class DatabaseHelper {
 
       final batch = txn.batch();
       for (final supplier in suppliers) {
-        batch.insert(
-          'suppliers',
-          {
-            'id': supplier.id,
-            'name': supplier.name,
-            'phone': supplier.phone,
-            'updated_at': supplier.updatedAt.isEmpty ? now : supplier.updatedAt,
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+        batch.insert('suppliers', {
+          'id': supplier.id,
+          'name': supplier.name,
+          'phone': supplier.phone,
+          'updated_at': supplier.updatedAt.isEmpty ? now : supplier.updatedAt,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
       await batch.commit(noResult: true);
     });
@@ -4379,7 +5839,9 @@ class DatabaseHelper {
       orderBy: 'name COLLATE NOCASE ASC',
     );
 
-    return rows.map((row) => PosSupplier.fromMap(Map<String, dynamic>.from(row))).toList();
+    return rows
+        .map((row) => PosSupplier.fromMap(Map<String, dynamic>.from(row)))
+        .toList();
   }
 
   Future<List<PosSupplier>> getMappedSuppliersForProduct(String barcode) async {
@@ -4419,37 +5881,77 @@ class DatabaseHelper {
     String invoiceNumber = '',
     String deliveryNoteNumber = '',
     String grnReference = '',
+    String batchNumber = '',
+    DateTime? expiryDate,
     required String cashierName,
     String backendStatus = 'synced',
   }) async {
     final db = await database;
 
-    return db.insert('stock_receipts', {
-      'backend_receipt_id': backendReceiptId,
-      'purchase_order_id': purchaseOrderId,
-      'purchase_order_number': purchaseOrderNumber?.trim(),
-      'purchase_order_receipt_id': null,
-      'barcode': barcode,
-      'product_name': productName,
-      'quantity': _roundQuantity(quantity),
-      'supplier_id': supplierId,
-      'supplier_name': supplierName,
-      'cost': _roundMoney(cost),
-      'reference_note': referenceNote.trim(),
-      'invoice_number': invoiceNumber.trim(),
-      'delivery_note_number': deliveryNoteNumber.trim(),
-      'grn_reference': grnReference.trim(),
-      'cashier_name': cashierName.trim(),
-      'is_reversed': 0,
-      'reversed_at': '',
-      'reversal_reason': '',
-      'created_at': DateTime.now().toIso8601String(),
-      'backend_status': backendStatus,
+    return db.transaction((txn) async {
+      final now = DateTime.now().toIso8601String();
+      final safeQuantity = _roundQuantity(quantity);
+      final safeExpiryDate = expiryDate == null
+          ? null
+          : _formatDateOnly(expiryDate);
+      final receiptId = await txn.insert('stock_receipts', {
+        'backend_receipt_id': backendReceiptId,
+        'purchase_order_id': purchaseOrderId,
+        'purchase_order_number': purchaseOrderNumber?.trim(),
+        'purchase_order_receipt_id': null,
+        'barcode': barcode,
+        'product_name': productName,
+        'quantity': safeQuantity,
+        'supplier_id': supplierId,
+        'supplier_name': supplierName,
+        'cost': _roundMoney(cost),
+        'reference_note': referenceNote.trim(),
+        'invoice_number': invoiceNumber.trim(),
+        'delivery_note_number': deliveryNoteNumber.trim(),
+        'grn_reference': grnReference.trim(),
+        'expiry_batch_id': null,
+        'batch_number': batchNumber.trim(),
+        'expiry_date': safeExpiryDate,
+        'cashier_name': cashierName.trim(),
+        'is_reversed': 0,
+        'reversed_at': '',
+        'reversal_reason': '',
+        'created_at': now,
+        'backend_status': backendStatus,
+      });
+
+      if (safeExpiryDate != null && _isPositiveQuantity(safeQuantity)) {
+        final batchId = await txn.insert('expiry_batches', {
+          'receipt_id': receiptId,
+          'barcode': barcode.trim(),
+          'product_name': productName.trim(),
+          'batch_number': batchNumber.trim(),
+          'supplier_id': supplierId,
+          'supplier_name': supplierName.trim(),
+          'received_quantity': safeQuantity,
+          'remaining_quantity': safeQuantity,
+          'expiry_date': safeExpiryDate,
+          'status': 'active',
+          'last_checked_at': '',
+          'created_at': now,
+          'updated_at': now,
+        });
+
+        await txn.update(
+          'stock_receipts',
+          {'expiry_batch_id': batchId},
+          where: 'id = ?',
+          whereArgs: [receiptId],
+        );
+      }
+
+      return receiptId;
     });
   }
 
-
-  Future<void> upsertSupplierProductMapping(SupplierProductMapping mapping) async {
+  Future<void> upsertSupplierProductMapping(
+    SupplierProductMapping mapping,
+  ) async {
     final db = await database;
 
     await db.transaction((txn) async {
@@ -4472,7 +5974,11 @@ class DatabaseHelper {
 
   Future<void> deleteSupplierProductMapping(int id) async {
     final db = await database;
-    await db.delete('supplier_product_mappings', where: 'id = ?', whereArgs: [id]);
+    await db.delete(
+      'supplier_product_mappings',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<List<SupplierProductMapping>> getSupplierProductMappings({
@@ -4494,21 +6000,32 @@ class DatabaseHelper {
       whereClauses.add(
         '(LOWER(product_name) LIKE ? OR LOWER(barcode) LIKE ? OR LOWER(supplier_name) LIKE ?)',
       );
-      whereArgs..add('%$trimmed%')..add('%$trimmed%')..add('%$trimmed%');
+      whereArgs
+        ..add('%$trimmed%')
+        ..add('%$trimmed%')
+        ..add('%$trimmed%');
     }
 
     final rows = await db.query(
       'supplier_product_mappings',
       where: whereClauses.isEmpty ? null : whereClauses.join(' AND '),
       whereArgs: whereClauses.isEmpty ? null : whereArgs,
-      orderBy: 'is_preferred DESC, supplier_name COLLATE NOCASE ASC, product_name COLLATE NOCASE ASC',
+      orderBy:
+          'is_preferred DESC, supplier_name COLLATE NOCASE ASC, product_name COLLATE NOCASE ASC',
       limit: limit,
     );
 
-    return rows.map((row) => SupplierProductMapping.fromMap(Map<String, dynamic>.from(row))).toList();
+    return rows
+        .map(
+          (row) =>
+              SupplierProductMapping.fromMap(Map<String, dynamic>.from(row)),
+        )
+        .toList();
   }
 
-  Future<List<SupplierProductMapping>> getMappingsForProduct(String barcode) async {
+  Future<List<SupplierProductMapping>> getMappingsForProduct(
+    String barcode,
+  ) async {
     final db = await database;
     final rows = await db.query(
       'supplier_product_mappings',
@@ -4516,10 +6033,17 @@ class DatabaseHelper {
       whereArgs: [barcode],
       orderBy: 'is_preferred DESC, supplier_name COLLATE NOCASE ASC',
     );
-    return rows.map((row) => SupplierProductMapping.fromMap(Map<String, dynamic>.from(row))).toList();
+    return rows
+        .map(
+          (row) =>
+              SupplierProductMapping.fromMap(Map<String, dynamic>.from(row)),
+        )
+        .toList();
   }
 
-  Future<SupplierProductMapping?> getPreferredSupplierMapping(String barcode) async {
+  Future<SupplierProductMapping?> getPreferredSupplierMapping(
+    String barcode,
+  ) async {
     final db = await database;
     final rows = await db.query(
       'supplier_product_mappings',
@@ -4530,25 +6054,26 @@ class DatabaseHelper {
     );
 
     if (rows.isEmpty) return null;
-    return SupplierProductMapping.fromMap(Map<String, dynamic>.from(rows.first));
+    return SupplierProductMapping.fromMap(
+      Map<String, dynamic>.from(rows.first),
+    );
   }
 
-  Future<Map<String, dynamic>> getSupplierProductMappingSummary({int? supplierId}) async {
+  Future<Map<String, dynamic>> getSupplierProductMappingSummary({
+    int? supplierId,
+  }) async {
     final db = await database;
     final whereClause = supplierId == null ? '' : 'WHERE supplier_id = ?';
     final args = supplierId == null ? <Object?>[] : <Object?>[supplierId];
 
-    final rows = await db.rawQuery(
-      '''
+    final rows = await db.rawQuery('''
       SELECT
         COUNT(*) AS mapping_count,
         COALESCE(SUM(CASE WHEN is_preferred = 1 THEN 1 ELSE 0 END), 0) AS preferred_count,
         COALESCE(AVG(default_unit_cost), 0) AS avg_cost
       FROM supplier_product_mappings
       $whereClause
-      ''',
-      args,
-    );
+      ''', args);
 
     final row = rows.first;
     return {
@@ -4576,9 +6101,11 @@ class DatabaseHelper {
 
     if (trimmed.isNotEmpty) {
       whereClauses.add(
-        '(LOWER(product_name) LIKE ? OR LOWER(barcode) LIKE ? OR LOWER(supplier_name) LIKE ?)',
+        '(LOWER(product_name) LIKE ? OR LOWER(barcode) LIKE ? OR LOWER(supplier_name) LIKE ? OR LOWER(COALESCE(batch_number, "")) LIKE ? OR COALESCE(expiry_date, "") LIKE ?)',
       );
       whereArgs
+        ..add('%$trimmed%')
+        ..add('%$trimmed%')
         ..add('%$trimmed%')
         ..add('%$trimmed%')
         ..add('%$trimmed%');
@@ -4592,7 +6119,11 @@ class DatabaseHelper {
       limit: limit,
     );
 
-    return rows.map((row) => StockReceiptRecord.fromMap(Map<String, dynamic>.from(row))).toList();
+    return rows
+        .map(
+          (row) => StockReceiptRecord.fromMap(Map<String, dynamic>.from(row)),
+        )
+        .toList();
   }
 
   Future<Map<String, dynamic>> getStockReceiptSummary({int? supplierId}) async {
@@ -4601,17 +6132,14 @@ class DatabaseHelper {
     final whereClause = supplierId == null ? '' : 'WHERE supplier_id = ?';
     final args = supplierId == null ? <Object?>[] : <Object?>[supplierId];
 
-    final rows = await db.rawQuery(
-      '''
+    final rows = await db.rawQuery('''
       SELECT
         COUNT(*) AS receipt_count,
         COALESCE(SUM(quantity), 0) AS total_units,
         COALESCE(SUM(cost), 0) AS total_cost
       FROM stock_receipts
       $whereClause
-      ''',
-      args,
-    );
+      ''', args);
 
     final row = rows.first;
     return {
@@ -4621,18 +6149,15 @@ class DatabaseHelper {
     };
   }
 
-
-
-
   Future<List<Map<String, dynamic>>> getInventoryMovements({
-      int limit = 50,
-      String? barcode,
-      List<String>? actionTypes,
-      String searchQuery = '',
-      DateTime? onDate,
-      bool hydrateSuppliers = true,
-    }) async {
-      final db = await database;
+    int limit = 50,
+    String? barcode,
+    List<String>? actionTypes,
+    String searchQuery = '',
+    DateTime? onDate,
+    bool hydrateSuppliers = true,
+  }) async {
+    final db = await database;
 
     final clauses = <String>[];
     final args = <Object?>[];
@@ -4648,25 +6173,27 @@ class DatabaseHelper {
       args.addAll(actionTypes);
     }
 
-      final trimmedSearch = searchQuery.trim();
-      if (trimmedSearch.isNotEmpty) {
-        clauses.add("(product_name LIKE ? OR barcode LIKE ? OR COALESCE(reason, '') LIKE ? OR COALESCE(supplier_name, '') LIKE ?)");
-        final pattern = '%$trimmedSearch%';
-        args
-          ..add(pattern)
-          ..add(pattern)
-          ..add(pattern)
-          ..add(pattern);
-      }
+    final trimmedSearch = searchQuery.trim();
+    if (trimmedSearch.isNotEmpty) {
+      clauses.add(
+        "(product_name LIKE ? OR barcode LIKE ? OR COALESCE(reason, '') LIKE ? OR COALESCE(supplier_name, '') LIKE ?)",
+      );
+      final pattern = '%$trimmedSearch%';
+      args
+        ..add(pattern)
+        ..add(pattern)
+        ..add(pattern)
+        ..add(pattern);
+    }
 
-      if (onDate != null) {
-        final start = DateTime(onDate.year, onDate.month, onDate.day);
-        final end = start.add(const Duration(days: 1));
-        clauses.add('created_at >= ? AND created_at < ?');
-        args
-          ..add(start.toIso8601String())
-          ..add(end.toIso8601String());
-      }
+    if (onDate != null) {
+      final start = DateTime(onDate.year, onDate.month, onDate.day);
+      final end = start.add(const Duration(days: 1));
+      clauses.add('created_at >= ? AND created_at < ?');
+      args
+        ..add(start.toIso8601String())
+        ..add(end.toIso8601String());
+    }
 
     final rows = await db.query(
       'inventory_movements',
@@ -4676,40 +6203,51 @@ class DatabaseHelper {
       limit: limit,
     );
 
-    final movements = rows.map((row) => Map<String, dynamic>.from(row)).toList();
+    final movements = rows
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
 
-      if (hydrateSuppliers) {
-        for (final movement in movements) {
-          await hydrateInventoryMovementSupplierData(movement, db: db);
-        }
+    if (hydrateSuppliers) {
+      for (final movement in movements) {
+        await hydrateInventoryMovementSupplierData(movement, db: db);
       }
-  
-      return movements;
     }
 
-    Future<Map<String, dynamic>> hydrateInventoryMovementSupplierData(
-      Map<String, dynamic> movement, {
-      Database? db,
-    }) async {
-      final actionType = (movement['action_type'] ?? '').toString();
-      final existingSupplier = (movement['supplier_name'] ?? '').toString().trim();
-      if (actionType != 'stock_receive' || existingSupplier.isNotEmpty) {
-        return movement;
-      }
+    return movements;
+  }
 
-      final targetDb = db ?? await database;
-      final movementBarcode = (movement['barcode'] ?? '').toString().trim();
-      final quantity = _parseQuantity(movement['quantity_change']).abs();
-      final createdAt = (movement['created_at'] ?? '').toString();
-      if (movementBarcode.isEmpty || quantity <= 0) {
-        return movement;
-      }
+  Future<Map<String, dynamic>> hydrateInventoryMovementSupplierData(
+    Map<String, dynamic> movement, {
+    Database? db,
+  }) async {
+    final actionType = (movement['action_type'] ?? '').toString();
+    final existingSupplier = (movement['supplier_name'] ?? '')
+        .toString()
+        .trim();
+    if (actionType != 'stock_receive') {
+      return movement;
+    }
 
-      List<Map<String, dynamic>> receiptRows = [];
-      try {
-        final raw = await targetDb.rawQuery(
-          """
-          SELECT supplier_id, supplier_name, cost, reference_note, created_at
+    final targetDb = db ?? await database;
+    final movementBarcode = (movement['barcode'] ?? '').toString().trim();
+    final quantity = _parseQuantity(movement['quantity_change']).abs();
+    final createdAt = (movement['created_at'] ?? '').toString();
+    if (movementBarcode.isEmpty || quantity <= 0) {
+      return movement;
+    }
+
+    List<Map<String, dynamic>> receiptRows = [];
+    try {
+      final raw = await targetDb.rawQuery(
+        """
+          SELECT
+            supplier_id,
+            supplier_name,
+            cost,
+            reference_note,
+            batch_number,
+            expiry_date,
+            created_at
           FROM stock_receipts
           WHERE barcode = ?
             AND quantity = ?
@@ -4717,38 +6255,51 @@ class DatabaseHelper {
           ORDER BY ABS(julianday(created_at) - julianday(?)) ASC, id DESC
           LIMIT 1
           """,
-          [movementBarcode, quantity, createdAt],
-        );
-        receiptRows = raw.map((row) => Map<String, dynamic>.from(row)).toList();
-      } catch (_) {
-        final raw = await targetDb.query(
-          'stock_receipts',
-          columns: ['supplier_id', 'supplier_name', 'cost', 'reference_note', 'created_at'],
-          where: 'barcode = ? AND quantity = ? AND COALESCE(is_reversed, 0) = 0',
-          whereArgs: [movementBarcode, quantity],
-          orderBy: 'created_at DESC, id DESC',
-          limit: 1,
-        );
-        receiptRows = raw.map((row) => Map<String, dynamic>.from(row)).toList();
-      }
+        [movementBarcode, quantity, createdAt],
+      );
+      receiptRows = raw.map((row) => Map<String, dynamic>.from(row)).toList();
+    } catch (_) {
+      final raw = await targetDb.query(
+        'stock_receipts',
+        columns: [
+          'supplier_id',
+          'supplier_name',
+          'cost',
+          'reference_note',
+          'batch_number',
+          'expiry_date',
+          'created_at',
+        ],
+        where: 'barcode = ? AND quantity = ? AND COALESCE(is_reversed, 0) = 0',
+        whereArgs: [movementBarcode, quantity],
+        orderBy: 'created_at DESC, id DESC',
+        limit: 1,
+      );
+      receiptRows = raw.map((row) => Map<String, dynamic>.from(row)).toList();
+    }
 
-      if (receiptRows.isEmpty) {
-        return movement;
-      }
-
-      final receipt = receiptRows.first;
-      movement['supplier_id'] = receipt['supplier_id'];
-      movement['supplier_name'] = (receipt['supplier_name'] ?? '').toString();
-      movement['supplier_cost'] = receipt['cost'];
-      if ((movement['reason'] ?? '').toString().trim().isEmpty) {
-        final note = (receipt['reference_note'] ?? '').toString().trim();
-        if (note.isNotEmpty) {
-          movement['reason'] = note;
-        }
-      }
-
+    if (receiptRows.isEmpty) {
       return movement;
     }
+
+    final receipt = receiptRows.first;
+    movement['supplier_id'] = receipt['supplier_id'];
+    final receiptSupplier = (receipt['supplier_name'] ?? '').toString();
+    movement['supplier_name'] = existingSupplier.isNotEmpty
+        ? existingSupplier
+        : receiptSupplier;
+    movement['supplier_cost'] = receipt['cost'];
+    movement['batch_number'] = (receipt['batch_number'] ?? '').toString();
+    movement['expiry_date'] = (receipt['expiry_date'] ?? '').toString();
+    if ((movement['reason'] ?? '').toString().trim().isEmpty) {
+      final note = (receipt['reference_note'] ?? '').toString().trim();
+      if (note.isNotEmpty) {
+        movement['reason'] = note;
+      }
+    }
+
+    return movement;
+  }
 
   Future<bool> receiveStockLocal(
     String barcode,
@@ -4760,7 +6311,8 @@ class DatabaseHelper {
     String? supplierName,
   }) async {
     final safeQuantity = _roundQuantity(quantity);
-    if (barcode.trim().isEmpty || !_isPositiveQuantity(safeQuantity)) return false;
+    if (barcode.trim().isEmpty || !_isPositiveQuantity(safeQuantity))
+      return false;
 
     final db = await database;
 
@@ -4812,7 +6364,9 @@ class DatabaseHelper {
           reason: reason,
           performedBy: performedBy,
           supplierId: supplierId,
-          supplierName: supplierName?.trim().isEmpty == true ? null : supplierName?.trim(),
+          supplierName: supplierName?.trim().isEmpty == true
+              ? null
+              : supplierName?.trim(),
           createdAt: now,
         );
 
@@ -4853,11 +6407,14 @@ class DatabaseHelper {
   }) async {
     final safeQuantity = _roundQuantity(quantity);
     if (barcode.trim().isEmpty) return false;
-    if (adjustmentType != 'add' && adjustmentType != 'remove' && adjustmentType != 'set') {
+    if (adjustmentType != 'add' &&
+        adjustmentType != 'remove' &&
+        adjustmentType != 'set') {
       return false;
     }
     if (safeQuantity < 0) return false;
-    if (adjustmentType != 'set' && !_isPositiveQuantity(safeQuantity)) return false;
+    if (adjustmentType != 'set' && !_isPositiveQuantity(safeQuantity))
+      return false;
 
     final db = await database;
 
@@ -4913,10 +6470,7 @@ class DatabaseHelper {
 
         await txn.update(
           'products',
-          {
-            'stock': stockAfter,
-            'updated_at': now,
-          },
+          {'stock': stockAfter, 'updated_at': now},
           where: 'barcode = ?',
           whereArgs: [barcode.trim()],
         );
@@ -4937,8 +6491,8 @@ class DatabaseHelper {
         final backendAdjustmentType = adjustmentType == 'add'
             ? 'increase'
             : adjustmentType == 'remove'
-                ? 'decrease'
-                : 'set_exact';
+            ? 'decrease'
+            : 'set_exact';
 
         final syncData = jsonEncode({
           'barcode': barcode.trim(),
@@ -4996,10 +6550,7 @@ class DatabaseHelper {
 
         await txn.update(
           'products',
-          {
-            'min_stock_level': minStockLevel,
-            'updated_at': now,
-          },
+          {'min_stock_level': minStockLevel, 'updated_at': now},
           where: 'barcode = ?',
           whereArgs: [barcode.trim()],
         );
@@ -5041,9 +6592,6 @@ class DatabaseHelper {
     }
   }
 
-
-
-
   Future<bool> createProductLocal({
     required String barcode,
     required String name,
@@ -5057,14 +6605,22 @@ class DatabaseHelper {
     required bool saleEnabled,
     required int openingStock,
     required int minStockLevel,
+    bool trackExpiry = false,
+    int expiryAlertDays = 30,
     String? changedBy,
   }) async {
     final trimmedBarcode = barcode.trim();
     final trimmedName = name.trim();
-    final trimmedCategory = category.trim().isEmpty ? 'General' : category.trim();
+    final trimmedCategory = category.trim().isEmpty
+        ? 'General'
+        : category.trim();
 
     if (trimmedBarcode.isEmpty || trimmedName.isEmpty) return false;
-    if (sellingPrice <= 0 || costPrice < 0 || openingStock < 0 || minStockLevel < 0) {
+    if (sellingPrice <= 0 ||
+        costPrice < 0 ||
+        openingStock < 0 ||
+        minStockLevel < 0 ||
+        expiryAlertDays < 1) {
       return false;
     }
     if (saleEnabled && (salePrice == null || salePrice <= 0)) {
@@ -5084,14 +6640,20 @@ class DatabaseHelper {
         );
 
         if (existing.isNotEmpty) {
-          throw Exception('Product with barcode $trimmedBarcode already exists.');
+          throw Exception(
+            'Product with barcode $trimmedBarcode already exists.',
+          );
         }
 
         final now = DateTime.now().toIso8601String();
         final resolvedWholesale = _roundMoney(
-          (wholesalePrice == null || wholesalePrice <= 0) ? sellingPrice : wholesalePrice,
+          (wholesalePrice == null || wholesalePrice <= 0)
+              ? sellingPrice
+              : wholesalePrice,
         );
-        final resolvedSalePrice = salePrice == null ? null : _roundMoney(salePrice);
+        final resolvedSalePrice = salePrice == null
+            ? null
+            : _roundMoney(salePrice);
         final resolvedQuantityType = quantityType.dbValue;
         final resolvedUnitLabel = _normalizeProductUnitLabel(
           quantityType: resolvedQuantityType,
@@ -5112,6 +6674,8 @@ class DatabaseHelper {
           'sale_enabled': saleEnabled ? 1 : 0,
           'stock': openingStock,
           'min_stock_level': minStockLevel,
+          'track_expiry': trackExpiry ? 1 : 0,
+          'expiry_alert_days': expiryAlertDays,
           'is_active': 1,
           'updated_at': now,
           'last_price_updated_at': now,
@@ -5157,6 +6721,8 @@ class DatabaseHelper {
           'opening_stock': openingStock,
           'stock': openingStock,
           'min_stock_level': minStockLevel,
+          'track_expiry': trackExpiry,
+          'expiry_alert_days': expiryAlertDays,
           'performed_by': changedBy,
           'updated_at': now,
           'branch': 'Hikkaduwa',
@@ -5178,7 +6744,6 @@ class DatabaseHelper {
     }
   }
 
-
   Future<bool> updateProductDetailsLocal({
     required String barcode,
     required String name,
@@ -5191,14 +6756,23 @@ class DatabaseHelper {
     double? salePrice,
     required bool saleEnabled,
     required int minStockLevel,
+    required bool trackExpiry,
+    required int expiryAlertDays,
     String? changedBy,
   }) async {
     final trimmedBarcode = barcode.trim();
     final trimmedName = name.trim();
-    final trimmedCategory = category.trim().isEmpty ? 'General' : category.trim();
+    final trimmedCategory = category.trim().isEmpty
+        ? 'General'
+        : category.trim();
 
     if (trimmedBarcode.isEmpty || trimmedName.isEmpty) return false;
-    if (sellingPrice <= 0 || costPrice < 0 || minStockLevel < 0) return false;
+    if (sellingPrice <= 0 ||
+        costPrice < 0 ||
+        minStockLevel < 0 ||
+        expiryAlertDays < 1) {
+      return false;
+    }
     if (saleEnabled && (salePrice == null || salePrice <= 0)) {
       return false;
     }
@@ -5220,6 +6794,8 @@ class DatabaseHelper {
             'sale_price',
             'sale_enabled',
             'min_stock_level',
+            'track_expiry',
+            'expiry_alert_days',
             'stock',
           ],
           where: 'barcode = ?',
@@ -5234,9 +6810,13 @@ class DatabaseHelper {
         final row = rows.first;
         final now = DateTime.now().toIso8601String();
         final resolvedWholesale = _roundMoney(
-          (wholesalePrice == null || wholesalePrice <= 0) ? sellingPrice : wholesalePrice,
+          (wholesalePrice == null || wholesalePrice <= 0)
+              ? sellingPrice
+              : wholesalePrice,
         );
-        final resolvedSalePrice = salePrice == null ? null : _roundMoney(salePrice);
+        final resolvedSalePrice = salePrice == null
+            ? null
+            : _roundMoney(salePrice);
         final resolvedQuantityType = quantityType.dbValue;
         final resolvedUnitLabel = _normalizeProductUnitLabel(
           quantityType: resolvedQuantityType,
@@ -5245,7 +6825,9 @@ class DatabaseHelper {
 
         final oldName = (row['name'] ?? '').toString();
         final oldCategory = (row['category'] ?? 'General').toString();
-        final oldQuantityType = _normalizeProductQuantityType(row['quantity_type']);
+        final oldQuantityType = _normalizeProductQuantityType(
+          row['quantity_type'],
+        );
         final oldUnitLabel = _normalizeProductUnitLabel(
           quantityType: oldQuantityType,
           unitLabel: row['unit_label']?.toString(),
@@ -5253,9 +6835,13 @@ class DatabaseHelper {
         final oldCostPrice = _parseDouble(row['cost_price']);
         final oldSellingPrice = _parseDouble(row['selling_price']);
         final oldWholesalePrice = _parseDouble(row['wholesale_price']);
-        final oldSalePrice = row['sale_price'] == null ? null : _parseDouble(row['sale_price']);
+        final oldSalePrice = row['sale_price'] == null
+            ? null
+            : _parseDouble(row['sale_price']);
         final oldSaleEnabled = _parseInt(row['sale_enabled']) == 1;
         final oldMinStockLevel = _parseInt(row['min_stock_level']);
+        final oldTrackExpiry = _parseInt(row['track_expiry']) == 1;
+        final oldExpiryAlertDays = _parseInt(row['expiry_alert_days']);
         final currentStock = _parseQuantity(row['stock']);
 
         await txn.update(
@@ -5272,6 +6858,8 @@ class DatabaseHelper {
             'sale_price': resolvedSalePrice,
             'sale_enabled': saleEnabled ? 1 : 0,
             'min_stock_level': minStockLevel,
+            'track_expiry': trackExpiry ? 1 : 0,
+            'expiry_alert_days': expiryAlertDays,
             'updated_at': now,
             'last_price_updated_at': now,
           },
@@ -5282,16 +6870,23 @@ class DatabaseHelper {
         final changes = <String>[];
         if (oldName != trimmedName) changes.add('name');
         if (oldCategory != trimmedCategory) changes.add('category');
-        if (oldQuantityType != resolvedQuantityType || oldUnitLabel != resolvedUnitLabel) {
+        if (oldQuantityType != resolvedQuantityType ||
+            oldUnitLabel != resolvedUnitLabel) {
           changes.add('measurement');
         }
         if (oldCostPrice != _roundMoney(costPrice)) changes.add('cost');
-        if (oldSellingPrice != _roundMoney(sellingPrice)) changes.add('selling');
+        if (oldSellingPrice != _roundMoney(sellingPrice))
+          changes.add('selling');
         if (oldWholesalePrice != resolvedWholesale) changes.add('wholesale');
-        if (oldSalePrice != resolvedSalePrice || oldSaleEnabled != saleEnabled) {
+        if (oldSalePrice != resolvedSalePrice ||
+            oldSaleEnabled != saleEnabled) {
           changes.add('sale');
         }
         if (oldMinStockLevel != minStockLevel) changes.add('min stock');
+        if (oldTrackExpiry != trackExpiry ||
+            oldExpiryAlertDays != expiryAlertDays) {
+          changes.add('expiry tracking');
+        }
 
         await _insertInventoryMovement(
           txn,
@@ -5322,6 +6917,8 @@ class DatabaseHelper {
           'stock': currentStock,
           'opening_stock': currentStock,
           'min_stock_level': minStockLevel,
+          'track_expiry': trackExpiry,
+          'expiry_alert_days': expiryAlertDays,
           'performed_by': changedBy,
           'updated_at': now,
           'branch': 'Hikkaduwa',
@@ -5343,10 +6940,7 @@ class DatabaseHelper {
     }
   }
 
-  Future<bool> deleteProductLocal(
-    String barcode, {
-    String? changedBy,
-  }) async {
+  Future<bool> deleteProductLocal(String barcode, {String? changedBy}) async {
     final trimmedBarcode = barcode.trim();
     if (trimmedBarcode.isEmpty) return false;
 
@@ -5366,11 +6960,18 @@ class DatabaseHelper {
           throw Exception('Product not found for barcode $trimmedBarcode.');
         }
 
-        final productName = (rows.first['name'] ?? 'Unknown product').toString();
+        final productName = (rows.first['name'] ?? 'Unknown product')
+            .toString();
         final now = DateTime.now().toIso8601String();
 
         await txn.delete(
           'supplier_product_mappings',
+          where: 'barcode = ?',
+          whereArgs: [trimmedBarcode],
+        );
+
+        await txn.delete(
+          'expiry_batches',
           where: 'barcode = ?',
           whereArgs: [trimmedBarcode],
         );
@@ -5443,10 +7044,16 @@ class DatabaseHelper {
           );
           if (rows.isEmpty) continue;
 
-          final productName = (rows.first['name'] ?? 'Unknown product').toString();
+          final productName = (rows.first['name'] ?? 'Unknown product')
+              .toString();
 
           await txn.delete(
             'supplier_product_mappings',
+            where: 'barcode = ?',
+            whereArgs: [barcode],
+          );
+          await txn.delete(
+            'expiry_batches',
             where: 'barcode = ?',
             whereArgs: [barcode],
           );
@@ -5493,7 +7100,6 @@ class DatabaseHelper {
     }
   }
 
-
   Future<Map<String, int>> bulkUpsertProductsLocal({
     required List<Map<String, dynamic>> rows,
     String? changedBy,
@@ -5515,28 +7121,41 @@ class DatabaseHelper {
         for (final raw in rows) {
           final barcode = (raw['barcode'] ?? '').toString().trim();
           final name = (raw['name'] ?? '').toString().trim();
-          final category = (raw['category'] ?? 'General').toString().trim().isEmpty
+          final category =
+              (raw['category'] ?? 'General').toString().trim().isEmpty
               ? 'General'
               : (raw['category'] ?? 'General').toString().trim();
-          final quantityType = _normalizeProductQuantityType(raw['quantity_type']);
+          final quantityType = _normalizeProductQuantityType(
+            raw['quantity_type'],
+          );
           final unitLabel = _normalizeProductUnitLabel(
             quantityType: quantityType,
             unitLabel: raw['unit_label']?.toString(),
           );
-          final sellingPrice = _roundMoney(_parseDouble(raw['selling_price'] ?? raw['price']));
+          final sellingPrice = _roundMoney(
+            _parseDouble(raw['selling_price'] ?? raw['price']),
+          );
           final costPrice = _roundMoney(_parseDouble(raw['cost_price']));
           final wholesalePrice = _roundMoney(
             _parseDouble(raw['wholesale_price'], fallback: sellingPrice),
           );
           final salePriceRaw = raw['sale_price'];
-          final salePrice = salePriceRaw == null ? null : _roundMoney(_parseDouble(salePriceRaw));
+          final salePrice = salePriceRaw == null
+              ? null
+              : _roundMoney(_parseDouble(salePriceRaw));
           final saleEnabled = raw['sale_enabled'] == null
               ? (salePrice != null)
-              : (_parseInt(raw['sale_enabled']) == 1 || raw['sale_enabled'] == true);
+              : (_parseInt(raw['sale_enabled']) == 1 ||
+                    raw['sale_enabled'] == true);
           final stock = _parseQuantity(raw['stock'] ?? raw['opening_stock']);
           final minStockLevel = _parseInt(raw['min_stock_level']);
 
-          if (barcode.isEmpty || name.isEmpty || sellingPrice <= 0 || costPrice < 0 || stock < 0 || minStockLevel < 0) {
+          if (barcode.isEmpty ||
+              name.isEmpty ||
+              sellingPrice <= 0 ||
+              costPrice < 0 ||
+              stock < 0 ||
+              minStockLevel < 0) {
             continue;
           }
           if (saleEnabled && (salePrice == null || salePrice <= 0)) {
@@ -5677,6 +7296,311 @@ class DatabaseHelper {
     }
   }
 
+  Future<List<ExpiryBatch>> getExpiryAlertBatches({
+    String search = '',
+    bool onlyAlerting = true,
+    int limit = 1000,
+  }) async {
+    final db = await database;
+    final today = _formatDateOnly(DateTime.now());
+    final trimmed = search.trim().toLowerCase();
+    final whereClauses = <String>[
+      "b.status = 'active'",
+      'b.remaining_quantity > ?',
+    ];
+    final whereArgs = <Object?>[_quantityEpsilon];
+
+    if (onlyAlerting) {
+      whereClauses.add(
+        "date(b.expiry_date) <= date(?, '+' || COALESCE(p.expiry_alert_days, 30) || ' days')",
+      );
+      whereArgs.add(today);
+    }
+
+    if (trimmed.isNotEmpty) {
+      whereClauses.add(
+        '(LOWER(b.product_name) LIKE ? OR LOWER(b.barcode) LIKE ? OR LOWER(b.batch_number) LIKE ? OR LOWER(b.supplier_name) LIKE ?)',
+      );
+      whereArgs
+        ..add('%$trimmed%')
+        ..add('%$trimmed%')
+        ..add('%$trimmed%')
+        ..add('%$trimmed%');
+    }
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        b.*,
+        COALESCE(p.unit_label, 'pcs') AS unit_label,
+        COALESCE(p.expiry_alert_days, 30) AS alert_days
+      FROM expiry_batches b
+      LEFT JOIN products p ON p.barcode = b.barcode
+      WHERE ${whereClauses.join(' AND ')}
+      ORDER BY date(b.expiry_date) ASC, LOWER(b.product_name) ASC
+      LIMIT ?
+      ''',
+      [...whereArgs, limit],
+    );
+
+    return rows.map((row) => ExpiryBatch.fromMap(row)).toList();
+  }
+
+  Future<Map<String, int>> getExpiryAlertSummary() async {
+    final batches = await getExpiryAlertBatches(onlyAlerting: false);
+    final now = DateTime.now();
+    var expired = 0;
+    var today = 0;
+    var critical = 0;
+    var warning = 0;
+    var checkedToday = 0;
+
+    for (final batch in batches) {
+      final days = batch.daysLeft(now);
+      if (days < 0) {
+        expired += 1;
+      } else if (days == 0) {
+        today += 1;
+      } else if (days <= 7) {
+        critical += 1;
+      } else {
+        warning += 1;
+      }
+      if (batch.checkedToday(now)) {
+        checkedToday += 1;
+      }
+    }
+
+    return {
+      'total': batches.length,
+      'expired': expired,
+      'today': today,
+      'critical': critical,
+      'warning': warning,
+      'checked_today': checkedToday,
+    };
+  }
+
+  Future<bool> hasExpiredBatchForBarcode(String barcode) async {
+    final trimmedBarcode = barcode.trim();
+    if (trimmedBarcode.isEmpty) return false;
+
+    final db = await database;
+    final today = _formatDateOnly(DateTime.now());
+    final rows = await db.query(
+      'expiry_batches',
+      columns: ['id'],
+      where:
+          "barcode = ? AND status = 'active' AND remaining_quantity > ? AND date(expiry_date) <= date(?)",
+      whereArgs: [trimmedBarcode, _quantityEpsilon, today],
+      limit: 1,
+    );
+
+    return rows.isNotEmpty;
+  }
+
+  Future<bool> markExpiryBatchChecked({
+    required int batchId,
+    required String performedBy,
+  }) async {
+    if (batchId <= 0) return false;
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+
+    try {
+      await db.transaction((txn) async {
+        final updated = await txn.update(
+          'expiry_batches',
+          {'last_checked_at': now, 'updated_at': now},
+          where: 'id = ?',
+          whereArgs: [batchId],
+        );
+        if (updated == 0) {
+          throw Exception('Expiry batch not found.');
+        }
+
+        await txn.insert('expiry_actions', {
+          'batch_id': batchId,
+          'action_type': 'checked',
+          'quantity': null,
+          'note': 'Shelf expiry checked',
+          'performed_by': performedBy.trim(),
+          'created_at': now,
+        });
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error marking expiry batch checked: $e');
+      return false;
+    }
+  }
+
+  Future<bool> wasteExpiryBatch({
+    required int batchId,
+    required num quantity,
+    required String performedBy,
+    String note = '',
+  }) async {
+    final safeQuantity = _roundQuantity(quantity);
+    if (batchId <= 0 || !_isPositiveQuantity(safeQuantity)) return false;
+
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+
+    try {
+      await db.transaction((txn) async {
+        final batchRows = await txn.query(
+          'expiry_batches',
+          where: "id = ? AND status = 'active'",
+          whereArgs: [batchId],
+          limit: 1,
+        );
+        if (batchRows.isEmpty) {
+          throw Exception('Expiry batch not found.');
+        }
+
+        final batch = ExpiryBatch.fromMap(batchRows.first);
+        if (_quantityExceeds(safeQuantity, batch.remainingQuantity)) {
+          throw Exception('Cannot waste more than remaining batch quantity.');
+        }
+
+        final productRows = await txn.query(
+          'products',
+          columns: ['stock'],
+          where: 'barcode = ?',
+          whereArgs: [batch.barcode],
+          limit: 1,
+        );
+        if (productRows.isEmpty) {
+          throw Exception('Product not found for expiry batch.');
+        }
+
+        final stockBefore = _parseQuantity(productRows.first['stock']);
+        if (_quantityExceeds(safeQuantity, stockBefore)) {
+          throw Exception('Cannot waste more than current product stock.');
+        }
+
+        final stockAfter = _roundQuantity(stockBefore - safeQuantity);
+        final remainingAfter = _roundQuantity(
+          batch.remainingQuantity - safeQuantity,
+        );
+
+        await txn.update(
+          'products',
+          {'stock': stockAfter, 'updated_at': now},
+          where: 'barcode = ?',
+          whereArgs: [batch.barcode],
+        );
+
+        await txn.update(
+          'expiry_batches',
+          {
+            'remaining_quantity': remainingAfter,
+            'status': remainingAfter <= _quantityEpsilon ? 'wasted' : 'active',
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [batchId],
+        );
+
+        await txn.insert('expiry_actions', {
+          'batch_id': batchId,
+          'action_type': 'wasted',
+          'quantity': safeQuantity,
+          'note': note.trim(),
+          'performed_by': performedBy.trim(),
+          'created_at': now,
+        });
+
+        await _insertInventoryMovement(
+          txn,
+          barcode: batch.barcode,
+          productName: batch.productName,
+          actionType: 'expiry_waste',
+          quantityChange: -safeQuantity,
+          stockBefore: stockBefore,
+          stockAfter: stockAfter,
+          reason: note.trim().isEmpty
+              ? 'Removed expired or near-expiry stock'
+              : note.trim(),
+          performedBy: performedBy,
+          supplierId: batch.supplierId,
+          supplierName: batch.supplierName.trim().isEmpty
+              ? null
+              : batch.supplierName.trim(),
+          referenceId: batchId,
+          referenceType: 'expiry_batch',
+          createdAt: now,
+        );
+
+        await txn.insert('sync_queue', {
+          'type': 'STOCK_ADJUST',
+          'data': jsonEncode({
+            'barcode': batch.barcode,
+            'adjustment_type': 'decrease',
+            'quantity': safeQuantity,
+            'reason':
+                'Expiry waste${note.trim().isEmpty ? '' : ': ${note.trim()}'}',
+            'performed_by': performedBy,
+            'updated_at': now,
+            'branch': 'Hikkaduwa',
+            'vendor': 'Alfasoft',
+          }),
+          'status': 'pending',
+          'created_at': now,
+        });
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error wasting expiry batch: $e');
+      return false;
+    }
+  }
+
+  Future<void> _deductExpiryBatchesForSale(
+    DatabaseExecutor txn, {
+    required String barcode,
+    required double quantity,
+    required String updatedAt,
+  }) async {
+    var remainingToDeduct = _roundQuantity(quantity);
+    if (!_isPositiveQuantity(remainingToDeduct)) return;
+
+    final rows = await txn.query(
+      'expiry_batches',
+      where: "barcode = ? AND status = 'active' AND remaining_quantity > ?",
+      whereArgs: [barcode, _quantityEpsilon],
+      orderBy: 'date(expiry_date) ASC, id ASC',
+    );
+
+    for (final row in rows) {
+      if (!_isPositiveQuantity(remainingToDeduct)) break;
+      final batchId = (row['id'] as num?)?.toInt() ?? 0;
+      final remainingQuantity = _parseQuantity(row['remaining_quantity']);
+      if (batchId <= 0 || !_isPositiveQuantity(remainingQuantity)) continue;
+
+      final deductQuantity = remainingQuantity < remainingToDeduct
+          ? remainingQuantity
+          : remainingToDeduct;
+      final nextRemaining = _roundQuantity(remainingQuantity - deductQuantity);
+
+      await txn.update(
+        'expiry_batches',
+        {
+          'remaining_quantity': nextRemaining,
+          'status': nextRemaining <= _quantityEpsilon ? 'sold' : 'active',
+          'updated_at': updatedAt,
+        },
+        where: 'id = ?',
+        whereArgs: [batchId],
+      );
+
+      remainingToDeduct = _roundQuantity(remainingToDeduct - deductQuantity);
+    }
+  }
+
   Future<Map<String, dynamic>> getOrCreateOpenStockTakeSession({
     String defaultSessionName = 'Main Store Count',
   }) async {
@@ -5722,10 +7646,7 @@ class DatabaseHelper {
     final now = DateTime.now().toIso8601String();
     final updated = await db.update(
       'stock_take_sessions',
-      {
-        'session_name': trimmed,
-        'updated_at': now,
-      },
+      {'session_name': trimmed, 'updated_at': now},
       where: 'id = ?',
       whereArgs: [sessionId],
     );
@@ -5749,7 +7670,9 @@ class DatabaseHelper {
 
     final countedItems = _parseInt(rows.first['counted_items']);
     final discrepancyItems = _parseInt(rows.first['discrepancy_items']);
-    final totalRows = await db.rawQuery('SELECT COUNT(*) AS total_products FROM products');
+    final totalRows = await db.rawQuery(
+      'SELECT COUNT(*) AS total_products FROM products',
+    );
     final totalProducts = _parseInt(totalRows.first['total_products']);
 
     await db.update(
@@ -5776,21 +7699,17 @@ class DatabaseHelper {
     final now = DateTime.now().toIso8601String();
     try {
       await db.transaction((txn) async {
-        await txn.insert(
-          'stock_take_items',
-          {
-            'session_id': sessionId,
-            'barcode': product.barcode,
-            'product_name': product.name,
-            'system_stock': product.stock,
-            'counted_stock': safeCountedQty,
-            'difference_qty': _roundQuantity(safeCountedQty - product.stock),
-            'applied': 0,
-            'created_at': now,
-            'updated_at': now,
-          },
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+        await txn.insert('stock_take_items', {
+          'session_id': sessionId,
+          'barcode': product.barcode,
+          'product_name': product.name,
+          'system_stock': product.stock,
+          'counted_stock': safeCountedQty,
+          'difference_qty': _roundQuantity(safeCountedQty - product.stock),
+          'applied': 0,
+          'created_at': now,
+          'updated_at': now,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
 
         await txn.update(
           'stock_take_sessions',
@@ -5830,7 +7749,9 @@ class DatabaseHelper {
     }
   }
 
-  Future<List<Map<String, dynamic>>> getStockTakeSessionItems(int sessionId) async {
+  Future<List<Map<String, dynamic>>> getStockTakeSessionItems(
+    int sessionId,
+  ) async {
     if (sessionId <= 0) return [];
     final db = await database;
     final rows = await db.query(
@@ -5895,11 +7816,13 @@ class DatabaseHelper {
     }
 
     final session = Map<String, dynamic>.from(sessionRows.first);
-    final sessionName = (session['session_name'] ?? 'Stock Take Session').toString();
+    final sessionName = (session['session_name'] ?? 'Stock Take Session')
+        .toString();
     final items = await getStockTakeSessionItems(sessionId);
     final discrepancies = items
         .where(
-          (item) => _parseQuantity(item['difference_qty']).abs() >= _quantityEpsilon,
+          (item) =>
+              _parseQuantity(item['difference_qty']).abs() >= _quantityEpsilon,
         )
         .toList();
 
@@ -5931,11 +7854,7 @@ class DatabaseHelper {
         appliedCount += 1;
         await db.update(
           'stock_take_items',
-          {
-            'applied': 1,
-            'applied_at': appliedAt,
-            'updated_at': appliedAt,
-          },
+          {'applied': 1, 'applied_at': appliedAt, 'updated_at': appliedAt},
           where: 'session_id = ? AND barcode = ?',
           whereArgs: [sessionId, barcode],
         );
@@ -5945,7 +7864,9 @@ class DatabaseHelper {
     }
 
     if (failedBarcodes.isEmpty) {
-      final totalRows = await db.rawQuery('SELECT COUNT(*) AS total_products FROM products');
+      final totalRows = await db.rawQuery(
+        'SELECT COUNT(*) AS total_products FROM products',
+      );
       final totalProducts = _parseInt(totalRows.first['total_products']);
       await db.update(
         'stock_take_sessions',
@@ -5978,8 +7899,6 @@ class DatabaseHelper {
     };
   }
 
-
-
   Future<List<Map<String, dynamic>>> getSalesTrendByDay({
     String? cashierName,
     DateTime? start,
@@ -6005,8 +7924,7 @@ class DatabaseHelper {
       salesArgs.add(trimmedCashier);
     }
 
-    final salesRows = await db.rawQuery(
-      '''
+    final salesRows = await db.rawQuery('''
       SELECT
         date(s.created_at) AS sales_date,
         COALESCE(SUM(CASE WHEN s.transaction_type = 'sale' THEN 1 ELSE 0 END), 0) AS sale_count,
@@ -6031,9 +7949,7 @@ class DatabaseHelper {
       WHERE ${salesConditions.join(' AND ')}
       GROUP BY date(s.created_at)
       ORDER BY date(s.created_at) ASC
-      ''',
-      salesArgs,
-    );
+      ''', salesArgs);
 
     final itemConditions = <String>[
       "s.transaction_type = 'sale'",
@@ -6050,8 +7966,7 @@ class DatabaseHelper {
       itemArgs.add(trimmedCashier);
     }
 
-    final itemRows = await db.rawQuery(
-      '''
+    final itemRows = await db.rawQuery('''
       SELECT
         date(s.created_at) AS sales_date,
         COALESCE(SUM(si.quantity), 0) AS items_sold
@@ -6059,9 +7974,7 @@ class DatabaseHelper {
       INNER JOIN sale_items si ON si.sale_id = s.id
       WHERE ${itemConditions.join(' AND ')}
       GROUP BY date(s.created_at)
-      ''',
-      itemArgs,
-    );
+      ''', itemArgs);
 
     final itemsByDate = <String, int>{
       for (final row in itemRows)
@@ -6117,8 +8030,7 @@ class DatabaseHelper {
       salesArgs.add(trimmedCashier);
     }
 
-    final salesRows = await db.rawQuery(
-      '''
+    final salesRows = await db.rawQuery('''
       SELECT
         strftime('%H', s.created_at) AS hour_key,
         COALESCE(SUM(CASE WHEN s.transaction_type = 'sale' THEN 1 ELSE 0 END), 0) AS sale_count,
@@ -6135,9 +8047,7 @@ class DatabaseHelper {
       WHERE ${salesConditions.join(' AND ')}
       GROUP BY strftime('%H', s.created_at)
       ORDER BY hour_key ASC
-      ''',
-      salesArgs,
-    );
+      ''', salesArgs);
 
     final itemConditions = <String>[
       "s.transaction_type = 'sale'",
@@ -6154,8 +8064,7 @@ class DatabaseHelper {
       itemArgs.add(trimmedCashier);
     }
 
-    final itemRows = await db.rawQuery(
-      '''
+    final itemRows = await db.rawQuery('''
       SELECT
         strftime('%H', s.created_at) AS hour_key,
         COALESCE(SUM(si.quantity), 0) AS items_sold
@@ -6164,9 +8073,7 @@ class DatabaseHelper {
       WHERE ${itemConditions.join(' AND ')}
       GROUP BY strftime('%H', s.created_at)
       ORDER BY hour_key ASC
-      ''',
-      itemArgs,
-    );
+      ''', itemArgs);
 
     final itemsByHour = <String, int>{
       for (final row in itemRows)
@@ -6285,7 +8192,8 @@ class DatabaseHelper {
 
     return rows.map((row) {
       final quantitySold = ((row['quantity_sold'] as num?) ?? 0).toDouble();
-      final refundedQuantity = ((row['refunded_quantity'] as num?) ?? 0).toDouble();
+      final refundedQuantity = ((row['refunded_quantity'] as num?) ?? 0)
+          .toDouble();
       final salesAmount = ((row['sales_amount'] as num?) ?? 0).toDouble();
       final refundAmount = ((row['refund_amount'] as num?) ?? 0).toDouble();
       final netSalesAfterRefunds =
@@ -6313,8 +8221,6 @@ class DatabaseHelper {
       };
     }).toList();
   }
-
-
 
   Future<List<Map<String, dynamic>>> getSlowMovingProductsSummary({
     DateTime? start,
@@ -6409,5 +8315,4 @@ class DatabaseHelper {
       };
     }).toList();
   }
-
 }

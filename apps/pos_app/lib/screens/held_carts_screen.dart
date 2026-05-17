@@ -1,9 +1,13 @@
 
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared/models/customer.dart';
 
 import '../services/database_helper.dart';
+import '../services/customer_service.dart';
 import '../widgets/app_snackbar.dart';
 
 class HeldCartsScreen extends StatefulWidget {
@@ -20,10 +24,41 @@ class HeldCartsScreen extends StatefulWidget {
 
 class _HeldCartsScreenState extends State<HeldCartsScreen> {
   static const double _quantityEpsilon = 0.000001;
+  static const Duration _heldCartDoubleTapWindow = Duration(milliseconds: 650);
+  static const Duration _heldSelectionVisibleDuration = Duration(seconds: 2);
+  static final Map<LogicalKeyboardKey, int> _numberKeys = {
+    LogicalKeyboardKey.digit1: 1,
+    LogicalKeyboardKey.digit2: 2,
+    LogicalKeyboardKey.digit3: 3,
+    LogicalKeyboardKey.digit4: 4,
+    LogicalKeyboardKey.digit5: 5,
+    LogicalKeyboardKey.digit6: 6,
+    LogicalKeyboardKey.digit7: 7,
+    LogicalKeyboardKey.digit8: 8,
+    LogicalKeyboardKey.digit9: 9,
+    LogicalKeyboardKey.numpad1: 1,
+    LogicalKeyboardKey.numpad2: 2,
+    LogicalKeyboardKey.numpad3: 3,
+    LogicalKeyboardKey.numpad4: 4,
+    LogicalKeyboardKey.numpad5: 5,
+    LogicalKeyboardKey.numpad6: 6,
+    LogicalKeyboardKey.numpad7: 7,
+    LogicalKeyboardKey.numpad8: 8,
+    LogicalKeyboardKey.numpad9: 9,
+  };
+
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  Timer? _heldSelectionHideTimer;
 
   bool _isLoading = true;
   bool _isRefreshing = false;
+  bool _isResumingHeldCart = false;
+  bool _isDeleteDialogOpen = false;
+  int? _selectedCartIndex;
+  bool _isHeldSelectionVisible = false;
+  int? _lastNumberShortcut;
+  DateTime? _lastNumberShortcutAt;
   List<Map<String, dynamic>> _heldCarts = [];
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
@@ -43,13 +78,262 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleHardwareKeyboardEvent);
     _loadHeldCarts();
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKeyboardEvent);
+    _heldSelectionHideTimer?.cancel();
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  bool _handleHardwareKeyboardEvent(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        !mounted ||
+        _isLoading ||
+        _isResumingHeldCart ||
+        _isDeleteDialogOpen) {
+      return false;
+    }
+
+    if (ModalRoute.of(context)?.isCurrent == false) return false;
+
+    final keyboard = HardwareKeyboard.instance;
+    if (_searchFocusNode.hasFocus) return false;
+
+    if (keyboard.isControlPressed ||
+        keyboard.isMetaPressed ||
+        keyboard.isAltPressed) {
+      return false;
+    }
+
+    final selectedNumber = _numberKeys[event.logicalKey];
+    if (selectedNumber != null) {
+      final carts = _filteredCarts;
+      final index = selectedNumber - 1;
+      if (index < 0 || index >= carts.length) return true;
+
+      final now = DateTime.now();
+      final wasAlreadySelected = _selectedCartIndex == index;
+      final isDoubleTap = _lastNumberShortcut == selectedNumber &&
+          wasAlreadySelected &&
+          _lastNumberShortcutAt != null &&
+          now.difference(_lastNumberShortcutAt!) <= _heldCartDoubleTapWindow;
+
+      _lastNumberShortcut = selectedNumber;
+      _lastNumberShortcutAt = now;
+      _selectHeldCart(index);
+
+      if (isDoubleTap) {
+        _lastNumberShortcut = null;
+        _lastNumberShortcutAt = null;
+        _resumeHeldCart((carts[index]['id'] as num).toInt());
+      }
+
+      return true;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveHeldCartSelection(-1);
+      return true;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveHeldCartSelection(1);
+      return true;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.pageUp) {
+      _selectHeldCart(0);
+      return true;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.pageDown) {
+      final carts = _filteredCarts;
+      if (carts.isNotEmpty) _selectHeldCart(carts.length - 1);
+      return true;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _resumeSelectedHeldCart();
+      return true;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.delete) {
+      _deleteSelectedHeldCart();
+      return true;
+    }
+
+    return false;
+  }
+
+  void _syncSelectedCartIndex() {
+    final carts = _filteredCarts;
+    if (carts.isEmpty) {
+      _selectedCartIndex = null;
+      _hideHeldSelection();
+      return;
+    }
+
+    final current = _selectedCartIndex ?? 0;
+    _selectedCartIndex = (current.clamp(0, carts.length - 1)) as int;
+  }
+
+  void _showTemporaryHeldSelection({int? selectedIndex}) {
+    _heldSelectionHideTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        if (selectedIndex != null) {
+          _selectedCartIndex = selectedIndex;
+        }
+        _isHeldSelectionVisible = true;
+      });
+    } else {
+      if (selectedIndex != null) {
+        _selectedCartIndex = selectedIndex;
+      }
+      _isHeldSelectionVisible = true;
+    }
+
+    _heldSelectionHideTimer = Timer(_heldSelectionVisibleDuration, () {
+      if (!mounted) return;
+      if (!_isHeldSelectionVisible) return;
+      setState(() {
+        _isHeldSelectionVisible = false;
+      });
+    });
+  }
+
+  void _hideHeldSelection() {
+    _heldSelectionHideTimer?.cancel();
+    _heldSelectionHideTimer = null;
+    _isHeldSelectionVisible = false;
+  }
+
+  void _selectHeldCart(int index, {bool showSelection = true}) {
+    final carts = _filteredCarts;
+    if (carts.isEmpty) return;
+
+    final next = (index.clamp(0, carts.length - 1)) as int;
+    if (showSelection) {
+      _showTemporaryHeldSelection(selectedIndex: next);
+    } else {
+      _selectedCartIndex = next;
+    }
+  }
+
+  void _moveHeldCartSelection(int delta) {
+    final carts = _filteredCarts;
+    if (carts.isEmpty) return;
+
+    final current = _selectedCartIndex ?? 0;
+    _selectHeldCart(current + delta);
+  }
+
+  Map<String, dynamic>? _selectedHeldCart() {
+    final carts = _filteredCarts;
+    if (carts.isEmpty) return null;
+
+    final index = ((_selectedCartIndex ?? 0).clamp(0, carts.length - 1)) as int;
+    _showTemporaryHeldSelection(selectedIndex: index);
+    return carts[index];
+  }
+
+  void _resumeSelectedHeldCart() {
+    final cart = _selectedHeldCart();
+    if (cart == null) return;
+
+    _resumeHeldCart((cart['id'] as num).toInt());
+  }
+
+  void _deleteSelectedHeldCart() {
+    final cart = _selectedHeldCart();
+    if (cart == null) return;
+
+    _deleteHeldCart(
+      (cart['id'] as num).toInt(),
+      (cart['cart_name'] ?? 'Held Cart').toString(),
+    );
+  }
+
+
+  Future<List<Map<String, dynamic>>> _attachCustomerSnapshots(
+    List<Map<String, dynamic>> carts,
+  ) async {
+    if (carts.isEmpty) return carts;
+
+    final enriched = <Map<String, dynamic>>[];
+    for (final cart in carts) {
+      final row = Map<String, dynamic>.from(cart);
+      final id = (row['id'] as num?)?.toInt();
+      if (id != null && id > 0) {
+        final snapshot = await _loadHeldCartCustomerSnapshot(id);
+        if (snapshot != null) {
+          row.addAll(snapshot);
+        }
+      }
+      enriched.add(row);
+    }
+
+    return enriched;
+  }
+
+  Future<Map<String, dynamic>?> _loadHeldCartCustomerSnapshot(int heldCartId) async {
+    if (heldCartId <= 0) return null;
+
+    try {
+      await CustomerService.instance.ensureCustomerStorage();
+      final db = await DatabaseHelper.instance.database;
+      final rows = await db.query(
+        'held_carts',
+        columns: const [
+          'customer_id',
+          'customer_name_snapshot',
+          'customer_phone_snapshot',
+          'customer_code_snapshot',
+        ],
+        where: 'id = ?',
+        whereArgs: [heldCartId],
+        limit: 1,
+      );
+
+      if (rows.isEmpty) return null;
+      return Map<String, dynamic>.from(rows.first);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Customer? _customerFromHeldCartRow(Map<String, dynamic> row) {
+    return CustomerService.instance.customerFromHeldCartRow(row);
+  }
+
+  Map<String, dynamic>? _findHeldCartRowById(int heldCartId) {
+    for (final cart in _heldCarts) {
+      final id = (cart['id'] as num?)?.toInt();
+      if (id == heldCartId) return cart;
+    }
+    return null;
+  }
+
+  Map<String, dynamic> _withRestoredCustomer(
+    Map<String, dynamic> restored,
+    Customer? customer,
+  ) {
+    if (customer == null) return restored;
+
+    final updated = Map<String, dynamic>.from(restored);
+    updated['selected_customer'] = customer.toMap();
+    updated['customer_id'] = customer.id;
+    updated['customer_name_snapshot'] = customer.displayName;
+    updated['customer_phone_snapshot'] = customer.hasPhone ? customer.phone : null;
+    updated['customer_code_snapshot'] = customer.displayCode;
+    return updated;
   }
 
   Future<void> _loadHeldCarts() async {
@@ -59,14 +343,17 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
       _isLoading = true;
     });
 
+    await CustomerService.instance.ensureCustomerStorage();
     final carts =
         await DatabaseHelper.instance.getHeldCartsForCashier(widget.cashierName);
+    final enrichedCarts = await _attachCustomerSnapshots(carts);
 
     if (!mounted) return;
 
     setState(() {
-      _heldCarts = carts;
+      _heldCarts = enrichedCarts;
       _isLoading = false;
+      _syncSelectedCartIndex();
     });
   }
 
@@ -91,6 +378,8 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     final query = _searchController.text.trim().toLowerCase();
     if (query.isEmpty) return _heldCarts;
 
+    final phoneQuery = CustomerService.instance.normalizePhone(query);
+
     return _heldCarts.where((cart) {
       final cartName = (cart['cart_name'] ?? 'Held Cart').toString().toLowerCase();
       final type = ((cart['is_refund_mode'] ?? false) == true ? 'refund' : 'sale');
@@ -98,12 +387,19 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
       final totalAmount = ((cart['total_amount'] as num?) ?? 0).toDouble();
       final totalText = totalAmount.toStringAsFixed(2);
       final updatedAt = _formatDateTime((cart['updated_at'] ?? '').toString()).toLowerCase();
+      final customerName = (cart['customer_name_snapshot'] ?? '').toString().toLowerCase();
+      final customerPhone = (cart['customer_phone_snapshot'] ?? '').toString().toLowerCase();
+      final customerCode = (cart['customer_code_snapshot'] ?? '').toString().toLowerCase();
 
       return cartName.contains(query) ||
           type.contains(query) ||
           itemCount.contains(query) ||
           totalText.contains(query) ||
-          updatedAt.contains(query);
+          updatedAt.contains(query) ||
+          customerName.contains(query) ||
+          customerPhone.contains(query) ||
+          (phoneQuery.isNotEmpty && customerPhone.contains(phoneQuery)) ||
+          customerCode.contains(query);
     }).toList();
   }
 
@@ -147,14 +443,16 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
 
   InputDecoration _searchDecoration() {
     return InputDecoration(
-      hintText: 'Search held bill by name, type, amount, or saved date',
+      hintText: 'Search held bill by name, customer, amount, or saved date',
       prefixIcon: Icon(Icons.search_rounded, color: _textMuted, size: 20),
       suffixIcon: _searchController.text.isEmpty
           ? null
           : IconButton(
               onPressed: () {
                 _searchController.clear();
-                setState(() {});
+                setState(() {
+                  _syncSelectedCartIndex();
+                });
               },
               icon: Icon(Icons.close_rounded, color: _textMuted),
             ),
@@ -181,14 +479,47 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
   }
 
   Future<void> _resumeHeldCart(int heldCartId) async {
-    final restored = await DatabaseHelper.instance.resumeHeldCart(
-      heldCartId,
-      cashierName: widget.cashierName,
+    if (_isResumingHeldCart) return;
+
+    setState(() {
+      _isResumingHeldCart = true;
+    });
+
+    Customer? customerSnapshot = _customerFromHeldCartRow(
+      _findHeldCartRowById(heldCartId) ?? const <String, dynamic>{},
     );
+    if (customerSnapshot == null) {
+      final row = await _loadHeldCartCustomerSnapshot(heldCartId);
+      if (row != null) {
+        customerSnapshot = _customerFromHeldCartRow(row);
+      }
+    }
+
+    final Map<String, dynamic>? restored;
+    try {
+      restored = await DatabaseHelper.instance.resumeHeldCart(
+        heldCartId,
+        cashierName: widget.cashierName,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isResumingHeldCart = false;
+      });
+      AppSnackBar.show(
+        context,
+        message: e.toString().replaceFirst('Exception: ', ''),
+        backgroundColor: _danger,
+      );
+      return;
+    }
 
     if (!mounted) return;
 
     if (restored == null) {
+      setState(() {
+        _isResumingHeldCart = false;
+      });
       AppSnackBar.show(
         context,
         message: 'Held bill not found.',
@@ -197,167 +528,203 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
       return;
     }
 
-    Navigator.pop(context, restored);
+    Navigator.pop(
+      context,
+      _withRestoredCustomer(restored, customerSnapshot),
+    );
   }
 
   Future<bool> _showDeleteDialog(String cartName) async {
-    final result = await showGeneralDialog<bool>(
-      context: context,
-      barrierLabel: 'Delete held bill',
-      barrierDismissible: true,
-      barrierColor: Colors.black.withOpacity(_isDark ? 0.34 : 0.24),
-      transitionDuration: const Duration(milliseconds: 220),
-      pageBuilder: (context, animation, secondaryAnimation) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: Container(
-                      constraints: const BoxConstraints(maxWidth: 440),
-                      padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
-                      decoration: _panelDecoration(color: _surface),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Center(
-                            child: Container(
-                              width: 46,
-                              height: 5,
-                              decoration: BoxDecoration(
-                                color: _border,
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                          Row(
+    _isDeleteDialogOpen = true;
+    try {
+      final result = await showGeneralDialog<bool>(
+        context: context,
+        barrierLabel: 'Delete held bill',
+        barrierDismissible: true,
+        barrierColor: Colors.black.withOpacity(_isDark ? 0.34 : 0.24),
+        transitionDuration: const Duration(milliseconds: 220),
+        pageBuilder: (dialogContext, animation, secondaryAnimation) {
+          var isClosing = false;
+
+          void close(bool value) {
+            if (isClosing) return;
+            isClosing = true;
+            Navigator.of(dialogContext).pop(value);
+          }
+
+          return Focus(
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event is! KeyDownEvent) return KeyEventResult.ignored;
+              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+                  event.logicalKey == LogicalKeyboardKey.numpadEnter;
+
+              if (isEnterKey) {
+                close(true);
+                return KeyEventResult.handled;
+              }
+
+              if (event.logicalKey == LogicalKeyboardKey.escape) {
+                close(false);
+                return KeyEventResult.handled;
+              }
+
+              return KeyEventResult.ignored;
+            },
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                return BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: Container(
+                          constraints: const BoxConstraints(maxWidth: 440),
+                          padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+                          decoration: _panelDecoration(color: _surface),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              Center(
+                                child: Container(
+                                  width: 46,
+                                  height: 5,
+                                  decoration: BoxDecoration(
+                                    color: _border,
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 18),
+                              Row(
+                                children: [
+                                  Container(
+                                    width: 52,
+                                    height: 52,
+                                    decoration: BoxDecoration(
+                                      color: _dangerSoft,
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color: _danger.withOpacity(0.24),
+                                      ),
+                                    ),
+                                    child: Icon(
+                                      Icons.delete_outline_rounded,
+                                      color: _danger,
+                                      size: 26,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Delete Held Bill',
+                                          style: TextStyle(
+                                            color: _textPrimary,
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'This will permanently remove this held bill.',
+                                          style: TextStyle(
+                                            color: _textSecondary,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            height: 1.4,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 18),
                               Container(
-                                width: 52,
-                                height: 52,
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
-                                  color: _dangerSoft,
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: _danger.withOpacity(0.24),
+                                  color: _surfaceSoft,
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: _border),
+                                ),
+                                child: Text(
+                                  cartName,
+                                  style: TextStyle(
+                                    color: _textPrimary,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 15,
                                   ),
                                 ),
-                                child: Icon(
-                                  Icons.delete_outline_rounded,
-                                  color: _danger,
-                                  size: 26,
-                                ),
                               ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Delete Held Bill',
-                                      style: TextStyle(
-                                        color: _textPrimary,
-                                        fontSize: 22,
-                                        fontWeight: FontWeight.w900,
+                              const SizedBox(height: 18),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton(
+                                      onPressed: () => close(false),
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: _textPrimary,
+                                        side: BorderSide(color: _border),
+                                        padding: const EdgeInsets.symmetric(vertical: 15),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(16),
+                                        ),
                                       ),
+                                      child: const Text('Cancel'),
                                     ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'This will permanently remove this held bill.',
-                                      style: TextStyle(
-                                        color: _textSecondary,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                        height: 1.4,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: ElevatedButton(
+                                      onPressed: () => close(true),
+                                      style: ElevatedButton.styleFrom(
+                                        elevation: 0,
+                                        backgroundColor: _danger,
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(vertical: 15),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(16),
+                                        ),
                                       ),
+                                      child: const Text('Delete Bill'),
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
-                          const SizedBox(height: 18),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: _surfaceSoft,
-                              borderRadius: BorderRadius.circular(18),
-                              border: Border.all(color: _border),
-                            ),
-                            child: Text(
-                              cartName,
-                              style: TextStyle(
-                                color: _textPrimary,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 15,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: OutlinedButton(
-                                  onPressed: () => Navigator.pop(context, false),
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: _textPrimary,
-                                    side: BorderSide(color: _border),
-                                    padding: const EdgeInsets.symmetric(vertical: 15),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                  ),
-                                  child: const Text('Cancel'),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: ElevatedButton(
-                                  onPressed: () => Navigator.pop(context, true),
-                                  style: ElevatedButton.styleFrom(
-                                    elevation: 0,
-                                    backgroundColor: _danger,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 15),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                  ),
-                                  child: const Text('Delete Bill'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
-        return FadeTransition(
-          opacity: curved,
-          child: ScaleTransition(
-            scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
-            child: child,
-          ),
-        );
-      },
-    );
+                );
+              },
+            ),
+          );
+        },
+        transitionBuilder: (context, animation, secondaryAnimation, child) {
+          final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+          return FadeTransition(
+            opacity: curved,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      );
 
-    return result ?? false;
+      return result ?? false;
+    } finally {
+      _isDeleteDialogOpen = false;
+    }
   }
 
   Future<void> _deleteHeldCart(int heldCartId, String cartName) async {
@@ -398,8 +765,11 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
           const SizedBox(height: 14),
           TextField(
             controller: _searchController,
+            focusNode: _searchFocusNode,
             decoration: _searchDecoration(),
-            onChanged: (_) => setState(() {}),
+            onChanged: (_) => setState(() {
+              _syncSelectedCartIndex();
+            }),
           ),
           const SizedBox(height: 10),
           Row(
@@ -440,44 +810,92 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     );
   }
 
-  Widget _buildCartRow(Map<String, dynamic> cart) {
+  Widget _buildCartRow(
+    Map<String, dynamic> cart, {
+    int? shortcutNumber,
+    required bool isSelected,
+  }) {
     final id = (cart['id'] as num).toInt();
     final cartName = (cart['cart_name'] ?? 'Held Cart').toString();
     final isRefundMode = (cart['is_refund_mode'] ?? false) == true;
     final itemCount = _formatQuantity((cart['item_count'] as num?) ?? 0);
     final totalAmount = ((cart['total_amount'] as num?) ?? 0).toDouble();
     final updatedAt = (cart['updated_at'] ?? '').toString();
+    final customer = _customerFromHeldCartRow(cart);
 
     final modeColor = isRefundMode ? _danger : _brand;
     final modeSoft = isRefundMode ? _dangerSoft : _brandSoft;
+    final selectedColor = isRefundMode ? _danger : _brand;
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(22),
         onTap: () => _resumeHeldCart(id),
-        child: Ink(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 80),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: _surface,
+            color: isSelected ? selectedColor.withOpacity(_isDark ? 0.16 : 0.08) : _surface,
             borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: _border),
+            border: Border.all(
+              color: isSelected ? selectedColor : _border,
+              width: isSelected ? 1.5 : 1,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: selectedColor.withOpacity(_isDark ? 0.14 : 0.08),
+                      blurRadius: 16,
+                      offset: const Offset(0, 8),
+                    ),
+                  ]
+                : null,
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: modeSoft,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Icon(
-                  isRefundMode ? Icons.restart_alt_rounded : Icons.receipt_long_rounded,
-                  color: modeColor,
-                  size: 22,
-                ),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: modeSoft,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(
+                      isRefundMode ? Icons.restart_alt_rounded : Icons.receipt_long_rounded,
+                      color: modeColor,
+                      size: 22,
+                    ),
+                  ),
+                  if (shortcutNumber != null)
+                    Positioned(
+                      top: -7,
+                      left: -7,
+                      child: Container(
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                          color: _brand,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: _surface, width: 2),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '$shortcutNumber',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -515,6 +933,41 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                             ),
                           ),
                         ),
+                        if (customer != null) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: _brandSoft,
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: _brand.withOpacity(0.22)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.person_rounded,
+                                  size: 13,
+                                  color: _brand,
+                                ),
+                                const SizedBox(width: 5),
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 150),
+                                  child: Text(
+                                    customer.displayName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: _brand,
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         const SizedBox(width: 8),
                         InkWell(
                           borderRadius: BorderRadius.circular(12),
@@ -559,6 +1012,17 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                             fontSize: 13,
                           ),
                         ),
+                        if (customer != null && customer.hasPhone) ...[
+                          _buildMetaDot(),
+                          Text(
+                            customer.displayPhone,
+                            style: TextStyle(
+                              color: _textSecondary,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
                         _buildMetaDot(),
                         Text(
                           'Saved ${_formatDateTime(updatedAt)}',
@@ -572,7 +1036,9 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      'Tap this bill to resume it instantly.',
+                      shortcutNumber == null
+                          ? 'Enter resumes selected bill. Delete removes it.'
+                          : 'Press $shortcutNumber to select. Press twice to resume.',
                       style: TextStyle(
                         color: _textMuted,
                         fontWeight: FontWeight.w600,
@@ -650,10 +1116,15 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                   else if (_filteredCarts.isEmpty)
                     _buildEmptyState(message: 'No held bills match your search.')
                   else
-                    ..._filteredCarts.map(
-                      (cart) => Padding(
+                    ..._filteredCarts.asMap().entries.map(
+                      (entry) => Padding(
                         padding: const EdgeInsets.only(bottom: 12),
-                        child: _buildCartRow(cart),
+                        child: _buildCartRow(
+                          entry.value,
+                          shortcutNumber: entry.key < 9 ? entry.key + 1 : null,
+                          isSelected:
+                              _isHeldSelectionVisible && _selectedCartIndex == entry.key,
+                        ),
                       ),
                     ),
                 ],
