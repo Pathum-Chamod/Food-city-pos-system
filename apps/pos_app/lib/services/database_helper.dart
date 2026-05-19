@@ -4579,6 +4579,72 @@ class DatabaseHelper {
     );
   }
 
+  Future<void> clearFullDatabaseData({
+    int? actorUserId,
+    String? actorName,
+  }) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    final preservedActorName = actorName == null || actorName.trim().isEmpty
+        ? 'Manager'
+        : actorName.trim();
+
+    const tablesToClear = [
+      'expiry_actions',
+      'expiry_batches',
+      'purchase_order_receipt_reversal_audit',
+      'purchase_order_receipt_lines',
+      'purchase_order_receipts',
+      'purchase_order_items',
+      'purchase_orders',
+      'stock_receipts',
+      'supplier_product_mappings',
+      'suppliers',
+      'loyalty_ledger',
+      'loyalty_excluded_products',
+      'loyalty_excluded_categories',
+      'customer_product_prices',
+      'pricing_scheme_rules',
+      'pricing_schemes',
+      'customer_categories',
+      'customers',
+      'held_carts',
+      'shifts',
+      'stock_take_items',
+      'stock_take_sessions',
+      'inventory_movements',
+      'sale_items',
+      'sales',
+      'product_price_history',
+      'products',
+      'sync_queue',
+      'user_logs',
+    ];
+
+    await db.transaction((txn) async {
+      for (final table in tablesToClear) {
+        await txn.delete(table);
+      }
+
+      for (final table in tablesToClear) {
+        await txn.delete(
+          'sqlite_sequence',
+          where: 'name = ?',
+          whereArgs: [table],
+        );
+      }
+
+      await _insertUserLog(
+        txn,
+        actorUserId: actorUserId,
+        actorName: preservedActorName,
+        actionType: 'database_clear',
+        description: 'Cleared full POS database data',
+        createdAt: now,
+      );
+    });
+  }
+
   Future<List<Map<String, dynamic>>> getUserLogs({
     String search = '',
     String actionFilter = 'all',
@@ -6423,8 +6489,9 @@ class DatabaseHelper {
     String? supplierName,
   }) async {
     final safeQuantity = _roundQuantity(quantity);
-    if (barcode.trim().isEmpty || !_isPositiveQuantity(safeQuantity))
+    if (barcode.trim().isEmpty || !_isPositiveQuantity(safeQuantity)) {
       return false;
+    }
 
     final db = await database;
 
@@ -6525,8 +6592,9 @@ class DatabaseHelper {
       return false;
     }
     if (safeQuantity < 0) return false;
-    if (adjustmentType != 'set' && !_isPositiveQuantity(safeQuantity))
+    if (adjustmentType != 'set' && !_isPositiveQuantity(safeQuantity)) {
       return false;
+    }
 
     final db = await database;
 
@@ -6987,8 +7055,9 @@ class DatabaseHelper {
           changes.add('measurement');
         }
         if (oldCostPrice != _roundMoney(costPrice)) changes.add('cost');
-        if (oldSellingPrice != _roundMoney(sellingPrice))
+        if (oldSellingPrice != _roundMoney(sellingPrice)) {
           changes.add('selling');
+        }
         if (oldWholesalePrice != resolvedWholesale) changes.add('wholesale');
         if (oldSalePrice != resolvedSalePrice ||
             oldSaleEnabled != saleEnabled) {
@@ -7503,8 +7572,8 @@ class DatabaseHelper {
       'expiry_batches',
       columns: ['id'],
       where:
-          "barcode = ? AND status = 'active' AND remaining_quantity > ? AND date(expiry_date) <= date(?)",
-      whereArgs: [trimmedBarcode, _quantityEpsilon, today],
+          "barcode = ? AND status = 'active' AND remaining_quantity > ? AND date(expiry_date) <= date(?) AND (last_checked_at = '' OR date(last_checked_at) < date(?))",
+      whereArgs: [trimmedBarcode, _quantityEpsilon, today, today],
       limit: 1,
     );
 
