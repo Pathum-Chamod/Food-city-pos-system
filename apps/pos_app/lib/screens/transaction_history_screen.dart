@@ -649,7 +649,8 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       });
     }
 
-    final type = _filter == 'all' ? null : _filter;
+    final creditSaleOnly = _filter == 'credit_sale';
+    final type = _filter == 'all' || creditSaleOnly ? null : _filter;
     final selectedDay = _dateFilter == 'today'
         ? _normalizedDay(DateTime.now())
         : _dateFilter == 'specific'
@@ -672,32 +673,16 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
 
     final transactions = await DatabaseHelper.instance.getRecentTransactions(
       transactionType: type,
+      creditSaleOnly: creditSaleOnly,
       start: start,
       end: end,
       limit: null,
     );
 
-    final enrichedTransactions = <Map<String, dynamic>>[];
-    for (final rawTransaction in transactions) {
-      final transaction = Map<String, dynamic>.from(rawTransaction);
-      final saleId =
-          (transaction['id'] as num?)?.toInt() ??
-          int.tryParse((transaction['id'] ?? '').toString()) ??
-          0;
-
-      if (saleId > 0) {
-        final customerSnapshot = await CustomerService.instance
-            .getSaleCustomerSnapshotMap(saleId);
-        transaction.addAll(customerSnapshot);
-      }
-
-      enrichedTransactions.add(transaction);
-    }
-
     if (!mounted) return;
 
     setState(() {
-      _transactions = enrichedTransactions;
+      _transactions = transactions;
       _isLoading = false;
     });
   }
@@ -959,15 +944,15 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
         creditStatus == 'refund_posted';
   }
 
-  String _customerSubtitle(Map<String, dynamic> tx) {
-    final parts = <String>[];
-    final code = (tx['customer_code_snapshot'] ?? '').toString().trim();
+  String _customerTagValue(Map<String, dynamic> tx) {
     final phone = (tx['customer_phone_snapshot'] ?? '').toString().trim();
+    if (phone.isNotEmpty) return phone;
 
-    if (code.isNotEmpty) parts.add(code);
-    if (phone.isNotEmpty) parts.add(phone);
+    final name = _customerName(tx);
+    if (name.isNotEmpty) return name;
 
-    return parts.isEmpty ? 'Registered customer' : parts.join(' • ');
+    final code = (tx['customer_code_snapshot'] ?? '').toString().trim();
+    return code.isNotEmpty ? code : 'Registered customer';
   }
 
   Color _typeColor(_TxPalette palette, String type) {
@@ -1210,6 +1195,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                 children: [
                   _buildFilterChip(palette, 'all', 'All'),
                   _buildFilterChip(palette, 'sale', 'Sales'),
+                  _buildFilterChip(palette, 'credit_sale', 'Credit Sale'),
                   _buildFilterChip(palette, 'refund', 'Refunds'),
                 ],
               );
@@ -1342,10 +1328,6 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     final customerName = _customerName(tx);
     final hasCustomer = customerName.isNotEmpty;
     final isCreditSale = _isCreditSale(tx);
-    final creditPreviousBalance = ((tx['credit_previous_balance'] as num?) ?? 0)
-        .toDouble();
-    final creditNewBalance = ((tx['credit_new_balance'] as num?) ?? 0)
-        .toDouble();
 
     return Material(
       color: Colors.transparent,
@@ -1432,13 +1414,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                           _buildMiniInfoCard(
                             palette,
                             'Customer',
-                            '$customerName\n${_customerSubtitle(tx)}',
-                          ),
-                        if (isCreditSale)
-                          _buildMiniInfoCard(
-                            palette,
-                            'Credit Balance',
-                            'Rs. ${creditPreviousBalance.toStringAsFixed(2)} → Rs. ${creditNewBalance.toStringAsFixed(2)}',
+                            _customerTagValue(tx),
                           ),
                         if (type == 'sale' && discountAmount > 0)
                           _buildMiniInfoCard(
@@ -1708,6 +1684,15 @@ Future<String?> showTransactionReceiptDialog(
       .toString()
       .trim();
   final hasCustomer = customerName.isNotEmpty;
+  final customerDetailParts = <String>['Customer: $customerName'];
+  if (customerCode.isNotEmpty && customerCode != customerName) {
+    customerDetailParts.add(customerCode);
+  }
+  if (customerPhone.isNotEmpty &&
+      customerPhone != customerName &&
+      customerPhone != customerCode) {
+    customerDetailParts.add(customerPhone);
+  }
   final isCreditSale =
       TransactionHistoryScreen._readBool(summary['is_credit_sale']) ||
       paymentMethod.toLowerCase() == 'customer_credit';
@@ -1978,11 +1963,6 @@ Future<String?> showTransactionReceiptDialog(
                                 Icons.person_outline_rounded,
                                 cashier,
                               ),
-                              if (hasCustomer)
-                                buildInfoChip(
-                                  Icons.badge_outlined,
-                                  customerName,
-                                ),
                               buildInfoChip(
                                 Icons.schedule_outlined,
                                 formatDateTime(createdAt),
@@ -2021,13 +2001,7 @@ Future<String?> showTransactionReceiptDialog(
                                   const SizedBox(width: 10),
                                   Expanded(
                                     child: Text(
-                                      [
-                                        'Customer: $customerName',
-                                        if (customerCode.isNotEmpty)
-                                          customerCode,
-                                        if (customerPhone.isNotEmpty)
-                                          customerPhone,
-                                      ].join(' • '),
+                                      customerDetailParts.join(' • '),
                                       style: TextStyle(
                                         color: palette.textPrimary,
                                         fontWeight: FontWeight.w800,

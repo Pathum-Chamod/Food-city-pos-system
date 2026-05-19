@@ -65,7 +65,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 27,
+        version: 29,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -445,6 +445,15 @@ class DatabaseHelper {
         payment_method TEXT,
         amount_tendered REAL,
         change_amount REAL,
+        customer_id INTEGER,
+        customer_name_snapshot TEXT,
+        customer_phone_snapshot TEXT,
+        customer_code_snapshot TEXT,
+        is_credit_sale INTEGER NOT NULL DEFAULT 0,
+        credit_status TEXT,
+        credit_previous_balance REAL,
+        credit_new_balance REAL,
+        credit_bill_amount REAL,
         created_at TEXT NOT NULL
       )
     ''');
@@ -487,6 +496,7 @@ class DatabaseHelper {
     ''');
 
     await _createProductPriceHistoryTable(db);
+    await _ensureSalesHistoryIndexes(db);
 
     await db.execute('''
       CREATE TABLE inventory_movements (
@@ -1332,6 +1342,36 @@ class DatabaseHelper {
       await _createCustomersTable(db);
       await _ensureLoyaltySchema(db);
     }
+
+    if (oldVersion < 29) {
+      await _addColumnIfMissing(db, 'sales', 'customer_id', 'INTEGER');
+      await _addColumnIfMissing(db, 'sales', 'customer_name_snapshot', 'TEXT');
+      await _addColumnIfMissing(db, 'sales', 'customer_phone_snapshot', 'TEXT');
+      await _addColumnIfMissing(db, 'sales', 'customer_code_snapshot', 'TEXT');
+      await _addColumnIfMissing(
+        db,
+        'sales',
+        'is_credit_sale',
+        'INTEGER NOT NULL DEFAULT 0',
+      );
+      await _addColumnIfMissing(db, 'sales', 'credit_status', 'TEXT');
+      await _addColumnIfMissing(db, 'sales', 'credit_previous_balance', 'REAL');
+      await _addColumnIfMissing(db, 'sales', 'credit_new_balance', 'REAL');
+      await _addColumnIfMissing(db, 'sales', 'credit_bill_amount', 'REAL');
+      await _ensureSalesHistoryIndexes(db);
+    }
+  }
+
+  Future<void> _ensureSalesHistoryIndexes(Database db) async {
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sales_created_at_id ON sales(created_at DESC, id DESC)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sales_type_created_at_id ON sales(transaction_type, created_at DESC, id DESC)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sale_items_sale_id ON sale_items(sale_id)',
+    );
   }
 
   Future<void> _createCustomersTable(Database db) async {
@@ -4622,6 +4662,7 @@ class DatabaseHelper {
 
   Future<List<Map<String, dynamic>>> getRecentTransactions({
     String? transactionType,
+    bool creditSaleOnly = false,
     DateTime? start,
     DateTime? end,
     int? limit = 50,
@@ -4636,13 +4677,23 @@ class DatabaseHelper {
       whereArgs.add(transactionType);
     }
 
+    if (creditSaleOnly) {
+      whereParts.add('''
+        s.transaction_type = 'sale'
+        AND (
+          COALESCE(s.is_credit_sale, 0) = 1
+          OR LOWER(COALESCE(s.payment_method, '')) = 'customer_credit'
+        )
+      ''');
+    }
+
     if (start != null) {
-      whereParts.add('datetime(s.created_at) >= datetime(?)');
+      whereParts.add('s.created_at >= ?');
       whereArgs.add(start.toIso8601String());
     }
 
     if (end != null) {
-      whereParts.add('datetime(s.created_at) <= datetime(?)');
+      whereParts.add('s.created_at <= ?');
       whereArgs.add(end.toIso8601String());
     }
 
@@ -4653,55 +4704,107 @@ class DatabaseHelper {
     final queryArgs = <Object?>[...whereArgs, if (limit != null) limit];
 
     final rows = await db.rawQuery('''
+      WITH filtered_sales AS (
+        SELECT
+          s.id,
+          s.subtotal_amount,
+          s.discount_type,
+          s.discount_value,
+          s.discount_amount,
+          s.total_amount,
+          s.cashier_name,
+          s.transaction_type,
+          s.original_sale_id,
+          s.refund_reason,
+          s.payment_method,
+          s.amount_tendered,
+          s.change_amount,
+          s.customer_id,
+          s.customer_name_snapshot,
+          s.customer_phone_snapshot,
+          s.customer_code_snapshot,
+          s.is_credit_sale,
+          s.credit_status,
+          s.credit_previous_balance,
+          s.credit_new_balance,
+          s.credit_bill_amount,
+          s.loyalty_points_earned,
+          s.loyalty_points_redeemed,
+          s.loyalty_redeemed_value,
+          s.loyalty_earn_base_amount,
+          s.loyalty_status,
+          s.loyalty_note,
+          s.created_at
+        FROM sales s
+        $whereClause
+        ORDER BY s.created_at DESC, s.id DESC
+        $limitClause
+      )
       SELECT
-        s.id,
-        s.subtotal_amount,
-        s.discount_type,
-        s.discount_value,
-        s.discount_amount,
-        s.total_amount,
-        s.cashier_name,
-        s.transaction_type,
-        s.original_sale_id,
-        s.refund_reason,
-        s.payment_method,
-        s.amount_tendered,
-        s.change_amount,
-        s.loyalty_points_earned,
-        s.loyalty_points_redeemed,
-        s.loyalty_redeemed_value,
-        s.loyalty_earn_base_amount,
-        s.loyalty_status,
-        s.loyalty_note,
-        s.created_at,
+        fs.id,
+        fs.subtotal_amount,
+        fs.discount_type,
+        fs.discount_value,
+        fs.discount_amount,
+        fs.total_amount,
+        fs.cashier_name,
+        fs.transaction_type,
+        fs.original_sale_id,
+        fs.refund_reason,
+        fs.payment_method,
+        fs.amount_tendered,
+        fs.change_amount,
+        fs.customer_id,
+        fs.customer_name_snapshot,
+        fs.customer_phone_snapshot,
+        fs.customer_code_snapshot,
+        fs.is_credit_sale,
+        fs.credit_status,
+        fs.credit_previous_balance,
+        fs.credit_new_balance,
+        fs.credit_bill_amount,
+        fs.loyalty_points_earned,
+        fs.loyalty_points_redeemed,
+        fs.loyalty_redeemed_value,
+        fs.loyalty_earn_base_amount,
+        fs.loyalty_status,
+        fs.loyalty_note,
+        fs.created_at,
         COUNT(si.id) AS item_line_count,
         COALESCE(SUM(si.quantity), 0) AS item_quantity_total
-      FROM sales s
-      LEFT JOIN sale_items si ON si.sale_id = s.id
-      $whereClause
+      FROM filtered_sales fs
+      LEFT JOIN sale_items si ON si.sale_id = fs.id
       GROUP BY
-        s.id,
-        s.subtotal_amount,
-        s.discount_type,
-        s.discount_value,
-        s.discount_amount,
-        s.total_amount,
-        s.cashier_name,
-        s.transaction_type,
-        s.original_sale_id,
-        s.refund_reason,
-        s.payment_method,
-        s.amount_tendered,
-        s.change_amount,
-        s.loyalty_points_earned,
-        s.loyalty_points_redeemed,
-        s.loyalty_redeemed_value,
-        s.loyalty_earn_base_amount,
-        s.loyalty_status,
-        s.loyalty_note,
-        s.created_at
-      ORDER BY datetime(s.created_at) DESC, s.id DESC
-      $limitClause
+        fs.id,
+        fs.subtotal_amount,
+        fs.discount_type,
+        fs.discount_value,
+        fs.discount_amount,
+        fs.total_amount,
+        fs.cashier_name,
+        fs.transaction_type,
+        fs.original_sale_id,
+        fs.refund_reason,
+        fs.payment_method,
+        fs.amount_tendered,
+        fs.change_amount,
+        fs.customer_id,
+        fs.customer_name_snapshot,
+        fs.customer_phone_snapshot,
+        fs.customer_code_snapshot,
+        fs.is_credit_sale,
+        fs.credit_status,
+        fs.credit_previous_balance,
+        fs.credit_new_balance,
+        fs.credit_bill_amount,
+        fs.loyalty_points_earned,
+        fs.loyalty_points_redeemed,
+        fs.loyalty_redeemed_value,
+        fs.loyalty_earn_base_amount,
+        fs.loyalty_status,
+        fs.loyalty_note,
+        fs.created_at
+      ORDER BY fs.created_at DESC, fs.id DESC
       ''', queryArgs);
 
     return rows
@@ -4720,6 +4823,15 @@ class DatabaseHelper {
             'payment_method': row['payment_method'],
             'amount_tendered': row['amount_tendered'],
             'change_amount': row['change_amount'],
+            'customer_id': row['customer_id'],
+            'customer_name_snapshot': row['customer_name_snapshot'],
+            'customer_phone_snapshot': row['customer_phone_snapshot'],
+            'customer_code_snapshot': row['customer_code_snapshot'],
+            'is_credit_sale': row['is_credit_sale'],
+            'credit_status': row['credit_status'],
+            'credit_previous_balance': row['credit_previous_balance'],
+            'credit_new_balance': row['credit_new_balance'],
+            'credit_bill_amount': row['credit_bill_amount'],
             'loyalty_points_earned': row['loyalty_points_earned'],
             'loyalty_points_redeemed': row['loyalty_points_redeemed'],
             'loyalty_redeemed_value': row['loyalty_redeemed_value'],

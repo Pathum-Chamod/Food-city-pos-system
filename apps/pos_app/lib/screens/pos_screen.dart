@@ -6534,10 +6534,7 @@ class _PosScreenState extends State<PosScreen> {
           OutlinedButton.icon(
             onPressed: cart.items.isEmpty
                 ? null
-                : () {
-                    context.read<CartProvider>().clearCart();
-                    _focusBarcodeField();
-                  },
+                : () => _confirmClearCart(cart),
             icon: const Icon(Icons.delete_sweep_rounded, size: 14),
             label: const Text('Clear Cart'),
             style: OutlinedButton.styleFrom(
