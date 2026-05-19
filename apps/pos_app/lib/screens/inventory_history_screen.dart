@@ -710,6 +710,235 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     );
   }
 
+  Widget _buildMovementRecord(Map<String, dynamic> movement) {
+    final actionType = (movement['action_type'] ?? '').toString();
+    final badge = _badgeColor(actionType);
+    final productName = (movement['product_name'] ?? 'Unknown product')
+        .toString();
+    final barcode = (movement['barcode'] ?? '-').toString();
+    final quantityChange = (movement['quantity_change'] as num?)?.toDouble();
+    final oldPrice = movement['old_price'] as num?;
+    final newPrice = movement['new_price'] as num?;
+    final supplierName = (movement['supplier_name'] ?? '').toString().trim();
+    final performedBy = (movement['performed_by'] ?? '').toString().trim();
+    final reason = (movement['reason'] ?? '').toString().trim();
+    final batchNumber = (movement['batch_number'] ?? '').toString().trim();
+    final expiryDate = (movement['expiry_date'] ?? '').toString().trim();
+    final stockBefore = movement['stock_before'];
+    final stockAfter = movement['stock_after'];
+    final supplierCost = movement['supplier_cost'];
+
+    return InkWell(
+      onTap: () => _openMovementDetails(movement),
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    productName,
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      color: _textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _buildMovementInlineMeta(
+                  icon: Icons.qr_code_rounded,
+                  text: barcode,
+                  color: _textSecondary,
+                ),
+                _buildMovementMetaDivider(),
+                _buildMovementInlineMeta(
+                  icon: badge.$3,
+                  text: _movementTitle(actionType),
+                  color: badge.$1,
+                ),
+                _buildMovementMetaDivider(),
+                _buildMovementInlineMeta(
+                  icon: Icons.schedule_rounded,
+                  text: _formatDateTime(movement['created_at']?.toString()),
+                  color: _textSecondary,
+                ),
+                if (supplierName.isNotEmpty) ...[
+                  _buildMovementMetaDivider(),
+                  _buildMovementInlineMeta(
+                    icon: Icons.local_shipping_outlined,
+                    text: supplierName,
+                    color: _brand,
+                  ),
+                ],
+                if (batchNumber.isNotEmpty) ...[
+                  _buildMovementMetaDivider(),
+                  _buildMovementInlineMeta(
+                    icon: Icons.sell_outlined,
+                    text: 'Batch $batchNumber',
+                    color: const Color(0xFF4B8DFF),
+                  ),
+                ],
+                if (expiryDate.isNotEmpty) ...[
+                  _buildMovementMetaDivider(),
+                  _buildMovementInlineMeta(
+                    icon: Icons.event_available_outlined,
+                    text: 'Exp ${_formatDateOnly(expiryDate)}',
+                    color: const Color(0xFFFFB65C),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (quantityChange != null)
+                  _buildMovementInlineMeta(
+                    icon: quantityChange >= 0
+                        ? Icons.add_box_outlined
+                        : Icons.indeterminate_check_box_outlined,
+                    text: _movementQuantityText(actionType, quantityChange),
+                    color: badge.$1,
+                  )
+                else if (oldPrice != null || newPrice != null)
+                  _buildMovementInlineMeta(
+                    icon: Icons.sell_outlined,
+                    text: _movementPriceText(movement),
+                    color: badge.$1,
+                  ),
+                if (stockBefore != null || stockAfter != null) ...[
+                  _buildMovementMetaDivider(),
+                  Text(
+                    'Stock ${_movementStockText(stockBefore)} -> ${_movementStockText(stockAfter)}',
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+                if (supplierCost != null) ...[
+                  _buildMovementMetaDivider(),
+                  Text(
+                    'Unit Rs. ${_asDouble(supplierCost).toStringAsFixed(2)}',
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            if (performedBy.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Processed by $performedBy',
+                style: TextStyle(
+                  color: _muted,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+            if (reason.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _panelSoft,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: _border),
+                ),
+                child: Text(
+                  reason,
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontWeight: FontWeight.w600,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMovementInlineMeta({
+    required IconData icon,
+    required String text,
+    required Color color,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: color, size: 14),
+        const SizedBox(width: 6),
+        Text(
+          text,
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMovementMetaDivider() {
+    return Text(
+      '•',
+      style: TextStyle(
+        color: _muted,
+        fontWeight: FontWeight.w900,
+        fontSize: 13,
+      ),
+    );
+  }
+
+  String _movementQuantityText(String actionType, double quantityChange) {
+    final sign = quantityChange > 0
+        ? '+'
+        : quantityChange < 0
+        ? '-'
+        : '';
+    final quantity = '$sign${_formatQuantity(quantityChange.abs())}';
+    if (actionType.contains('receive')) return '$quantity received';
+    if (actionType == 'sale') return '$quantity sold';
+    if (actionType == 'refund') return '$quantity refunded';
+    if (actionType.contains('remove')) return '$quantity removed';
+    if (actionType.contains('add')) return '$quantity added';
+    return '$quantity changed';
+  }
+
+  String _movementPriceText(Map<String, dynamic> movement) {
+    return 'Rs. ${_asDouble(movement['old_price']).toStringAsFixed(2)} -> '
+        'Rs. ${_asDouble(movement['new_price']).toStringAsFixed(2)}';
+  }
+
+  String _movementStockText(dynamic value) {
+    return value == null ? '-' : _formatQuantity(value);
+  }
+
+  // ignore: unused_element
   Widget _buildMovementTile(Map<String, dynamic> movement) {
     final actionType = (movement['action_type'] ?? '').toString();
     final quantityChange = (movement['quantity_change'] as num?)?.toDouble();
@@ -1338,70 +1567,86 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                       ),
                       const SizedBox(height: 16),
                       Container(
-                        padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
                           color: _panel,
-                          borderRadius: BorderRadius.circular(22),
+                          borderRadius: BorderRadius.circular(28),
                           border: Border.all(color: _border),
                         ),
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: [
-                                Text(
-                                  'History Records',
-                                  style: TextStyle(
-                                    color: _textPrimary,
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w900,
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                18,
+                                18,
+                                18,
+                                12,
+                              ),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    'History Records',
+                                    style: TextStyle(
+                                      color: _textPrimary,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w900,
+                                    ),
                                   ),
-                                ),
-                                const Spacer(),
-                                Text(
-                                  '${_movements.length} shown',
-                                  style: TextStyle(
-                                    color: _textSecondary,
-                                    fontWeight: FontWeight.w700,
+                                  const Spacer(),
+                                  Text(
+                                    '${_movements.length} shown',
+                                    style: TextStyle(
+                                      color: _textSecondary,
+                                      fontWeight: FontWeight.w800,
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                            const SizedBox(height: 14),
+                            Divider(height: 1, color: _border),
                             if (_movements.isEmpty)
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(28),
-                                decoration: BoxDecoration(
-                                  color: _panelSoft,
-                                  borderRadius: BorderRadius.circular(18),
-                                  border: Border.all(color: _border),
-                                ),
-                                child: Column(
-                                  children: [
-                                    Icon(
-                                      Icons.history_toggle_off_rounded,
-                                      color: _muted,
-                                      size: 36,
-                                    ),
-                                    const SizedBox(height: 10),
-                                    Text(
-                                      'No inventory history records match the current search or filter.',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        color: _textSecondary,
-                                        fontWeight: FontWeight.w700,
+                              Padding(
+                                padding: const EdgeInsets.all(18),
+                                child: Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(28),
+                                  decoration: BoxDecoration(
+                                    color: _panelSoft,
+                                    borderRadius: BorderRadius.circular(18),
+                                    border: Border.all(color: _border),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Icon(
+                                        Icons.history_toggle_off_rounded,
+                                        color: _muted,
+                                        size: 36,
                                       ),
-                                    ),
-                                  ],
+                                      const SizedBox(height: 10),
+                                      Text(
+                                        'No inventory history records match the current search or filter.',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          color: _textSecondary,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               )
                             else
-                              ..._movements.map(
-                                (movement) => Padding(
-                                  padding: const EdgeInsets.only(bottom: 10),
-                                  child: _buildMovementTile(movement),
+                              ListView.separated(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 6,
                                 ),
+                                itemCount: _movements.length,
+                                separatorBuilder: (_, __) =>
+                                    Divider(height: 1, color: _border),
+                                itemBuilder: (context, index) =>
+                                    _buildMovementRecord(_movements[index]),
                               ),
                           ],
                         ),

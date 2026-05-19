@@ -667,26 +667,6 @@ class _SupplierReceiveHistoryScreenState
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: ui.successSoft,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: ui.success.withOpacity(0.22)),
-                ),
-                child: Text(
-                  '+${_formatQuantity(receipt.quantity)}',
-                  style: TextStyle(
-                    color: ui.success,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
             ],
           ),
           const SizedBox(height: 8),
