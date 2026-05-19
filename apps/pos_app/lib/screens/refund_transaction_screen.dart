@@ -814,6 +814,20 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     final selectedQty = _selectedFor(barcode);
     final refundAmount = unitPrice * selectedQty;
     final hasSelection = selectedQty > 0;
+    final cardColor = hasSelection
+        ? palette.isDark
+              ? palette.brandSoftStrong
+              : const Color(0xFFF2FFFB)
+        : palette.surfaceAlt;
+    final shadowColor = Colors.black.withValues(
+      alpha: palette.isDark
+          ? hasSelection
+                ? 0.24
+                : 0.18
+          : hasSelection
+          ? 0.08
+          : 0.04,
+    );
 
     Widget statChip(String title, String value) {
       return Expanded(
@@ -854,7 +868,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
       duration: const Duration(milliseconds: 180),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: hasSelection ? palette.brandSoftStrong : palette.surfaceAlt,
+        color: cardColor,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: hasSelection
@@ -863,9 +877,9 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
         ),
         boxShadow: [
           BoxShadow(
-            color: palette.shadow.withOpacity(hasSelection ? 0.9 : 0.7),
-            blurRadius: hasSelection ? 18 : 12,
-            offset: const Offset(0, 8),
+            color: shadowColor,
+            blurRadius: hasSelection ? 16 : 10,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
