@@ -108,7 +108,6 @@ class _PosScreenState extends State<PosScreen> {
   ProductPriceType? _lastPriceModePreviousType;
   DateTime? _lastPriceModeTapAt;
   bool _isPriceModePromptOpen = false;
-  final Set<String> _expiryWarningShownBarcodes = <String>{};
 
   final ScrollController _cartScrollController = ScrollController();
   int _lastCartItemCount = 0;
@@ -3355,11 +3354,9 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     if (!cart.isRefundMode &&
-        !_expiryWarningShownBarcodes.contains(product.barcode) &&
         await DatabaseHelper.instance.hasExpiredBatchForBarcode(
           product.barcode,
         )) {
-      _expiryWarningShownBarcodes.add(product.barcode);
       _showInfoMessage(
         '${product.name} has expired stock recorded. Check the shelf item before selling.',
         backgroundColor: _warningColor,

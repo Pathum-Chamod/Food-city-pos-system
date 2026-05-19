@@ -3283,6 +3283,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
     int? selectedSupplierId = preferredMapping.supplierId;
     bool setAsPrimary = false;
     DateTime? expiryDate;
+    if (product.trackExpiry) {
+      final preferredSupplier = suppliers
+          .where((supplier) => supplier.id == selectedSupplierId)
+          .cast<PosSupplier?>()
+          .firstOrNull;
+      if (preferredSupplier != null) {
+        batchController.text = await DatabaseHelper.instance
+            .generateStockBatchNumber(supplierName: preferredSupplier.name);
+        if (!mounted) return;
+      }
+    }
 
     final saved = await _showInventoryPopup<bool>(
       icon: Icons.inventory_2_rounded,
@@ -3477,6 +3488,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       ),
                     );
                   });
+                  if (product.trackExpiry) {
+                    final supplier = suppliers
+                        .where((item) => item.id == value)
+                        .cast<PosSupplier?>()
+                        .firstOrNull;
+                    if (supplier != null) {
+                      DatabaseHelper.instance
+                          .generateStockBatchNumber(supplierName: supplier.name)
+                          .then((batchNumber) {
+                            if (!dialogContext.mounted) return;
+                            setPopupState(() {
+                              batchController.text = batchNumber;
+                            });
+                          });
+                    }
+                  }
                 },
               ),
               const SizedBox(height: 8),
@@ -3628,9 +3655,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           Expanded(
                             child: TextField(
                               controller: batchController,
-                              textInputAction: TextInputAction.next,
+                              readOnly: true,
                               decoration: const InputDecoration(
-                                labelText: 'Batch number (optional)',
+                                labelText: 'Batch number',
+                                helperText: 'Generated automatically',
                               ),
                             ),
                           ),

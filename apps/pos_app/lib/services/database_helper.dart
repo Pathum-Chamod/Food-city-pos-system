@@ -2350,6 +2350,20 @@ class DatabaseHelper {
     final db = await database;
 
     await db.transaction((txn) async {
+      final existingRows = await txn.query(
+        'products',
+        columns: ['barcode', 'track_expiry', 'expiry_alert_days'],
+      );
+      final existingExpirySettings = {
+        for (final row in existingRows)
+          (row['barcode'] ?? '').toString(): {
+            'track_expiry': _parseInt(row['track_expiry']) == 1,
+            'expiry_alert_days': _parseInt(
+              row['expiry_alert_days'],
+              fallback: 30,
+            ),
+          },
+      };
       final backendBarcodes = backendProducts.map((p) => p.barcode).toList();
 
       if (backendBarcodes.isEmpty) {
@@ -2366,6 +2380,15 @@ class DatabaseHelper {
       final batch = txn.batch();
 
       for (final product in backendProducts) {
+        final existingExpiry = existingExpirySettings[product.barcode];
+        final resolvedTrackExpiry =
+            product.trackExpiry ||
+            ((existingExpiry?['track_expiry'] as bool?) ?? false);
+        final resolvedExpiryAlertDays = product.trackExpiry
+            ? product.expiryAlertDays
+            : ((existingExpiry?['expiry_alert_days'] as int?) ??
+                  product.expiryAlertDays);
+
         batch.insert('products', {
           'barcode': product.barcode,
           'name': product.name,
@@ -2380,8 +2403,8 @@ class DatabaseHelper {
           'sale_enabled': product.saleEnabled ? 1 : 0,
           'stock': product.stock,
           'min_stock_level': product.minStockLevel,
-          'track_expiry': product.trackExpiry ? 1 : 0,
-          'expiry_alert_days': product.expiryAlertDays,
+          'track_expiry': resolvedTrackExpiry ? 1 : 0,
+          'expiry_alert_days': resolvedExpiryAlertDays,
           'is_active': product.isActive ? 1 : 0,
           'updated_at': product.updatedAt,
           'last_price_updated_at':
@@ -2635,6 +2658,15 @@ class DatabaseHelper {
               'sale_enabled': saleEnabled,
               'stock': stock,
               'min_stock_level': _parseInt(row['min_stock_level']),
+              'track_expiry':
+                  _parseInt(row['track_expiry']) == 1 ||
+                      row['track_expiry'] == true
+                  ? 1
+                  : 0,
+              'expiry_alert_days': _parseInt(
+                row['expiry_alert_days'],
+                fallback: 30,
+              ).clamp(1, 3650),
               'is_active': 1,
               'updated_at': now,
               'last_price_updated_at': now,
@@ -2676,6 +2708,15 @@ class DatabaseHelper {
             'sale_enabled': saleEnabled,
             'stock': _parseInt(data['opening_stock'] ?? data['stock']),
             'min_stock_level': _parseInt(data['min_stock_level']),
+            'track_expiry':
+                _parseInt(data['track_expiry']) == 1 ||
+                    data['track_expiry'] == true
+                ? 1
+                : 0,
+            'expiry_alert_days': _parseInt(
+              data['expiry_alert_days'],
+              fallback: 30,
+            ).clamp(1, 3650),
             'is_active': 1,
             'updated_at': now,
             'last_price_updated_at': now,
@@ -6072,6 +6113,10 @@ class DatabaseHelper {
       final safeExpiryDate = expiryDate == null
           ? null
           : _formatDateOnly(expiryDate);
+      final resolvedBatchNumber =
+          batchNumber.trim().isNotEmpty || safeExpiryDate == null
+          ? batchNumber.trim()
+          : await _generateStockBatchNumber(txn, supplierName: supplierName);
       final receiptId = await txn.insert('stock_receipts', {
         'backend_receipt_id': backendReceiptId,
         'purchase_order_id': purchaseOrderId,
@@ -6088,7 +6133,7 @@ class DatabaseHelper {
         'delivery_note_number': deliveryNoteNumber.trim(),
         'grn_reference': grnReference.trim(),
         'expiry_batch_id': null,
-        'batch_number': batchNumber.trim(),
+        'batch_number': resolvedBatchNumber,
         'expiry_date': safeExpiryDate,
         'cashier_name': cashierName.trim(),
         'is_reversed': 0,
@@ -6103,7 +6148,7 @@ class DatabaseHelper {
           'receipt_id': receiptId,
           'barcode': barcode.trim(),
           'product_name': productName.trim(),
-          'batch_number': batchNumber.trim(),
+          'batch_number': resolvedBatchNumber,
           'supplier_id': supplierId,
           'supplier_name': supplierName.trim(),
           'received_quantity': safeQuantity,
@@ -6217,6 +6262,75 @@ class DatabaseHelper {
               SupplierProductMapping.fromMap(Map<String, dynamic>.from(row)),
         )
         .toList();
+  }
+
+  String _supplierBatchPrefix(String supplierName) {
+    final cleaned = supplierName.toUpperCase().replaceAll(
+      RegExp(r'[^A-Z0-9]'),
+      '',
+    );
+    if (cleaned.isEmpty) return 'SUP';
+
+    final first = cleaned[0];
+    final consonants = cleaned
+        .substring(1)
+        .split('')
+        .where((char) => !'AEIOU'.contains(char))
+        .join();
+    final fallback = cleaned.substring(1);
+    final code = first + consonants + fallback;
+    return code.length >= 3 ? code.substring(0, 3) : code.padRight(3, 'X');
+  }
+
+  String _formatBatchDate(DateTime value) {
+    final year = (value.year % 100).toString().padLeft(2, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    final day = value.day.toString().padLeft(2, '0');
+    return '$year$month$day';
+  }
+
+  Future<String> _generateStockBatchNumber(
+    DatabaseExecutor executor, {
+    required String supplierName,
+    DateTime? receivedAt,
+  }) async {
+    final prefix = _supplierBatchPrefix(supplierName);
+    final datePart = _formatBatchDate(receivedAt ?? DateTime.now());
+    final batchBase = '$prefix-$datePart';
+    final pattern = '$batchBase-%';
+    final rows = await executor.rawQuery(
+      '''
+      SELECT batch_number FROM stock_receipts WHERE batch_number LIKE ?
+      UNION ALL
+      SELECT batch_number FROM expiry_batches WHERE batch_number LIKE ?
+      ''',
+      [pattern, pattern],
+    );
+
+    var maxSequence = 0;
+    final sequencePattern = RegExp('^$batchBase-(\\d+)\$');
+    for (final row in rows) {
+      final batchNumber = (row['batch_number'] ?? '').toString().trim();
+      final match = sequencePattern.firstMatch(batchNumber);
+      if (match == null) continue;
+      final sequence = int.tryParse(match.group(1) ?? '') ?? 0;
+      if (sequence > maxSequence) maxSequence = sequence;
+    }
+
+    final nextSequence = (maxSequence + 1).toString().padLeft(3, '0');
+    return '$batchBase-$nextSequence';
+  }
+
+  Future<String> generateStockBatchNumber({
+    required String supplierName,
+    DateTime? receivedAt,
+  }) async {
+    final db = await database;
+    return _generateStockBatchNumber(
+      db,
+      supplierName: supplierName,
+      receivedAt: receivedAt,
+    );
   }
 
   Future<SupplierProductMapping?> getPreferredSupplierMapping(
