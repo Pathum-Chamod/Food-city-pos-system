@@ -811,7 +811,11 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                     icon: quantityChange >= 0
                         ? Icons.add_box_outlined
                         : Icons.indeterminate_check_box_outlined,
-                    text: _movementQuantityText(actionType, quantityChange),
+                    text: _movementQuantityText(
+                      movement,
+                      actionType,
+                      quantityChange,
+                    ),
                     color: badge.$1,
                   )
                 else if (oldPrice != null || newPrice != null)
@@ -823,7 +827,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                 if (stockBefore != null || stockAfter != null) ...[
                   _buildMovementMetaDivider(),
                   Text(
-                    'Stock ${_movementStockText(stockBefore)} -> ${_movementStockText(stockAfter)}',
+                    'Stock ${_movementStockText(movement, stockBefore)} -> ${_movementStockText(movement, stockAfter)}',
                     style: TextStyle(
                       color: _textSecondary,
                       fontWeight: FontWeight.w700,
@@ -914,13 +918,18 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     );
   }
 
-  String _movementQuantityText(String actionType, double quantityChange) {
+  String _movementQuantityText(
+    Map<String, dynamic> movement,
+    String actionType,
+    double quantityChange,
+  ) {
     final sign = quantityChange > 0
         ? '+'
         : quantityChange < 0
         ? '-'
         : '';
-    final quantity = '$sign${_formatQuantity(quantityChange.abs())}';
+    final quantity =
+        '$sign${_formatMovementQuantity(movement, quantityChange.abs())}';
     if (actionType.contains('receive')) return '$quantity received';
     if (actionType == 'sale') return '$quantity sold';
     if (actionType == 'refund') return '$quantity refunded';
@@ -934,8 +943,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
         'Rs. ${_asDouble(movement['new_price']).toStringAsFixed(2)}';
   }
 
-  String _movementStockText(dynamic value) {
-    return value == null ? '-' : _formatQuantity(value);
+  String _movementStockText(Map<String, dynamic> movement, dynamic value) {
+    return value == null ? '-' : _formatMovementQuantity(movement, value);
   }
 
   // ignore: unused_element
@@ -1151,8 +1160,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       if (stockBefore != null || stockAfter != null)
         MapEntry(
           'Stock',
-          '${stockBefore == null ? '-' : _formatQuantity(stockBefore)} -> '
-              '${stockAfter == null ? '-' : _formatQuantity(stockAfter)}',
+          '${stockBefore == null ? '-' : _formatMovementQuantity(movement, stockBefore)} -> '
+              '${stockAfter == null ? '-' : _formatMovementQuantity(movement, stockAfter)}',
         ),
       if (movement['old_price'] != null || movement['new_price'] != null)
         MapEntry(
@@ -1181,8 +1190,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       );
     } else if (stockBefore != null || stockAfter != null) {
       pieces.add(
-        '${stockBefore == null ? '-' : _formatQuantity(stockBefore)} -> '
-        '${stockAfter == null ? '-' : _formatQuantity(stockAfter)}',
+        '${stockBefore == null ? '-' : _formatMovementQuantity(movement, stockBefore)} -> '
+        '${stockAfter == null ? '-' : _formatMovementQuantity(movement, stockAfter)}',
       );
     }
 
@@ -1214,7 +1223,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
 
     if (quantityChange != null) {
       final sign = quantityChange > 0 ? '+' : '';
-      return '$sign${_formatQuantity(quantityChange.abs())} - $baseTrailing';
+      return '$sign${_formatMovementQuantity(movement, quantityChange.abs())} - $baseTrailing';
     }
 
     if (newPrice != null) {
@@ -1238,6 +1247,20 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return quantity
         .toStringAsFixed(maxDecimals)
         .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _formatMovementQuantity(Map<String, dynamic> movement, dynamic value) {
+    final quantity = _asDouble(value);
+    final safeQuantity = quantity.abs() < 0.000001 ? 0.0 : quantity;
+    final isWeighted =
+        (movement['quantity_type'] ?? '').toString().trim().toLowerCase() ==
+        'weight';
+    if (!isWeighted ||
+        (safeQuantity - safeQuantity.roundToDouble()).abs() < 0.000001) {
+      return safeQuantity.round().toString();
+    }
+
+    return safeQuantity.toStringAsFixed(6).replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatDateTime(String? raw) {

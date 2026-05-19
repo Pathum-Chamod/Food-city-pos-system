@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 import 'dart:io';
 
@@ -24,7 +23,8 @@ class AdminProvider with ChangeNotifier {
   static const String _sessionUserIdKey = 'admin_session_user_id';
   static const String _sessionUserNameKey = 'admin_session_user_name';
   static const String _sessionUserRoleKey = 'admin_session_user_role';
-  static const String _sessionUserFullAccessKey = 'admin_session_user_full_access';
+  static const String _sessionUserFullAccessKey =
+      'admin_session_user_full_access';
   static const String _biometricEnabledKey = 'admin_biometric_enabled';
 
   List<Product> _products = [];
@@ -72,7 +72,9 @@ class AdminProvider with ChangeNotifier {
   List<dynamic> get cashierBreakdown => _cashierBreakdown;
   List<Supplier> get suppliers => _suppliers;
   Map<String, dynamic> supplierContactForBarcode(String barcode) =>
-      Map<String, dynamic>.from(_productSupplierContacts[barcode] ?? const <String, dynamic>{});
+      Map<String, dynamic>.from(
+        _productSupplierContacts[barcode] ?? const <String, dynamic>{},
+      );
 
   bool get isOwnerShellLoading => _isOwnerShellLoading;
   Map<String, dynamic> get ownerDashboardSummary => _ownerDashboardSummary;
@@ -82,18 +84,35 @@ class AdminProvider with ChangeNotifier {
 
   bool get isOwnerSalesLoading => _isOwnerSalesLoading;
   Map<String, dynamic> get ownerSalesReport => _ownerSalesReport;
-  List<Map<String, dynamic>> get ownerSalesHourlyTrend => _ownerSalesHourlyTrend;
-  Map<String, dynamic> get ownerSalesSummary => Map<String, dynamic>.from((_ownerSalesReport['summary'] as Map?) ?? <String, dynamic>{});
-  List<Map<String, dynamic>> get ownerSalesTrendReport => ((_ownerSalesReport['trend'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
-  List<Map<String, dynamic>> get ownerSalesCashiers => ((_ownerSalesReport['cashier_summary'] as List?) ?? []).map((item) => Map<String, dynamic>.from(item as Map)).toList();
-  List<Map<String, dynamic>> get ownerSalesTopProducts => ((_ownerSalesReport['top_products'] as List?) ?? [])
-      .whereType<Map>()
-      .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
-      .toList();
-  List<Map<String, dynamic>> get ownerSalesSlowMovers => ((_ownerSalesReport['slow_movers'] as List?) ?? [])
-      .whereType<Map>()
-      .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
-      .toList();
+  List<Map<String, dynamic>> get ownerSalesHourlyTrend =>
+      _ownerSalesHourlyTrend;
+  Map<String, dynamic> get ownerSalesSummary => Map<String, dynamic>.from(
+    (_ownerSalesReport['summary'] as Map?) ?? <String, dynamic>{},
+  );
+  List<Map<String, dynamic>> get ownerSalesTrendReport =>
+      ((_ownerSalesReport['trend'] as List?) ?? [])
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
+  List<Map<String, dynamic>> get ownerSalesCashiers =>
+      ((_ownerSalesReport['cashier_summary'] as List?) ?? [])
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
+  List<Map<String, dynamic>> get ownerSalesTopProducts =>
+      ((_ownerSalesReport['top_products'] as List?) ?? [])
+          .whereType<Map>()
+          .map(
+            (item) =>
+                _normalizeSalesProductRow(Map<String, dynamic>.from(item)),
+          )
+          .toList();
+  List<Map<String, dynamic>> get ownerSalesSlowMovers =>
+      ((_ownerSalesReport['slow_movers'] as List?) ?? [])
+          .whereType<Map>()
+          .map(
+            (item) =>
+                _normalizeSalesProductRow(Map<String, dynamic>.from(item)),
+          )
+          .toList();
 
   bool get isOwnerUsersLoading => _isOwnerUsersLoading;
   Map<String, dynamic> get ownerUsersSummary => _ownerUsersSummary;
@@ -116,12 +135,14 @@ class AdminProvider with ChangeNotifier {
       _biometricEnabled &&
       _biometricUnlockRequired &&
       !_manualUnlockRequested;
-  bool get shouldShowPinLogin => _currentOwnerUser == null || _manualUnlockRequested;
+  bool get shouldShowPinLogin =>
+      _currentOwnerUser == null || _manualUnlockRequested;
   bool get isAuthenticated => _currentOwnerUser != null;
   Map<String, dynamic>? get currentOwnerUser => _currentOwnerUser == null
       ? null
       : Map<String, dynamic>.from(_currentOwnerUser!);
-  String get currentOwnerName => (_currentOwnerUser?['name'] ?? 'Owner').toString();
+  String get currentOwnerName =>
+      (_currentOwnerUser?['name'] ?? 'Owner').toString();
   String get currentOwnerRole => (_currentOwnerUser?['role'] ?? '').toString();
   bool get currentOwnerHasFullAccess =>
       (_currentOwnerUser?['has_full_access'] == true) ||
@@ -148,7 +169,8 @@ class AdminProvider with ChangeNotifier {
     return 'Use $biometricTypeLabel to unlock the owner app faster on this device.';
   }
 
-  List<Map<String, dynamic>> get topAlertsPreview => _ownerAlerts.take(3).toList();
+  List<Map<String, dynamic>> get topAlertsPreview =>
+      _ownerAlerts.take(3).toList();
 
   int get transactionCount {
     return _cashierBreakdown.fold<int>(
@@ -165,9 +187,7 @@ class AdminProvider with ChangeNotifier {
 
   int get totalProducts => _products.length;
   int get outOfStockCount => _products.where((p) => p.isOutOfStock).length;
-  int get lowStockCount => _products
-      .where((p) => p.isLowStock)
-      .length;
+  int get lowStockCount => _products.where((p) => p.isLowStock).length;
 
   final String apiUrl = "http://10.0.2.2:8080/api/pos_sync.php";
   // final String apiUrl = "http://127.0.0.1:8080/api/pos_sync.php";
@@ -178,7 +198,9 @@ class AdminProvider with ChangeNotifier {
       return '${safeValue.round()} ${product.unitLabel}';
     }
 
-    final text = safeValue.toStringAsFixed(3).replaceFirst(RegExp(r'\.?0+$'), '');
+    final text = safeValue
+        .toStringAsFixed(3)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
     return '$text ${product.unitLabel}';
   }
 
@@ -217,7 +239,8 @@ class AdminProvider with ChangeNotifier {
     if (product == null) return normalized;
 
     final type = (normalized['type'] ?? '').toString();
-    final isStockAlert = type == 'out_of_stock' ||
+    final isStockAlert =
+        type == 'out_of_stock' ||
         type == 'low_stock' ||
         type == 'best_seller_low_stock';
     if (!isStockAlert) return normalized;
@@ -227,7 +250,8 @@ class AdminProvider with ChangeNotifier {
       normalized['type'] = 'out_of_stock';
       normalized['severity'] = 'critical';
       normalized['title'] = '${product.name} is out of stock';
-      normalized['subtitle'] = 'Barcode ${product.barcode} - stock ${_formatAlertQuantity(product, 0)}';
+      normalized['subtitle'] =
+          'Barcode ${product.barcode} - stock ${_formatAlertQuantity(product, 0)}';
       return normalized;
     }
 
@@ -235,12 +259,15 @@ class AdminProvider with ChangeNotifier {
       final title = type == 'best_seller_low_stock'
           ? 'Best seller low in stock: ${product.name}'
           : '${product.name} is low in stock';
-      normalized['type'] = type == 'best_seller_low_stock' ? 'best_seller_low_stock' : 'low_stock';
+      normalized['type'] = type == 'best_seller_low_stock'
+          ? 'best_seller_low_stock'
+          : 'low_stock';
       normalized['severity'] = 'warning';
       normalized['title'] = title;
 
       final currentSubtitle = (normalized['subtitle'] ?? '').toString().trim();
-      if (type == 'best_seller_low_stock' && currentSubtitle.startsWith('Sold ')) {
+      if (type == 'best_seller_low_stock' &&
+          currentSubtitle.startsWith('Sold ')) {
         final parts = currentSubtitle.split(' - ');
         final salesPrefix = parts.isNotEmpty ? parts.first : currentSubtitle;
         normalized['subtitle'] = '$salesPrefix - stock $stockText';
@@ -287,11 +314,12 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
-
   Future<void> refreshBiometricAvailability({bool notify = true}) async {
     try {
       final canCheck = await _localAuth.canCheckBiometrics;
-      final available = canCheck ? await _localAuth.getAvailableBiometrics() : <BiometricType>[];
+      final available = canCheck
+          ? await _localAuth.getAvailableBiometrics()
+          : <BiometricType>[];
       _availableBiometrics = available;
       _biometricAvailable = canCheck;
       _biometricEnrolled = available.isNotEmpty;
@@ -327,7 +355,8 @@ class AdminProvider with ChangeNotifier {
       }
 
       final didAuthenticate = await _localAuth.authenticate(
-        localizedReason: 'Scan your fingerprint to enable biometric unlock for Food City Admin.',
+        localizedReason:
+            'Scan your fingerprint to enable biometric unlock for Food City Admin.',
         biometricOnly: true,
         persistAcrossBackgrounding: true,
       );
@@ -429,7 +458,10 @@ class AdminProvider with ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_sessionUserIdKey, (user['id'] as num?)?.toInt() ?? 0);
     await prefs.setString(_sessionUserNameKey, (user['name'] ?? '').toString());
-    await prefs.setString(_sessionUserRoleKey, (user['role'] ?? 'cashier').toString());
+    await prefs.setString(
+      _sessionUserRoleKey,
+      (user['role'] ?? 'cashier').toString(),
+    );
     await prefs.setBool(
       _sessionUserFullAccessKey,
       user['has_full_access'] == true || user['has_full_access'] == 1,
@@ -460,9 +492,12 @@ class AdminProvider with ChangeNotifier {
         body: json.encode({'pin': trimmedPin}),
       );
 
-      final Map<String, dynamic> data = json.decode(response.body) as Map<String, dynamic>;
+      final Map<String, dynamic> data =
+          json.decode(response.body) as Map<String, dynamic>;
       if (response.statusCode == 200 && data['status'] == 'success') {
-        final user = Map<String, dynamic>.from((data['user'] as Map?) ?? <String, dynamic>{});
+        final user = Map<String, dynamic>.from(
+          (data['user'] as Map?) ?? <String, dynamic>{},
+        );
         _currentOwnerUser = user;
         _showWelcomeAnimation = true;
         _manualUnlockRequested = false;
@@ -524,7 +559,8 @@ class AdminProvider with ChangeNotifier {
         Uri.parse('$apiUrl?action=export_data_backup'),
       );
 
-      final Map<String, dynamic> data = json.decode(response.body) as Map<String, dynamic>;
+      final Map<String, dynamic> data =
+          json.decode(response.body) as Map<String, dynamic>;
       if (response.statusCode != 200 || data['status'] != 'success') {
         return (data['message'] ?? 'Unable to export backup').toString();
       }
@@ -634,7 +670,10 @@ class AdminProvider with ChangeNotifier {
               .toList();
           _ownerTopProducts = ((data['top_products'] as List?) ?? [])
               .whereType<Map>()
-              .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
+              .map(
+                (item) =>
+                    _normalizeSalesProductRow(Map<String, dynamic>.from(item)),
+              )
               .toList();
           notifyListeners();
           return;
@@ -650,7 +689,9 @@ class AdminProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  Future<Map<String, dynamic>> fetchProductSupplierContact(String barcode) async {
+  Future<Map<String, dynamic>> fetchProductSupplierContact(
+    String barcode,
+  ) async {
     final normalized = barcode.trim();
     if (normalized.isEmpty) return const {};
 
@@ -661,7 +702,9 @@ class AdminProvider with ChangeNotifier {
 
     try {
       final response = await http.get(
-        Uri.parse('$apiUrl?action=get_product_supplier_contact&barcode=$normalized'),
+        Uri.parse(
+          '$apiUrl?action=get_product_supplier_contact&barcode=$normalized',
+        ),
       );
 
       if (response.statusCode == 200) {
@@ -706,10 +749,15 @@ class AdminProvider with ChangeNotifier {
 
       final rows = ((data['top_products'] as List?) ?? [])
           .whereType<Map>()
-          .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
+          .map(
+            (item) =>
+                _normalizeSalesProductRow(Map<String, dynamic>.from(item)),
+          )
           .toList();
 
-      _ownerTopProducts = rows.map(_mapSalesReportProductToDashboardRow).toList();
+      _ownerTopProducts = rows
+          .map(_mapSalesReportProductToDashboardRow)
+          .toList();
       notifyListeners();
     } catch (e) {
       debugPrint('Dashboard top products sync error: $e');
@@ -726,15 +774,12 @@ class AdminProvider with ChangeNotifier {
     final quantitySold =
         ((row['net_quantity_sold'] ??
                     row['sold_quantity'] ??
-                    row['quantity_sold']) as num?)
-                ?.toDouble() ??
-            0.0;
+                    row['quantity_sold'])
+                as num?)
+            ?.toDouble() ??
+        0.0;
 
-    return {
-      ...row,
-      'total_sales': totalSales,
-      'quantity_sold': quantitySold,
-    };
+    return {...row, 'total_sales': totalSales, 'quantity_sold': quantitySold};
   }
 
   Future<void> fetchOwnerAlerts() async {
@@ -749,7 +794,9 @@ class AdminProvider with ChangeNotifier {
         if (data['status'] == 'success') {
           _ownerAlerts = ((data['alerts'] as List?) ?? [])
               .whereType<Map>()
-              .map((item) => _normalizeOwnerAlert(Map<String, dynamic>.from(item)))
+              .map(
+                (item) => _normalizeOwnerAlert(Map<String, dynamic>.from(item)),
+              )
               .toList();
           notifyListeners();
           return;
@@ -806,11 +853,17 @@ class AdminProvider with ChangeNotifier {
           final payload = Map<String, dynamic>.from(data as Map);
           payload['top_products'] = ((payload['top_products'] as List?) ?? [])
               .whereType<Map>()
-              .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
+              .map(
+                (item) =>
+                    _normalizeSalesProductRow(Map<String, dynamic>.from(item)),
+              )
               .toList();
           payload['slow_movers'] = ((payload['slow_movers'] as List?) ?? [])
               .whereType<Map>()
-              .map((item) => _normalizeSalesProductRow(Map<String, dynamic>.from(item)))
+              .map(
+                (item) =>
+                    _normalizeSalesProductRow(Map<String, dynamic>.from(item)),
+              )
               .toList();
           _ownerSalesReport = payload;
           _ownerSalesHourlyTrend = await _resolveOwnerSalesHourlyTrend(
@@ -837,7 +890,8 @@ class AdminProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  bool _usesHourlyTrend(String range) => range == 'today' || range == 'specific';
+  bool _usesHourlyTrend(String range) =>
+      range == 'today' || range == 'specific';
 
   Future<List<Map<String, dynamic>>> _resolveOwnerSalesHourlyTrend({
     required Map<String, dynamic> payload,
@@ -957,7 +1011,8 @@ class AdminProvider with ChangeNotifier {
         ...row,
         'hour': hour,
         'net_after_refunds':
-            ((row['net_after_refunds'] ?? row['net_sales'] ?? row['sales']) as num?)
+            ((row['net_after_refunds'] ?? row['net_sales'] ?? row['sales'])
+                    as num?)
                 ?.toDouble() ??
             0.0,
         'transaction_count':
@@ -1018,7 +1073,9 @@ class AdminProvider with ChangeNotifier {
       }
     }
 
-    final meridiem = RegExp(r'^(\d{1,2})(?::\d{2})?\s*([ap]m)$').firstMatch(input);
+    final meridiem = RegExp(
+      r'^(\d{1,2})(?::\d{2})?\s*([ap]m)$',
+    ).firstMatch(input);
     if (meridiem != null) {
       final baseHour = int.tryParse(meridiem.group(1)!);
       if (baseHour == null || baseHour < 1 || baseHour > 12) return null;
@@ -1055,12 +1112,20 @@ class AdminProvider with ChangeNotifier {
 
     switch (range) {
       case 'last7':
-        start = DateTime(now.year, now.month, now.day).subtract(const Duration(days: 6));
+        start = DateTime(
+          now.year,
+          now.month,
+          now.day,
+        ).subtract(const Duration(days: 6));
         end = DateTime(now.year, now.month, now.day);
         label = 'Last 7 Days';
         break;
       case 'last30':
-        start = DateTime(now.year, now.month, now.day).subtract(const Duration(days: 29));
+        start = DateTime(
+          now.year,
+          now.month,
+          now.day,
+        ).subtract(const Duration(days: 29));
         end = DateTime(now.year, now.month, now.day);
         label = 'Last 30 Days';
         break;
@@ -1112,21 +1177,24 @@ class AdminProvider with ChangeNotifier {
       },
       'trend': <Map<String, dynamic>>[],
       'cashier_summary': _cashierBreakdown
-          .map((item) => {
-                'cashier_name': (item['cashier_name'] ?? 'Unknown').toString(),
-                'transaction_count': int.tryParse('${item['transaction_count'] ?? 0}') ?? 0,
-                'items_sold': 0,
-                'net_sales': double.tryParse('${item['total_sales'] ?? 0}') ?? 0.0,
-                'refund_total': 0.0,
-                'gross_profit': 0.0,
-                'average_sale': 0.0,
-              })
+          .map(
+            (item) => {
+              'cashier_name': (item['cashier_name'] ?? 'Unknown').toString(),
+              'transaction_count':
+                  int.tryParse('${item['transaction_count'] ?? 0}') ?? 0,
+              'items_sold': 0,
+              'net_sales':
+                  double.tryParse('${item['total_sales'] ?? 0}') ?? 0.0,
+              'refund_total': 0.0,
+              'gross_profit': 0.0,
+              'average_sale': 0.0,
+            },
+          )
           .toList(),
       'top_products': <Map<String, dynamic>>[],
       'slow_movers': <Map<String, dynamic>>[],
     };
   }
-
 
   Future<void> fetchBusinessInfo() async {
     _isBusinessInfoLoading = true;
@@ -1218,7 +1286,6 @@ class AdminProvider with ChangeNotifier {
     };
   }
 
-
   Future<void> fetchOwnerUsersActivity({
     String userSearch = '',
     String role = 'all',
@@ -1231,9 +1298,9 @@ class AdminProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final summaryUri = Uri.parse(apiUrl).replace(
-        queryParameters: const {'action': 'get_owner_user_summary'},
-      );
+      final summaryUri = Uri.parse(
+        apiUrl,
+      ).replace(queryParameters: const {'action': 'get_owner_user_summary'});
       final usersUri = Uri.parse(apiUrl).replace(
         queryParameters: {
           'action': 'get_owner_users',
@@ -1292,8 +1359,6 @@ class AdminProvider with ChangeNotifier {
     notifyListeners();
   }
 
-
-
   Future<String?> _postOwnerUserAction(
     String action,
     Map<String, dynamic> payload,
@@ -1330,15 +1395,12 @@ class AdminProvider with ChangeNotifier {
     required String role,
     required String pin,
   }) async {
-    final message = await _postOwnerUserAction(
-      'create_owner_user',
-      {
-        'name': name,
-        'role': role,
-        'pin': pin,
-        'actor_name': 'Admin Mobile',
-      },
-    );
+    final message = await _postOwnerUserAction('create_owner_user', {
+      'name': name,
+      'role': role,
+      'pin': pin,
+      'actor_name': 'Admin Mobile',
+    });
     if (message == null) {
       await fetchOwnerUsersActivity();
     }
@@ -1350,15 +1412,12 @@ class AdminProvider with ChangeNotifier {
     required String name,
     required String role,
   }) async {
-    final message = await _postOwnerUserAction(
-      'update_owner_user',
-      {
-        'user_id': userId,
-        'name': name,
-        'role': role,
-        'actor_name': 'Admin Mobile',
-      },
-    );
+    final message = await _postOwnerUserAction('update_owner_user', {
+      'user_id': userId,
+      'name': name,
+      'role': role,
+      'actor_name': 'Admin Mobile',
+    });
     if (message == null) {
       await fetchOwnerUsersActivity();
     }
@@ -1369,14 +1428,11 @@ class AdminProvider with ChangeNotifier {
     required int userId,
     required String newPin,
   }) async {
-    final message = await _postOwnerUserAction(
-      'reset_owner_user_pin',
-      {
-        'user_id': userId,
-        'new_pin': newPin,
-        'actor_name': 'Admin Mobile',
-      },
-    );
+    final message = await _postOwnerUserAction('reset_owner_user_pin', {
+      'user_id': userId,
+      'new_pin': newPin,
+      'actor_name': 'Admin Mobile',
+    });
     if (message == null) {
       await fetchOwnerUsersActivity();
     }
@@ -1387,14 +1443,11 @@ class AdminProvider with ChangeNotifier {
     required int userId,
     required bool isActive,
   }) async {
-    final message = await _postOwnerUserAction(
-      'set_owner_user_active_status',
-      {
-        'user_id': userId,
-        'is_active': isActive,
-        'actor_name': 'Admin Mobile',
-      },
-    );
+    final message = await _postOwnerUserAction('set_owner_user_active_status', {
+      'user_id': userId,
+      'is_active': isActive,
+      'actor_name': 'Admin Mobile',
+    });
     if (message == null) {
       await fetchOwnerUsersActivity();
     }
@@ -1405,22 +1458,22 @@ class AdminProvider with ChangeNotifier {
     required int userId,
     required bool hasFullAccess,
   }) async {
-    final message = await _postOwnerUserAction(
-      'set_owner_user_full_access',
-      {
-        'user_id': userId,
-        'has_full_access': hasFullAccess,
-        'actor_name': 'Admin Mobile',
-      },
-    );
+    final message = await _postOwnerUserAction('set_owner_user_full_access', {
+      'user_id': userId,
+      'has_full_access': hasFullAccess,
+      'actor_name': 'Admin Mobile',
+    });
     if (message == null) {
       await fetchOwnerUsersActivity();
     }
     return message;
   }
+
   Future<void> fetchSuppliers() async {
     try {
-      final response = await http.get(Uri.parse('$apiUrl?action=get_suppliers'));
+      final response = await http.get(
+        Uri.parse('$apiUrl?action=get_suppliers'),
+      );
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
@@ -1554,8 +1607,9 @@ class AdminProvider with ChangeNotifier {
   }
 
   Future<List<InventoryHistoryItem>> fetchInventoryHistory(
-    String barcode,
-  ) async {
+    String barcode, {
+    Product? product,
+  }) async {
     try {
       final response = await http.get(
         Uri.parse('$apiUrl?action=get_inventory_history&barcode=$barcode'),
@@ -1569,7 +1623,10 @@ class AdminProvider with ChangeNotifier {
 
           return history
               .map(
-                (item) => _mapHistoryItem(item as Map<String, dynamic>),
+                (item) => _mapHistoryItem(
+                  item as Map<String, dynamic>,
+                  selectedProduct: product,
+                ),
               )
               .toList();
         }
@@ -1581,20 +1638,36 @@ class AdminProvider with ChangeNotifier {
     return [];
   }
 
-  InventoryHistoryItem _mapHistoryItem(Map<String, dynamic> item) {
+  InventoryHistoryItem _mapHistoryItem(
+    Map<String, dynamic> item, {
+    Product? selectedProduct,
+  }) {
     final String movementType = item['movement_type']?.toString() ?? '';
-    final int quantity = int.tryParse(item['quantity'].toString()) ?? 0;
+    final double quantity = _asHistoryQuantity(item['quantity']);
     final String reason = item['reason']?.toString() ?? '';
     final String createdAt = item['created_at']?.toString() ?? '';
+    final product =
+        selectedProduct ??
+        _products.firstWhere(
+          (product) => product.barcode == (item['barcode'] ?? '').toString(),
+          orElse: () => Product(
+            barcode: (item['barcode'] ?? '').toString(),
+            name: '',
+            sellingPrice: 0,
+            stock: 0,
+            updatedAt: DateTime.now().toIso8601String(),
+          ),
+        );
 
     return InventoryHistoryItem(
       type: movementType,
       title: _historyTitle(movementType),
       subtitle: _historySubtitle(movementType, reason, quantity),
-      quantityText: _historyQuantityText(movementType, quantity),
+      quantityText: _historyQuantityText(movementType, quantity, product),
       dateText: _formatHistoryDate(createdAt),
       icon: _historyIcon(movementType),
       color: _historyColor(movementType),
+      unitLabel: product.unitLabel,
     );
   }
 
@@ -1651,7 +1724,6 @@ class AdminProvider with ChangeNotifier {
     return alerts;
   }
 
-
   String _formatDateOnly(DateTime value) {
     final y = value.year.toString().padLeft(4, '0');
     final m = value.month.toString().padLeft(2, '0');
@@ -1692,7 +1764,23 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
-  String _historySubtitle(String movementType, String reason, int quantity) {
+  double _asHistoryQuantity(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0.0;
+  }
+
+  String _formatHistoryQuantity(Product product, double value) {
+    final safeValue = value.abs() < Product.quantityEpsilon ? 0.0 : value;
+    if (!product.isWeighted ||
+        (safeValue - safeValue.roundToDouble()).abs() <
+            Product.quantityEpsilon) {
+      return safeValue.round().toString();
+    }
+
+    return safeValue.toStringAsFixed(6).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _historySubtitle(String movementType, String reason, double quantity) {
     if (reason.isNotEmpty) {
       return reason;
     }
@@ -1731,7 +1819,11 @@ class AdminProvider with ChangeNotifier {
     }
   }
 
-  String _historyQuantityText(String movementType, int quantity) {
+  String _historyQuantityText(
+    String movementType,
+    double quantity,
+    Product product,
+  ) {
     if (movementType.startsWith('price_') ||
         movementType == 'min_stock_change' ||
         movementType == 'product_updated' ||
@@ -1741,10 +1833,14 @@ class AdminProvider with ChangeNotifier {
     }
 
     if (quantity > 0) {
-      return '+$quantity';
+      return '+${_formatHistoryQuantity(product, quantity)}';
     }
 
-    return quantity.toString();
+    if (quantity < 0) {
+      return '-${_formatHistoryQuantity(product, quantity.abs())}';
+    }
+
+    return _formatHistoryQuantity(product, quantity);
   }
 
   String _formatHistoryDate(String rawDate) {

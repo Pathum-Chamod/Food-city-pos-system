@@ -6499,6 +6499,30 @@ class DatabaseHelper {
         .map((row) => Map<String, dynamic>.from(row))
         .toList();
 
+    final barcodes = movements
+        .map((movement) => (movement['barcode'] ?? '').toString().trim())
+        .where((barcode) => barcode.isNotEmpty)
+        .toSet()
+        .toList();
+    if (barcodes.isNotEmpty) {
+      final placeholders = List.filled(barcodes.length, '?').join(',');
+      final productRows = await db.rawQuery('''
+        SELECT barcode, quantity_type, unit_label
+        FROM products
+        WHERE barcode IN ($placeholders)
+        ''', barcodes);
+      final productMetaByBarcode = {
+        for (final row in productRows) row['barcode']?.toString(): row,
+      };
+      for (final movement in movements) {
+        final productMeta =
+            productMetaByBarcode[(movement['barcode'] ?? '').toString()];
+        if (productMeta == null) continue;
+        movement['quantity_type'] = productMeta['quantity_type'];
+        movement['unit_label'] = productMeta['unit_label'];
+      }
+    }
+
     if (hydrateSuppliers) {
       for (final movement in movements) {
         await hydrateInventoryMovementSupplierData(movement, db: db);

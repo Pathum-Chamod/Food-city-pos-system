@@ -3658,7 +3658,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               readOnly: true,
                               decoration: const InputDecoration(
                                 labelText: 'Batch number',
-                                helperText: 'Generated automatically',
                               ),
                             ),
                           ),

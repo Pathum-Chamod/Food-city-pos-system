@@ -8,10 +8,7 @@ import '../providers/admin_provider.dart';
 class InventoryHistoryScreen extends StatefulWidget {
   final Product product;
 
-  const InventoryHistoryScreen({
-    super.key,
-    required this.product,
-  });
+  const InventoryHistoryScreen({super.key, required this.product});
 
   @override
   State<InventoryHistoryScreen> createState() => _InventoryHistoryScreenState();
@@ -34,8 +31,9 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     });
 
     final history = await context.read<AdminProvider>().fetchInventoryHistory(
-          widget.product.barcode,
-        );
+      widget.product.barcode,
+      product: widget.product,
+    );
 
     if (!mounted) return;
 
@@ -171,6 +169,17 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     }
   }
 
+  String _formatStockQuantity(Product product, double value) {
+    final safeValue = value.abs() < Product.quantityEpsilon ? 0.0 : value;
+    if (!product.isWeighted ||
+        (safeValue - safeValue.roundToDouble()).abs() <
+            Product.quantityEpsilon) {
+      return safeValue.round().toString();
+    }
+
+    return safeValue.toStringAsFixed(6).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
   @override
   Widget build(BuildContext context) {
     final product = widget.product;
@@ -227,7 +236,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        'Current Stock: ${product.stock}',
+                        'Current Stock: ${_formatStockQuantity(product, product.stock)} ${product.unitLabel}',
                         style: const TextStyle(
                           color: Colors.blue,
                           fontWeight: FontWeight.bold,
@@ -297,69 +306,68 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                       ],
                     )
                   : filteredHistory.isEmpty
-                      ? ListView(
-                          children: [
-                            const SizedBox(height: 140),
-                            Center(
-                              child: Column(
-                                children: [
-                                  const Icon(
-                                    Icons.history,
-                                    size: 54,
-                                    color: Colors.grey,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    _emptyMessageTitle(),
-                                    style: const TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    _emptyMessageSubtitle(),
-                                    style: const TextStyle(color: Colors.grey),
-                                  ),
-                                ],
+                  ? ListView(
+                      children: [
+                        const SizedBox(height: 140),
+                        Center(
+                          child: Column(
+                            children: [
+                              const Icon(
+                                Icons.history,
+                                size: 54,
+                                color: Colors.grey,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                _emptyMessageTitle(),
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _emptyMessageSubtitle(),
+                                style: const TextStyle(color: Colors.grey),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      itemCount: filteredHistory.length,
+                      itemBuilder: (context, index) {
+                        final item = filteredHistory[index];
+
+                        return Card(
+                          margin: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.all(12),
+                            leading: CircleAvatar(
+                              backgroundColor: item.color.withOpacity(0.12),
+                              child: Icon(item.icon, color: item.color),
+                            ),
+                            title: Text(
+                              item.title,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
                               ),
                             ),
-                          ],
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.only(bottom: 16),
-                          itemCount: filteredHistory.length,
-                          itemBuilder: (context, index) {
-                            final item = filteredHistory[index];
-
-                            return Card(
-                              margin: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
-                              ),
-                              child: ListTile(
-                                contentPadding: const EdgeInsets.all(12),
-                                leading: CircleAvatar(
-                                  backgroundColor: item.color.withOpacity(0.12),
-                                  child: Icon(
-                                    item.icon,
-                                    color: item.color,
-                                  ),
-                                ),
-                                title: Text(
-                                  item.title,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                subtitle: Padding(
-                                  padding: const EdgeInsets.only(top: 4),
-                                  child: Text(
-                                    '${item.subtitle}\n${item.dateText}',
-                                  ),
-                                ),
-                                trailing: Text(
+                            subtitle: Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text('${item.subtitle}\n${item.dateText}'),
+                            ),
+                            trailing: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
                                   item.quantityText,
                                   style: TextStyle(
                                     color: item.color,
@@ -367,10 +375,20 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                     fontSize: 15,
                                   ),
                                 ),
-                              ),
-                            );
-                          },
-                        ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  item.unitLabel,
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
             ),
           ),
         ],
