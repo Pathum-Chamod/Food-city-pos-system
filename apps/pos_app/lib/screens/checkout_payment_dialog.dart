@@ -74,6 +74,8 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
     text: totalAmount.toStringAsFixed(2),
   );
   final loyaltyPointsController = TextEditingController();
+  final dialogFocusNode = FocusNode(debugLabel: 'CheckoutPaymentDialog');
+  final amountFocusNode = FocusNode(debugLabel: 'CheckoutPaymentAmount');
 
   String selectedMethod = 'cash';
   double amountTendered = totalAmount;
@@ -320,6 +322,38 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                 ? const Color(0xFF97AAC6)
                 : const Color(0xFF61758F);
 
+            void focusCashAmountOnNextFrame() {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!amountFocusNode.canRequestFocus) return;
+                amountFocusNode.requestFocus();
+                amountController.selection = TextSelection(
+                  baseOffset: 0,
+                  extentOffset: amountController.text.length,
+                );
+              });
+            }
+
+            void selectPaymentMethod(String value) {
+              if (value == 'customer_credit' && !canUseCustomerCredit()) {
+                return;
+              }
+
+              setState(() {
+                selectedMethod = value;
+                if (value == 'customer_credit') {
+                  loyaltyPointsToRedeem = 0;
+                  setLoyaltyPointsText(0);
+                }
+                setAmountText(payableTotal().toStringAsFixed(2));
+              });
+
+              if (value == 'cash') {
+                focusCashAmountOnNextFrame();
+              } else if (dialogFocusNode.canRequestFocus) {
+                dialogFocusNode.requestFocus();
+              }
+            }
+
             InputDecoration fieldDecoration({
               required String label,
               String? prefixText,
@@ -365,18 +399,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                   opacity: enabled ? 1 : 0.52,
                   child: InkWell(
                     borderRadius: BorderRadius.circular(16),
-                    onTap: enabled
-                        ? () {
-                            setState(() {
-                              selectedMethod = value;
-                              if (value == 'customer_credit') {
-                                loyaltyPointsToRedeem = 0;
-                                setLoyaltyPointsText(0);
-                              }
-                              setAmountText(payableTotal().toStringAsFixed(2));
-                            });
-                          }
-                        : null,
+                    onTap: enabled ? () => selectPaymentMethod(value) : null,
                     child: Tooltip(
                       message: enabled ? label : (disabledReason ?? label),
                       waitDuration: const Duration(milliseconds: 450),
@@ -960,8 +983,24 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
             }
 
             return Focus(
+              focusNode: dialogFocusNode,
               onKeyEvent: (node, event) {
                 if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+                if (event.logicalKey == LogicalKeyboardKey.f1) {
+                  selectPaymentMethod('cash');
+                  return KeyEventResult.handled;
+                }
+
+                if (event.logicalKey == LogicalKeyboardKey.f2) {
+                  selectPaymentMethod('card');
+                  return KeyEventResult.handled;
+                }
+
+                if (event.logicalKey == LogicalKeyboardKey.f3) {
+                  selectPaymentMethod('customer_credit');
+                  return KeyEventResult.handled;
+                }
 
                 final isEnterKey =
                     event.logicalKey == LogicalKeyboardKey.enter ||
@@ -1120,6 +1159,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                                 children: [
                                   TextField(
                                     controller: amountController,
+                                    focusNode: amountFocusNode,
                                     autofocus: true,
                                     textInputAction: TextInputAction.done,
                                     keyboardType:
@@ -1319,5 +1359,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
   } finally {
     amountController.dispose();
     loyaltyPointsController.dispose();
+    dialogFocusNode.dispose();
+    amountFocusNode.dispose();
   }
 }
