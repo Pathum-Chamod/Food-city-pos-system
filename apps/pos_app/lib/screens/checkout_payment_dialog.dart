@@ -172,6 +172,11 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
             final textSecondary = isDark
                 ? const Color(0xFF97AAC6)
                 : const Color(0xFF61758F);
+            final availableDialogHeight = math.max(
+              0.0,
+              MediaQuery.sizeOf(context).height - 48,
+            );
+            final dialogHeight = math.min(736.0, availableDialogHeight);
 
             void focusCashAmountOnNextFrame() {
               WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -407,50 +412,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: customerCreditEnabled
-                          ? warning.withValues(alpha: isDark ? 0.14 : 0.08)
-                          : surfaceAlt,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: customerCreditEnabled
-                            ? warning.withValues(alpha: 0.30)
-                            : border,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          customerCreditEnabled
-                              ? Icons.check_circle_rounded
-                              : Icons.info_rounded,
-                          color: customerCreditEnabled
-                              ? warning
-                              : textSecondary,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            customerCreditEnabled
-                                ? '${selectedCustomer!.displayName}: Balance Rs. ${creditPreviousBalance().toStringAsFixed(2)} → Rs. ${creditNewBalance().toStringAsFixed(2)}'
-                                : creditReason,
-                            style: TextStyle(
-                              color: customerCreditEnabled
-                                  ? textPrimary
-                                  : textSecondary,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ],
               );
             }
@@ -682,6 +643,8 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                   vertical: 24,
                 ),
                 child: Container(
+                  width: 640,
+                  height: dialogHeight,
                   constraints: const BoxConstraints(maxWidth: 640),
                   decoration: BoxDecoration(
                     color: bg,
@@ -699,307 +662,341 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                   ),
                   child: Padding(
                     padding: const EdgeInsets.all(22),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                width: 46,
-                                height: 46,
-                                decoration: BoxDecoration(
-                                  color: brand.withValues(alpha: 0.14),
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                child: const Icon(
-                                  Icons.point_of_sale_rounded,
-                                  color: brand,
-                                ),
-                              ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Checkout Payment',
-                                      style: TextStyle(
-                                        color: textPrimary,
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      'Complete the payment for this bill.',
-                                      style: TextStyle(
-                                        color: textSecondary,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              IconButton(
-                                tooltip: 'Close',
-                                onPressed: () => Navigator.pop(context),
-                                style: IconButton.styleFrom(
-                                  backgroundColor: surfaceAlt,
-                                  foregroundColor: textSecondary,
-                                ),
-                                icon: const Icon(Icons.close_rounded),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 18),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(18),
-                            decoration: BoxDecoration(
-                              color: surface,
-                              borderRadius: BorderRadius.circular(22),
-                              border: Border.all(color: border),
+                    child: LayoutBuilder(
+                      builder: (context, viewportConstraints) {
+                        return SingleChildScrollView(
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minHeight: viewportConstraints.maxHeight,
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  loyaltyRedeemedValue > 0
-                                      ? 'PAYABLE TOTAL'
-                                      : 'TOTAL DUE',
-                                  style: TextStyle(
-                                    color: textSecondary,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 1.1,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  'Rs. ${due.toStringAsFixed(2)}',
-                                  style: const TextStyle(
-                                    color: brand,
-                                    fontSize: 32,
-                                    fontWeight: FontWeight.w900,
-                                    height: 1,
-                                  ),
-                                ),
-                                if (loyaltyRedeemedValue > 0) ...[
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    'Before loyalty: Rs. ${(originalTotal ?? totalAmount).toStringAsFixed(2)}   Redeemed: Rs. ${loyaltyRedeemedValue.toStringAsFixed(2)}',
-                                    style: TextStyle(
-                                      color: textSecondary,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                          paymentMethodSection(),
-                          const SizedBox(height: 18),
-                          if (selectedMethod == 'cash') ...[
-                            Container(
-                              padding: const EdgeInsets.all(18),
-                              decoration: BoxDecoration(
-                                color: surface,
-                                borderRadius: BorderRadius.circular(22),
-                                border: Border.all(color: border),
-                              ),
+                            child: IntrinsicHeight(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  TextField(
-                                    controller: amountController,
-                                    focusNode: amountFocusNode,
-                                    autofocus: true,
-                                    textInputAction: TextInputAction.done,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                          decimal: true,
-                                        ),
-                                    style: TextStyle(
-                                      color: textPrimary,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                    decoration: fieldDecoration(
-                                      label: 'Amount Tendered',
-                                      prefixText: 'Rs. ',
-                                      helperText:
-                                          'Enter the cash received from customer.',
-                                    ),
-                                    onTap: () {
-                                      if (!replaceAmountOnNextEdit) return;
-                                      amountController.selection =
-                                          TextSelection(
-                                            baseOffset: 0,
-                                            extentOffset:
-                                                amountController.text.length,
-                                          );
-                                    },
-                                    onChanged: (_) {
-                                      replaceAmountOnNextEdit = false;
-                                      setState(() {});
-                                    },
-                                    onSubmitted: (_) {
-                                      unawaited(confirmPayment());
-                                    },
-                                  ),
-                                  const SizedBox(height: 14),
-                                  Wrap(
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children:
-                                        [
-                                          ('Exact', due),
-                                          ('+100', due + 100),
-                                          ('+500', due + 500),
-                                          ('+1000', due + 1000),
-                                        ].map((entry) {
-                                          final label = entry.$1;
-                                          final value = entry.$2;
-                                          return InkWell(
-                                            borderRadius: BorderRadius.circular(
-                                              999,
-                                            ),
-                                            onTap: () {
-                                              setAmountText(
-                                                value.toStringAsFixed(2),
-                                              );
-                                              setState(() {});
-                                            },
-                                            child: Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 14,
-                                                    vertical: 9,
-                                                  ),
-                                              decoration: BoxDecoration(
-                                                color: surfaceAlt,
-                                                borderRadius:
-                                                    BorderRadius.circular(999),
-                                                border: Border.all(
-                                                  color: border,
-                                                ),
-                                              ),
-                                              child: Text(
-                                                label,
-                                                style: TextStyle(
-                                                  color: textPrimary,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                            ),
-                                          );
-                                        }).toList(),
-                                  ),
-                                  const SizedBox(height: 14),
                                   Row(
                                     children: [
-                                      buildInfoTile(
-                                        label: 'Tendered',
-                                        value:
-                                            'Rs. ${amountTendered.toStringAsFixed(2)}',
-                                        valueColor: textPrimary,
+                                      Container(
+                                        width: 46,
+                                        height: 46,
+                                        decoration: BoxDecoration(
+                                          color: brand.withValues(alpha: 0.14),
+                                          borderRadius: BorderRadius.circular(
+                                            14,
+                                          ),
+                                        ),
+                                        child: const Icon(
+                                          Icons.point_of_sale_rounded,
+                                          color: brand,
+                                        ),
                                       ),
-                                      const SizedBox(width: 10),
-                                      buildInfoTile(
-                                        label: amountTendered < due
-                                            ? 'Remaining'
-                                            : 'Change',
-                                        value: amountTendered < due
-                                            ? 'Rs. ${remainingAmount.toStringAsFixed(2)}'
-                                            : 'Rs. ${changeAmount.toStringAsFixed(2)}',
-                                        valueColor: amountTendered < due
-                                            ? danger
-                                            : brand,
+                                      const SizedBox(width: 14),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Checkout Payment',
+                                              style: TextStyle(
+                                                color: textPrimary,
+                                                fontSize: 24,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'Complete the payment for this bill.',
+                                              style: TextStyle(
+                                                color: textSecondary,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Close',
+                                        onPressed: () => Navigator.pop(context),
+                                        style: IconButton.styleFrom(
+                                          backgroundColor: surfaceAlt,
+                                          foregroundColor: textSecondary,
+                                        ),
+                                        icon: const Icon(Icons.close_rounded),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 18),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(18),
+                                    decoration: BoxDecoration(
+                                      color: surface,
+                                      borderRadius: BorderRadius.circular(22),
+                                      border: Border.all(color: border),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          loyaltyRedeemedValue > 0
+                                              ? 'PAYABLE TOTAL'
+                                              : 'TOTAL DUE',
+                                          style: TextStyle(
+                                            color: textSecondary,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w800,
+                                            letterSpacing: 1.1,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          'Rs. ${due.toStringAsFixed(2)}',
+                                          style: const TextStyle(
+                                            color: brand,
+                                            fontSize: 32,
+                                            fontWeight: FontWeight.w900,
+                                            height: 1,
+                                          ),
+                                        ),
+                                        if (loyaltyRedeemedValue > 0) ...[
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            'Before loyalty: Rs. ${(originalTotal ?? totalAmount).toStringAsFixed(2)}   Redeemed: Rs. ${loyaltyRedeemedValue.toStringAsFixed(2)}',
+                                            style: TextStyle(
+                                              color: textSecondary,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 18),
+                                  paymentMethodSection(),
+                                  const SizedBox(height: 18),
+                                  if (selectedMethod == 'cash') ...[
+                                    Container(
+                                      padding: const EdgeInsets.all(18),
+                                      decoration: BoxDecoration(
+                                        color: surface,
+                                        borderRadius: BorderRadius.circular(22),
+                                        border: Border.all(color: border),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          TextField(
+                                            controller: amountController,
+                                            focusNode: amountFocusNode,
+                                            autofocus: true,
+                                            textInputAction:
+                                                TextInputAction.done,
+                                            keyboardType:
+                                                const TextInputType.numberWithOptions(
+                                                  decimal: true,
+                                                ),
+                                            style: TextStyle(
+                                              color: textPrimary,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                            decoration: fieldDecoration(
+                                              label: 'Amount Tendered',
+                                              prefixText: 'Rs. ',
+                                              helperText:
+                                                  'Enter the cash received from customer.',
+                                            ),
+                                            onTap: () {
+                                              if (!replaceAmountOnNextEdit) {
+                                                return;
+                                              }
+                                              amountController
+                                                  .selection = TextSelection(
+                                                baseOffset: 0,
+                                                extentOffset: amountController
+                                                    .text
+                                                    .length,
+                                              );
+                                            },
+                                            onChanged: (_) {
+                                              replaceAmountOnNextEdit = false;
+                                              setState(() {});
+                                            },
+                                            onSubmitted: (_) {
+                                              unawaited(confirmPayment());
+                                            },
+                                          ),
+                                          const SizedBox(height: 14),
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 8,
+                                            children:
+                                                [
+                                                  ('Exact', due),
+                                                  ('+100', due + 100),
+                                                  ('+500', due + 500),
+                                                  ('+1000', due + 1000),
+                                                ].map((entry) {
+                                                  final label = entry.$1;
+                                                  final value = entry.$2;
+                                                  return InkWell(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          999,
+                                                        ),
+                                                    onTap: () {
+                                                      setAmountText(
+                                                        value.toStringAsFixed(
+                                                          2,
+                                                        ),
+                                                      );
+                                                      setState(() {});
+                                                    },
+                                                    child: Container(
+                                                      padding:
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 14,
+                                                            vertical: 9,
+                                                          ),
+                                                      decoration: BoxDecoration(
+                                                        color: surfaceAlt,
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              999,
+                                                            ),
+                                                        border: Border.all(
+                                                          color: border,
+                                                        ),
+                                                      ),
+                                                      child: Text(
+                                                        label,
+                                                        style: TextStyle(
+                                                          color: textPrimary,
+                                                          fontWeight:
+                                                              FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  );
+                                                }).toList(),
+                                          ),
+                                          const SizedBox(height: 14),
+                                          Row(
+                                            children: [
+                                              buildInfoTile(
+                                                label: 'Tendered',
+                                                value:
+                                                    'Rs. ${amountTendered.toStringAsFixed(2)}',
+                                                valueColor: textPrimary,
+                                              ),
+                                              const SizedBox(width: 10),
+                                              buildInfoTile(
+                                                label: amountTendered < due
+                                                    ? 'Remaining'
+                                                    : 'Change',
+                                                value: amountTendered < due
+                                                    ? 'Rs. ${remainingAmount.toStringAsFixed(2)}'
+                                                    : 'Rs. ${changeAmount.toStringAsFixed(2)}',
+                                                valueColor: amountTendered < due
+                                                    ? danger
+                                                    : brand,
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ] else if (selectedMethod == 'card') ...[
+                                    cardPaymentPanel(),
+                                  ] else ...[
+                                    creditPaymentPanel(),
+                                  ],
+                                  const Spacer(),
+                                  const SizedBox(height: 20),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: OutlinedButton(
+                                          onPressed: () =>
+                                              Navigator.pop(context),
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: textPrimary,
+                                            side: BorderSide(color: border),
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 16,
+                                            ),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
+                                            ),
+                                          ),
+                                          child: const Text(
+                                            'Cancel',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: ElevatedButton.icon(
+                                          onPressed: canConfirm
+                                              ? () {
+                                                  unawaited(confirmPayment());
+                                                }
+                                              : null,
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor:
+                                                selectedMethod ==
+                                                    'customer_credit'
+                                                ? warning
+                                                : brand,
+                                            foregroundColor: Colors.white,
+                                            disabledBackgroundColor: isDark
+                                                ? Colors.white10
+                                                : Colors.black12,
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 16,
+                                            ),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
+                                            ),
+                                            elevation: 0,
+                                          ),
+                                          icon: Icon(
+                                            selectedMethod == 'card'
+                                                ? Icons.credit_card_rounded
+                                                : selectedMethod ==
+                                                      'customer_credit'
+                                                ? Icons
+                                                      .account_balance_wallet_rounded
+                                                : Icons
+                                                      .check_circle_outline_rounded,
+                                          ),
+                                          label: Text(
+                                            selectedMethod == 'card'
+                                                ? 'Complete Card Sale'
+                                                : selectedMethod ==
+                                                      'customer_credit'
+                                                ? 'Confirm Credit Sale'
+                                                : 'Confirm Payment',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
                                       ),
                                     ],
                                   ),
                                 ],
                               ),
                             ),
-                          ] else if (selectedMethod == 'card') ...[
-                            cardPaymentPanel(),
-                          ] else ...[
-                            creditPaymentPanel(),
-                          ],
-                          const SizedBox(height: 20),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: OutlinedButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: textPrimary,
-                                    side: BorderSide(color: border),
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 16,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                  ),
-                                  child: const Text(
-                                    'Cancel',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: ElevatedButton.icon(
-                                  onPressed: canConfirm
-                                      ? () {
-                                          unawaited(confirmPayment());
-                                        }
-                                      : null,
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor:
-                                        selectedMethod == 'customer_credit'
-                                        ? warning
-                                        : brand,
-                                    foregroundColor: Colors.white,
-                                    disabledBackgroundColor: isDark
-                                        ? Colors.white10
-                                        : Colors.black12,
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 16,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    elevation: 0,
-                                  ),
-                                  icon: Icon(
-                                    selectedMethod == 'card'
-                                        ? Icons.credit_card_rounded
-                                        : selectedMethod == 'customer_credit'
-                                        ? Icons.account_balance_wallet_rounded
-                                        : Icons.check_circle_outline_rounded,
-                                  ),
-                                  label: Text(
-                                    selectedMethod == 'card'
-                                        ? 'Complete Card Sale'
-                                        : selectedMethod == 'customer_credit'
-                                        ? 'Confirm Credit Sale'
-                                        : 'Confirm Payment',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
                   ),
                 ),
