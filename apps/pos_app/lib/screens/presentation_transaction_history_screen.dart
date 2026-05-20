@@ -27,7 +27,6 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
         .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
-
   static String _formatPercent(num value) {
     final number = value.toDouble();
     return number.toStringAsFixed(number % 1 == 0 ? 0 : 2);
@@ -75,42 +74,52 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
     final discountType = (summary['discount_type'] ?? 'none').toString();
 
     return items.map((item) {
-      final finalLineTotal = ((item['line_total'] as num?) ?? 0).toDouble().abs();
+      final finalLineTotal = ((item['line_total'] as num?) ?? 0)
+          .toDouble()
+          .abs();
       final baseLineTotal =
-          ((item['base_line_total'] as num?) ?? finalLineTotal).toDouble().abs();
+          ((item['base_line_total'] as num?) ?? finalLineTotal)
+              .toDouble()
+              .abs();
       final storedExplicitItemDiscount =
           ((item['explicit_item_discount_amount'] as num?) ?? 0)
               .toDouble()
               .abs();
-      final storedCartDiscount =
-          ((item['cart_discount_amount'] as num?) ?? 0).toDouble().abs();
+      final storedCartDiscount = ((item['cart_discount_amount'] as num?) ?? 0)
+          .toDouble()
+          .abs();
       final storedCombinedItemDiscount =
           ((item['item_discount_amount'] as num?) ?? 0).toDouble().abs();
       final explicitItemDiscount = storedExplicitItemDiscount > 0
           ? storedExplicitItemDiscount
           : (storedCartDiscount <= 0 && discountType == 'none'
-              ? storedCombinedItemDiscount
-              : 0.0);
+                ? storedCombinedItemDiscount
+                : 0.0);
 
       return {
         'name': (item['product_name'] ?? 'Item').toString(),
         'qty': ((item['quantity'] as num?) ?? 0).toDouble().abs(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
         'markedPrice':
-            ((item['marked_price'] as num?) ?? (item['unit_price'] as num?) ?? 0)
+            ((item['marked_price'] as num?) ??
+                    (item['unit_price'] as num?) ??
+                    0)
                 .toDouble(),
         'priceType': (item['price_category_used'] ?? 'selling').toString(),
         'baseLineTotal': baseLineTotal,
         'itemDiscountType': (item['item_discount_type'] ?? 'none').toString(),
-        'itemDiscountValue':
-            ((item['item_discount_value'] as num?) ?? 0).toDouble().abs(),
+        'itemDiscountValue': ((item['item_discount_value'] as num?) ?? 0)
+            .toDouble()
+            .abs(),
         'itemDiscountAmount': explicitItemDiscount,
         'lineTotal': baseLineTotal - explicitItemDiscount,
       };
     }).toList();
   }
 
-  static double _receiptItemDiscountTotal(List<Map<String, dynamic>> receiptItems) {
+  static double _receiptItemDiscountTotal(
+    List<Map<String, dynamic>> receiptItems,
+  ) {
     return receiptItems.fold<double>(
       0.0,
       (sum, item) =>
@@ -140,14 +149,17 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
       if (context.mounted) {
         AppSnackBar.show(
           context,
-          message: 'Receipt printer is not selected. Open Hardware Setup first.',
+          message:
+              'Receipt printer is not selected. Open Hardware Setup first.',
           backgroundColor: Colors.orange,
         );
       }
       return false;
     }
 
-    final summary = await DatabaseHelper.instance.getTransactionSummary(realSaleId);
+    final summary = await DatabaseHelper.instance.getTransactionSummary(
+      realSaleId,
+    );
     final items = await DatabaseHelper.instance.getTransactionItems(realSaleId);
 
     if (!context.mounted) return false;
@@ -163,18 +175,20 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
 
     final paymentMethod = (summary['payment_method'] ?? 'cash').toString();
     final cashierName = 'Cashier';
-    final discountAmount =
-        ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
+    final discountAmount = ((summary['discount_amount'] as num?) ?? 0)
+        .toDouble()
+        .abs();
     final discountType = (summary['discount_type'] ?? 'none').toString();
-    final discountValue =
-        ((summary['discount_value'] as num?) ?? 0).toDouble().abs();
+    final discountValue = ((summary['discount_value'] as num?) ?? 0)
+        .toDouble()
+        .abs();
     final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
-    final amountTendered =
-        ((summary['amount_tendered'] as num?) ?? 0).toDouble();
+    final amountTendered = ((summary['amount_tendered'] as num?) ?? 0)
+        .toDouble();
     final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
     final isRefund =
         (summary['transaction_type'] ?? 'sale').toString().toLowerCase() ==
-            'refund';
+        'refund';
 
     final receiptItems = _buildReceiptItems(items, summary);
     final receiptItemDiscountTotal = _receiptItemDiscountTotal(receiptItems);
@@ -194,7 +208,9 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
       discountType: discountType,
       discountValue: discountValue,
       total: total,
-      amountTendered: paymentMethod.toLowerCase() == 'cash' ? amountTendered : null,
+      amountTendered: paymentMethod.toLowerCase() == 'cash'
+          ? amountTendered
+          : null,
       changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
       isRefund: isRefund,
     );
@@ -219,7 +235,9 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
       realSaleId: realSaleId,
       displayId: displayId,
     );
-    final summary = await DatabaseHelper.instance.getTransactionSummary(realSaleId);
+    final summary = await DatabaseHelper.instance.getTransactionSummary(
+      realSaleId,
+    );
     final items = await DatabaseHelper.instance.getTransactionItems(realSaleId);
 
     if (!context.mounted) return false;
@@ -235,18 +253,20 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
 
     final paymentMethod = (summary['payment_method'] ?? 'cash').toString();
     final cashierName = 'Cashier';
-    final discountAmount =
-        ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
+    final discountAmount = ((summary['discount_amount'] as num?) ?? 0)
+        .toDouble()
+        .abs();
     final discountType = (summary['discount_type'] ?? 'none').toString();
-    final discountValue =
-        ((summary['discount_value'] as num?) ?? 0).toDouble().abs();
+    final discountValue = ((summary['discount_value'] as num?) ?? 0)
+        .toDouble()
+        .abs();
     final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
-    final amountTendered =
-        ((summary['amount_tendered'] as num?) ?? 0).toDouble();
+    final amountTendered = ((summary['amount_tendered'] as num?) ?? 0)
+        .toDouble();
     final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
     final isRefund =
         (summary['transaction_type'] ?? 'sale').toString().toLowerCase() ==
-            'refund';
+        'refund';
 
     final receiptItems = _buildReceiptItems(items, summary);
     final receiptItemDiscountTotal = _receiptItemDiscountTotal(receiptItems);
@@ -266,7 +286,9 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
       discountType: discountType,
       discountValue: discountValue,
       total: total,
-      amountTendered: paymentMethod.toLowerCase() == 'cash' ? amountTendered : null,
+      amountTendered: paymentMethod.toLowerCase() == 'cash'
+          ? amountTendered
+          : null,
       changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
       isRefund: isRefund,
     );
@@ -291,7 +313,9 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
       realSaleId: realSaleId,
       displayId: displayId,
     );
-    final summary = await DatabaseHelper.instance.getTransactionSummary(realSaleId);
+    final summary = await DatabaseHelper.instance.getTransactionSummary(
+      realSaleId,
+    );
     final items = await DatabaseHelper.instance.getTransactionItems(realSaleId);
 
     if (!context.mounted) return;
@@ -312,26 +336,44 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
         final theme = Theme.of(dialogContext);
         final isDark = theme.brightness == Brightness.dark;
         final panel = isDark ? const Color(0xFF0F1C31) : Colors.white;
-        final panelSoft = isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
-        final border = isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
-        final textPrimary = isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
-        final textSecondary = isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+        final panelSoft = isDark
+            ? const Color(0xFF14243C)
+            : const Color(0xFFF8FAFD);
+        final border = isDark
+            ? const Color(0xFF23344D)
+            : const Color(0xFFD9E3EE);
+        final textPrimary = isDark
+            ? const Color(0xFFF4F8FF)
+            : const Color(0xFF14263B);
+        final textSecondary = isDark
+            ? const Color(0xFF9DB0C8)
+            : const Color(0xFF667A92);
         const brand = Color(0xFF2AAA8A);
         const danger = Color(0xFFFF6B7A);
 
-        final type = (summary['transaction_type'] ?? 'sale').toString().toLowerCase();
+        final type = (summary['transaction_type'] ?? 'sale')
+            .toString()
+            .toLowerCase();
         final isRefund = type == 'refund';
         final tone = isRefund ? danger : brand;
         final title = isRefund ? 'Refund Receipt' : 'Sale Receipt';
         final total = ((summary['total_amount'] as num?) ?? 0).toDouble().abs();
-        final subtotal = ((summary['subtotal_amount'] as num?) ?? total).toDouble().abs();
-        final discountAmount = ((summary['discount_amount'] as num?) ?? 0).toDouble().abs();
+        final subtotal = ((summary['subtotal_amount'] as num?) ?? total)
+            .toDouble()
+            .abs();
+        final discountAmount = ((summary['discount_amount'] as num?) ?? 0)
+            .toDouble()
+            .abs();
         final discountType = (summary['discount_type'] ?? 'none').toString();
-        final discountValue = ((summary['discount_value'] as num?) ?? 0).toDouble().abs();
+        final discountValue = ((summary['discount_value'] as num?) ?? 0)
+            .toDouble()
+            .abs();
         final payment = (summary['payment_method'] ?? 'cash').toString();
         final createdAt = (summary['created_at'] ?? '').toString();
-        final amountTendered = ((summary['amount_tendered'] as num?) ?? 0).toDouble();
-        final changeAmount = ((summary['change_amount'] as num?) ?? 0).toDouble();
+        final amountTendered = ((summary['amount_tendered'] as num?) ?? 0)
+            .toDouble();
+        final changeAmount = ((summary['change_amount'] as num?) ?? 0)
+            .toDouble();
         final receiptItems = _buildReceiptItems(items, summary);
         final discountPercentLabel = discountAmount > 0
             ? _discountPercentLabel(
@@ -404,18 +446,27 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
           final receiptItem = receiptItems[index];
           final name = (item['product_name'] ?? 'Item').toString();
           final barcode = (item['barcode'] ?? '').toString().trim();
-          final unitPrice = ((receiptItem['unitPrice'] as num?) ?? 0).toDouble();
-          final markedPrice = ((receiptItem['markedPrice'] as num?) ?? unitPrice).toDouble();
+          final unitPrice = ((receiptItem['unitPrice'] as num?) ?? 0)
+              .toDouble();
+          final markedPrice =
+              ((receiptItem['markedPrice'] as num?) ?? unitPrice).toDouble();
           final qty = ((receiptItem['qty'] as num?) ?? 0).toDouble();
-          final lineTotal = ((receiptItem['lineTotal'] as num?) ?? 0).toDouble();
+          final lineTotal = ((receiptItem['lineTotal'] as num?) ?? 0)
+              .toDouble();
           final itemDiscountAmount =
-              ((receiptItem['itemDiscountAmount'] as num?) ?? 0).toDouble().abs();
-          final itemDiscountType =
-              (receiptItem['itemDiscountType'] ?? 'none').toString();
+              ((receiptItem['itemDiscountAmount'] as num?) ?? 0)
+                  .toDouble()
+                  .abs();
+          final itemDiscountType = (receiptItem['itemDiscountType'] ?? 'none')
+              .toString();
           final itemDiscountValue =
-              ((receiptItem['itemDiscountValue'] as num?) ?? 0).toDouble().abs();
+              ((receiptItem['itemDiscountValue'] as num?) ?? 0)
+                  .toDouble()
+                  .abs();
           final baseLineTotal =
-              ((receiptItem['baseLineTotal'] as num?) ?? lineTotal).toDouble().abs();
+              ((receiptItem['baseLineTotal'] as num?) ?? lineTotal)
+                  .toDouble()
+                  .abs();
           final itemDiscountPercent = itemDiscountAmount > 0
               ? _discountPercentLabel(
                   discountAmount: itemDiscountAmount,
@@ -507,9 +558,17 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
                     const SizedBox(width: 12),
                     columnValue('Mark price', _formatMoney(markedPrice)),
                     const SizedBox(width: 12),
-                    columnValue('Qty', _formatQuantity(qty), align: TextAlign.right),
+                    columnValue(
+                      'Qty',
+                      _formatQuantity(qty),
+                      align: TextAlign.right,
+                    ),
                     const SizedBox(width: 12),
-                    columnValue('Total', _formatMoney(lineTotal), align: TextAlign.right),
+                    columnValue(
+                      'Total',
+                      _formatMoney(lineTotal),
+                      align: TextAlign.right,
+                    ),
                   ],
                 ),
               ],
@@ -517,7 +576,12 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
           );
         }
 
-        Widget totalRow(String label, String value, {bool strong = false, Color? valueColor}) {
+        Widget totalRow(
+          String label,
+          String value, {
+          bool strong = false,
+          Color? valueColor,
+        }) {
           return Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Row(
@@ -595,7 +659,10 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
 
         return Dialog(
           backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 24,
+          ),
           child: Container(
             constraints: BoxConstraints(
               maxWidth: 720,
@@ -630,7 +697,9 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Icon(
-                          isRefund ? Icons.undo_rounded : Icons.receipt_long_rounded,
+                          isRefund
+                              ? Icons.undo_rounded
+                              : Icons.receipt_long_rounded,
                           color: tone,
                         ),
                       ),
@@ -677,7 +746,9 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
                         color: textSecondary,
                       ),
                       headerChip(
-                        icon: isRefund ? Icons.undo_rounded : Icons.point_of_sale_rounded,
+                        icon: isRefund
+                            ? Icons.undo_rounded
+                            : Icons.point_of_sale_rounded,
                         label: isRefund ? 'Refund' : 'Sale',
                         color: tone,
                       ),
@@ -817,6 +888,7 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
 class _PresentationTransactionHistoryScreenState
     extends State<PresentationTransactionHistoryScreen> {
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
 
   bool _isLoading = true;
   bool _isRefreshing = false;
@@ -834,27 +906,51 @@ class _PresentationTransactionHistoryScreenState
   static const Color _danger = Color(0xFFFF6B7A);
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
-  Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _page =>
+      _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
   Color get _panel => _isDark ? const Color(0xFF0F1C31) : Colors.white;
-  Color get _panelSoft => _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
-  Color get _border => _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
-  Color get _textPrimary => _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
-  Color get _textSecondary => _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
-  Color get _muted => _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
+  Color get _panelSoft =>
+      _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get _border =>
+      _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get _textPrimary =>
+      _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get _textSecondary =>
+      _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get _muted =>
+      _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
 
   @override
   void initState() {
     super.initState();
     _loadTransactions();
+    _focusSearchField();
   }
 
   @override
   void dispose() {
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
-  DateTime _normalizedDay(DateTime value) => DateTime(value.year, value.month, value.day);
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+      final context = _searchFocusNode.context;
+      if (context == null) return;
+      final position = Scrollable.maybeOf(context)?.position;
+      position?.animateTo(
+        position.minScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  DateTime _normalizedDay(DateTime value) =>
+      DateTime(value.year, value.month, value.day);
 
   Future<void> _loadTransactions() async {
     if (mounted) {
@@ -869,8 +965,8 @@ class _PresentationTransactionHistoryScreenState
       final selectedDay = _dateFilter == 'today'
           ? _normalizedDay(DateTime.now())
           : _dateFilter == 'specific'
-              ? _selectedDate
-              : null;
+          ? _selectedDate
+          : null;
       final start = selectedDay == null
           ? null
           : DateTime(selectedDay.year, selectedDay.month, selectedDay.day);
@@ -938,7 +1034,9 @@ class _PresentationTransactionHistoryScreenState
       final displayId = tx.displayId.toString();
       final payment = (row['payment_method'] ?? '').toString().toLowerCase();
       final type = (row['transaction_type'] ?? '').toString().toLowerCase();
-      final refundReason = (row['refund_reason'] ?? '').toString().toLowerCase();
+      final refundReason = (row['refund_reason'] ?? '')
+          .toString()
+          .toLowerCase();
       final createdAt = (row['created_at'] ?? '').toString().toLowerCase();
       return displayId.contains(q) ||
           payment.contains(q) ||
@@ -949,22 +1047,47 @@ class _PresentationTransactionHistoryScreenState
   }
 
   int get _saleCount => _transactions
-      .where((tx) => (tx.row['transaction_type'] ?? 'sale').toString().toLowerCase() == 'sale')
+      .where(
+        (tx) =>
+            (tx.row['transaction_type'] ?? 'sale').toString().toLowerCase() ==
+            'sale',
+      )
       .length;
 
   int get _refundCount => _transactions
-      .where((tx) => (tx.row['transaction_type'] ?? 'sale').toString().toLowerCase() == 'refund')
+      .where(
+        (tx) =>
+            (tx.row['transaction_type'] ?? 'sale').toString().toLowerCase() ==
+            'refund',
+      )
       .length;
 
   double get _salesTotal => _transactions
-      .where((tx) => (tx.row['transaction_type'] ?? 'sale').toString().toLowerCase() == 'sale')
-      .fold<double>(0, (sum, tx) => sum + (((tx.row['total_amount'] as num?) ?? 0).toDouble().abs()));
+      .where(
+        (tx) =>
+            (tx.row['transaction_type'] ?? 'sale').toString().toLowerCase() ==
+            'sale',
+      )
+      .fold<double>(
+        0,
+        (sum, tx) =>
+            sum + (((tx.row['total_amount'] as num?) ?? 0).toDouble().abs()),
+      );
 
   double get _refundTotal => _transactions
-      .where((tx) => (tx.row['transaction_type'] ?? 'sale').toString().toLowerCase() == 'refund')
-      .fold<double>(0, (sum, tx) => sum + (((tx.row['total_amount'] as num?) ?? 0).toDouble().abs()));
+      .where(
+        (tx) =>
+            (tx.row['transaction_type'] ?? 'sale').toString().toLowerCase() ==
+            'refund',
+      )
+      .fold<double>(
+        0,
+        (sum, tx) =>
+            sum + (((tx.row['total_amount'] as num?) ?? 0).toDouble().abs()),
+      );
 
-  String _formatMoney(num value) => PresentationTransactionHistoryScreen._formatMoney(value);
+  String _formatMoney(num value) =>
+      PresentationTransactionHistoryScreen._formatMoney(value);
 
   String _formatDate(DateTime value) {
     final y = value.year.toString().padLeft(4, '0');
@@ -973,13 +1096,16 @@ class _PresentationTransactionHistoryScreenState
     return '$y-$m-$d';
   }
 
-  String _formatDateTime(String raw) => PresentationTransactionHistoryScreen._formatDateTime(raw);
+  String _formatDateTime(String raw) =>
+      PresentationTransactionHistoryScreen._formatDateTime(raw);
 
   Future<void> _pickDate() async {
     final now = DateTime.now();
     final today = _normalizedDay(now);
     final selected = _selectedDate;
-    final initialDate = selected != null && !selected.isAfter(today) ? selected : today;
+    final initialDate = selected != null && !selected.isAfter(today)
+        ? selected
+        : today;
 
     final picked = await showDatePicker(
       context: context,
@@ -1041,9 +1167,25 @@ class _PresentationTransactionHistoryScreenState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w700, fontSize: 12)),
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
                 const SizedBox(height: 4),
-                Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w900, fontSize: 17)),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 17,
+                  ),
+                ),
               ],
             ),
           ),
@@ -1066,7 +1208,10 @@ class _PresentationTransactionHistoryScreenState
       selectedColor: _brand.withOpacity(0.14),
       backgroundColor: _panelSoft,
       side: BorderSide(color: selected ? _brand : _border),
-      labelStyle: TextStyle(color: selected ? _brand : _textSecondary, fontWeight: FontWeight.w800),
+      labelStyle: TextStyle(
+        color: selected ? _brand : _textSecondary,
+        fontWeight: FontWeight.w800,
+      ),
     );
   }
 
@@ -1079,7 +1224,10 @@ class _PresentationTransactionHistoryScreenState
       selectedColor: _blue.withOpacity(0.14),
       backgroundColor: _panelSoft,
       side: BorderSide(color: selected ? _blue : _border),
-      labelStyle: TextStyle(color: selected ? _blue : _textSecondary, fontWeight: FontWeight.w800),
+      labelStyle: TextStyle(
+        color: selected ? _blue : _textSecondary,
+        fontWeight: FontWeight.w800,
+      ),
     );
   }
 
@@ -1102,12 +1250,14 @@ class _PresentationTransactionHistoryScreenState
               ),
         label: Text(label),
         onPressed: onPressed,
-        backgroundColor: selected ? tone.withOpacity(_isDark ? 0.22 : 0.16) : _panelSoft,
-        side: BorderSide(
-          color: selected ? tone.withOpacity(0.45) : _border,
-        ),
+        backgroundColor: selected
+            ? tone.withOpacity(_isDark ? 0.22 : 0.16)
+            : _panelSoft,
+        side: BorderSide(color: selected ? tone.withOpacity(0.45) : _border),
         labelStyle: TextStyle(
-          color: selected ? (tone == _brand ? _brand : Colors.white) : _textPrimary,
+          color: selected
+              ? (tone == _brand ? _brand : Colors.white)
+              : _textPrimary,
           fontWeight: FontWeight.w800,
         ),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -1130,8 +1280,11 @@ class _PresentationTransactionHistoryScreenState
               Expanded(
                 child: TextField(
                   controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  autofocus: true,
                   decoration: InputDecoration(
-                    hintText: 'Search by transaction, cashier, payment, or type',
+                    hintText:
+                        'Search by transaction, cashier, payment, or type',
                     prefixIcon: const Icon(Icons.search_rounded, color: _brand),
                     suffixIcon: _searchController.text.isEmpty
                         ? null
@@ -1185,7 +1338,8 @@ class _PresentationTransactionHistoryScreenState
                 ],
               );
 
-              final pickedDateLabel = _dateFilter == 'specific' && _selectedDate != null
+              final pickedDateLabel =
+                  _dateFilter == 'specific' && _selectedDate != null
                   ? _formatDate(_selectedDate!)
                   : 'Pick Date';
               final dateFilters = Wrap(
@@ -1290,18 +1444,29 @@ class _PresentationTransactionHistoryScreenState
                         Expanded(
                           child: Text(
                             'Transaction #${tx.displayId}',
-                            style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w900, fontSize: 17),
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 17,
+                            ),
                           ),
                         ),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
                           decoration: BoxDecoration(
                             color: color.withOpacity(_isDark ? 0.18 : 0.10),
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
                             isRefund ? 'Refund' : 'Sale',
-                            style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 12),
+                            style: TextStyle(
+                              color: color,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 12,
+                            ),
                           ),
                         ),
                       ],
@@ -1309,7 +1474,10 @@ class _PresentationTransactionHistoryScreenState
                     const SizedBox(height: 8),
                     Text(
                       '${_formatDateTime(createdAt)} • ${payment.isEmpty ? 'N/A' : payment.toUpperCase()} • $itemCount items',
-                      style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w700),
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ],
                 ),
@@ -1317,7 +1485,11 @@ class _PresentationTransactionHistoryScreenState
               const SizedBox(width: 12),
               Text(
                 _formatMoney(total),
-                style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w900, fontSize: 18),
+                style: TextStyle(
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                ),
               ),
             ],
           ),
@@ -1326,7 +1498,9 @@ class _PresentationTransactionHistoryScreenState
     );
   }
 
-  Future<void> _showPresentationReceipt(PresentationVisibleTransaction tx) async {
+  Future<void> _showPresentationReceipt(
+    PresentationVisibleTransaction tx,
+  ) async {
     await PresentationTransactionHistoryScreen.showReceiptDialogForTransaction(
       context,
       tx.realSaleId,
@@ -1342,9 +1516,7 @@ class _PresentationTransactionHistoryScreenState
 
     return Scaffold(
       backgroundColor: _page,
-      appBar: AppBar(
-        title: const Text('Transaction History'),
-      ),
+      appBar: AppBar(title: const Text('Transaction History')),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -1356,9 +1528,24 @@ class _PresentationTransactionHistoryScreenState
                     spacing: 12,
                     runSpacing: 12,
                     children: [
-                      _summaryCard('Transactions', '${_transactions.length}', Icons.receipt_long_rounded, _blue),
-                      _summaryCard('Sales', '$_saleCount', Icons.shopping_cart_rounded, _brand),
-                      _summaryCard('Refunds', '$_refundCount', Icons.undo_rounded, _danger),
+                      _summaryCard(
+                        'Transactions',
+                        '${_transactions.length}',
+                        Icons.receipt_long_rounded,
+                        _blue,
+                      ),
+                      _summaryCard(
+                        'Sales',
+                        '$_saleCount',
+                        Icons.shopping_cart_rounded,
+                        _brand,
+                      ),
+                      _summaryCard(
+                        'Refunds',
+                        '$_refundCount',
+                        Icons.undo_rounded,
+                        _danger,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 18),
@@ -1375,14 +1562,19 @@ class _PresentationTransactionHistoryScreenState
                       child: Text(
                         'No transactions found.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: _muted, fontWeight: FontWeight.w800),
+                        style: TextStyle(
+                          color: _muted,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     )
                   else
-                    ...visibleRows.map((tx) => Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: _buildTransactionCard(tx),
-                        )),
+                    ...visibleRows.map(
+                      (tx) => Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _buildTransactionCard(tx),
+                      ),
+                    ),
                 ],
               ),
             ),

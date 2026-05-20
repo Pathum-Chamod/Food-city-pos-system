@@ -1,14 +1,21 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../models/expiry_batch.dart';
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 import '../widgets/app_snackbar.dart';
+import '../widgets/premium_dialog.dart';
 
 class ExpiryAlertsScreen extends StatefulWidget {
-  const ExpiryAlertsScreen({super.key});
+  const ExpiryAlertsScreen({super.key, this.pointBatchId});
+
+  final int? pointBatchId;
 
   @override
   State<ExpiryAlertsScreen> createState() => _ExpiryAlertsScreenState();
@@ -16,12 +23,19 @@ class ExpiryAlertsScreen extends StatefulWidget {
 
 class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  final ScrollController _scrollController = ScrollController();
+  final Map<int, GlobalKey> _batchKeys = <int, GlobalKey>{};
 
   List<ExpiryBatch> _batches = [];
   Map<String, int> _summary = const {};
   bool _isLoading = true;
   bool _isRefreshing = false;
   String _search = '';
+  int? _pointedBatchId;
+  bool _pointFlashOn = false;
+  bool _hasAutoPointed = false;
+  Timer? _pointTimer;
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _background =>
@@ -45,12 +59,58 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
   void initState() {
     super.initState();
     _loadData();
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.expiryAlerts,
+      _focusSearchField,
+    );
+    _focusSearchField();
   }
 
   @override
   void dispose() {
+    _pointTimer?.cancel();
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.expiryAlerts,
+      _focusSearchField,
+    );
+    _searchFocusNode.dispose();
+    _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+      final context = _searchFocusNode.context;
+      final position = context == null
+          ? null
+          : Scrollable.maybeOf(context)?.position;
+      if (position != null) {
+        position.animateTo(
+          position.minScrollExtent,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+        return;
+      }
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+        return;
+      }
+      final primaryController = PrimaryScrollController.maybeOf(this.context);
+      if (primaryController?.hasClients != true) return;
+      primaryController!.animateTo(
+        0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   Future<void> _loadData({bool showLoader = true}) async {
@@ -77,6 +137,7 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
         _isLoading = false;
         _isRefreshing = false;
       });
+      _schedulePointToBatch();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -85,6 +146,58 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
       });
       AppSnackBar.show(context, message: 'Could not load expiry alerts.');
     }
+  }
+
+  void _schedulePointToBatch() {
+    final batchId = widget.pointBatchId;
+    if (batchId == null || _hasAutoPointed) return;
+    _hasAutoPointed = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pointToBatch(batchId);
+    });
+  }
+
+  Future<void> _pointToBatch(int batchId, {int attempt = 0}) async {
+    if (!mounted) return;
+
+    final context = _batchKeys[batchId]?.currentContext;
+    if (context == null) {
+      if (attempt < 4) {
+        Future<void>.delayed(const Duration(milliseconds: 120), () {
+          _pointToBatch(batchId, attempt: attempt + 1);
+        });
+      }
+      return;
+    }
+
+    await Scrollable.ensureVisible(
+      context,
+      duration: const Duration(milliseconds: 520),
+      curve: Curves.easeOutCubic,
+      alignment: 0.24,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _pointedBatchId = batchId;
+      _pointFlashOn = true;
+    });
+
+    _pointTimer?.cancel();
+    Future<void>.delayed(const Duration(milliseconds: 80), () {
+      if (!mounted || _pointedBatchId != batchId) return;
+      setState(() {
+        _pointFlashOn = false;
+      });
+    });
+    _pointTimer = Timer(const Duration(milliseconds: 2400), () {
+      if (!mounted || _pointedBatchId != batchId) return;
+      setState(() {
+        _pointedBatchId = null;
+        _pointFlashOn = false;
+      });
+    });
   }
 
   String get _performedBy {
@@ -172,49 +285,227 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
           .replaceFirst(RegExp(r'\.?0+$'), ''),
     );
     final noteController = TextEditingController(text: 'Expired stock removed');
+    final qtyFocusNode = FocusNode();
+    final noteFocusNode = FocusNode();
+    final days = batch.daysLeft(DateTime.now());
+    final statusColor = _statusColor(days);
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showPremiumDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Waste Expiry Batch'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(batch.productName),
-              const SizedBox(height: 12),
-              TextField(
-                controller: qtyController,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                ],
-                decoration: InputDecoration(
-                  labelText: 'Quantity to waste (${batch.unitLabel})',
+        void submit() => Navigator.pop(dialogContext, true);
+
+        return Focus(
+          autofocus: true,
+          onKeyEvent: (node, event) {
+            if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+            if (event.logicalKey == LogicalKeyboardKey.escape) {
+              Navigator.pop(dialogContext, false);
+              return KeyEventResult.handled;
+            }
+
+            final isSubmit =
+                event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.numpadEnter;
+            if (isSubmit && HardwareKeyboard.instance.isControlPressed) {
+              submit();
+              return KeyEventResult.handled;
+            }
+
+            return KeyEventResult.ignored;
+          },
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 540),
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
+                decoration: _panelDecoration(color: _panel, radius: 26),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: _danger.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Icon(
+                            Icons.delete_sweep_rounded,
+                            color: _danger,
+                            size: 26,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Waste Expiry Batch',
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                batch.productName,
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: _danger.withValues(alpha: _isDark ? 0.14 : 0.08),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: _danger.withValues(alpha: 0.24),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Remove this quantity from saleable expiry stock only after checking the shelf.',
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              height: 1.35,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 8,
+                            children: [
+                              _batchInfoChip(
+                                Icons.event_busy_rounded,
+                                _daysText(days),
+                                statusColor,
+                              ),
+                              _batchInfoChip(
+                                Icons.event_rounded,
+                                'Expiry ${_formatDate(batch.expiryDate)}',
+                                statusColor,
+                              ),
+                              _batchInfoChip(
+                                Icons.inventory_2_rounded,
+                                'Remaining ${_formatQuantity(batch.remainingQuantity, batch.unitLabel)}',
+                                _blue,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: qtyController,
+                      focusNode: qtyFocusNode,
+                      autofocus: true,
+                      textInputAction: TextInputAction.next,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                      ],
+                      decoration: _dialogFieldDecoration(
+                        label: 'Quantity to waste (${batch.unitLabel})',
+                        helperText:
+                            'Use the checked shelf quantity. It cannot exceed the remaining batch stock.',
+                      ),
+                      onSubmitted: (_) => noteFocusNode.requestFocus(),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: noteController,
+                      focusNode: noteFocusNode,
+                      maxLines: 2,
+                      textInputAction: TextInputAction.done,
+                      decoration: _dialogFieldDecoration(
+                        label: 'Note',
+                        helperText:
+                            'Example: Expired stock removed from shelf.',
+                      ),
+                      onSubmitted: (_) => submit(),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Keyboard: Esc cancels, Ctrl+Enter wastes stock.',
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            onPressed: () =>
+                                Navigator.pop(dialogContext, false),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              backgroundColor: _danger,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            onPressed: submit,
+                            child: const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.delete_sweep_rounded, size: 18),
+                                  SizedBox(width: 7),
+                                  Text('Waste Stock'),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: noteController,
-                maxLines: 2,
-                decoration: const InputDecoration(labelText: 'Note'),
-              ),
-            ],
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: _danger),
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Waste Stock'),
-            ),
-          ],
         );
       },
     );
@@ -222,6 +513,8 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
     if (confirmed != true) {
       qtyController.dispose();
       noteController.dispose();
+      qtyFocusNode.dispose();
+      noteFocusNode.dispose();
       return;
     }
 
@@ -229,6 +522,8 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
     final note = noteController.text.trim();
     qtyController.dispose();
     noteController.dispose();
+    qtyFocusNode.dispose();
+    noteFocusNode.dispose();
 
     if (qty == null || qty <= 0) {
       if (!mounted) return;
@@ -264,6 +559,32 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
           offset: const Offset(0, 12),
         ),
       ],
+    );
+  }
+
+  InputDecoration _dialogFieldDecoration({
+    required String label,
+    String? helperText,
+  }) {
+    return InputDecoration(
+      labelText: label,
+      helperText: helperText,
+      filled: true,
+      fillColor: _isDark ? const Color(0xFF0C1728) : const Color(0xFFF2F6FA),
+      labelStyle: TextStyle(color: _textSecondary),
+      helperStyle: TextStyle(color: _textSecondary),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide(color: _border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide(color: _border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: BorderSide(color: _brand, width: 1.4),
+      ),
     );
   }
 
@@ -335,94 +656,151 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
     );
   }
 
+  Widget _batchInfoChip(IconData icon, String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: _isDark ? 0.18 : 0.11),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.32)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 16),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: _textPrimary,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _batchCard(ExpiryBatch batch) {
     final now = DateTime.now();
     final days = batch.daysLeft(now);
     final color = _statusColor(days);
+    final isPointed = _pointedBatchId == batch.id;
+    final showFlash = isPointed && _pointFlashOn;
+    final key = _batchKeys.putIfAbsent(batch.id, () => GlobalKey());
 
     return Container(
+      key: key,
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: _panelDecoration(color: _panelAlt, radius: 18),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Stack(
         children: [
           Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: _isDark ? 0.18 : 0.12),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(Icons.event_busy_rounded, color: color, size: 22),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
+            padding: const EdgeInsets.all(14),
+            decoration: _panelDecoration(color: _panelAlt, radius: 18),
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        batch.productName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: _textPrimary,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _statusChip(_daysText(days), color),
-                    if (batch.checkedToday(now)) ...[
-                      const SizedBox(width: 6),
-                      _statusChip('Checked', _success),
-                    ],
-                  ],
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: _isDark ? 0.18 : 0.12),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(Icons.event_busy_rounded, color: color, size: 22),
                 ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 14,
-                  runSpacing: 7,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              batch.productName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: _textPrimary,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _statusChip(_daysText(days), color),
+                          if (batch.checkedToday(now)) ...[
+                            const SizedBox(width: 6),
+                            _statusChip('Checked', _success),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 14,
+                        runSpacing: 7,
+                        children: [
+                          _detail('Barcode', batch.barcode),
+                          _detail(
+                            'Batch',
+                            batch.batchNumber.trim().isEmpty
+                                ? 'Not recorded'
+                                : batch.batchNumber,
+                          ),
+                          _detail('Supplier', batch.supplierName),
+                          _detail(
+                            'Remaining',
+                            _formatQuantity(
+                              batch.remainingQuantity,
+                              batch.unitLabel,
+                            ),
+                          ),
+                          _detail('Expiry', _formatDate(batch.expiryDate)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    _detail('Barcode', batch.barcode),
-                    _detail(
-                      'Batch',
-                      batch.batchNumber.trim().isEmpty
-                          ? 'Not recorded'
-                          : batch.batchNumber,
+                    OutlinedButton.icon(
+                      onPressed: () => _markChecked(batch),
+                      icon: const Icon(
+                        Icons.check_circle_outline_rounded,
+                        size: 16,
+                      ),
+                      label: const Text('Checked'),
                     ),
-                    _detail('Supplier', batch.supplierName),
-                    _detail(
-                      'Remaining',
-                      _formatQuantity(batch.remainingQuantity, batch.unitLabel),
+                    const SizedBox(height: 8),
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(backgroundColor: _danger),
+                      onPressed: () => _wasteBatch(batch),
+                      icon: const Icon(Icons.delete_sweep_rounded, size: 16),
+                      label: const Text('Waste'),
                     ),
-                    _detail('Expiry', _formatDate(batch.expiryDate)),
                   ],
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              OutlinedButton.icon(
-                onPressed: () => _markChecked(batch),
-                icon: const Icon(Icons.check_circle_outline_rounded, size: 16),
-                label: const Text('Checked'),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 2200),
+                curve: Curves.easeOutCubic,
+                opacity: showFlash ? (_isDark ? 0.55 : 0.42) : 0,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                ),
               ),
-              const SizedBox(height: 8),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: _danger),
-                onPressed: () => _wasteBatch(batch),
-                icon: const Icon(Icons.delete_sweep_rounded, size: 16),
-                label: const Text('Waste'),
-              ),
-            ],
+            ),
           ),
         ],
       ),
@@ -503,6 +881,8 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
               Expanded(
                 child: TextField(
                   controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  autofocus: true,
                   onChanged: (value) {
                     _search = value;
                     _loadData(showLoader: false);
@@ -531,6 +911,7 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
                   ),
                 )
               : ListView(
+                  controller: _scrollController,
                   children: [
                     for (final entry in grouped.entries) ...[
                       Padding(

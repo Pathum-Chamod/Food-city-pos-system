@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared/models/customer.dart';
 import 'package:shared/models/loyalty_ledger_entry.dart';
 
@@ -20,6 +21,8 @@ class CustomerLoyaltyReportScreen extends StatefulWidget {
 class _CustomerLoyaltyReportScreenState
     extends State<CustomerLoyaltyReportScreen> {
   final TextEditingController _searchController = TextEditingController();
+  late final FocusNode _searchFocusNode;
+  final ScrollController _pageScrollController = ScrollController();
   Timer? _searchDebounce;
 
   Map<String, dynamic> _summary = {};
@@ -29,6 +32,9 @@ class _CustomerLoyaltyReportScreenState
   bool _includeZeroBalance = true;
   String _query = '';
   String _entryFilter = 'all';
+  int? _selectedSearchResultIndex;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _blue = Color(0xFF4B8DFF);
@@ -52,14 +58,109 @@ class _CustomerLoyaltyReportScreenState
   @override
   void initState() {
     super.initState();
+    _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
     _loadReport();
+    _focusSearchField();
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _searchSelectionTimer?.cancel();
+    _pageScrollController.dispose();
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _searchSelectionTimer?.cancel();
+      if (_selectedSearchResultIndex != null) {
+        setState(() => _selectedSearchResultIndex = null);
+      }
+      if (_pageScrollController.hasClients) {
+        await _pageScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _openSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    if (_customers.isEmpty) {
+      setState(() => _selectedSearchResultIndex = null);
+      return;
+    }
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, _customers.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(
+    int index, {
+    int scrollDirection = 0,
+    bool autoClear = true,
+  }) {
+    _searchSelectionTimer?.cancel();
+    setState(() => _selectedSearchResultIndex = index);
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    if (!autoClear) return;
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() => _selectedSearchResultIndex = null);
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  Future<void> _openSelectedSearchResult() async {
+    if (_customers.isEmpty) return;
+    final index = _customers.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, _customers.length - 1);
+    _showSearchSelection(index, autoClear: false);
+    await _openCustomerDetails(_customers[index]);
+    if (mounted) _showSearchSelection(index);
   }
 
   Future<void> _loadReport() async {
@@ -263,13 +364,17 @@ class _CustomerLoyaltyReportScreenState
       onSelected: (_) async {
         setState(() {
           _entryFilter = value;
+          _selectedSearchResultIndex = null;
         });
         await _loadReport();
       },
     );
   }
 
-  Widget _customerRow(Map<String, dynamic> row) {
+  Widget _customerRow(
+    Map<String, dynamic> row, {
+    bool isKeyboardSelected = false,
+  }) {
     final balance = _readInt(row['loyalty_points_balance']);
     final enabled = _readBool(row['loyalty_enabled'], fallback: true);
     final name = (row['name'] ?? '').toString().trim();
@@ -283,7 +388,10 @@ class _CustomerLoyaltyReportScreenState
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _border),
+        border: Border.all(
+          color: isKeyboardSelected ? _brand : _border,
+          width: isKeyboardSelected ? 1.6 : 1,
+        ),
       ),
       child: Row(
         children: [
@@ -470,6 +578,7 @@ class _CustomerLoyaltyReportScreenState
             : RefreshIndicator(
                 onRefresh: _loadReport,
                 child: SingleChildScrollView(
+                  controller: _pageScrollController,
                   physics: const AlwaysScrollableScrollPhysics(),
                   padding: const EdgeInsets.all(22),
                   child: Column(
@@ -527,6 +636,8 @@ class _CustomerLoyaltyReportScreenState
                             Expanded(
                               child: TextField(
                                 controller: _searchController,
+                                focusNode: _searchFocusNode,
+                                autofocus: true,
                                 decoration: InputDecoration(
                                   labelText: 'Search customers',
                                   prefixIcon: const Icon(Icons.search_rounded),
@@ -537,7 +648,12 @@ class _CustomerLoyaltyReportScreenState
                                     borderSide: BorderSide(color: _border),
                                   ),
                                 ),
-                                onChanged: _onSearchChanged,
+                                onChanged: (value) {
+                                  setState(() {
+                                    _selectedSearchResultIndex = null;
+                                  });
+                                  _onSearchChanged(value);
+                                },
                               ),
                             ),
                             const SizedBox(width: 12),
@@ -547,6 +663,7 @@ class _CustomerLoyaltyReportScreenState
                               onSelected: (value) async {
                                 setState(() {
                                   _includeZeroBalance = !value;
+                                  _selectedSearchResultIndex = null;
                                 });
                                 await _loadReport();
                               },
@@ -573,8 +690,17 @@ class _CustomerLoyaltyReportScreenState
                           itemCount: _customers.length,
                           separatorBuilder: (_, __) =>
                               const SizedBox(height: 10),
-                          itemBuilder: (context, index) =>
-                              _customerRow(_customers[index]),
+                          itemBuilder: (context, index) => KeyedSubtree(
+                            key: _searchResultKeys.putIfAbsent(
+                              index,
+                              GlobalKey.new,
+                            ),
+                            child: _customerRow(
+                              _customers[index],
+                              isKeyboardSelected:
+                                  _selectedSearchResultIndex == index,
+                            ),
+                          ),
                         ),
                       const SizedBox(height: 22),
                       Row(

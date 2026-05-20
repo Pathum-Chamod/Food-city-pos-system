@@ -1,9 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/customer.dart';
 
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
 import '../services/customer_service.dart';
 import '../widgets/app_snackbar.dart';
@@ -25,12 +28,17 @@ class CustomerManagementScreen extends StatefulWidget {
 
 class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
   final TextEditingController _searchController = TextEditingController();
+  late final FocusNode _searchFocusNode;
+  final ScrollController _resultScrollController = ScrollController();
   Timer? _searchDebounce;
 
   List<Customer> _customers = [];
   bool _isLoading = true;
   bool _includeInactive = false;
   String _query = '';
+  int? _selectedSearchResultIndex;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _warning = Color(0xFFFFB65C);
@@ -53,14 +61,117 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
   @override
   void initState() {
     super.initState();
+    _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
     _loadCustomers();
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.customerManagement,
+      _focusSearchField,
+    );
+    _focusSearchField();
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _searchSelectionTimer?.cancel();
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.customerManagement,
+      _focusSearchField,
+    );
+    _searchFocusNode.dispose();
+    _resultScrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _searchSelectionTimer?.cancel();
+      if (_selectedSearchResultIndex != null) {
+        setState(() => _selectedSearchResultIndex = null);
+      }
+      if (_resultScrollController.hasClients) {
+        await _resultScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _openSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    if (_customers.isEmpty) {
+      setState(() => _selectedSearchResultIndex = null);
+      return;
+    }
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, _customers.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(
+    int index, {
+    int scrollDirection = 0,
+    bool autoClear = true,
+  }) {
+    _searchSelectionTimer?.cancel();
+    setState(() => _selectedSearchResultIndex = index);
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    if (!autoClear) return;
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() => _selectedSearchResultIndex = null);
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  Future<void> _openSelectedSearchResult() async {
+    if (_customers.isEmpty) return;
+    final index = _customers.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, _customers.length - 1);
+    _showSearchSelection(index, autoClear: false);
+    await _openDetails(_customers[index]);
+    if (mounted) _showSearchSelection(index);
   }
 
   Future<void> _loadCustomers() async {
@@ -330,13 +441,16 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
     );
   }
 
-  Widget _customerCard(Customer customer) {
+  Widget _customerCard(Customer customer, {bool isKeyboardSelected = false}) {
     return Container(
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color: customer.isActive ? _border : _danger.withValues(alpha: 0.35),
+          color: isKeyboardSelected
+              ? _brand
+              : (customer.isActive ? _border : _danger.withValues(alpha: 0.35)),
+          width: isKeyboardSelected ? 1.6 : 1,
         ),
       ),
       child: Material(
@@ -564,6 +678,8 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                     Expanded(
                       child: TextField(
                         controller: _searchController,
+                        focusNode: _searchFocusNode,
+                        autofocus: true,
                         decoration:
                             _inputDecoration(
                               label: 'Search customers',
@@ -577,6 +693,7 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                                         _searchController.clear();
                                         setState(() {
                                           _query = '';
+                                          _selectedSearchResultIndex = null;
                                         });
                                         _loadCustomers();
                                       },
@@ -584,7 +701,9 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                                     ),
                             ),
                         onChanged: (value) {
-                          setState(() {});
+                          setState(() {
+                            _selectedSearchResultIndex = null;
+                          });
                           _onSearchChanged(value);
                         },
                       ),
@@ -671,10 +790,21 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                         ),
                       )
                     : ListView.separated(
+                        controller: _resultScrollController,
                         itemCount: _customers.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
-                          return _customerCard(_customers[index]);
+                          return KeyedSubtree(
+                            key: _searchResultKeys.putIfAbsent(
+                              index,
+                              GlobalKey.new,
+                            ),
+                            child: _customerCard(
+                              _customers[index],
+                              isKeyboardSelected:
+                                  _selectedSearchResultIndex == index,
+                            ),
+                          );
                         },
                       ),
               ),

@@ -65,7 +65,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 29,
+        version: 30,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -311,6 +311,40 @@ class DatabaseHelper {
     );
     await db.execute(
       'CREATE INDEX IF NOT EXISTS idx_expiry_batches_expiry_date ON expiry_batches(expiry_date)',
+    );
+  }
+
+  Future<void> _createSaleItemBatchesTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sale_item_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sale_id INTEGER NOT NULL,
+        sale_item_id INTEGER NOT NULL,
+        expiry_batch_id INTEGER NOT NULL,
+        barcode TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        batch_number TEXT NOT NULL DEFAULT '',
+        expiry_date TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        returned_quantity REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
+        FOREIGN KEY (sale_item_id) REFERENCES sale_items(id) ON DELETE CASCADE,
+        FOREIGN KEY (expiry_batch_id) REFERENCES expiry_batches(id)
+      )
+    ''');
+
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sale_item_batches_sale_id ON sale_item_batches(sale_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sale_item_batches_sale_item_id ON sale_item_batches(sale_item_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sale_item_batches_batch_id ON sale_item_batches(expiry_batch_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sale_item_batches_barcode ON sale_item_batches(barcode)',
     );
   }
 
@@ -606,6 +640,7 @@ class DatabaseHelper {
     await _createSupplierTables(db);
     await _createPurchaseOrderTables(db);
     await _createExpiryTables(db);
+    await _createSaleItemBatchesTable(db);
   }
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
@@ -1359,6 +1394,10 @@ class DatabaseHelper {
       await _addColumnIfMissing(db, 'sales', 'credit_new_balance', 'REAL');
       await _addColumnIfMissing(db, 'sales', 'credit_bill_amount', 'REAL');
       await _ensureSalesHistoryIndexes(db);
+    }
+
+    if (oldVersion < 30) {
+      await _createSaleItemBatchesTable(db);
     }
   }
 
@@ -2988,7 +3027,7 @@ class DatabaseHelper {
 
             final rows = await txn.query(
               'products',
-              columns: ['stock'],
+              columns: ['stock', 'track_expiry'],
               where: 'barcode = ?',
               whereArgs: [barcode],
               limit: 1,
@@ -3006,6 +3045,21 @@ class DatabaseHelper {
               throw Exception(
                 'Insufficient stock for $productName. Available: ${_formatQuantityValue(availableStock)}, requested: ${_formatQuantityValue(quantity)}.',
               );
+            }
+
+            final trackExpiry =
+                ((rows.first['track_expiry'] as num?)?.toInt() ?? 0) == 1;
+            if (trackExpiry) {
+              final expiryRemaining =
+                  await _getActiveExpiryRemainingForBarcodeExecutor(
+                    txn,
+                    barcode,
+                  );
+              if (_quantityExceeds(quantity, expiryRemaining)) {
+                throw Exception(
+                  'Expiry batch stock is not enough for $productName. Please check Expiry Alerts.',
+                );
+              }
             }
           }
         } else {
@@ -3226,7 +3280,7 @@ class DatabaseHelper {
 
           final stockRows = await txn.query(
             'products',
-            columns: ['stock'],
+            columns: ['stock', 'track_expiry'],
             where: 'barcode = ?',
             whereArgs: [barcode],
             limit: 1,
@@ -3250,16 +3304,7 @@ class DatabaseHelper {
             );
           }
 
-          if (!isRefund) {
-            await _deductExpiryBatchesForSale(
-              txn,
-              barcode: barcode,
-              quantity: quantity,
-              updatedAt: now,
-            );
-          }
-
-          await txn.insert('sale_items', {
+          final saleItemId = await txn.insert('sale_items', {
             'sale_id': saleId,
             'barcode': barcode,
             'product_name': productName,
@@ -3291,6 +3336,34 @@ class DatabaseHelper {
             'line_total': finalLineTotal,
             'created_at': now,
           });
+
+          final trackExpiry =
+              stockRows.isNotEmpty &&
+              ((stockRows.first['track_expiry'] as num?)?.toInt() ?? 0) == 1;
+
+          if (!isRefund && trackExpiry) {
+            final allocations = await _deductExpiryBatchesForSaleItem(
+              txn,
+              barcode: barcode,
+              quantity: quantity,
+              updatedAt: now,
+            );
+
+            for (final allocation in allocations) {
+              await txn.insert('sale_item_batches', {
+                'sale_id': saleId,
+                'sale_item_id': saleItemId,
+                'expiry_batch_id': allocation['expiry_batch_id'],
+                'barcode': allocation['barcode'],
+                'product_name': allocation['product_name'],
+                'batch_number': allocation['batch_number'],
+                'expiry_date': allocation['expiry_date'],
+                'quantity': allocation['quantity'],
+                'returned_quantity': 0,
+                'created_at': now,
+              });
+            }
+          }
 
           await _insertInventoryMovement(
             txn,
@@ -3582,6 +3655,15 @@ class DatabaseHelper {
               '$productName was not found in local POS database.',
             );
           }
+
+          await _restoreExpiryBatchesForRefund(
+            txn,
+            originalSaleId: originalSaleId,
+            barcode: barcode,
+            refundQuantity: quantity,
+            updatedAt: now,
+            performedBy: cashierName,
+          );
 
           double refundLineTotal;
           if ((quantity - refundableQty).abs() < _quantityEpsilon) {
@@ -6715,6 +6797,189 @@ class DatabaseHelper {
     }
   }
 
+  Future<bool> receiveStockWithReceiptLocal({
+    required String barcode,
+    required num quantity,
+    required int supplierId,
+    required String supplierName,
+    required double resolvedCost,
+    double? unitCost,
+    String referenceNote = '',
+    String invoiceNumber = '',
+    String deliveryNoteNumber = '',
+    String grnReference = '',
+    String batchNumber = '',
+    DateTime? expiryDate,
+    required String performedBy,
+    String backendStatus = 'local',
+  }) async {
+    final trimmedBarcode = barcode.trim();
+    final trimmedSupplierName = supplierName.trim();
+    final safeQuantity = _roundQuantity(quantity);
+    if (trimmedBarcode.isEmpty || !_isPositiveQuantity(safeQuantity)) {
+      return false;
+    }
+
+    final db = await database;
+
+    try {
+      await db.transaction((txn) async {
+        final now = DateTime.now().toIso8601String();
+        final productRows = await txn.query(
+          'products',
+          columns: ['name', 'stock', 'cost_price', 'track_expiry'],
+          where: 'barcode = ?',
+          whereArgs: [trimmedBarcode],
+          limit: 1,
+        );
+
+        if (productRows.isEmpty) {
+          throw Exception('Product not found for barcode $trimmedBarcode');
+        }
+
+        final product = productRows.first;
+        final productName = (product['name'] ?? 'Unknown product').toString();
+        final trackExpiry =
+            ((product['track_expiry'] as num?)?.toInt() ?? 0) == 1;
+
+        if (trackExpiry && expiryDate == null) {
+          throw Exception('Expiry date is required for this product.');
+        }
+
+        final stockBefore = _parseQuantity(product['stock']);
+        final stockAfter = _roundQuantity(stockBefore + safeQuantity);
+        final safeExpiryDate = expiryDate == null
+            ? null
+            : _formatDateOnly(expiryDate);
+        final resolvedBatchNumber = trackExpiry
+            ? (batchNumber.trim().isNotEmpty
+                  ? batchNumber.trim()
+                  : await _generateStockBatchNumber(
+                      txn,
+                      supplierName: trimmedSupplierName,
+                    ))
+            : batchNumber.trim();
+
+        final updates = <String, Object?>{
+          'stock': stockAfter,
+          'updated_at': now,
+        };
+
+        if (unitCost != null && unitCost >= 0) {
+          updates['cost_price'] = _roundMoney(unitCost);
+          updates['last_price_updated_at'] = now;
+        }
+
+        await txn.update(
+          'products',
+          updates,
+          where: 'barcode = ?',
+          whereArgs: [trimmedBarcode],
+        );
+
+        final receiptId = await txn.insert('stock_receipts', {
+          'backend_receipt_id': null,
+          'purchase_order_id': null,
+          'purchase_order_number': null,
+          'purchase_order_receipt_id': null,
+          'barcode': trimmedBarcode,
+          'product_name': productName,
+          'quantity': safeQuantity,
+          'supplier_id': supplierId,
+          'supplier_name': trimmedSupplierName,
+          'cost': _roundMoney(resolvedCost),
+          'reference_note': referenceNote.trim(),
+          'invoice_number': invoiceNumber.trim(),
+          'delivery_note_number': deliveryNoteNumber.trim(),
+          'grn_reference': grnReference.trim(),
+          'expiry_batch_id': null,
+          'batch_number': resolvedBatchNumber,
+          'expiry_date': safeExpiryDate,
+          'cashier_name': performedBy.trim(),
+          'is_reversed': 0,
+          'reversed_at': '',
+          'reversal_reason': '',
+          'created_at': now,
+          'backend_status': backendStatus,
+        });
+
+        int? expiryBatchId;
+        if (trackExpiry) {
+          expiryBatchId = await txn.insert('expiry_batches', {
+            'receipt_id': receiptId,
+            'barcode': trimmedBarcode,
+            'product_name': productName,
+            'batch_number': resolvedBatchNumber,
+            'supplier_id': supplierId,
+            'supplier_name': trimmedSupplierName,
+            'received_quantity': safeQuantity,
+            'remaining_quantity': safeQuantity,
+            'expiry_date': safeExpiryDate,
+            'status': 'active',
+            'last_checked_at': '',
+            'created_at': now,
+            'updated_at': now,
+          });
+
+          await txn.update(
+            'stock_receipts',
+            {'expiry_batch_id': expiryBatchId},
+            where: 'id = ?',
+            whereArgs: [receiptId],
+          );
+        }
+
+        await _insertInventoryMovement(
+          txn,
+          barcode: trimmedBarcode,
+          productName: productName,
+          actionType: 'stock_receive',
+          quantityChange: safeQuantity,
+          stockBefore: stockBefore,
+          stockAfter: stockAfter,
+          reason: referenceNote.trim(),
+          performedBy: performedBy.trim(),
+          supplierId: supplierId,
+          supplierName: trimmedSupplierName,
+          createdAt: now,
+        );
+
+        final syncData = jsonEncode({
+          'barcode': trimmedBarcode,
+          'product_name': productName,
+          'quantity': safeQuantity,
+          'unit_cost': unitCost,
+          'resolved_cost': _roundMoney(resolvedCost),
+          'supplier_id': supplierId,
+          'supplier_name': trimmedSupplierName,
+          'reference_note': referenceNote.trim(),
+          'invoice_number': invoiceNumber.trim(),
+          'delivery_note_number': deliveryNoteNumber.trim(),
+          'grn_reference': grnReference.trim(),
+          'batch_number': resolvedBatchNumber,
+          'expiry_date': safeExpiryDate,
+          'expiry_batch_id': expiryBatchId,
+          'performed_by': performedBy.trim(),
+          'updated_at': now,
+          'branch': 'Hikkaduwa',
+          'vendor': 'Alfasoft',
+        });
+
+        await txn.insert('sync_queue', {
+          'type': 'STOCK_RECEIVE',
+          'data': syncData,
+          'status': 'pending',
+          'created_at': now,
+        });
+      });
+
+      return true;
+    } catch (e) {
+      debugPrint('Error receiving stock with receipt: $e');
+      return false;
+    }
+  }
+
   Future<bool> adjustStockLocal(
     String barcode, {
     required String adjustmentType,
@@ -6741,7 +7006,7 @@ class DatabaseHelper {
         final now = DateTime.now().toIso8601String();
         final rows = await txn.query(
           'products',
-          columns: ['name', 'stock'],
+          columns: ['name', 'stock', 'track_expiry'],
           where: 'barcode = ?',
           whereArgs: [barcode.trim()],
           limit: 1,
@@ -6754,6 +7019,7 @@ class DatabaseHelper {
         final row = rows.first;
         final productName = (row['name'] ?? 'Unknown product').toString();
         final stockBefore = _parseQuantity(row['stock']);
+        final trackExpiry = ((row['track_expiry'] as num?)?.toInt() ?? 0) == 1;
 
         late final double stockAfter;
         late final double quantityChange;
@@ -6784,6 +7050,28 @@ class DatabaseHelper {
 
         if (quantityChange.abs() < _quantityEpsilon) {
           throw Exception('No stock change detected.');
+        }
+
+        if (trackExpiry && quantityChange > _quantityEpsilon) {
+          if (adjustmentType == 'set') {
+            throw Exception(
+              'Cannot increase expiry-tracked stock using Set Exact. Use Receive Stock instead.',
+            );
+          }
+          throw Exception(
+            'This product tracks expiry. Please use Receive Stock to add stock with expiry date.',
+          );
+        }
+
+        if (trackExpiry && quantityChange < -_quantityEpsilon) {
+          await _deductExpiryBatchesForManualAdjustment(
+            txn,
+            barcode: barcode.trim(),
+            quantityToRemove: quantityChange.abs(),
+            performedBy: performedBy ?? '',
+            reason: reason ?? '',
+            updatedAt: now,
+          );
         }
 
         await txn.update(
@@ -6835,6 +7123,70 @@ class DatabaseHelper {
     } catch (e) {
       debugPrint('Error adjusting stock: $e');
       return false;
+    }
+  }
+
+  Future<void> _deductExpiryBatchesForManualAdjustment(
+    DatabaseExecutor txn, {
+    required String barcode,
+    required double quantityToRemove,
+    required String performedBy,
+    required String reason,
+    required String updatedAt,
+  }) async {
+    var remainingToRemove = _roundQuantity(quantityToRemove);
+    if (!_isPositiveQuantity(remainingToRemove)) return;
+
+    final rows = await txn.query(
+      'expiry_batches',
+      where: "barcode = ? AND status = 'active' AND remaining_quantity > ?",
+      whereArgs: [barcode.trim(), _quantityEpsilon],
+      orderBy: 'date(expiry_date) ASC, id ASC',
+    );
+
+    for (final row in rows) {
+      if (!_isPositiveQuantity(remainingToRemove)) break;
+
+      final batchId = (row['id'] as num?)?.toInt() ?? 0;
+      final remainingQuantity = _parseQuantity(row['remaining_quantity']);
+      if (batchId <= 0 || !_isPositiveQuantity(remainingQuantity)) continue;
+
+      final deductQuantity = remainingQuantity < remainingToRemove
+          ? remainingQuantity
+          : remainingToRemove;
+      final nextRemaining = _roundQuantity(remainingQuantity - deductQuantity);
+
+      await txn.update(
+        'expiry_batches',
+        {
+          'remaining_quantity': nextRemaining,
+          'status': nextRemaining <= _quantityEpsilon
+              ? 'stock_adjusted'
+              : 'active',
+          'updated_at': updatedAt,
+        },
+        where: 'id = ?',
+        whereArgs: [batchId],
+      );
+
+      await txn.insert('expiry_actions', {
+        'batch_id': batchId,
+        'action_type': 'stock_adjusted',
+        'quantity': deductQuantity,
+        'note': reason.trim().isEmpty
+            ? 'Manual stock adjustment reduced expiry batch'
+            : reason.trim(),
+        'performed_by': performedBy.trim(),
+        'created_at': updatedAt,
+      });
+
+      remainingToRemove = _roundQuantity(remainingToRemove - deductQuantity);
+    }
+
+    if (_isPositiveQuantity(remainingToRemove)) {
+      throw Exception(
+        'Expiry batch quantity is not enough to match this stock adjustment.',
+      );
     }
   }
 
@@ -7718,6 +8070,99 @@ class DatabaseHelper {
     return rows.isNotEmpty;
   }
 
+  Future<Map<String, dynamic>?> getExpiredBatchWarningForBarcode(
+    String barcode,
+  ) async {
+    final trimmedBarcode = barcode.trim();
+    if (trimmedBarcode.isEmpty) return null;
+
+    final db = await database;
+    final today = _formatDateOnly(DateTime.now());
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        b.id,
+        b.barcode,
+        b.product_name,
+        b.batch_number,
+        b.expiry_date,
+        b.remaining_quantity,
+        b.last_checked_at,
+        COALESCE(p.unit_label, 'pcs') AS unit_label
+      FROM expiry_batches b
+      LEFT JOIN products p ON p.barcode = b.barcode
+      WHERE b.barcode = ?
+        AND b.status = 'active'
+        AND b.remaining_quantity > ?
+        AND date(b.expiry_date) < date(?)
+        AND (b.last_checked_at = '' OR date(b.last_checked_at) < date(?))
+      ORDER BY date(b.expiry_date) ASC, b.id ASC
+      LIMIT 1
+      ''',
+      [trimmedBarcode, _quantityEpsilon, today, today],
+    );
+
+    if (rows.isEmpty) return null;
+    return Map<String, dynamic>.from(rows.first);
+  }
+
+  Future<Map<String, dynamic>?> getExpiryCartWarningForBarcode(
+    String barcode,
+  ) async {
+    final trimmedBarcode = barcode.trim();
+    if (trimmedBarcode.isEmpty) return null;
+
+    final db = await database;
+    final now = DateTime.now();
+    final today = _formatDateOnly(now);
+    final tomorrow = _formatDateOnly(now.add(const Duration(days: 1)));
+    final weekEnd = _formatDateOnly(now.add(const Duration(days: 7)));
+
+    final rows = await db.rawQuery(
+      '''
+      SELECT
+        b.id,
+        b.barcode,
+        b.product_name,
+        b.batch_number,
+        b.expiry_date,
+        b.remaining_quantity,
+        b.last_checked_at,
+        COALESCE(p.unit_label, 'pcs') AS unit_label
+      FROM expiry_batches b
+      LEFT JOIN products p ON p.barcode = b.barcode
+      WHERE b.barcode = ?
+        AND b.status = 'active'
+        AND b.remaining_quantity > ?
+        AND date(b.expiry_date) <= date(?)
+        AND (b.last_checked_at = '' OR date(b.last_checked_at) < date(?))
+      ORDER BY date(b.expiry_date) ASC, b.id ASC
+      LIMIT 1
+      ''',
+      [trimmedBarcode, _quantityEpsilon, weekEnd, today],
+    );
+
+    if (rows.isEmpty) return null;
+
+    final warning = Map<String, dynamic>.from(rows.first);
+    final expiryDate = (warning['expiry_date'] ?? '').toString();
+    if (expiryDate.isEmpty) return null;
+
+    if (DateTime.tryParse(expiryDate)?.isBefore(DateTime.parse(today)) ==
+        true) {
+      warning['warning_type'] = 'expired';
+    } else if (expiryDate == today) {
+      warning['warning_type'] = 'today';
+    } else if (expiryDate == tomorrow) {
+      warning['warning_type'] = 'tomorrow';
+    } else {
+      warning['warning_type'] = 'week';
+    }
+
+    return warning;
+  }
+
   Future<bool> markExpiryBatchChecked({
     required int batchId,
     required String performedBy,
@@ -7878,22 +8323,43 @@ class DatabaseHelper {
     }
   }
 
-  Future<void> _deductExpiryBatchesForSale(
+  Future<double> _getActiveExpiryRemainingForBarcodeExecutor(
+    DatabaseExecutor txn,
+    String barcode,
+  ) async {
+    final rows = await txn.rawQuery(
+      '''
+      SELECT COALESCE(SUM(remaining_quantity), 0) AS total_remaining
+      FROM expiry_batches
+      WHERE barcode = ?
+        AND status = 'active'
+        AND remaining_quantity > ?
+      ''',
+      [barcode.trim(), _quantityEpsilon],
+    );
+
+    return _parseQuantity(rows.first['total_remaining']);
+  }
+
+  Future<List<Map<String, dynamic>>> _deductExpiryBatchesForSaleItem(
     DatabaseExecutor txn, {
     required String barcode,
     required double quantity,
     required String updatedAt,
   }) async {
     var remainingToDeduct = _roundQuantity(quantity);
-    if (!_isPositiveQuantity(remainingToDeduct)) return;
+    if (!_isPositiveQuantity(remainingToDeduct)) {
+      return const <Map<String, dynamic>>[];
+    }
 
     final rows = await txn.query(
       'expiry_batches',
       where: "barcode = ? AND status = 'active' AND remaining_quantity > ?",
-      whereArgs: [barcode, _quantityEpsilon],
+      whereArgs: [barcode.trim(), _quantityEpsilon],
       orderBy: 'date(expiry_date) ASC, id ASC',
     );
 
+    final allocations = <Map<String, dynamic>>[];
     for (final row in rows) {
       if (!_isPositiveQuantity(remainingToDeduct)) break;
       final batchId = (row['id'] as num?)?.toInt() ?? 0;
@@ -7916,7 +8382,117 @@ class DatabaseHelper {
         whereArgs: [batchId],
       );
 
+      allocations.add({
+        'expiry_batch_id': batchId,
+        'barcode': (row['barcode'] ?? barcode).toString(),
+        'product_name': (row['product_name'] ?? '').toString(),
+        'batch_number': (row['batch_number'] ?? '').toString(),
+        'expiry_date': (row['expiry_date'] ?? '').toString(),
+        'quantity': deductQuantity,
+      });
+
       remainingToDeduct = _roundQuantity(remainingToDeduct - deductQuantity);
+    }
+
+    return allocations;
+  }
+
+  Future<void> _restoreExpiryBatchesForRefund(
+    DatabaseExecutor txn, {
+    required int originalSaleId,
+    required String barcode,
+    required double refundQuantity,
+    required String updatedAt,
+    required String performedBy,
+  }) async {
+    var remainingToRestore = _roundQuantity(refundQuantity);
+    if (originalSaleId <= 0 ||
+        barcode.trim().isEmpty ||
+        !_isPositiveQuantity(remainingToRestore)) {
+      return;
+    }
+
+    final allocationRows = await txn.rawQuery(
+      '''
+      SELECT *
+      FROM sale_item_batches
+      WHERE sale_id = ?
+        AND barcode = ?
+        AND quantity > returned_quantity + ?
+      ORDER BY id ASC
+      ''',
+      [originalSaleId, barcode.trim(), _quantityEpsilon],
+    );
+
+    if (allocationRows.isEmpty) return;
+
+    for (final row in allocationRows) {
+      if (!_isPositiveQuantity(remainingToRestore)) break;
+
+      final saleItemBatchId = (row['id'] as num?)?.toInt() ?? 0;
+      final batchId = (row['expiry_batch_id'] as num?)?.toInt() ?? 0;
+      final allocatedQuantity = _parseQuantity(row['quantity']);
+      final returnedQuantity = _parseQuantity(row['returned_quantity']);
+      final availableToRestore = _roundQuantity(
+        allocatedQuantity - returnedQuantity,
+      );
+
+      if (saleItemBatchId <= 0 ||
+          batchId <= 0 ||
+          !_isPositiveQuantity(availableToRestore)) {
+        continue;
+      }
+
+      final restoreQuantity = availableToRestore < remainingToRestore
+          ? availableToRestore
+          : remainingToRestore;
+
+      final batchRows = await txn.query(
+        'expiry_batches',
+        columns: ['remaining_quantity'],
+        where: 'id = ?',
+        whereArgs: [batchId],
+        limit: 1,
+      );
+      if (batchRows.isEmpty) continue;
+
+      final currentRemaining = _parseQuantity(
+        batchRows.first['remaining_quantity'],
+      );
+      final nextRemaining = _roundQuantity(currentRemaining + restoreQuantity);
+
+      await txn.update(
+        'expiry_batches',
+        {
+          'remaining_quantity': nextRemaining,
+          'status': 'active',
+          'updated_at': updatedAt,
+        },
+        where: 'id = ?',
+        whereArgs: [batchId],
+      );
+
+      await txn.update(
+        'sale_item_batches',
+        {
+          'returned_quantity': _roundQuantity(
+            returnedQuantity + restoreQuantity,
+          ),
+        },
+        where: 'id = ?',
+        whereArgs: [saleItemBatchId],
+      );
+
+      await txn.insert('expiry_actions', {
+        'batch_id': batchId,
+        'action_type': 'refunded',
+        'quantity': restoreQuantity,
+        'note': 'Refund restored to original expiry batch',
+        'performed_by': performedBy.trim(),
+        'created_at': updatedAt,
+      });
+
+      remainingToRestore = _roundQuantity(remainingToRestore - restoreQuantity);
     }
   }
 

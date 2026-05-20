@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 import '../widgets/app_snackbar.dart';
@@ -18,6 +20,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
   final TextEditingController _userSearchController = TextEditingController();
   final TextEditingController _logSearchController = TextEditingController();
+  final FocusNode _userSearchFocusNode = FocusNode();
+  final FocusNode _logSearchFocusNode = FocusNode();
 
   Map<String, dynamic> _summary = const {
     'total_users': 0,
@@ -42,13 +46,53 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   void initState() {
     super.initState();
     _loadAll();
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.userManagement,
+      _focusActiveSearchField,
+    );
+    _focusActiveSearchField();
   }
 
   @override
   void dispose() {
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.userManagement,
+      _focusActiveSearchField,
+    );
+    _userSearchFocusNode.dispose();
+    _logSearchFocusNode.dispose();
     _userSearchController.dispose();
     _logSearchController.dispose();
     super.dispose();
+  }
+
+  void _focusActiveSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final focusNode = _showLogsView
+          ? _logSearchFocusNode
+          : _userSearchFocusNode;
+      focusNode.requestFocus();
+      final context = focusNode.context;
+      final position = context == null
+          ? null
+          : Scrollable.maybeOf(context)?.position;
+      if (position != null) {
+        position.animateTo(
+          position.minScrollExtent,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+        return;
+      }
+      final primaryController = PrimaryScrollController.maybeOf(this.context);
+      if (primaryController?.hasClients != true) return;
+      primaryController!.animateTo(
+        0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   UserModulePalette get _ui => UserModulePalette.of(context);
@@ -911,6 +955,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       _logFilter = 'all';
       _showLogsView = true;
     });
+    _focusActiveSearchField();
     _loadAll();
   }
 
@@ -1274,6 +1319,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         Widget searchField() {
           return TextField(
             controller: _userSearchController,
+            focusNode: _userSearchFocusNode,
+            autofocus: !_showLogsView,
             decoration: _fieldDecoration(
               hintText: 'Search users by name, role, or PIN',
               icon: Icons.search_rounded,
@@ -1359,6 +1406,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   setState(() {
                     _showLogsView = true;
                   });
+                  _focusActiveSearchField();
                 },
               ),
               const SizedBox(width: 12),
@@ -1395,6 +1443,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       setState(() {
                         _showLogsView = true;
                       });
+                      _focusActiveSearchField();
                     },
                   ),
                   const SizedBox(width: 12),
@@ -1432,6 +1481,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       setState(() {
                         _showLogsView = true;
                       });
+                      _focusActiveSearchField();
                     },
                   ),
                 ),
@@ -1465,6 +1515,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             Widget searchField() {
               return TextField(
                 controller: _logSearchController,
+                focusNode: _logSearchFocusNode,
+                autofocus: _showLogsView,
                 decoration: _fieldDecoration(
                   hintText: 'Search activity, user, or approval details',
                   icon: Icons.search_rounded,
@@ -1538,6 +1590,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     _selectedActivityUserName = null;
                     _logFilter = 'all';
                   });
+                  _focusActiveSearchField();
                   _loadAll(keepUserActivityFilter: false);
                 },
               );

@@ -27,6 +27,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
   final _maximumRedeemController = TextEditingController();
   final _categoryController = TextEditingController();
   final _productSearchController = TextEditingController();
+  final _productSearchFocusNode = FocusNode();
 
   LoyaltySettings? _settings;
   List<LoyaltyExclusion> _excludedCategories = const [];
@@ -79,6 +80,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(_handleTabChanged);
     _load();
   }
 
@@ -91,8 +93,17 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
     _minimumRedeemController.dispose();
     _maximumRedeemController.dispose();
     _categoryController.dispose();
+    _productSearchFocusNode.dispose();
     _productSearchController.dispose();
     super.dispose();
+  }
+
+  void _handleTabChanged() {
+    if (_tabController.indexIsChanging || _tabController.index != 2) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _tabController.index != 2) return;
+      _productSearchFocusNode.requestFocus();
+    });
   }
 
   Future<void> _load() async {
@@ -1010,6 +1021,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
                 const SizedBox(height: 16),
                 TextField(
                   controller: _productSearchController,
+                  focusNode: _productSearchFocusNode,
                   decoration: const InputDecoration(
                     labelText: 'Search product',
                     hintText: 'Name, barcode, or category',

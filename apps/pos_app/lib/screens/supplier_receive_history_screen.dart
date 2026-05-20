@@ -19,6 +19,7 @@ class _SupplierReceiveHistoryScreenState
     extends State<SupplierReceiveHistoryScreen> {
   final SupplierService _supplierService = SupplierService();
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
 
   bool _isLoading = true;
   bool _isRefreshing = false;
@@ -29,12 +30,29 @@ class _SupplierReceiveHistoryScreenState
   void initState() {
     super.initState();
     _loadData();
+    _focusSearchField();
   }
 
   @override
   void dispose() {
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+      final context = _searchFocusNode.context;
+      if (context == null) return;
+      final position = Scrollable.maybeOf(context)?.position;
+      position?.animateTo(
+        position.minScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   SupplierHistoryPalette get _ui => SupplierHistoryPalette.of(context);
@@ -465,6 +483,8 @@ class _SupplierReceiveHistoryScreenState
               children: [
                 TextField(
                   controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  autofocus: true,
                   decoration: _fieldDecoration(
                     hintText:
                         'Search by product, supplier, barcode, cashier, note, or date',
@@ -521,6 +541,8 @@ class _SupplierReceiveHistoryScreenState
               Expanded(
                 child: TextField(
                   controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  autofocus: true,
                   decoration: _fieldDecoration(
                     hintText:
                         'Search by product, supplier, barcode, cashier, note, or date',

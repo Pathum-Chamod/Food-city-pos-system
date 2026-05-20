@@ -23,6 +23,7 @@ class CustomerProductPricesScreen extends StatefulWidget {
 class _CustomerProductPricesScreenState
     extends State<CustomerProductPricesScreen> {
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   List<CustomerPricingRule> _rules = [];
   List<Product> _products = [];
   bool _isLoading = true;
@@ -63,12 +64,29 @@ class _CustomerProductPricesScreenState
   void initState() {
     super.initState();
     _loadData();
+    _focusSearchField();
   }
 
   @override
   void dispose() {
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+      final context = _searchFocusNode.context;
+      if (context == null) return;
+      final position = Scrollable.maybeOf(context)?.position;
+      position?.animateTo(
+        position.minScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   Future<void> _loadData() async {
@@ -319,6 +337,8 @@ class _CustomerProductPricesScreenState
                     const SizedBox(height: 16),
                     TextField(
                       controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      autofocus: true,
                       decoration: _searchDecoration(),
                       onChanged: (_) => setState(() {}),
                     ),

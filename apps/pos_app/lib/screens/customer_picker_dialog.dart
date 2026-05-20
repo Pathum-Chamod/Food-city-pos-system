@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared/models/customer.dart';
 
 import '../services/customer_service.dart';
@@ -50,11 +51,15 @@ class _CustomerPickerDialog extends StatefulWidget {
 class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  late final FocusNode _searchFocusNode;
   Timer? _searchDebounce;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
 
   List<Customer> _customers = [];
   bool _isLoading = true;
   String _query = '';
+  int? _selectedSearchResultIndex;
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _warning = Color(0xFFFFB65C);
@@ -64,9 +69,11 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
   @override
   void initState() {
     super.initState();
+    _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _loadCustomers();
+        _searchFocusNode.requestFocus();
       }
     });
   }
@@ -74,9 +81,78 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _searchSelectionTimer?.cancel();
+    _searchFocusNode.dispose();
     _searchController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _selectHighlightedCustomer();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    if (_customers.isEmpty) {
+      setState(() => _selectedSearchResultIndex = null);
+      return;
+    }
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, _customers.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(int index, {int scrollDirection = 0}) {
+    _searchSelectionTimer?.cancel();
+    setState(() => _selectedSearchResultIndex = index);
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() => _selectedSearchResultIndex = null);
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  void _selectHighlightedCustomer() {
+    if (_customers.isEmpty) return;
+    final index = _customers.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, _customers.length - 1);
+    _showSearchSelection(index);
+    Navigator.of(
+      context,
+    ).pop(CustomerPickerResult(customer: _customers[index]));
   }
 
   void _showMessage(String message, {Color color = _warning}) {
@@ -114,6 +190,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
 
   void _onSearchChanged(String value) {
     _query = value.trim();
+    _selectedSearchResultIndex = null;
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 260), () {
       if (mounted) {
@@ -164,7 +241,10 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
     );
   }
 
-  Widget _buildCustomerCard(Customer customer) {
+  Widget _buildCustomerCard(
+    Customer customer, {
+    bool isKeyboardSelected = false,
+  }) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final panelSoft = isDark
@@ -197,8 +277,8 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
                 : panelSoft,
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: isSelected ? _brand : border,
-              width: isSelected ? 1.4 : 1,
+              color: isKeyboardSelected || isSelected ? _brand : border,
+              width: isKeyboardSelected || isSelected ? 1.4 : 1,
             ),
           ),
           child: Row(
@@ -363,6 +443,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
                   Expanded(
                     child: TextField(
                       controller: _searchController,
+                      focusNode: _searchFocusNode,
                       autofocus: true,
                       decoration:
                           _inputDecoration(
@@ -377,6 +458,7 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
                                       _searchController.clear();
                                       setState(() {
                                         _query = '';
+                                        _selectedSearchResultIndex = null;
                                       });
                                       _loadCustomers();
                                     },
@@ -384,7 +466,9 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
                                   ),
                           ),
                       onChanged: (value) {
-                        setState(() {});
+                        setState(() {
+                          _selectedSearchResultIndex = null;
+                        });
                         _onSearchChanged(value);
                       },
                     ),
@@ -502,7 +586,17 @@ class _CustomerPickerDialogState extends State<_CustomerPickerDialog> {
                           separatorBuilder: (_, __) =>
                               const SizedBox(height: 10),
                           itemBuilder: (context, index) {
-                            return _buildCustomerCard(_customers[index]);
+                            return KeyedSubtree(
+                              key: _searchResultKeys.putIfAbsent(
+                                index,
+                                GlobalKey.new,
+                              ),
+                              child: _buildCustomerCard(
+                                _customers[index],
+                                isKeyboardSelected:
+                                    _selectedSearchResultIndex == index,
+                              ),
+                            );
                           },
                         ),
                       ),

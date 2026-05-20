@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -51,6 +52,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   final TextEditingController _barcodeController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _sessionNameController = TextEditingController();
+  late final FocusNode _searchFocusNode;
+  final ScrollController _pageScrollController = ScrollController();
 
   bool _isLoading = true;
   bool _isApplying = false;
@@ -58,6 +61,9 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   String _startedAt = '';
   String _searchQuery = '';
   StockTakeFilter _selectedFilter = StockTakeFilter.all;
+  int? _selectedSearchResultIndex;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
 
   List<Product> _products = [];
   Map<String, double> _countedQuantities = {};
@@ -100,15 +106,112 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   @override
   void initState() {
     super.initState();
+    _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
     _loadSession(showLoader: true);
+    _focusSearchField();
   }
 
   @override
   void dispose() {
+    _searchSelectionTimer?.cancel();
+    _pageScrollController.dispose();
+    _searchFocusNode.dispose();
     _barcodeController.dispose();
     _searchController.dispose();
     _sessionNameController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _searchSelectionTimer?.cancel();
+      if (_selectedSearchResultIndex != null) {
+        setState(() => _selectedSearchResultIndex = null);
+      }
+      if (_pageScrollController.hasClients) {
+        await _pageScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _openSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    final products = _filteredProducts;
+    if (products.isEmpty) {
+      setState(() => _selectedSearchResultIndex = null);
+      return;
+    }
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, products.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(
+    int index, {
+    int scrollDirection = 0,
+    bool autoClear = true,
+  }) {
+    _searchSelectionTimer?.cancel();
+    setState(() => _selectedSearchResultIndex = index);
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    if (!autoClear) return;
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() => _selectedSearchResultIndex = null);
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  Future<void> _openSelectedSearchResult() async {
+    final products = _filteredProducts;
+    if (products.isEmpty) return;
+    final index = products.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, products.length - 1);
+    _showSearchSelection(index, autoClear: false);
+    await _setCountDialog(products[index]);
+    if (mounted) _showSearchSelection(index);
   }
 
   Future<void> _loadSession({bool showLoader = false}) async {
@@ -1869,6 +1972,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                   children: [
                     TextField(
                       controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      autofocus: true,
                       decoration: _fieldDecoration(
                         hintText: 'Search by name, barcode, or category',
                         labelText: 'Search Products',
@@ -1880,6 +1985,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                   _searchController.clear();
                                   setState(() {
                                     _searchQuery = '';
+                                    _selectedSearchResultIndex = null;
                                   });
                                 },
                                 icon: Icon(
@@ -1891,6 +1997,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                       onChanged: (value) {
                         setState(() {
                           _searchQuery = value;
+                          _selectedSearchResultIndex = null;
                         });
                       },
                     ),
@@ -1905,6 +2012,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                   Expanded(
                     child: TextField(
                       controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      autofocus: true,
                       decoration: _fieldDecoration(
                         hintText: 'Search by name, barcode, or category',
                         labelText: 'Search Products',
@@ -1916,6 +2025,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                   _searchController.clear();
                                   setState(() {
                                     _searchQuery = '';
+                                    _selectedSearchResultIndex = null;
                                   });
                                 },
                                 icon: Icon(
@@ -1927,6 +2037,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                       onChanged: (value) {
                         setState(() {
                           _searchQuery = value;
+                          _selectedSearchResultIndex = null;
                         });
                       },
                     ),
@@ -1971,7 +2082,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     );
   }
 
-  Widget _buildProductRow(Product product) {
+  Widget _buildProductRow(Product product, {bool isKeyboardSelected = false}) {
     final countedQty = _countedQuantities[product.barcode];
     final hasCount = countedQty != null;
     final difference = hasCount ? countedQty - product.stock : null;
@@ -2002,7 +2113,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: _panelDecoration(color: _surface, radius: 22),
+      decoration: _panelDecoration(color: _surface, radius: 22).copyWith(
+        border: Border.all(
+          color: isKeyboardSelected ? _brand : _border,
+          width: isKeyboardSelected ? 1.6 : 1,
+        ),
+      ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 900;
@@ -2264,6 +2380,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                   ),
                 ),
                 child: ListView(
+                  controller: _pageScrollController,
                   padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
                   children: [
                     _buildTopPanel(),
@@ -2273,10 +2390,18 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                     if (visibleProducts.isEmpty)
                       _buildEmptyState()
                     else
-                      ...visibleProducts.map(
-                        (product) => Padding(
+                      ...visibleProducts.indexed.map(
+                        (entry) => Padding(
+                          key: _searchResultKeys.putIfAbsent(
+                            entry.$1,
+                            GlobalKey.new,
+                          ),
                           padding: const EdgeInsets.only(bottom: 12),
-                          child: _buildProductRow(product),
+                          child: _buildProductRow(
+                            entry.$2,
+                            isKeyboardSelected:
+                                _selectedSearchResultIndex == entry.$1,
+                          ),
                         ),
                       ),
                   ],

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,8 @@ import 'package:shared/models/product.dart';
 
 import '../models/pos_supplier.dart';
 import '../models/supplier_product_mapping.dart';
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
 import '../services/database_helper.dart';
 import '../services/permission_service.dart';
@@ -55,6 +58,8 @@ class _BulkImportPreviewRow {
 
 class _InventoryScreenState extends State<InventoryScreen> {
   final TextEditingController _searchController = TextEditingController();
+  late final FocusNode _searchFocusNode;
+  final ScrollController _pageScrollController = ScrollController();
 
   List<Product> _products = [];
   List<Map<String, dynamic>> _recentMovements = [];
@@ -63,6 +68,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
   String _searchQuery = '';
   InventoryFilter _selectedFilter = InventoryFilter.all;
   bool _isBulkDeleteMode = false;
+  int? _selectedSearchResultIndex;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
   final Set<String> _selectedProductBarcodes = <String>{};
   String? _bulkDeletePerformedByLabel;
 
@@ -442,13 +450,161 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   void initState() {
     super.initState();
+    _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
     _loadData(showLoader: true);
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.inventory,
+      _focusSearchField,
+    );
+    _focusSearchField();
   }
 
   @override
   void dispose() {
+    _searchSelectionTimer?.cancel();
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.inventory,
+      _focusSearchField,
+    );
+    _pageScrollController.dispose();
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _searchSelectionTimer?.cancel();
+      if (_selectedSearchResultIndex != null) {
+        setState(() {
+          _selectedSearchResultIndex = null;
+        });
+      }
+      if (_pageScrollController.hasClients) {
+        await _pageScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _openSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+
+    final isPlusKey =
+        event.logicalKey == LogicalKeyboardKey.numpadAdd ||
+        event.logicalKey == LogicalKeyboardKey.add ||
+        (event.logicalKey == LogicalKeyboardKey.equal &&
+            HardwareKeyboard.instance.isShiftPressed);
+    if (isPlusKey && _selectedSearchResultIndex != null) {
+      _openReceiveStockForSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    final products = _filteredProducts;
+    if (products.isEmpty) {
+      setState(() {
+        _selectedSearchResultIndex = null;
+      });
+      return;
+    }
+
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, products.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(
+    int index, {
+    int scrollDirection = 0,
+    bool autoClear = true,
+  }) {
+    _searchSelectionTimer?.cancel();
+    setState(() {
+      _selectedSearchResultIndex = index;
+    });
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    if (!autoClear) return;
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() {
+        _selectedSearchResultIndex = null;
+      });
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  Future<void> _openSelectedSearchResult() async {
+    final products = _filteredProducts;
+    if (products.isEmpty) return;
+
+    final index = products.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, products.length - 1);
+    final product = products[index];
+
+    if (_isBulkDeleteMode) {
+      _showSearchSelection(index);
+      _toggleProductSelection(product);
+    } else {
+      _showSearchSelection(index, autoClear: false);
+      await _openProductDetail(product);
+      if (mounted) _showSearchSelection(index);
+    }
+  }
+
+  Future<void> _openReceiveStockForSelectedSearchResult() async {
+    final products = _filteredProducts;
+    final selectedIndex = _selectedSearchResultIndex;
+    if (products.isEmpty || selectedIndex == null) return;
+
+    final index = selectedIndex.clamp(0, products.length - 1);
+    final product = products[index];
+    _showSearchSelection(index, autoClear: false);
+    await _openReceiveFlow(initialProduct: product);
+    if (mounted) _showSearchSelection(index);
   }
 
   Future<void> _loadData({bool showLoader = false}) async {
@@ -3381,35 +3537,26 @@ class _InventoryScreenState extends State<InventoryScreen> {
           );
           if (!confirmed) return;
 
-          final success = await DatabaseHelper.instance.receiveStockLocal(
-            product.barcode,
-            qty,
-            unitCost: unitCost,
-            performedBy: changedBy,
-            reason: noteController.text.trim(),
-            supplierId: supplier.id,
-            supplierName: supplier.name,
-          );
+          final success = await DatabaseHelper.instance
+              .receiveStockWithReceiptLocal(
+                barcode: product.barcode,
+                quantity: qty,
+                supplierId: supplier.id,
+                supplierName: supplier.name,
+                resolvedCost: resolvedCost,
+                unitCost: unitCost,
+                referenceNote: noteController.text.trim(),
+                batchNumber: batchController.text.trim(),
+                expiryDate: expiryDate,
+                performedBy: changedBy,
+                backendStatus: 'local',
+              );
 
           if (!success) {
             if (!dialogContext.mounted) return;
             Navigator.pop(dialogContext, false);
             return;
           }
-
-          await DatabaseHelper.instance.insertStockReceipt(
-            barcode: product.barcode,
-            productName: product.name,
-            quantity: qty,
-            supplierId: supplier.id,
-            supplierName: supplier.name,
-            cost: resolvedCost,
-            referenceNote: noteController.text.trim(),
-            batchNumber: batchController.text.trim(),
-            expiryDate: expiryDate,
-            cashierName: changedBy,
-            backendStatus: 'local',
-          );
 
           if (setAsPrimary) {
             await DatabaseHelper.instance.upsertSupplierProductMapping(
@@ -4216,6 +4363,26 @@ class _InventoryScreenState extends State<InventoryScreen> {
               break;
           }
 
+          if (product.trackExpiry && adjustmentType == 'add') {
+            AppSnackBar.show(
+              dialogContext,
+              message:
+                  'This product tracks expiry. Please use Receive Stock to add stock with expiry date.',
+            );
+            return;
+          }
+
+          if (product.trackExpiry &&
+              adjustmentType == 'set' &&
+              resultingStock > product.stock) {
+            AppSnackBar.show(
+              dialogContext,
+              message:
+                  'Cannot increase expiry-tracked stock using Set Exact. Use Receive Stock instead.',
+            );
+            return;
+          }
+
           if (resultingStock < 0) {
             AppSnackBar.show(
               dialogContext,
@@ -4287,6 +4454,38 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   ),
                 ],
               ),
+              if (product.trackExpiry) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _warningColor.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _warningColor.withOpacity(0.35)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.info_outline_rounded,
+                        color: _warningColor,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'This item tracks expiry. Adding stock must be done through Receive Stock. Removing or setting lower stock will reduce the nearest expiry batches first.',
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 initialValue: adjustmentType,
@@ -5645,7 +5844,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
-  Widget _buildProductRow(Product product) {
+  Widget _buildProductRow(Product product, {bool isKeyboardSelected = false}) {
     final isSelectedForDelete = _selectedProductBarcodes.contains(
       product.barcode,
     );
@@ -5740,8 +5939,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
             color: _panelSoft,
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: isSelectedForDelete ? _dangerColor : _borderColor,
-              width: isSelectedForDelete ? 1.5 : 1,
+              color: isKeyboardSelected
+                  ? _brandColor
+                  : (isSelectedForDelete ? _dangerColor : _borderColor),
+              width: isKeyboardSelected || isSelectedForDelete ? 1.5 : 1,
             ),
           ),
           child: Row(
@@ -5958,6 +6159,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               ),
             ),
             child: ListView(
+              controller: _pageScrollController,
               padding: const EdgeInsets.all(16),
               children: [
                 _buildHeaderCard(),
@@ -6016,6 +6218,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           Expanded(
                             child: TextField(
                               controller: _searchController,
+                              focusNode: _searchFocusNode,
+                              autofocus: true,
                               style: TextStyle(color: _textPrimary),
                               decoration: InputDecoration(
                                 hintText:
@@ -6060,6 +6264,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               onChanged: (value) {
                                 setState(() {
                                   _searchQuery = value;
+                                  _selectedSearchResultIndex = null;
                                 });
                               },
                             ),
@@ -6270,10 +6475,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           ),
                         )
                       else
-                        ...visibleProducts.map(
-                          (product) => Padding(
+                        ...visibleProducts.indexed.map(
+                          (entry) => Padding(
+                            key: _searchResultKeys.putIfAbsent(
+                              entry.$1,
+                              GlobalKey.new,
+                            ),
                             padding: const EdgeInsets.only(bottom: 12),
-                            child: _buildProductRow(product),
+                            child: _buildProductRow(
+                              entry.$2,
+                              isKeyboardSelected:
+                                  _selectedSearchResultIndex == entry.$1,
+                            ),
                           ),
                         ),
                     ],

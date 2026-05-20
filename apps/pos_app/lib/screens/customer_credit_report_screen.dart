@@ -1,7 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/customer.dart';
 
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
 import '../services/customer_credit_service.dart';
 import '../widgets/app_snackbar.dart';
@@ -20,11 +25,17 @@ class CustomerCreditReportScreen extends StatefulWidget {
 
 class _CustomerCreditReportScreenState
     extends State<CustomerCreditReportScreen> {
+  final FocusNode _searchFocusNode = FocusNode();
+  final ScrollController _resultScrollController = ScrollController();
+
   List<Map<String, dynamic>> _rows = [];
   bool _isLoading = true;
   bool _includeZeroBalance = false;
   String _query = '';
   String _filter = 'outstanding';
+  int? _selectedSearchResultIndex;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _blue = Color(0xFF4B8DFF);
@@ -101,7 +112,117 @@ class _CustomerCreditReportScreenState
   @override
   void initState() {
     super.initState();
+    _searchFocusNode.onKeyEvent = _handleSearchKeyEvent;
     _loadReport();
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.customerCreditReport,
+      _focusSearchField,
+    );
+    _focusSearchField();
+  }
+
+  @override
+  void dispose() {
+    _searchSelectionTimer?.cancel();
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.customerCreditReport,
+      _focusSearchField,
+    );
+    _resultScrollController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _searchSelectionTimer?.cancel();
+      if (_selectedSearchResultIndex != null) {
+        setState(() => _selectedSearchResultIndex = null);
+      }
+      if (_resultScrollController.hasClients) {
+        await _resultScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _openSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    final rows = _filteredRows;
+    if (rows.isEmpty) {
+      setState(() => _selectedSearchResultIndex = null);
+      return;
+    }
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, rows.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(
+    int index, {
+    int scrollDirection = 0,
+    bool autoClear = true,
+  }) {
+    _searchSelectionTimer?.cancel();
+    setState(() => _selectedSearchResultIndex = index);
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    if (!autoClear) return;
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() => _selectedSearchResultIndex = null);
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  Future<void> _openSelectedSearchResult() async {
+    final rows = _filteredRows;
+    if (rows.isEmpty) return;
+    final index = rows.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, rows.length - 1);
+    _showSearchSelection(index, autoClear: false);
+    await _openCustomerDetails(rows[index]);
+    if (mounted) _showSearchSelection(index);
   }
 
   Future<void> _loadReport() async {
@@ -350,6 +471,7 @@ class _CustomerCreditReportScreenState
           onSelected: (_) {
             setState(() {
               _filter = item.$1;
+              _selectedSearchResultIndex = null;
             });
           },
         );
@@ -357,7 +479,10 @@ class _CustomerCreditReportScreenState
     );
   }
 
-  Widget _reportRow(Map<String, dynamic> row) {
+  Widget _reportRow(
+    Map<String, dynamic> row, {
+    bool isKeyboardSelected = false,
+  }) {
     final customer = _customerFromRow(row);
     final balance = _readDouble(row['current_credit_balance']);
     final limit = _readDouble(row['credit_limit']);
@@ -373,7 +498,10 @@ class _CustomerCreditReportScreenState
         color: _panel,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color: isOverLimit ? _danger.withValues(alpha: 0.38) : _border,
+          color: isKeyboardSelected
+              ? _brand
+              : (isOverLimit ? _danger.withValues(alpha: 0.38) : _border),
+          width: isKeyboardSelected ? 1.6 : 1,
         ),
       ),
       child: Row(
@@ -604,6 +732,8 @@ class _CustomerCreditReportScreenState
                       children: [
                         Expanded(
                           child: TextField(
+                            focusNode: _searchFocusNode,
+                            autofocus: true,
                             decoration: InputDecoration(
                               labelText: 'Search customer',
                               hintText: 'Name / phone / code',
@@ -629,6 +759,7 @@ class _CustomerCreditReportScreenState
                             onChanged: (value) {
                               setState(() {
                                 _query = value;
+                                _selectedSearchResultIndex = null;
                               });
                             },
                           ),
@@ -656,6 +787,7 @@ class _CustomerCreditReportScreenState
                                 onChanged: (value) {
                                   setState(() {
                                     _includeZeroBalance = value;
+                                    _selectedSearchResultIndex = null;
                                   });
                                   _loadReport();
                                 },
@@ -693,10 +825,21 @@ class _CustomerCreditReportScreenState
                         ),
                       )
                     : ListView.separated(
+                        controller: _resultScrollController,
                         itemCount: rows.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (context, index) {
-                          return _reportRow(rows[index]);
+                          return KeyedSubtree(
+                            key: _searchResultKeys.putIfAbsent(
+                              index,
+                              GlobalKey.new,
+                            ),
+                            child: _reportRow(
+                              rows[index],
+                              isKeyboardSelected:
+                                  _selectedSearchResultIndex == index,
+                            ),
+                          );
                         },
                       ),
               ),

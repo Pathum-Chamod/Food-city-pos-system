@@ -28,6 +28,7 @@ class InventoryHistoryScreen extends StatefulWidget {
 
 class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   static final Map<String, List<Map<String, dynamic>>> _historyCache = {};
 
   List<Map<String, dynamic>> _movements = [];
@@ -74,13 +75,32 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       _isLoading = false;
     }
     _loadHistory(showLoader: cached == null);
+    if (widget.initialBarcode == null) {
+      _focusSearchField();
+    }
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+      final context = _searchFocusNode.context;
+      if (context == null) return;
+      final position = Scrollable.maybeOf(context)?.position;
+      position?.animateTo(
+        position.minScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   List<String>? get _selectedActionTypes {
@@ -1478,6 +1498,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                   Expanded(
                                     child: TextField(
                                       controller: _searchController,
+                                      focusNode: _searchFocusNode,
+                                      autofocus: true,
                                       style: TextStyle(color: _textPrimary),
                                       decoration: InputDecoration(
                                         hintText:

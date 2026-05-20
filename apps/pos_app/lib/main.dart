@@ -12,6 +12,7 @@ import 'providers/cart_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/app_theme_provider.dart';
 import 'navigation/pos_route_names.dart';
+import 'navigation/route_search_focus_registry.dart';
 import 'screens/cashier_summary_screen.dart';
 import 'screens/expiry_alerts_screen.dart';
 import 'screens/held_carts_screen.dart';
@@ -484,7 +485,11 @@ class _PosAppState extends State<PosApp> {
     required WidgetBuilder builder,
   }) async {
     final navigator = AppSnackBar.navigatorKey.currentState;
-    if (navigator == null || _currentRouteName == routeName) return;
+    if (navigator == null) return;
+    if (_currentRouteName == routeName) {
+      RouteSearchFocusRegistry.focus(routeName);
+      return;
+    }
 
     var foundRoute = false;
     navigator.popUntil((route) {
@@ -496,7 +501,10 @@ class _PosAppState extends State<PosApp> {
       return route.settings.name == PosRouteNames.pos || route.isFirst;
     });
 
-    if (foundRoute) return;
+    if (foundRoute) {
+      RouteSearchFocusRegistry.focus(routeName);
+      return;
+    }
 
     unawaited(
       navigator.push(

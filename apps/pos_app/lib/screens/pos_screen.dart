@@ -78,6 +78,45 @@ class _DecimalQuantityInputFormatter extends TextInputFormatter {
   }
 }
 
+class _ExpiryDialogChip extends StatelessWidget {
+  const _ExpiryDialogChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurface,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PosScreenState extends State<PosScreen> {
   static const double _quantityEpsilon = 0.000001;
   static const double _minSupportedWidth = 1180;
@@ -86,6 +125,9 @@ class _PosScreenState extends State<PosScreen> {
   static const double _checkoutRailWidth = 340;
   static const Duration _priceModeDoubleTapWindow = Duration(milliseconds: 650);
   static const Duration _cartSelectionVisibleDuration = Duration(seconds: 2);
+  static const Duration _customerRemoveEscapeWindow = Duration(
+    milliseconds: 900,
+  );
   List<Product> _products = [];
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
@@ -100,6 +142,7 @@ class _PosScreenState extends State<PosScreen> {
   Timer? _welcomeOverlayTimer;
   Timer? _welcomeOverlayCleanupTimer;
   Timer? _cartSelectionHideTimer;
+  Timer? _customerRemoveEscapeHintTimer;
   DateTime? _barcodeInputStartedAt;
   DateTime? _lastBarcodeInputAt;
   String _lastBarcodeInputValue = '';
@@ -107,6 +150,7 @@ class _PosScreenState extends State<PosScreen> {
   ProductPriceType? _lastPriceModeTapType;
   ProductPriceType? _lastPriceModePreviousType;
   DateTime? _lastPriceModeTapAt;
+  DateTime? _lastCustomerRemoveEscapeAt;
   bool _isPriceModePromptOpen = false;
 
   final ScrollController _cartScrollController = ScrollController();
@@ -122,6 +166,7 @@ class _PosScreenState extends State<PosScreen> {
 
   String _searchQuery = '';
   Map<String, dynamic>? _currentShiftSummary;
+  final Set<String> _weeklyExpiryWarningSessionKeys = <String>{};
 
   bool get _isDark => context.read<AppThemeProvider>().isDarkMode;
   Color get _screenBackground =>
@@ -181,6 +226,7 @@ class _PosScreenState extends State<PosScreen> {
     _productRefreshTimer?.cancel();
     _barcodeScannerSubmitTimer?.cancel();
     _cartSelectionHideTimer?.cancel();
+    _customerRemoveEscapeHintTimer?.cancel();
     _welcomeOverlayTimer?.cancel();
     _welcomeOverlayCleanupTimer?.cancel();
     _barcodeController.dispose();
@@ -353,6 +399,37 @@ class _PosScreenState extends State<PosScreen> {
         if (_barcodeController.text.isNotEmpty) {
           _barcodeController.clear();
           _resetBarcodeScannerTracking();
+          return true;
+        }
+
+        if (cart.selectedCustomer != null) {
+          final now = DateTime.now();
+          final isSecondEscape =
+              _lastCustomerRemoveEscapeAt != null &&
+              now.difference(_lastCustomerRemoveEscapeAt!) <=
+                  _customerRemoveEscapeWindow;
+          _lastCustomerRemoveEscapeAt = now;
+          if (isSecondEscape) {
+            _lastCustomerRemoveEscapeAt = null;
+            _customerRemoveEscapeHintTimer?.cancel();
+            _customerRemoveEscapeHintTimer = null;
+            AppSnackBar.dismiss();
+            unawaited(_confirmRemoveSelectedCustomer(cart));
+          } else {
+            _customerRemoveEscapeHintTimer?.cancel();
+            final customerName = cart.selectedCustomer!.displayName;
+            _customerRemoveEscapeHintTimer = Timer(
+              const Duration(milliseconds: 220),
+              () {
+                if (!mounted) return;
+                _showInfoMessage(
+                  'Press Esc again to remove $customerName.',
+                  backgroundColor: _warningColor,
+                );
+              },
+            );
+            _focusBarcodeField();
+          }
           return true;
         }
 
@@ -867,6 +944,32 @@ class _PosScreenState extends State<PosScreen> {
         _focusBarcodeField();
       }
     }
+  }
+
+  Future<void> _confirmRemoveSelectedCustomer(CartProvider cart) async {
+    final customer = cart.selectedCustomer;
+    if (customer == null || _activeModalCount > 0) return;
+
+    final confirmed = await _showKeyboardConfirmDialog(
+      title: 'Remove Customer?',
+      message:
+          'Remove ${customer.displayName} from the current cart and continue as Walk-in Customer?',
+      confirmLabel: 'Remove',
+      icon: Icons.person_remove_alt_1_outlined,
+      confirmColor: _dangerColor,
+    );
+
+    if (!mounted || !confirmed) {
+      _focusBarcodeField();
+      return;
+    }
+
+    await cart.clearCustomer();
+    _showInfoMessage(
+      'Customer removed. Using Walk-in Customer.',
+      backgroundColor: _accentBlue,
+    );
+    _focusBarcodeField();
   }
 
   Future<void> _openCustomerManagement() async {
@@ -3354,14 +3457,9 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     if (!cart.isRefundMode &&
-        await DatabaseHelper.instance.hasExpiredBatchForBarcode(
-          product.barcode,
-        )) {
-      _showInfoMessage(
-        '${product.name} has expired stock recorded. Check the shelf item before selling.',
-        backgroundColor: _warningColor,
-        duration: const Duration(seconds: 4),
-      );
+        !await _handleExpiryCartWarning(product.barcode)) {
+      _focusBarcodeField();
+      return;
     }
 
     final currentQtyInCart = _getQuantityInCart(cart, product.barcode);
@@ -3424,6 +3522,337 @@ class _PosScreenState extends State<PosScreen> {
       _scrollCartToLatest();
     });
     _focusBarcodeField();
+  }
+
+  Future<bool> _handleExpiryCartWarning(String barcode) async {
+    final warning = await DatabaseHelper.instance
+        .getExpiryCartWarningForBarcode(barcode);
+    if (warning == null) return true;
+
+    final warningType = (warning['warning_type'] ?? '').toString();
+    switch (warningType) {
+      case 'expired':
+        await _showExpiredBatchBlockDialog(warning);
+        return false;
+      case 'today':
+        return _showExpiresTodayConfirmDialog(warning);
+      case 'tomorrow':
+        _showTomorrowExpiryToast(warning);
+        return true;
+      case 'week':
+        _showWeeklyExpiryToastOncePerSession(warning);
+        return true;
+      default:
+        return true;
+    }
+  }
+
+  Future<void> _showExpiredBatchBlockDialog(
+    Map<String, dynamic> warning,
+  ) async {
+    final productName = (warning['product_name'] ?? 'This product').toString();
+    final expiryDate = (warning['expiry_date'] ?? '').toString();
+    final quantity = _sanitizeQuantity(
+      ((warning['remaining_quantity'] as num?) ?? 0).toDouble(),
+    );
+    final unitLabel = (warning['unit_label'] ?? 'pcs').toString();
+    final batchId = (warning['id'] as num?)?.toInt();
+
+    _activeModalCount += 1;
+    try {
+      final openAlerts = await showPremiumDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Check Expiry Alerts'),
+          content: Text(
+            '$productName has expired stock that must be checked before selling.\n\n'
+            'Expired batch: $expiryDate\n'
+            'Remaining: ${_formatQuantity(quantity)} $unitLabel',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Open Expiry Alerts'),
+            ),
+          ],
+        ),
+      );
+
+      if (openAlerts == true && mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.expiryAlerts),
+            builder: (context) => ExpiryAlertsScreen(pointBatchId: batchId),
+          ),
+        );
+      }
+    } finally {
+      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+    }
+  }
+
+  Future<bool> _showExpiresTodayConfirmDialog(
+    Map<String, dynamic> warning,
+  ) async {
+    final productName = (warning['product_name'] ?? 'This product').toString();
+    final expiryDate = (warning['expiry_date'] ?? '').toString();
+    final quantity = _sanitizeQuantity(
+      ((warning['remaining_quantity'] as num?) ?? 0).toDouble(),
+    );
+    final unitLabel = (warning['unit_label'] ?? 'pcs').toString();
+    final batchId = (warning['id'] as num?)?.toInt();
+
+    _activeModalCount += 1;
+    try {
+      final action = await showPremiumDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => Focus(
+          autofocus: true,
+          onKeyEvent: (node, event) {
+            if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+            if (event.logicalKey == LogicalKeyboardKey.escape) {
+              Navigator.of(dialogContext).pop('cancel');
+              return KeyEventResult.handled;
+            }
+
+            if (event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+              Navigator.of(dialogContext).pop('add');
+              return KeyEventResult.handled;
+            }
+
+            return KeyEventResult.ignored;
+          },
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 580),
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
+                decoration: _panelDecoration(color: _panelColor),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: _warningSoft,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Icon(
+                            Icons.warning_amber_rounded,
+                            color: _warningColor,
+                            size: 26,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Expiry Check Required',
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                productName,
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: _softDecoration(
+                        color: _warningColor.withOpacity(_isDark ? 0.14 : 0.10),
+                        radius: BorderRadius.circular(18),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'This batch expires today. Check the shelf item and Expiry Alerts before selling.',
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              height: 1.35,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 8,
+                            children: [
+                              _ExpiryDialogChip(
+                                icon: Icons.event_rounded,
+                                label: expiryDate.isEmpty
+                                    ? 'Expires today'
+                                    : 'Expiry $expiryDate',
+                                color: _warningColor,
+                              ),
+                              _ExpiryDialogChip(
+                                icon: Icons.inventory_2_rounded,
+                                label:
+                                    'Remaining ${_formatQuantity(quantity)} $unitLabel',
+                                color: _accentBlue,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Keyboard: Esc cancels, Enter adds anyway after shelf check.',
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop('cancel'),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop('alerts'),
+                            child: const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.notifications_active_rounded,
+                                    size: 18,
+                                  ),
+                                  SizedBox(width: 7),
+                                  Text('Open Alerts'),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              backgroundColor: _brandColor,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop('add'),
+                            child: const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.check_rounded, size: 18),
+                                  SizedBox(width: 7),
+                                  Text('Add Anyway'),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      if (action == 'alerts' && mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.expiryAlerts),
+            builder: (context) => ExpiryAlertsScreen(pointBatchId: batchId),
+          ),
+        );
+        return false;
+      }
+
+      return action == 'add';
+    } finally {
+      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+    }
+  }
+
+  void _showTomorrowExpiryToast(Map<String, dynamic> warning) {
+    final productName = (warning['product_name'] ?? 'This product').toString();
+    _showInfoMessage(
+      '$productName expires tomorrow. Check Expiry Alerts.',
+      backgroundColor: _warningColor,
+      duration: const Duration(seconds: 4),
+    );
+  }
+
+  void _showWeeklyExpiryToastOncePerSession(Map<String, dynamic> warning) {
+    final batchId = (warning['id'] as num?)?.toInt() ?? 0;
+    final expiryDate = (warning['expiry_date'] ?? '').toString();
+    final productName = (warning['product_name'] ?? 'This product').toString();
+    final sessionKey = '$batchId|$expiryDate';
+    if (_weeklyExpiryWarningSessionKeys.contains(sessionKey)) return;
+
+    _weeklyExpiryWarningSessionKeys.add(sessionKey);
+    _showInfoMessage(
+      '$productName expires this week. Check Expiry Alerts.',
+      backgroundColor: _warningColor,
+      duration: const Duration(seconds: 4),
+    );
   }
 
   Future<void> _showReceiptForTransaction(int saleId) async {

@@ -1,5 +1,10 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
 import '../services/database_helper.dart';
 import '../services/customer_service.dart';
 import '../services/customer_credit_service.dart';
@@ -621,6 +626,8 @@ class TransactionHistoryScreen extends StatefulWidget {
 
 class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   final TextEditingController _searchController = TextEditingController();
+  late final FocusNode _searchFocusNode;
+  final ScrollController _pageScrollController = ScrollController();
 
   bool _isLoading = true;
   bool _isRefreshing = false;
@@ -628,18 +635,153 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   String _dateFilter = 'all';
   String _searchQuery = '';
   DateTime? _selectedDate;
+  int? _selectedSearchResultIndex;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
   List<Map<String, dynamic>> _transactions = [];
 
   @override
   void initState() {
     super.initState();
+    _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
     _loadTransactions();
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.transactionHistory,
+      _focusSearchField,
+    );
+    _focusSearchField();
   }
 
   @override
   void dispose() {
+    _searchSelectionTimer?.cancel();
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.transactionHistory,
+      _focusSearchField,
+    );
+    _pageScrollController.dispose();
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _searchSelectionTimer?.cancel();
+      if (_selectedSearchResultIndex != null) {
+        setState(() {
+          _selectedSearchResultIndex = null;
+        });
+      }
+      if (_pageScrollController.hasClients) {
+        await _pageScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _openSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    final transactions = _visibleTransactions;
+    if (transactions.isEmpty) {
+      setState(() {
+        _selectedSearchResultIndex = null;
+      });
+      return;
+    }
+
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, transactions.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(
+    int index, {
+    int scrollDirection = 0,
+    bool autoClear = true,
+  }) {
+    _searchSelectionTimer?.cancel();
+    setState(() {
+      _selectedSearchResultIndex = index;
+    });
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    if (!autoClear) return;
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() {
+        _selectedSearchResultIndex = null;
+      });
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  Future<void> _openSelectedSearchResult() async {
+    final transactions = _visibleTransactions;
+    if (transactions.isEmpty) return;
+
+    final index = transactions.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, transactions.length - 1);
+    _showSearchSelection(index, autoClear: false);
+    await _openTransaction(transactions[index]);
+    if (mounted) _showSearchSelection(index);
+  }
+
+  Future<void> _openTransaction(Map<String, dynamic> tx) async {
+    final id = tx['id'];
+    if (id is! num) return;
+
+    await TransactionHistoryScreen.showReceiptDialogForTransaction(
+      context,
+      id.toInt(),
+    );
+    if (mounted) {
+      _loadTransactions();
+    }
   }
 
   Future<void> _loadTransactions() async {
@@ -1140,6 +1282,8 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
               Expanded(
                 child: TextField(
                   controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  autofocus: true,
                   decoration: InputDecoration(
                     hintText:
                         'Search transaction, customer, phone, cashier, payment, or type',
@@ -1154,6 +1298,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                               _searchController.clear();
                               setState(() {
                                 _searchQuery = '';
+                                _selectedSearchResultIndex = null;
                               });
                             },
                             icon: const Icon(Icons.close_rounded),
@@ -1162,6 +1307,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                   onChanged: (value) {
                     setState(() {
                       _searchQuery = value;
+                      _selectedSearchResultIndex = null;
                     });
                   },
                 ),
@@ -1312,7 +1458,11 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     );
   }
 
-  Widget _buildTransactionCard(_TxPalette palette, Map<String, dynamic> tx) {
+  Widget _buildTransactionCard(
+    _TxPalette palette,
+    Map<String, dynamic> tx, {
+    bool isKeyboardSelected = false,
+  }) {
     final type = (tx['transaction_type'] ?? 'sale').toString().toLowerCase();
     final color = _typeColor(palette, type);
     final total = ((tx['total_amount'] as num?) ?? 0).toDouble().abs();
@@ -1332,22 +1482,17 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () async {
-          await TransactionHistoryScreen.showReceiptDialogForTransaction(
-            context,
-            id as int,
-          );
-          if (mounted) {
-            _loadTransactions();
-          }
-        },
+        onTap: () => _openTransaction(tx),
         borderRadius: BorderRadius.circular(22),
         child: Ink(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: palette.surface,
             borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: palette.border),
+            border: Border.all(
+              color: isKeyboardSelected ? palette.brand : palette.border,
+              width: isKeyboardSelected ? 1.6 : 1,
+            ),
             boxShadow: [
               BoxShadow(
                 color: palette.shadow,
@@ -1558,6 +1703,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
           child: _isLoading
               ? Center(child: CircularProgressIndicator(color: palette.brand))
               : ListView(
+                  controller: _pageScrollController,
                   padding: const EdgeInsets.all(16),
                   children: [
                     _buildHeader(palette),
@@ -1604,10 +1750,19 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                     if (visibleTransactions.isEmpty)
                       _buildEmptyState(palette)
                     else
-                      ...visibleTransactions.map(
-                        (tx) => Padding(
+                      ...visibleTransactions.indexed.map(
+                        (entry) => Padding(
+                          key: _searchResultKeys.putIfAbsent(
+                            entry.$1,
+                            GlobalKey.new,
+                          ),
                           padding: const EdgeInsets.only(bottom: 12),
-                          child: _buildTransactionCard(palette, tx),
+                          child: _buildTransactionCard(
+                            palette,
+                            entry.$2,
+                            isKeyboardSelected:
+                                _selectedSearchResultIndex == entry.$1,
+                          ),
                         ),
                       ),
                   ],
