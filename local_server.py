@@ -2750,6 +2750,8 @@ def get_product_row(cursor, barcode):
             COALESCE(sale_enabled, CASE WHEN sale_price IS NOT NULL THEN 1 ELSE 0 END) AS sale_enabled,
             COALESCE(stock, 0) AS stock,
             COALESCE(min_stock_level, 0) AS min_stock_level,
+            COALESCE(track_expiry, 0) AS track_expiry,
+            COALESCE(expiry_alert_days, 30) AS expiry_alert_days,
             COALESCE(is_active, 1) AS is_active,
             updated_at,
             last_price_updated_at
@@ -3309,6 +3311,8 @@ def create_or_update_product(
     unit_label=None,
     opening_stock=0,
     min_stock_level=0,
+    track_expiry=False,
+    expiry_alert_days=30,
     reason="",
     mirror_to_pos=True,
 ):
@@ -3341,10 +3345,13 @@ def create_or_update_product(
 
     opening_stock = parse_int(opening_stock, 0)
     min_stock_level = parse_int(min_stock_level, 0)
+    expiry_alert_days = parse_int(expiry_alert_days, 30)
     if opening_stock < 0:
         return False, "Opening stock cannot be negative"
     if min_stock_level < 0:
         return False, "Minimum stock level cannot be negative"
+    if expiry_alert_days < 1:
+        return False, "Expiry alert days must be greater than 0"
 
     existing = get_product_row(cursor, barcode)
     if existing:
@@ -3364,6 +3371,8 @@ def create_or_update_product(
                 sale_enabled = ?,
                 stock = ?,
                 min_stock_level = ?,
+                track_expiry = ?,
+                expiry_alert_days = ?,
                 is_active = 1,
                 updated_at = {now_sql()},
                 last_price_updated_at = {now_sql()}
@@ -3382,6 +3391,8 @@ def create_or_update_product(
                 1 if normalize_bool(sale_enabled, False) else 0,
                 opening_stock,
                 min_stock_level,
+                1 if normalize_bool(track_expiry, False) else 0,
+                expiry_alert_days,
                 barcode,
             ),
         )
@@ -3402,11 +3413,13 @@ def create_or_update_product(
                 sale_enabled,
                 stock,
                 min_stock_level,
+                track_expiry,
+                expiry_alert_days,
                 is_active,
                 updated_at,
                 last_price_updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, {now_sql()}, {now_sql()})
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, {now_sql()}, {now_sql()})
             """,
             (
                 barcode,
@@ -3422,6 +3435,8 @@ def create_or_update_product(
                 1 if normalize_bool(sale_enabled, False) else 0,
                 opening_stock,
                 min_stock_level,
+                1 if normalize_bool(track_expiry, False) else 0,
+                expiry_alert_days,
             ),
         )
 
@@ -3556,6 +3571,218 @@ def bulk_delete_products(cursor, barcodes, reason="", mirror_to_pos=True):
     return True, deleted
 
 
+def ensure_expiry_batches_table(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS expiry_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pos_batch_id INTEGER UNIQUE,
+            receipt_id INTEGER,
+            barcode TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            batch_number TEXT,
+            supplier_id INTEGER,
+            supplier_name TEXT,
+            received_quantity REAL NOT NULL DEFAULT 0,
+            remaining_quantity REAL NOT NULL DEFAULT 0,
+            expiry_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            last_checked_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expiry_batches_barcode ON expiry_batches(barcode)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expiry_batches_expiry_date ON expiry_batches(expiry_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expiry_batches_status ON expiry_batches(status)")
+
+
+def upsert_expiry_batch_from_sync(cursor, data):
+    ensure_expiry_batches_table(cursor)
+
+    barcode = str(data.get("barcode", "") or "").strip()
+    product_name = str(data.get("product_name", "") or "").strip()
+    expiry_date = str(data.get("expiry_date", "") or "").strip()
+    if not barcode or not expiry_date:
+        return None
+
+    supplier_id = parse_int(data.get("supplier_id"), 0) or None
+    supplier_name = str(data.get("supplier_name", "") or "").strip()
+    supplier_phone = str(data.get("supplier_phone", "") or "").strip()
+    if supplier_id is not None and (supplier_name or supplier_phone):
+        cursor.execute(
+            """
+            INSERT INTO suppliers (id, name, phone)
+            VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = CASE
+                    WHEN excluded.name != '' THEN excluded.name
+                    ELSE suppliers.name
+                END,
+                phone = CASE
+                    WHEN excluded.phone != '' THEN excluded.phone
+                    ELSE suppliers.phone
+                END
+            """,
+            (supplier_id, supplier_name, supplier_phone),
+        )
+
+    if not product_name:
+        product = get_product_row(cursor, barcode)
+        product_name = str(product["name"] if product else "Unknown product")
+
+    now = str(data.get("updated_at") or data.get("created_at") or datetime.now().astimezone().isoformat())
+    pos_batch_id = parse_int(data.get("pos_batch_id", data.get("expiry_batch_id", 0)), 0) or None
+    received_quantity = parse_float(data.get("received_quantity", data.get("quantity", 0)), 0.0)
+    remaining_quantity = parse_float(data.get("remaining_quantity", received_quantity), received_quantity)
+    status = str(data.get("status", "active") or "active").strip() or "active"
+
+    existing = None
+    if pos_batch_id is not None:
+        existing = cursor.execute(
+            "SELECT id FROM expiry_batches WHERE pos_batch_id = ? LIMIT 1",
+            (pos_batch_id,),
+        ).fetchone()
+
+    if existing:
+        cursor.execute(
+            f"""
+            UPDATE expiry_batches
+            SET receipt_id = COALESCE(?, receipt_id),
+                barcode = ?,
+                product_name = ?,
+                batch_number = ?,
+                supplier_id = ?,
+                supplier_name = ?,
+                received_quantity = ?,
+                remaining_quantity = ?,
+                expiry_date = ?,
+                status = ?,
+                last_checked_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                parse_int(data.get("receipt_id"), 0) or None,
+                barcode,
+                product_name,
+                str(data.get("batch_number", "") or "").strip(),
+                supplier_id,
+                supplier_name,
+                received_quantity,
+                remaining_quantity,
+                expiry_date,
+                status,
+                str(data.get("last_checked_at", "") or "").strip(),
+                now,
+                existing["id"],
+            ),
+        )
+        return existing["id"]
+
+    cursor.execute(
+        """
+        INSERT INTO expiry_batches (
+            pos_batch_id,
+            receipt_id,
+            barcode,
+            product_name,
+            batch_number,
+            supplier_id,
+            supplier_name,
+            received_quantity,
+            remaining_quantity,
+            expiry_date,
+            status,
+            last_checked_at,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pos_batch_id,
+            parse_int(data.get("receipt_id"), 0) or None,
+            barcode,
+            product_name,
+            str(data.get("batch_number", "") or "").strip(),
+            supplier_id,
+            supplier_name,
+            received_quantity,
+            remaining_quantity,
+            expiry_date,
+            status,
+            str(data.get("last_checked_at", "") or "").strip(),
+            str(data.get("created_at") or now),
+            now,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def refresh_expiry_batches_from_pos(cursor):
+    if not os.path.exists(POS_DB_PATH):
+        return
+
+    ensure_expiry_batches_table(cursor)
+
+    conn = None
+    try:
+        conn = get_pos_db()
+        pos_cursor = conn.cursor()
+        rows = pos_cursor.execute(
+            """
+            SELECT
+                b.id,
+                b.receipt_id,
+                b.barcode,
+                b.product_name,
+                b.batch_number,
+                b.supplier_id,
+                b.supplier_name,
+                s.phone AS supplier_phone,
+                b.received_quantity,
+                b.remaining_quantity,
+                b.expiry_date,
+                b.status,
+                b.last_checked_at,
+                b.created_at,
+                b.updated_at
+            FROM expiry_batches b
+            LEFT JOIN suppliers s ON s.id = b.supplier_id
+            WHERE COALESCE(b.expiry_date, '') != ''
+            """
+        ).fetchall()
+
+        for row in rows:
+            upsert_expiry_batch_from_sync(
+                cursor,
+                {
+                    "pos_batch_id": row["id"],
+                    "receipt_id": row["receipt_id"],
+                    "barcode": row["barcode"],
+                    "product_name": row["product_name"],
+                    "batch_number": row["batch_number"],
+                    "supplier_id": row["supplier_id"],
+                    "supplier_name": row["supplier_name"],
+                    "supplier_phone": row["supplier_phone"],
+                    "received_quantity": row["received_quantity"],
+                    "remaining_quantity": row["remaining_quantity"],
+                    "expiry_date": row["expiry_date"],
+                    "status": row["status"],
+                    "last_checked_at": row["last_checked_at"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                },
+            )
+    except Exception as e:
+        print(f"  ⚠️ Expiry backfill from POS skipped: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def fetch_products(cursor):
     rows = cursor.execute(
         """
@@ -3584,6 +3811,8 @@ def fetch_products(cursor):
             COALESCE(sale_enabled, CASE WHEN sale_price IS NOT NULL THEN 1 ELSE 0 END) AS sale_enabled,
             COALESCE(stock, 0) AS stock,
             COALESCE(min_stock_level, 0) AS min_stock_level,
+            COALESCE(track_expiry, 0) AS track_expiry,
+            COALESCE(expiry_alert_days, 30) AS expiry_alert_days,
             COALESCE(is_active, 1) AS is_active,
             updated_at,
             last_price_updated_at
@@ -4026,6 +4255,118 @@ def _build_owner_alerts(cursor):
             }
         )
 
+    refresh_expiry_batches_from_pos(cursor)
+    ensure_expiry_batches_table(cursor)
+    expiry_rows = cursor.execute(
+        """
+        SELECT
+            b.id,
+            b.pos_batch_id,
+            b.barcode,
+            b.product_name,
+            b.batch_number,
+            b.supplier_id,
+            b.supplier_name,
+            b.remaining_quantity,
+            b.expiry_date,
+            COALESCE(p.unit_label, 'pcs') AS unit_label,
+            COALESCE(p.quantity_type, 'unit') AS quantity_type,
+            COALESCE(p.expiry_alert_days, 30) AS alert_days
+        FROM expiry_batches b
+        LEFT JOIN products p ON p.barcode = b.barcode
+        WHERE b.status = 'active'
+          AND COALESCE(b.remaining_quantity, 0) > ?
+          AND date(b.expiry_date) <= date('now', 'localtime', '+7 days')
+        ORDER BY date(b.expiry_date) ASC, LOWER(b.product_name) ASC
+        LIMIT 20
+        """,
+        (quantity_epsilon,),
+    ).fetchall()
+
+    today = datetime.now().date()
+    for row in expiry_rows:
+        expiry_text = str(row["expiry_date"] or "").strip()
+        try:
+            expiry_date = datetime.strptime(expiry_text[:10], "%Y-%m-%d").date()
+        except Exception:
+            continue
+
+        days_left = (expiry_date - today).days
+        remaining_text = format_stock_with_unit(
+            row["quantity_type"],
+            row["unit_label"],
+            row["remaining_quantity"],
+        )
+        batch_number = str(row["batch_number"] or "").strip()
+        batch_suffix = f" - batch {batch_number}" if batch_number else ""
+
+        if days_left < 0:
+            severity = "critical"
+            title = f"Expired stock: {row['product_name']}"
+            timing = f"expired {abs(days_left)} day{'s' if abs(days_left) != 1 else ''} ago"
+            priority = 0
+        elif days_left == 0:
+            severity = "critical"
+            title = f"{row['product_name']} expires today"
+            timing = "expires today"
+            priority = 1
+        elif days_left == 1:
+            severity = "warning"
+            title = f"{row['product_name']} expires tomorrow"
+            timing = "expires tomorrow"
+            priority = 2
+        elif days_left <= 7:
+            severity = "warning"
+            title = f"{row['product_name']} expires in {days_left} day{'s' if days_left != 1 else ''}"
+            timing = f"expires on {expiry_text}"
+            priority = 4
+        else:
+            continue
+
+        supplier_contact = {
+            "supplier_id": parse_int(row["supplier_id"], 0),
+            "supplier_name": str(row["supplier_name"] or "").strip(),
+            "supplier_phone": "",
+        }
+        if not supplier_contact["supplier_name"]:
+            supplier_contact = _latest_supplier_contact_for_barcode(
+                cursor,
+                str(row["barcode"]),
+            )
+        elif supplier_contact["supplier_id"] > 0:
+            supplier_row = cursor.execute(
+                "SELECT phone FROM suppliers WHERE id = ? LIMIT 1",
+                (supplier_contact["supplier_id"],),
+            ).fetchone()
+            supplier_contact["supplier_phone"] = str(
+                supplier_row["phone"] if supplier_row else ""
+            ).strip()
+
+        alerts.append(
+            {
+                "type": "expiry_alert",
+                "severity": severity,
+                "title": title,
+                "subtitle": f"{remaining_text} {timing}{batch_suffix}",
+                "barcode": row["barcode"],
+                "expiry_batch_id": row["pos_batch_id"] or row["id"],
+                "expiry_date": expiry_text,
+                "days_left": days_left,
+                "expiry_bucket": (
+                    "expired"
+                    if days_left < 0
+                    else "today"
+                    if days_left == 0
+                    else "tomorrow"
+                    if days_left == 1
+                    else "week"
+                ),
+                "remaining_quantity": row["remaining_quantity"],
+                "priority": priority,
+                **supplier_contact,
+            }
+        )
+
     today_rows = _sales_rows_between(
         cursor,
         "datetime('now','localtime','start of day')",
@@ -4060,6 +4401,24 @@ def _build_owner_alerts(cursor):
             }
         )
 
+    severity_rank = {"critical": 0, "warning": 1}
+    type_rank = {
+        "expiry_alert": 0,
+        "out_of_stock": 2,
+        "best_seller_low_stock": 3,
+        "low_stock": 4,
+        "weak_sales": 5,
+    }
+    alerts.sort(
+        key=lambda alert: (
+            severity_rank.get(str(alert.get("severity") or ""), 2),
+            parse_int(
+                alert.get("priority"),
+                type_rank.get(str(alert.get("type") or ""), 9),
+            ),
+            str(alert.get("title") or "").lower(),
+        )
+    )
     return alerts
 
 
@@ -5666,6 +6025,8 @@ def init_db():
     ensure_column(c, "products", "sale_price", "sale_price REAL")
     ensure_column(c, "products", "sale_enabled", "sale_enabled INTEGER DEFAULT 0")
     ensure_column(c, "products", "min_stock_level", "min_stock_level INTEGER DEFAULT 0")
+    ensure_column(c, "products", "track_expiry", "track_expiry INTEGER DEFAULT 0")
+    ensure_column(c, "products", "expiry_alert_days", "expiry_alert_days INTEGER DEFAULT 30")
     ensure_column(c, "products", "is_active", "is_active INTEGER DEFAULT 1")
     ensure_column(c, "products", "last_price_updated_at", "last_price_updated_at TEXT")
 
@@ -5690,6 +6051,11 @@ def init_db():
             END,
             sale_enabled = COALESCE(sale_enabled, 0),
             min_stock_level = COALESCE(min_stock_level, 0),
+            track_expiry = COALESCE(track_expiry, 0),
+            expiry_alert_days = CASE
+                WHEN COALESCE(expiry_alert_days, 30) < 1 THEN 30
+                ELSE COALESCE(expiry_alert_days, 30)
+            END,
             is_active = COALESCE(is_active, 1),
             updated_at = COALESCE(updated_at, {now_sql()}),
             last_price_updated_at = COALESCE(last_price_updated_at, updated_at)
@@ -5723,6 +6089,7 @@ def init_db():
     create_pricing_schemes_tables(c)
     create_sale_items_table(c)
     create_loyalty_tables(c)
+    ensure_expiry_batches_table(c)
 
     c.execute(
         """
@@ -6765,6 +7132,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     unit_label=data.get("unit_label"),
                     opening_stock=data.get("opening_stock", data.get("stock", 0)),
                     min_stock_level=data.get("min_stock_level", 0),
+                    track_expiry=data.get("track_expiry", False),
+                    expiry_alert_days=data.get("expiry_alert_days", 30),
                     reason=str(data.get("reason", "")).strip(),
                 )
                 if not ok:
@@ -6796,6 +7165,8 @@ class APIHandler(BaseHTTPRequestHandler):
                         unit_label=row.get("unit_label"),
                         opening_stock=row.get("opening_stock", row.get("stock", 0)),
                         min_stock_level=row.get("min_stock_level", 0),
+                        track_expiry=row.get("track_expiry", False),
+                        expiry_alert_days=row.get("expiry_alert_days", 30),
                         reason="Bulk product import",
                         mirror_to_pos=False,
                     )
@@ -6828,6 +7199,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     unit_label=data.get("unit_label"),
                     opening_stock=data.get("opening_stock", data.get("stock", 0)),
                     min_stock_level=data.get("min_stock_level", 0),
+                    track_expiry=data.get("track_expiry", False),
+                    expiry_alert_days=data.get("expiry_alert_days", 30),
                     reason=str(data.get("reason", "")).strip() or "Product updated",
                     mirror_to_pos=False,
                 )
@@ -6914,10 +7287,28 @@ class APIHandler(BaseHTTPRequestHandler):
                     self._set_headers(400)
                     self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
                 else:
+                    if str(data.get("expiry_date", "") or "").strip():
+                        upsert_expiry_batch_from_sync(
+                            c,
+                            {
+                                **data,
+                                "pos_batch_id": data.get("expiry_batch_id"),
+                                "received_quantity": quantity,
+                                "remaining_quantity": data.get("remaining_quantity", quantity),
+                                "status": data.get("status", "active"),
+                            },
+                        )
                     conn.commit()
                     print(f"  ✅ STOCK_RECEIVE: {barcode} +{parse_int(quantity)}")
                     self._set_headers()
                     self.wfile.write(json.dumps({"status": "success"}).encode())
+
+            elif sync_type in {"EXPIRY_BATCH_UPSERT", "EXPIRY_BATCH"}:
+                batch_id = upsert_expiry_batch_from_sync(c, data)
+                conn.commit()
+                print(f"  EXPIRY_BATCH_UPSERT: #{batch_id or 0}")
+                self._set_headers()
+                self.wfile.write(json.dumps({"status": "success", "batch_id": batch_id}).encode())
 
             elif sync_type in {"STOCK_ADJUST", "INVENTORY_ADJUST"}:
                 barcode = str(data.get("barcode", "")).strip()

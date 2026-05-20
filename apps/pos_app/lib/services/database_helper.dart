@@ -6248,6 +6248,7 @@ class DatabaseHelper {
           where: 'id = ?',
           whereArgs: [receiptId],
         );
+        await _queueExpiryBatchSync(txn, batchId: batchId, updatedAt: now);
       }
 
       return receiptId;
@@ -6927,6 +6928,11 @@ class DatabaseHelper {
             where: 'id = ?',
             whereArgs: [receiptId],
           );
+          await _queueExpiryBatchSync(
+            txn,
+            batchId: expiryBatchId,
+            updatedAt: now,
+          );
         }
 
         await _insertInventoryMovement(
@@ -7179,6 +7185,7 @@ class DatabaseHelper {
         'performed_by': performedBy.trim(),
         'created_at': updatedAt,
       });
+      await _queueExpiryBatchSync(txn, batchId: batchId, updatedAt: updatedAt);
 
       remainingToRemove = _roundQuantity(remainingToRemove - deductQuantity);
     }
@@ -8191,6 +8198,7 @@ class DatabaseHelper {
           'performed_by': performedBy.trim(),
           'created_at': now,
         });
+        await _queueExpiryBatchSync(txn, batchId: batchId, updatedAt: now);
       });
 
       return true;
@@ -8276,6 +8284,7 @@ class DatabaseHelper {
           'performed_by': performedBy.trim(),
           'created_at': now,
         });
+        await _queueExpiryBatchSync(txn, batchId: batchId, updatedAt: now);
 
         await _insertInventoryMovement(
           txn,
@@ -8341,6 +8350,47 @@ class DatabaseHelper {
     return _parseQuantity(rows.first['total_remaining']);
   }
 
+  Future<void> _queueExpiryBatchSync(
+    DatabaseExecutor txn, {
+    required int batchId,
+    required String updatedAt,
+  }) async {
+    if (batchId <= 0) return;
+
+    final rows = await txn.query(
+      'expiry_batches',
+      where: 'id = ?',
+      whereArgs: [batchId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+
+    final row = rows.first;
+    await txn.insert('sync_queue', {
+      'type': 'EXPIRY_BATCH_UPSERT',
+      'data': jsonEncode({
+        'pos_batch_id': batchId,
+        'receipt_id': row['receipt_id'],
+        'barcode': (row['barcode'] ?? '').toString(),
+        'product_name': (row['product_name'] ?? '').toString(),
+        'batch_number': (row['batch_number'] ?? '').toString(),
+        'supplier_id': row['supplier_id'],
+        'supplier_name': (row['supplier_name'] ?? '').toString(),
+        'received_quantity': _parseQuantity(row['received_quantity']),
+        'remaining_quantity': _parseQuantity(row['remaining_quantity']),
+        'expiry_date': (row['expiry_date'] ?? '').toString(),
+        'status': (row['status'] ?? 'active').toString(),
+        'last_checked_at': (row['last_checked_at'] ?? '').toString(),
+        'created_at': (row['created_at'] ?? updatedAt).toString(),
+        'updated_at': updatedAt,
+        'branch': 'Hikkaduwa',
+        'vendor': 'Alfasoft',
+      }),
+      'status': 'pending',
+      'created_at': updatedAt,
+    });
+  }
+
   Future<List<Map<String, dynamic>>> _deductExpiryBatchesForSaleItem(
     DatabaseExecutor txn, {
     required String barcode,
@@ -8381,6 +8431,7 @@ class DatabaseHelper {
         where: 'id = ?',
         whereArgs: [batchId],
       );
+      await _queueExpiryBatchSync(txn, batchId: batchId, updatedAt: updatedAt);
 
       allocations.add({
         'expiry_batch_id': batchId,
@@ -8491,6 +8542,7 @@ class DatabaseHelper {
         'performed_by': performedBy.trim(),
         'created_at': updatedAt,
       });
+      await _queueExpiryBatchSync(txn, batchId: batchId, updatedAt: updatedAt);
 
       remainingToRestore = _roundQuantity(remainingToRestore - restoreQuantity);
     }
