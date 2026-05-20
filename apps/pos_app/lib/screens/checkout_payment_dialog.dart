@@ -5,18 +5,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared/models/customer.dart';
 import 'package:shared/models/customer_credit_summary.dart';
-import 'package:shared/models/loyalty_exclusion.dart';
-import 'package:shared/models/loyalty_settings.dart';
 
 import '../services/customer_credit_service.dart';
-import '../services/loyalty_service.dart';
 import '../widgets/premium_dialog.dart';
 
 Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
   BuildContext context, {
   required double totalAmount,
+  double? originalTotal,
   Customer? selectedCustomer,
-  List<Map<String, dynamic>> cartItems = const [],
+  int loyaltyPointsRedeemed = 0,
+  double loyaltyRedeemedValue = 0.0,
 }) async {
   const brand = Color(0xFF2AAA8A);
   const danger = Color(0xFFE85D75);
@@ -26,10 +25,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
   CustomerCreditSummary? creditSummary;
   String? creditUnavailableReason;
   bool isCreditLoading = false;
-  LoyaltySettings? loyaltySettings;
-  String? loyaltyUnavailableReason;
-  List<LoyaltyExclusion> loyaltyExcludedCategories = const [];
-  List<LoyaltyExclusion> loyaltyExcludedProducts = const [];
 
   final customerId = selectedCustomer?.id ?? 0;
   if (customerId > 0) {
@@ -48,24 +43,8 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
     } finally {
       isCreditLoading = false;
     }
-
-    try {
-      loyaltySettings = await LoyaltyService.instance.getSettings();
-      loyaltyExcludedCategories = await LoyaltyService.instance
-          .getExcludedCategories(activeOnly: true);
-      loyaltyExcludedProducts = await LoyaltyService.instance
-          .getExcludedProducts(activeOnly: true);
-      if (loyaltySettings.isEnabled != true) {
-        loyaltyUnavailableReason = 'Loyalty is disabled in settings.';
-      } else if (selectedCustomer?.loyaltyEnabled != true) {
-        loyaltyUnavailableReason = 'Loyalty is disabled for this customer.';
-      }
-    } catch (e) {
-      loyaltyUnavailableReason = 'Could not load loyalty details.';
-    }
   } else {
     creditUnavailableReason = 'Select a customer to use Customer Credit.';
-    loyaltyUnavailableReason = 'Select a customer to redeem loyalty points.';
   }
 
   if (!context.mounted) return null;
@@ -73,7 +52,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
   final amountController = TextEditingController(
     text: totalAmount.toStringAsFixed(2),
   );
-  final loyaltyPointsController = TextEditingController();
   final dialogFocusNode = FocusNode(debugLabel: 'CheckoutPaymentDialog');
   final amountFocusNode = FocusNode(debugLabel: 'CheckoutPaymentAmount');
 
@@ -82,139 +60,12 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
   double changeAmount = 0.0;
   bool hasConfirmedPayment = false;
   bool replaceAmountOnNextEdit = true;
-  int loyaltyPointsToRedeem = 0;
 
-  double roundMoney(num value) {
-    return double.parse(value.toStringAsFixed(2));
-  }
-
-  LoyaltySettings effectiveLoyaltySettings() {
-    return loyaltySettings ?? LoyaltySettings.defaults();
-  }
-
-  bool canUseLoyalty() {
-    final settings = loyaltySettings;
-    return selectedCustomer != null &&
-        customerId > 0 &&
-        settings != null &&
-        settings.isEnabled &&
-        selectedCustomer.loyaltyEnabled &&
-        selectedCustomer.loyaltyPointsBalance > 0 &&
-        totalAmount > 0;
-  }
-
-  double loyaltyRedeemableTotal() {
-    if (cartItems.isEmpty) return totalAmount;
-    final excludedCategoryNames = loyaltyExcludedCategories
-        .where((item) => item.excludeRedemption && item.isActive)
-        .map((item) => item.value.trim().toLowerCase())
-        .toSet();
-    final excludedBarcodes = loyaltyExcludedProducts
-        .where((item) => item.excludeRedemption && item.isActive)
-        .map((item) => item.value.trim())
-        .toSet();
-
-    var itemTotal = 0.0;
-    var redeemableItemTotal = 0.0;
-    for (final item in cartItems) {
-      final product = item['product'];
-      final productMap = product is Map ? product : const <String, dynamic>{};
-      final barcode = (productMap['barcode'] ?? '').toString().trim();
-      final category = (productMap['category'] ?? 'General')
-          .toString()
-          .trim()
-          .toLowerCase();
-      final quantity = ((item['quantity'] as num?) ?? 0).toDouble();
-      final unitPrice =
-          ((item['unit_price_used'] as num?) ??
-                  (productMap['selling_price'] as num?) ??
-                  (productMap['price'] as num?) ??
-                  0)
-              .toDouble();
-      final lineTotal = ((item['line_total'] as num?) ?? (unitPrice * quantity))
-          .toDouble();
-      final safeLineTotal = lineTotal.abs();
-      itemTotal += safeLineTotal;
-      if (!excludedBarcodes.contains(barcode) &&
-          !excludedCategoryNames.contains(category)) {
-        redeemableItemTotal += safeLineTotal;
-      }
-    }
-    if (itemTotal <= 0) return totalAmount;
-    return roundMoney(totalAmount * (redeemableItemTotal / itemTotal));
-  }
-
-  int maxRedeemablePoints() {
-    if (!canUseLoyalty()) return 0;
-    return LoyaltyService.instance.maxRedeemablePoints(
-      currentPointsBalance: selectedCustomer!.loyaltyPointsBalance,
-      billTotal: loyaltyRedeemableTotal(),
-      settings: effectiveLoyaltySettings(),
-    );
-  }
-
-  double loyaltyRedeemedValue() {
-    if (loyaltyPointsToRedeem <= 0) return 0.0;
-    final settings = effectiveLoyaltySettings();
-    final maxPoints = maxRedeemablePoints();
-    if (selectedMethod == 'customer_credit' ||
-        maxPoints <= 0 ||
-        loyaltyPointsToRedeem < settings.safeMinimumRedeemPoints ||
-        loyaltyPointsToRedeem > maxPoints) {
-      return 0.0;
-    }
-    final rawValue = loyaltyPointsToRedeem * settings.safePointValueAmount;
-    return roundMoney(rawValue > totalAmount ? totalAmount : rawValue);
-  }
-
-  void setLoyaltyPointsText(int value, {bool selectForReplacement = false}) {
-    loyaltyPointsController.text = value <= 0 ? '' : value.toString();
-    if (selectForReplacement) {
-      loyaltyPointsController.selection = TextSelection(
-        baseOffset: 0,
-        extentOffset: loyaltyPointsController.text.length,
-      );
-    }
-  }
-
-  String? loyaltyRedemptionError({bool showMinimumError = true}) {
-    if (loyaltyPointsToRedeem <= 0) return null;
-    if (!canUseLoyalty()) {
-      return loyaltyUnavailableReason ?? 'Loyalty redemption is not available.';
-    }
-    if (selectedMethod == 'customer_credit') {
-      return 'Customer Credit cannot be combined with loyalty redemption in V1.';
-    }
-    final settings = effectiveLoyaltySettings();
-    final maxPoints = maxRedeemablePoints();
-    if (maxPoints <= 0) {
-      return 'This bill does not meet the minimum redemption rule.';
-    }
-    if (loyaltyPointsToRedeem < settings.safeMinimumRedeemPoints) {
-      if (!showMinimumError) return null;
-      return 'Minimum redemption is ${settings.safeMinimumRedeemPoints} points.';
-    }
-    if (loyaltyPointsToRedeem > maxPoints) {
-      return 'Maximum redemption for this bill is $maxPoints points.';
-    }
-    return null;
-  }
-
-  double payableTotal() {
-    final total = totalAmount - loyaltyRedeemedValue();
-    return roundMoney(total < 0 ? 0.0 : total);
-  }
-
-  void applyLoyaltyRedeemPoints(String value, {bool normalizeText = false}) {
-    loyaltyPointsToRedeem = int.tryParse(value.trim()) ?? 0;
-    if (normalizeText) {
-      setLoyaltyPointsText(loyaltyPointsToRedeem);
-    }
-  }
+  double payableTotal() => totalAmount;
 
   bool canUseCustomerCredit() {
     if (selectedCustomer == null || customerId <= 0) return false;
-    if (loyaltyPointsToRedeem > 0) return false;
+    if (loyaltyPointsRedeemed > 0) return false;
     if (creditSummary == null) return false;
     if (!creditSummary.creditEnabled) return false;
     if (creditSummary.isBlocked) return false;
@@ -244,8 +95,8 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
     if (creditSummary.isBlocked) {
       return 'Customer credit is blocked.';
     }
-    if (loyaltyPointsToRedeem > 0) {
-      return 'Customer Credit cannot be combined with loyalty redemption in V1.';
+    if (loyaltyPointsRedeemed > 0) {
+      return 'Customer Credit cannot be combined with loyalty redemption.';
     }
 
     final newBalance = creditSummary.currentBalance + payableTotal();
@@ -340,10 +191,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
 
               setState(() {
                 selectedMethod = value;
-                if (value == 'customer_credit') {
-                  loyaltyPointsToRedeem = 0;
-                  setLoyaltyPointsText(0);
-                }
                 setAmountText(payableTotal().toStringAsFixed(2));
               });
 
@@ -485,16 +332,10 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
             }
 
             final due = payableTotal();
-            final redeemedValue = loyaltyRedeemedValue();
-            final loyaltyError = loyaltyRedemptionError();
-            final visibleLoyaltyError = loyaltyRedemptionError(
-              showMinimumError: false,
-            );
             final canConfirm =
-                loyaltyError == null &&
-                (selectedMethod == 'card' ||
-                    selectedMethod == 'customer_credit' ||
-                    amountTendered >= due);
+                selectedMethod == 'card' ||
+                selectedMethod == 'customer_credit' ||
+                amountTendered >= due;
 
             Future<void> confirmPayment() async {
               if (!canConfirm || hasConfirmedPayment) return;
@@ -507,14 +348,14 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                     ? amountTendered
                     : due,
                 'change_amount': selectedMethod == 'cash' ? changeAmount : 0.0,
-                'original_total': totalAmount,
+                'original_total': originalTotal ?? totalAmount,
                 'final_total': due,
                 'loyalty_points_redeemed': selectedMethod == 'customer_credit'
                     ? 0
-                    : loyaltyPointsToRedeem,
+                    : loyaltyPointsRedeemed,
                 'loyalty_redeemed_value': selectedMethod == 'customer_credit'
                     ? 0.0
-                    : redeemedValue,
+                    : loyaltyRedeemedValue,
                 'is_credit_sale': selectedMethod == 'customer_credit',
                 'credit_previous_balance': selectedMethod == 'customer_credit'
                     ? creditPreviousBalance()
@@ -611,189 +452,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                     ),
                   ),
                 ],
-              );
-            }
-
-            Widget loyaltySection() {
-              final maxPoints = maxRedeemablePoints();
-              final settings = effectiveLoyaltySettings();
-              final hasCustomer = selectedCustomer != null && customerId > 0;
-              final canRedeem = canUseLoyalty() && maxPoints > 0;
-              final reason =
-                  loyaltyUnavailableReason ??
-                  (hasCustomer
-                      ? 'Not enough points available for this bill.'
-                      : 'Select a customer to redeem loyalty points.');
-
-              return Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: surface,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: loyaltyPointsToRedeem > 0
-                        ? brand.withValues(alpha: 0.40)
-                        : border,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 38,
-                          height: 38,
-                          decoration: BoxDecoration(
-                            color: brand.withValues(
-                              alpha: isDark ? 0.16 : 0.10,
-                            ),
-                            borderRadius: BorderRadius.circular(13),
-                          ),
-                          child: const Icon(
-                            Icons.card_giftcard_rounded,
-                            color: brand,
-                            size: 21,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Loyalty Redemption',
-                                style: TextStyle(
-                                  color: textPrimary,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                canRedeem
-                                    ? '${selectedCustomer!.loyaltyPointsBalance} points available. Max $maxPoints points for this bill.'
-                                    : reason,
-                                style: TextStyle(
-                                  color: textSecondary,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (loyaltyPointsToRedeem > 0)
-                          TextButton.icon(
-                            onPressed: () {
-                              setState(() {
-                                loyaltyPointsToRedeem = 0;
-                                setLoyaltyPointsText(0);
-                                if (selectedMethod == 'cash') {
-                                  setAmountText(
-                                    payableTotal().toStringAsFixed(2),
-                                  );
-                                }
-                              });
-                            },
-                            icon: const Icon(Icons.close_rounded, size: 17),
-                            label: const Text('Clear'),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: loyaltyPointsController,
-                            enabled:
-                                canRedeem &&
-                                selectedMethod != 'customer_credit',
-                            keyboardType: TextInputType.number,
-                            inputFormatters: [
-                              FilteringTextInputFormatter.digitsOnly,
-                            ],
-                            decoration: fieldDecoration(
-                              label: 'Points to redeem',
-                              helperText:
-                                  'Min ${settings.safeMinimumRedeemPoints} pts. Max $maxPoints pts for this bill.',
-                              errorText: visibleLoyaltyError,
-                            ),
-                            style: TextStyle(
-                              color: textPrimary,
-                              fontWeight: FontWeight.w800,
-                            ),
-                            onTap: () {
-                              if (loyaltyPointsController.text == '0') {
-                                setLoyaltyPointsText(0);
-                              }
-                            },
-                            onChanged: (value) {
-                              setState(() {
-                                applyLoyaltyRedeemPoints(value);
-                                if (selectedMethod == 'cash') {
-                                  setAmountText(
-                                    payableTotal().toStringAsFixed(2),
-                                    selectForReplacement: false,
-                                  );
-                                }
-                              });
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        SizedBox(
-                          height: 58,
-                          child: ElevatedButton.icon(
-                            onPressed:
-                                canRedeem && selectedMethod != 'customer_credit'
-                                ? () {
-                                    setState(() {
-                                      loyaltyPointsToRedeem = maxPoints;
-                                      setLoyaltyPointsText(maxPoints);
-                                      if (selectedMethod == 'cash') {
-                                        setAmountText(
-                                          payableTotal().toStringAsFixed(2),
-                                        );
-                                      }
-                                    });
-                                  }
-                                : null,
-                            icon: const Icon(Icons.auto_awesome_rounded),
-                            label: const Text('Max'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: brand,
-                              foregroundColor: Colors.white,
-                              elevation: 0,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        buildInfoTile(
-                          label: 'Points Used',
-                          value: loyaltyPointsToRedeem.toString(),
-                          valueColor: loyaltyPointsToRedeem > 0
-                              ? brand
-                              : textSecondary,
-                        ),
-                        const SizedBox(width: 10),
-                        buildInfoTile(
-                          label: 'Loyalty Value',
-                          value: 'Rs. ${redeemedValue.toStringAsFixed(2)}',
-                          valueColor: loyaltyPointsToRedeem > 0
-                              ? brand
-                              : textSecondary,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
               );
             }
 
@@ -1108,7 +766,7 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  redeemedValue > 0
+                                  loyaltyRedeemedValue > 0
                                       ? 'PAYABLE TOTAL'
                                       : 'TOTAL DUE',
                                   style: TextStyle(
@@ -1128,10 +786,10 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                                     height: 1,
                                   ),
                                 ),
-                                if (redeemedValue > 0) ...[
+                                if (loyaltyRedeemedValue > 0) ...[
                                   const SizedBox(height: 8),
                                   Text(
-                                    'Before loyalty: Rs. ${totalAmount.toStringAsFixed(2)}   Redeemed: Rs. ${redeemedValue.toStringAsFixed(2)}',
+                                    'Before loyalty: Rs. ${(originalTotal ?? totalAmount).toStringAsFixed(2)}   Redeemed: Rs. ${loyaltyRedeemedValue.toStringAsFixed(2)}',
                                     style: TextStyle(
                                       color: textSecondary,
                                       fontWeight: FontWeight.w700,
@@ -1141,8 +799,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
                               ],
                             ),
                           ),
-                          const SizedBox(height: 18),
-                          loyaltySection(),
                           const SizedBox(height: 18),
                           paymentMethodSection(),
                           const SizedBox(height: 18),
@@ -1358,7 +1014,6 @@ Future<Map<String, dynamic>?> showCheckoutPaymentDialog(
     return result;
   } finally {
     amountController.dispose();
-    loyaltyPointsController.dispose();
     dialogFocusNode.dispose();
     amountFocusNode.dispose();
   }

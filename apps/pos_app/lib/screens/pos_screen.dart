@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/customer_pricing_result.dart';
+import 'package:shared/models/loyalty_exclusion.dart';
+import 'package:shared/models/loyalty_settings.dart';
 import 'package:shared/models/product.dart';
 
 import '../config/pos_feature_flags.dart';
@@ -134,6 +136,7 @@ class _PosScreenState extends State<PosScreen> {
   bool _isPaymentDialogOpen = false;
   bool _isRefreshingProducts = false;
   bool _isLookupOpen = false;
+  bool _isLoyaltyRulesLoading = false;
   int _activeModalCount = 0;
   bool _showWelcomeOverlay = false;
   bool _renderWelcomeOverlay = false;
@@ -160,12 +163,19 @@ class _PosScreenState extends State<PosScreen> {
 
   final TextEditingController _barcodeController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _checkoutLoyaltyController =
+      TextEditingController();
   final FocusNode _barcodeFocusNode = FocusNode();
   final FocusNode _searchFocusNode = FocusNode();
   final FocusNode _keyboardListenerFocusNode = FocusNode();
 
   String _searchQuery = '';
   Map<String, dynamic>? _currentShiftSummary;
+  LoyaltySettings? _checkoutLoyaltySettings;
+  String? _checkoutLoyaltyUnavailableReason;
+  List<LoyaltyExclusion> _checkoutLoyaltyExcludedCategories = const [];
+  List<LoyaltyExclusion> _checkoutLoyaltyExcludedProducts = const [];
+  int _checkoutLoyaltyPointsToRedeem = 0;
   final Set<String> _weeklyExpiryWarningSessionKeys = <String>{};
 
   bool get _isDark => context.read<AppThemeProvider>().isDarkMode;
@@ -206,6 +216,7 @@ class _PosScreenState extends State<PosScreen> {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleHardwareKeyboardEvent);
     _loadProducts(showLoader: true);
+    _loadCheckoutLoyaltyRules();
     _refreshProductsFromBackendAndReload(silentOnFailure: true);
     _startAutoRefresh();
 
@@ -231,6 +242,7 @@ class _PosScreenState extends State<PosScreen> {
     _welcomeOverlayCleanupTimer?.cancel();
     _barcodeController.dispose();
     _searchController.dispose();
+    _checkoutLoyaltyController.dispose();
     _cartScrollController.dispose();
     _barcodeFocusNode.dispose();
     _searchFocusNode.dispose();
@@ -911,6 +923,162 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  double _roundMoney(num value) {
+    return double.parse(value.toStringAsFixed(2));
+  }
+
+  Future<void> _loadCheckoutLoyaltyRules() async {
+    if (_isLoyaltyRulesLoading) return;
+    _isLoyaltyRulesLoading = true;
+
+    try {
+      final settings = await LoyaltyService.instance.getSettings();
+      final excludedCategories = await LoyaltyService.instance
+          .getExcludedCategories(activeOnly: true);
+      final excludedProducts = await LoyaltyService.instance
+          .getExcludedProducts(activeOnly: true);
+
+      if (!mounted) return;
+      setState(() {
+        _checkoutLoyaltySettings = settings;
+        _checkoutLoyaltyExcludedCategories = excludedCategories;
+        _checkoutLoyaltyExcludedProducts = excludedProducts;
+        _checkoutLoyaltyUnavailableReason = settings.isEnabled
+            ? null
+            : 'Loyalty is disabled in settings.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _checkoutLoyaltyUnavailableReason = 'Could not load loyalty details.';
+      });
+    } finally {
+      _isLoyaltyRulesLoading = false;
+    }
+  }
+
+  void _resetCheckoutLoyaltyRedemption({bool updateUi = true}) {
+    _checkoutLoyaltyPointsToRedeem = 0;
+    _checkoutLoyaltyController.clear();
+    if (updateUi && mounted) setState(() {});
+  }
+
+  LoyaltySettings _effectiveCheckoutLoyaltySettings() {
+    return _checkoutLoyaltySettings ?? LoyaltySettings.defaults();
+  }
+
+  bool _canUseCheckoutLoyalty(CartProvider cart) {
+    final customer = cart.selectedCustomer;
+    final settings = _checkoutLoyaltySettings;
+    return !cart.isRefundMode &&
+        customer != null &&
+        (customer.id ?? 0) > 0 &&
+        settings != null &&
+        settings.isEnabled &&
+        customer.loyaltyEnabled &&
+        customer.loyaltyPointsBalance > 0 &&
+        cart.cartTotal > 0;
+  }
+
+  String _checkoutLoyaltyReason(CartProvider cart) {
+    final customer = cart.selectedCustomer;
+    if (cart.isRefundMode) return 'Loyalty is not available for refunds.';
+    if (customer == null || (customer.id ?? 0) <= 0) {
+      return 'Select a customer to redeem loyalty points.';
+    }
+    if (_checkoutLoyaltySettings == null) {
+      return _checkoutLoyaltyUnavailableReason ?? 'Loading loyalty details...';
+    }
+    if (!_checkoutLoyaltySettings!.isEnabled) {
+      return 'Loyalty is disabled in settings.';
+    }
+    if (!customer.loyaltyEnabled) {
+      return 'Loyalty is disabled for this customer.';
+    }
+    if (customer.loyaltyPointsBalance <= 0) {
+      return 'No loyalty points available.';
+    }
+    if (cart.cartTotal <= 0) return 'Add items to redeem loyalty points.';
+    return _checkoutLoyaltyUnavailableReason ?? 'Loyalty is available.';
+  }
+
+  double _checkoutLoyaltyRedeemableTotal(CartProvider cart) {
+    if (cart.items.isEmpty) return cart.cartTotal;
+
+    final excludedCategoryNames = _checkoutLoyaltyExcludedCategories
+        .where((item) => item.excludeRedemption && item.isActive)
+        .map((item) => item.value.trim().toLowerCase())
+        .toSet();
+    final excludedBarcodes = _checkoutLoyaltyExcludedProducts
+        .where((item) => item.excludeRedemption && item.isActive)
+        .map((item) => item.value.trim())
+        .toSet();
+
+    var itemTotal = 0.0;
+    var redeemableItemTotal = 0.0;
+    for (final item in cart.items) {
+      final barcode = item.product.barcode.trim();
+      final category = item.product.category.trim().toLowerCase();
+      final lineTotal = item.total.abs();
+      itemTotal += lineTotal;
+      if (!excludedBarcodes.contains(barcode) &&
+          !excludedCategoryNames.contains(category)) {
+        redeemableItemTotal += lineTotal;
+      }
+    }
+
+    if (itemTotal <= 0) return cart.cartTotal;
+    return _roundMoney(cart.cartTotal * (redeemableItemTotal / itemTotal));
+  }
+
+  int _maxCheckoutRedeemablePoints(CartProvider cart) {
+    if (!_canUseCheckoutLoyalty(cart)) return 0;
+    return LoyaltyService.instance.maxRedeemablePoints(
+      currentPointsBalance: cart.selectedCustomer!.loyaltyPointsBalance,
+      billTotal: _checkoutLoyaltyRedeemableTotal(cart),
+      settings: _effectiveCheckoutLoyaltySettings(),
+    );
+  }
+
+  String? _checkoutLoyaltyRedemptionError(
+    CartProvider cart, {
+    bool showMinimumError = true,
+  }) {
+    if (_checkoutLoyaltyPointsToRedeem <= 0) return null;
+    if (!_canUseCheckoutLoyalty(cart)) return _checkoutLoyaltyReason(cart);
+
+    final settings = _effectiveCheckoutLoyaltySettings();
+    final maxPoints = _maxCheckoutRedeemablePoints(cart);
+    if (maxPoints <= 0) return 'This bill does not meet the redemption rule.';
+    if (_checkoutLoyaltyPointsToRedeem < settings.safeMinimumRedeemPoints) {
+      if (!showMinimumError) return null;
+      return 'Minimum redemption is ${settings.safeMinimumRedeemPoints} points.';
+    }
+    if (_checkoutLoyaltyPointsToRedeem > maxPoints) {
+      return 'Maximum redemption for this bill is $maxPoints points.';
+    }
+    return null;
+  }
+
+  double _checkoutLoyaltyRedeemedValue(CartProvider cart) {
+    if (_checkoutLoyaltyRedemptionError(cart) != null) return 0.0;
+    if (_checkoutLoyaltyPointsToRedeem <= 0) return 0.0;
+    final rawValue =
+        _checkoutLoyaltyPointsToRedeem *
+        _effectiveCheckoutLoyaltySettings().safePointValueAmount;
+    return _roundMoney(rawValue > cart.cartTotal ? cart.cartTotal : rawValue);
+  }
+
+  double _checkoutPayableTotal(CartProvider cart) {
+    final payable = cart.cartTotal - _checkoutLoyaltyRedeemedValue(cart);
+    return _roundMoney(payable < 0 ? 0.0 : payable);
+  }
+
+  void _applyCheckoutLoyaltyText(String value) {
+    _checkoutLoyaltyPointsToRedeem = int.tryParse(value.trim()) ?? 0;
+    setState(() {});
+  }
+
   Future<void> _openCustomerPicker(CartProvider cart) async {
     if (_activeModalCount > 0) return;
 
@@ -927,12 +1095,14 @@ class _PosScreenState extends State<PosScreen> {
 
       if (result.cleared || result.customer == null) {
         await cart.clearCustomer();
+        _resetCheckoutLoyaltyRedemption(updateUi: false);
         _showInfoMessage(
           'Using Walk-in Customer.',
           backgroundColor: _accentBlue,
         );
       } else {
         await cart.selectCustomer(result.customer!);
+        _resetCheckoutLoyaltyRedemption(updateUi: false);
         _showInfoMessage(
           'Customer selected: ${result.customer!.displayName}',
           backgroundColor: _brandColor,
@@ -965,6 +1135,7 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     await cart.clearCustomer();
+    _resetCheckoutLoyaltyRedemption(updateUi: false);
     _showInfoMessage(
       'Customer removed. Using Walk-in Customer.',
       backgroundColor: _accentBlue,
@@ -1084,6 +1255,7 @@ class _PosScreenState extends State<PosScreen> {
               color: _dangerColor,
               onPressed: () async {
                 await cart.clearCustomer();
+                _resetCheckoutLoyaltyRedemption(updateUi: false);
                 _showInfoMessage(
                   'Customer removed. Using Walk-in Customer.',
                   backgroundColor: _accentBlue,
@@ -2528,6 +2700,7 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     cart.clearCart();
+    _resetCheckoutLoyaltyRedemption(updateUi: false);
     setState(() {
       _selectedCartIndex = null;
       _isCartSelectionVisible = false;
@@ -3989,13 +4162,23 @@ class _PosScreenState extends State<PosScreen> {
     final subtotal = cart.subtotal;
     final discountAmount = cart.discountAmount;
     final displayTotal = cart.cartTotal;
+    final loyaltyError = _checkoutLoyaltyRedemptionError(cart);
+    if (loyaltyError != null) {
+      _showInfoMessage(loyaltyError, backgroundColor: _dangerColor);
+      _focusBarcodeField();
+      return;
+    }
+
+    final selectedLoyaltyPoints = _checkoutLoyaltyPointsToRedeem;
+    final selectedLoyaltyValue = _checkoutLoyaltyRedeemedValue(cart);
+    final payableTotal = _checkoutPayableTotal(cart);
     final itemsMap = cart.getCartItemsAsMap();
     String? paymentMethod;
     double? amountTendered;
     double? changeAmount;
     bool isCreditSale = false;
     String? creditApprovedBy;
-    double paidTotal = displayTotal;
+    double paidTotal = payableTotal;
     int loyaltyPointsRedeemed = 0;
     double loyaltyRedeemedValue = 0.0;
 
@@ -4006,9 +4189,11 @@ class _PosScreenState extends State<PosScreen> {
       try {
         paymentResult = await showCheckoutPaymentDialog(
           context,
-          totalAmount: displayTotal,
+          totalAmount: payableTotal,
+          originalTotal: displayTotal,
           selectedCustomer: cart.selectedCustomer,
-          cartItems: itemsMap,
+          loyaltyPointsRedeemed: selectedLoyaltyPoints,
+          loyaltyRedeemedValue: selectedLoyaltyValue,
         );
       } finally {
         _isPaymentDialogOpen = false;
@@ -4114,6 +4299,7 @@ class _PosScreenState extends State<PosScreen> {
       }
 
       cart.clearCart();
+      _resetCheckoutLoyaltyRedemption(updateUi: false);
 
       await SyncService().syncNow();
       await _refreshProductsFromBackendAndReload(silentOnFailure: true);
@@ -4707,6 +4893,7 @@ class _PosScreenState extends State<PosScreen> {
       );
 
       cart.clearCart();
+      _resetCheckoutLoyaltyRedemption(updateUi: false);
 
       if (!mounted) return;
 
@@ -5047,6 +5234,7 @@ class _PosScreenState extends State<PosScreen> {
       selectedPriceType: restoredSelectedPriceType,
       selectedCustomer: restoredCustomer,
     );
+    _resetCheckoutLoyaltyRedemption(updateUi: false);
 
     _showInfoMessage('Held cart resumed.', backgroundColor: _successColor);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -5596,6 +5784,7 @@ class _PosScreenState extends State<PosScreen> {
             onPressed: () {
               context.read<AuthProvider>().logout();
               context.read<CartProvider>().clearCart();
+              _resetCheckoutLoyaltyRedemption(updateUi: false);
 
               Navigator.pushReplacement(
                 context,
@@ -6251,6 +6440,7 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _toggleSaleRefundModeFromHeader(CartProvider cart) async {
     if (cart.isRefundMode) {
       context.read<CartProvider>().toggleRefundMode(false);
+      _resetCheckoutLoyaltyRedemption(updateUi: false);
       _showInfoMessage('Switched to sale mode.', backgroundColor: _accentBlue);
       _focusBarcodeField();
       return;
@@ -6259,6 +6449,7 @@ class _PosScreenState extends State<PosScreen> {
     await _runProtectedManagerAction(
       () async {
         context.read<CartProvider>().toggleRefundMode(true);
+        _resetCheckoutLoyaltyRedemption(updateUi: false);
         if (!mounted) return;
         _showInfoMessage('Refund mode enabled.', backgroundColor: _dangerColor);
         _focusBarcodeField();
@@ -6820,9 +7011,223 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  Widget _buildCheckoutLoyaltyPanel(CartProvider cart) {
+    final customer = cart.selectedCustomer;
+    final maxPoints = _maxCheckoutRedeemablePoints(cart);
+    final canRedeem = _canUseCheckoutLoyalty(cart) && maxPoints > 0;
+    final redeemedValue = _checkoutLoyaltyRedeemedValue(cart);
+    final visibleError = _checkoutLoyaltyRedemptionError(cart);
+    final reason = _checkoutLoyaltyReason(cart);
+    final isActive = _checkoutLoyaltyPointsToRedeem > 0 && redeemedValue > 0;
+    final tone = isActive ? _brandColor : _accentBlue;
+    final title = customer == null
+        ? 'Loyalty'
+        : '${customer.loyaltyPointsBalance} pts';
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isActive ? _brandSoft : _panelSoft,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isActive ? _brandColor.withValues(alpha: 0.30) : _borderColor,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: tone.withValues(alpha: _isDark ? 0.16 : 0.11),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.card_giftcard_rounded, color: tone, size: 18),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      canRedeem ? 'Max $maxPoints pts' : reason,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: canRedeem ? _textSecondary : _mutedIcon,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 10.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isActive)
+                TextButton(
+                  onPressed: () {
+                    _resetCheckoutLoyaltyRedemption();
+                    _focusBarcodeField();
+                  },
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    foregroundColor: _dangerColor,
+                    textStyle: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  child: const Text('Clear'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 38,
+                  child: TextField(
+                    controller: _checkoutLoyaltyController,
+                    enabled: canRedeem,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    style: TextStyle(
+                      color: _textPrimary,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: canRedeem ? 'Redeem pts' : 'Unavailable',
+                      errorText: visibleError,
+                      filled: true,
+                      fillColor: _inputFill,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(13),
+                        borderSide: BorderSide(color: _borderColor),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(13),
+                        borderSide: BorderSide(color: _borderColor),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(13),
+                        borderSide: BorderSide(color: _brandColor, width: 1.3),
+                      ),
+                      errorStyle: const TextStyle(height: 0.01, fontSize: 0),
+                    ),
+                    onChanged: _applyCheckoutLoyaltyText,
+                    onSubmitted: (_) => _focusBarcodeField(),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                height: 38,
+                child: FilledButton.icon(
+                  onPressed: canRedeem
+                      ? () {
+                          _checkoutLoyaltyPointsToRedeem = maxPoints;
+                          _checkoutLoyaltyController.text = maxPoints
+                              .toString();
+                          _checkoutLoyaltyController.selection = TextSelection(
+                            baseOffset: 0,
+                            extentOffset:
+                                _checkoutLoyaltyController.text.length,
+                          );
+                          setState(() {});
+                          _focusBarcodeField();
+                        }
+                      : null,
+                  icon: const Icon(Icons.auto_awesome_rounded, size: 14),
+                  label: const Text('Max'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _brandColor,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: _isDark
+                        ? Colors.white10
+                        : Colors.black12,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    textStyle: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w900,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (visibleError != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              visibleError,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: _dangerColor,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ] else if (isActive) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Redeeming $_checkoutLoyaltyPointsToRedeem pts',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                Text(
+                  '- Rs. ${redeemedValue.toStringAsFixed(2)}',
+                  style: TextStyle(
+                    color: _brandColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildSummarySection(CartProvider cart) {
     final totalTone = cart.isRefundMode ? _dangerColor : _brandColor;
     final totalToneSoft = cart.isRefundMode ? _dangerSoft : _brandSoft;
+    final loyaltyValue = _checkoutLoyaltyRedeemedValue(cart);
+    final payableTotal = _checkoutPayableTotal(cart);
 
     return Container(
       padding: const EdgeInsets.all(10),
@@ -6845,6 +7250,12 @@ class _PosScreenState extends State<PosScreen> {
                 ? _dangerColor
                 : _textPrimary,
           ),
+          if (loyaltyValue > 0)
+            _buildSummaryLine(
+              label: 'Loyalty',
+              value: '- Rs. ${loyaltyValue.toStringAsFixed(2)}',
+              valueColor: _brandColor,
+            ),
           const SizedBox(height: 6),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
@@ -6856,7 +7267,11 @@ class _PosScreenState extends State<PosScreen> {
             child: Row(
               children: [
                 Text(
-                  cart.isRefundMode ? 'REFUND TOTAL' : 'TOTAL',
+                  cart.isRefundMode
+                      ? 'REFUND TOTAL'
+                      : loyaltyValue > 0
+                      ? 'PAYABLE'
+                      : 'TOTAL',
                   style: TextStyle(
                     color: _isDark ? const Color(0xFFF4F8FF) : _textPrimary,
                     fontWeight: FontWeight.w900,
@@ -6872,7 +7287,7 @@ class _PosScreenState extends State<PosScreen> {
                 ),
                 const Spacer(),
                 Text(
-                  'Rs. ${cart.cartTotal.toStringAsFixed(2)}',
+                  'Rs. ${payableTotal.toStringAsFixed(2)}',
                   style: TextStyle(
                     color: totalTone,
                     fontWeight: FontWeight.w900,
@@ -6974,7 +7389,10 @@ class _PosScreenState extends State<PosScreen> {
           ),
           const SizedBox(height: 8),
           ElevatedButton.icon(
-            onPressed: cart.items.isEmpty || _isProcessingCheckout
+            onPressed:
+                cart.items.isEmpty ||
+                    _isProcessingCheckout ||
+                    _checkoutLoyaltyRedemptionError(cart) != null
                 ? null
                 : () => _handleCheckout(cart),
             icon: Icon(
@@ -7064,6 +7482,8 @@ class _PosScreenState extends State<PosScreen> {
             ),
             const SizedBox(height: 12),
             _buildCustomerMiniPanel(cart),
+            const SizedBox(height: 12),
+            _buildCheckoutLoyaltyPanel(cart),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
