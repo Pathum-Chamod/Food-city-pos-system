@@ -614,6 +614,8 @@ class DatabaseHelper {
         customer_name_snapshot TEXT,
         customer_phone_snapshot TEXT,
         customer_code_snapshot TEXT,
+        loyalty_points_redeemed INTEGER NOT NULL DEFAULT 0,
+        loyalty_redeemed_value REAL NOT NULL DEFAULT 0,
         items_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -1849,6 +1851,18 @@ class DatabaseHelper {
       'held_carts',
       'customer_code_snapshot',
       'TEXT',
+    );
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'loyalty_points_redeemed',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db,
+      'held_carts',
+      'loyalty_redeemed_value',
+      'REAL NOT NULL DEFAULT 0',
     );
   }
 
@@ -5923,6 +5937,8 @@ class DatabaseHelper {
     required List<Map<String, dynamic>> items,
     String selectedPriceType = 'selling',
     Customer? selectedCustomer,
+    int loyaltyPointsRedeemed = 0,
+    double loyaltyRedeemedValue = 0.0,
   }) async {
     final db = await database;
     await _ensureHeldCartCustomerSchema(db);
@@ -5951,6 +5967,12 @@ class DatabaseHelper {
           ? selectedCustomer?.phone?.trim()
           : null,
       'customer_code_snapshot': selectedCustomer?.displayCode,
+      'loyalty_points_redeemed': loyaltyPointsRedeemed < 0
+          ? 0
+          : loyaltyPointsRedeemed,
+      'loyalty_redeemed_value': loyaltyRedeemedValue < 0
+          ? 0.0
+          : _roundMoney(loyaltyRedeemedValue),
       'items_json': jsonEncode(items),
       'created_at': now,
       'updated_at': now,
@@ -5961,6 +5983,7 @@ class DatabaseHelper {
     String cashierName,
   ) async {
     final db = await database;
+    await _ensureHeldCartCustomerSchema(db);
 
     final rows = await db.query(
       'held_carts',
@@ -6010,6 +6033,10 @@ class DatabaseHelper {
         'customer_name_snapshot': row['customer_name_snapshot'],
         'customer_phone_snapshot': row['customer_phone_snapshot'],
         'customer_code_snapshot': row['customer_code_snapshot'],
+        'loyalty_points_redeemed':
+            ((row['loyalty_points_redeemed'] as num?) ?? 0).toInt(),
+        'loyalty_redeemed_value': ((row['loyalty_redeemed_value'] as num?) ?? 0)
+            .toDouble(),
         'item_count': itemCount,
         'total_amount': _roundMoney(subtotal - discountAmount),
         'created_at': row['created_at'],
@@ -6023,6 +6050,7 @@ class DatabaseHelper {
     required String cashierName,
   }) async {
     final db = await database;
+    await _ensureHeldCartCustomerSchema(db);
 
     Map<String, dynamic>? result;
 
@@ -6071,6 +6099,10 @@ class DatabaseHelper {
         'customer_name_snapshot': row['customer_name_snapshot'],
         'customer_phone_snapshot': row['customer_phone_snapshot'],
         'customer_code_snapshot': row['customer_code_snapshot'],
+        'loyalty_points_redeemed':
+            ((row['loyalty_points_redeemed'] as num?) ?? 0).toInt(),
+        'loyalty_redeemed_value': ((row['loyalty_redeemed_value'] as num?) ?? 0)
+            .toDouble(),
         'items': decodedItems,
         'created_at': row['created_at'],
         'updated_at': row['updated_at'],

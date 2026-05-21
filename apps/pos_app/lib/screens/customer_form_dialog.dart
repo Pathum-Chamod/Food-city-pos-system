@@ -11,20 +11,33 @@ Future<Customer?> showCustomerFormDialog({
   required BuildContext context,
   Customer? customer,
   int? actorUserId,
+  String? initialName,
+  String? initialPhone,
 }) {
   return showPremiumDialog<Customer?>(
     context: context,
     barrierDismissible: true,
-    builder: (_) =>
-        _CustomerFormDialog(customer: customer, actorUserId: actorUserId),
+    builder: (_) => _CustomerFormDialog(
+      customer: customer,
+      actorUserId: actorUserId,
+      initialName: initialName,
+      initialPhone: initialPhone,
+    ),
   );
 }
 
 class _CustomerFormDialog extends StatefulWidget {
-  const _CustomerFormDialog({this.customer, this.actorUserId});
+  const _CustomerFormDialog({
+    this.customer,
+    this.actorUserId,
+    this.initialName,
+    this.initialPhone,
+  });
 
   final Customer? customer;
   final int? actorUserId;
+  final String? initialName;
+  final String? initialPhone;
 
   @override
   State<_CustomerFormDialog> createState() => _CustomerFormDialogState();
@@ -56,8 +69,12 @@ class _CustomerFormDialogState extends State<_CustomerFormDialog> {
   void initState() {
     super.initState();
     final customer = widget.customer;
-    _nameController = TextEditingController(text: customer?.name ?? '');
-    _phoneController = TextEditingController(text: customer?.phone ?? '');
+    _nameController = TextEditingController(
+      text: customer?.name ?? widget.initialName?.trim() ?? '',
+    );
+    _phoneController = TextEditingController(
+      text: customer?.phone ?? widget.initialPhone?.trim() ?? '',
+    );
     _emailController = TextEditingController(text: customer?.email ?? '');
     _addressController = TextEditingController(text: customer?.address ?? '');
     _notesController = TextEditingController(text: customer?.notes ?? '');
