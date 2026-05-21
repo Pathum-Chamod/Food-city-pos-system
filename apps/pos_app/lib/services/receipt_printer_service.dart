@@ -165,6 +165,7 @@ class ReceiptPrinterService {
     String? creditApprovedBy,
     int loyaltyPointsEarned = 0,
     int loyaltyPointsRedeemed = 0,
+    int? loyaltyTotalPoints,
     double loyaltyRedeemedValue = 0.0,
     double loyaltyEarnBaseAmount = 0.0,
     String? loyaltyNote,
@@ -194,9 +195,18 @@ class ReceiptPrinterService {
       final shouldShowSubtotal =
           (subtotal - total).abs() > 0.000001 || discountAmount > 0;
       final customerNameText = (customerName ?? '').trim();
-      final customerPhoneText = (customerPhone ?? '').trim();
-      final customerCodeText = (customerCode ?? '').trim();
       final hasCustomer = customerNameText.isNotEmpty;
+      final markedItemsTotal = items.fold<double>(0, (sum, item) {
+        final qty = ((item['qty'] as num?) ?? 0).toDouble().abs();
+        final unitPrice = ((item['unitPrice'] as num?) ?? 0).toDouble().abs();
+        final markedPrice = ((item['markedPrice'] as num?) ?? unitPrice)
+            .toDouble()
+            .abs();
+        return sum + (markedPrice * qty);
+      });
+      final totalSavings = markedItemsTotal > total.abs()
+          ? markedItemsTotal - total.abs()
+          : 0.0;
       final paymentMethodLower = paymentMethod.toLowerCase();
       final isCustomerCredit =
           isCreditSale ||
@@ -205,8 +215,8 @@ class ReceiptPrinterService {
       final hasLoyalty =
           loyaltyPointsEarned != 0 ||
           loyaltyPointsRedeemed != 0 ||
-          loyaltyRedeemedValue.abs() > 0.000001 ||
-          (loyaltyNote ?? '').trim().isNotEmpty;
+          loyaltyTotalPoints != null ||
+          loyaltyRedeemedValue.abs() > 0.000001;
 
       // Reset + basic formatting
       bytes.addAll(_escInit());
@@ -248,14 +258,6 @@ class ReceiptPrinterService {
       bytes.addAll(_text('${_labelValue('Cashier', cashierName)}\n'));
       if (hasCustomer) {
         bytes.addAll(_text('${_labelValue('Customer', customerNameText)}\n'));
-        if (customerCodeText.isNotEmpty) {
-          bytes.addAll(
-            _text('${_labelValue('Cus. Code', customerCodeText)}\n'),
-          );
-        }
-        if (customerPhoneText.isNotEmpty) {
-          bytes.addAll(_text('${_labelValue('Phone', customerPhoneText)}\n'));
-        }
       }
       bytes.addAll(_text('${_line('-')}\n'));
       bytes.addAll(_boldOn());
@@ -275,9 +277,6 @@ class ReceiptPrinterService {
             .toString();
         final itemDiscountValue = ((item['itemDiscountValue'] as num?) ?? 0)
             .toDouble();
-        final customerPricingDetail = (item['customerPricingDetail'] ?? '')
-            .toString()
-            .trim();
         final lineTotal = ((item['lineTotal'] as num?) ?? 0).toDouble();
 
         for (final line in _wrapText(name, 28)) {
@@ -299,12 +298,6 @@ class ReceiptPrinterService {
             '${_itemValueRow(unitPrice: unitPriceText, markedPrice: 'Rs.${markedPrice.toStringAsFixed(2)}', quantity: _formatQuantity(qty), total: 'Rs.${lineTotal.toStringAsFixed(2)}')}\n\n',
           ),
         );
-        if (customerPricingDetail.isNotEmpty) {
-          for (final line in _wrapText(customerPricingDetail, _lineWidth - 2)) {
-            bytes.addAll(_text(' $line\n'));
-          }
-          bytes.addAll(_feed(1));
-        }
       }
 
       if (shouldShowSubtotal) {
@@ -413,44 +406,45 @@ class ReceiptPrinterService {
       }
 
       if (hasLoyalty) {
-        bytes.addAll(_text('${_line('-')}\n'));
-        bytes.addAll(_boldOn());
-        bytes.addAll(_text('LOYALTY\n'));
-        bytes.addAll(_boldOff());
+        bytes.addAll(_feed(1));
         if (loyaltyPointsRedeemed != 0) {
           bytes.addAll(
             _text(
-              '${_labelValue('Redeemed', '${loyaltyPointsRedeemed.abs()} pts')}\n',
+              '${_labelValue('Loyalty redeemed', '${loyaltyPointsRedeemed.abs()} pts')}\n',
             ),
           );
         }
         if (loyaltyRedeemedValue.abs() > 0.000001) {
           bytes.addAll(
             _text(
-              '${_labelValue('Redeem Value', 'Rs.${loyaltyRedeemedValue.abs().toStringAsFixed(2)}')}\n',
+              '${_labelValue('Loyalty value', 'Rs.${loyaltyRedeemedValue.abs().toStringAsFixed(2)}')}\n',
             ),
           );
         }
         if (loyaltyPointsEarned != 0) {
           bytes.addAll(
             _text(
-              '${_labelValue(isRefund ? 'Reversed' : 'Earned', '${loyaltyPointsEarned.abs()} pts')}\n',
+              '${_labelValue(isRefund ? 'Loyalty points reversed' : 'Loyalty points earned', '${loyaltyPointsEarned.abs()} pts')}\n',
             ),
           );
         }
-        if (loyaltyEarnBaseAmount.abs() > 0.000001 && !isRefund) {
+        if (loyaltyTotalPoints != null) {
           bytes.addAll(
             _text(
-              '${_labelValue('Earn Base', 'Rs.${loyaltyEarnBaseAmount.abs().toStringAsFixed(2)}')}\n',
+              '${_labelValue('Total Loyalty points', '${loyaltyTotalPoints.abs()} pts')}\n',
             ),
           );
         }
-        final note = (loyaltyNote ?? '').trim();
-        if (note.isNotEmpty) {
-          for (final line in _wrapText(note, _lineWidth - 2)) {
-            bytes.addAll(_text(' $line\n'));
-          }
-        }
+      }
+
+      if (!isRefund && totalSavings > 0.000001) {
+        bytes.addAll(_text('${_line('-')}\n'));
+        bytes.addAll(_alignCenter());
+        bytes.addAll(_boldOn());
+        bytes.addAll(
+          _text('You Save: Rs.${totalSavings.toStringAsFixed(2)}!\n'),
+        );
+        bytes.addAll(_boldOff());
       }
 
       bytes.addAll(_feed(1));
@@ -524,14 +518,6 @@ class ReceiptPrinterService {
 
     final spaces = _lineWidth - safeLabel.length - safeValue.length;
     return '$safeLabel${' ' * spaces}$safeValue';
-  }
-
-  String _itemHeader() {
-    const col1 = 'QTY';
-    const col2 = 'UNIT';
-    const col3 = 'TOTAL';
-
-    return '${_padLeft(col1, 6)}${_padLeft(col2, 15)}${_padLeft(col3, 15)}';
   }
 
   String _itemValueHeader() {

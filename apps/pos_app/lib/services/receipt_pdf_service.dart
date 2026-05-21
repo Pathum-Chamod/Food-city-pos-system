@@ -82,6 +82,7 @@ class ReceiptPdfService {
     String? creditApprovedBy,
     int loyaltyPointsEarned = 0,
     int loyaltyPointsRedeemed = 0,
+    int? loyaltyTotalPoints,
     double loyaltyRedeemedValue = 0.0,
     double loyaltyEarnBaseAmount = 0.0,
     String? loyaltyNote,
@@ -104,23 +105,28 @@ class ReceiptPdfService {
           '${now.minute.toString().padLeft(2, '0')}:'
           '${now.second.toString().padLeft(2, '0')}';
       final cleanCustomerName = (customerName ?? '').trim();
-      final cleanCustomerPhone = (customerPhone ?? '').trim();
-      final cleanCustomerCode = (customerCode ?? '').trim();
-      final hasCustomer =
-          cleanCustomerName.isNotEmpty ||
-          cleanCustomerPhone.isNotEmpty ||
-          cleanCustomerCode.isNotEmpty;
+      final hasCustomer = cleanCustomerName.isNotEmpty;
+      final markedItemsTotal = items.fold<double>(0, (sum, item) {
+        final qty = ((item['qty'] as num?) ?? 0).toDouble().abs();
+        final unitPrice = ((item['unitPrice'] as num?) ?? 0).toDouble().abs();
+        final markedPrice = ((item['markedPrice'] as num?) ?? unitPrice)
+            .toDouble()
+            .abs();
+        return sum + (markedPrice * qty);
+      });
+      final totalSavings = markedItemsTotal > total.abs()
+          ? markedItemsTotal - total.abs()
+          : 0.0;
       final paymentMethodLower = paymentMethod.toLowerCase();
       final isCustomerCredit =
           isCreditSale ||
           paymentMethodLower == 'customer_credit' ||
           paymentMethodLower == 'customer_credit_refund';
-      final cleanLoyaltyNote = (loyaltyNote ?? '').trim();
       final hasLoyalty =
           loyaltyPointsEarned != 0 ||
           loyaltyPointsRedeemed != 0 ||
-          loyaltyRedeemedValue.abs() > 0.000001 ||
-          cleanLoyaltyNote.isNotEmpty;
+          loyaltyTotalPoints != null ||
+          loyaltyRedeemedValue.abs() > 0.000001;
 
       pdf.addPage(
         pw.MultiPage(
@@ -167,15 +173,8 @@ class ReceiptPdfService {
                 _receiptLabelValue('Date', dateStr),
                 _receiptLabelValue('Txn', '#$transactionId'),
                 _receiptLabelValue('Cashier', cashierName),
-                if (hasCustomer) ...[
-                  _receiptThinDivider(),
-                  if (cleanCustomerName.isNotEmpty)
-                    _receiptLabelValue('Customer', cleanCustomerName),
-                  if (cleanCustomerCode.isNotEmpty)
-                    _receiptLabelValue('Cus. Code', cleanCustomerCode),
-                  if (cleanCustomerPhone.isNotEmpty)
-                    _receiptLabelValue('Phone', cleanCustomerPhone),
-                ],
+                if (hasCustomer)
+                  _receiptLabelValue('Customer', cleanCustomerName),
                 _receiptDivider(),
                 _receiptItemHeader(),
                 _receiptThinDivider(),
@@ -196,8 +195,6 @@ class ReceiptPdfService {
                       .toString();
                   final itemDiscountValue =
                       ((item['itemDiscountValue'] as num?) ?? 0).toDouble();
-                  final customerPricingDetail =
-                      (item['customerPricingDetail'] ?? '').toString().trim();
                   final lineTotal = ((item['lineTotal'] as num?) ?? 0)
                       .toDouble();
                   final itemDiscountPercent = _discountPercentLabel(
@@ -220,14 +217,6 @@ class ReceiptPdfService {
                       quantity: _formatQuantity(qty),
                       total: _formatMoney(lineTotal),
                     ),
-                    if (customerPricingDetail.isNotEmpty) ...[
-                      pw.SizedBox(height: 2),
-                      _receiptText(
-                        customerPricingDetail,
-                        fontSize: 6.4,
-                        color: PdfColors.grey700,
-                      ),
-                    ],
                     pw.SizedBox(height: 3),
                   ];
                 }),
@@ -285,34 +274,48 @@ class ReceiptPdfService {
                 if (!isRefund && !isCustomerCredit && changeAmount != null)
                   _receiptLabelValue('Change', _formatMoney(changeAmount)),
                 if (hasLoyalty) ...[
-                  _receiptThinDivider(),
-                  _receiptText('LOYALTY', bold: true, fontSize: 8),
+                  pw.SizedBox(height: 4),
                   if (loyaltyPointsRedeemed != 0)
                     _receiptLabelValue(
-                      'Redeemed',
+                      'Loyalty redeemed',
                       '${loyaltyPointsRedeemed.abs()} pts',
+                      fontSize: 7,
+                      valueColor: PdfColors.grey700,
                     ),
                   if (loyaltyRedeemedValue.abs() > 0.000001)
                     _receiptLabelValue(
-                      'Redeem Value',
+                      'Loyalty value',
                       _formatMoney(loyaltyRedeemedValue.abs()),
+                      fontSize: 7,
+                      valueColor: PdfColors.grey700,
                     ),
                   if (loyaltyPointsEarned != 0)
                     _receiptLabelValue(
-                      isRefund ? 'Reversed' : 'Earned',
+                      isRefund
+                          ? 'Loyalty points reversed'
+                          : 'Loyalty points earned',
                       '${loyaltyPointsEarned.abs()} pts',
+                      fontSize: 7,
+                      valueColor: PdfColors.grey700,
                     ),
-                  if (loyaltyEarnBaseAmount.abs() > 0.000001 && !isRefund)
+                  if (loyaltyTotalPoints != null)
                     _receiptLabelValue(
-                      'Earn Base',
-                      _formatMoney(loyaltyEarnBaseAmount.abs()),
+                      'Total Loyalty points',
+                      '${loyaltyTotalPoints.abs()} pts',
+                      fontSize: 7,
+                      valueColor: PdfColors.grey700,
                     ),
-                  if (cleanLoyaltyNote.isNotEmpty)
-                    _receiptText(
-                      cleanLoyaltyNote,
-                      fontSize: 6.4,
-                      color: PdfColors.grey700,
+                ],
+                if (!isRefund && totalSavings > 0.000001) ...[
+                  _receiptThinDivider(),
+                  pw.Text(
+                    'You Save: ${_formatMoney(totalSavings)}!',
+                    textAlign: pw.TextAlign.center,
+                    style: pw.TextStyle(
+                      fontSize: 9,
+                      fontWeight: pw.FontWeight.bold,
                     ),
+                  ),
                 ],
                 pw.SizedBox(height: 10),
                 pw.Text(

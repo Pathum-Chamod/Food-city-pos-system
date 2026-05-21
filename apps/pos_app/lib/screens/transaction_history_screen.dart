@@ -144,6 +144,15 @@ class TransactionHistoryScreen extends StatefulWidget {
     return parts.join(' | ');
   }
 
+  static Future<int?> _loyaltyTotalPointsForSummary(
+    Map<String, dynamic> summary,
+  ) async {
+    final customerId = ((summary['customer_id'] as num?) ?? 0).toInt();
+    if (customerId <= 0) return null;
+    final customer = await CustomerService.instance.getCustomerById(customerId);
+    return customer?.loyaltyPointsBalance;
+  }
+
   static Future<void> showReceiptDialogForTransaction(
     BuildContext context,
     int saleId,
@@ -336,6 +345,7 @@ class TransactionHistoryScreen extends StatefulWidget {
     final loyaltyEarnBaseAmount =
         ((summary['loyalty_earn_base_amount'] as num?) ?? 0).toDouble();
     final loyaltyNote = (summary['loyalty_note'] ?? '').toString().trim();
+    final loyaltyTotalPoints = await _loyaltyTotalPointsForSummary(summary);
 
     final receiptItems = items.map((item) {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0)
@@ -424,6 +434,7 @@ class TransactionHistoryScreen extends StatefulWidget {
       creditApprovedBy: creditApprovedBy,
       loyaltyPointsEarned: loyaltyPointsEarned,
       loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+      loyaltyTotalPoints: loyaltyTotalPoints,
       loyaltyRedeemedValue: loyaltyRedeemedValue,
       loyaltyEarnBaseAmount: loyaltyEarnBaseAmount,
       loyaltyNote: loyaltyNote,
@@ -519,6 +530,7 @@ class TransactionHistoryScreen extends StatefulWidget {
     final loyaltyEarnBaseAmount =
         ((summary['loyalty_earn_base_amount'] as num?) ?? 0).toDouble();
     final loyaltyNote = (summary['loyalty_note'] ?? '').toString().trim();
+    final loyaltyTotalPoints = await _loyaltyTotalPointsForSummary(summary);
 
     final receiptItems = items.map((item) {
       final finalLineTotal = ((item['line_total'] as num?) ?? 0)
@@ -607,6 +619,7 @@ class TransactionHistoryScreen extends StatefulWidget {
       creditApprovedBy: creditApprovedBy,
       loyaltyPointsEarned: loyaltyPointsEarned,
       loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+      loyaltyTotalPoints: loyaltyTotalPoints,
       loyaltyRedeemedValue: loyaltyRedeemedValue,
       loyaltyEarnBaseAmount: loyaltyEarnBaseAmount,
       loyaltyNote: loyaltyNote,
