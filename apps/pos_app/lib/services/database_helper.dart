@@ -5699,20 +5699,80 @@ class DatabaseHelper {
 
     final whereBase = conditions.join(' AND ');
 
+    final itemDiscountRow = (await db.rawQuery('''
+      SELECT
+        COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(si.marked_price, 0) > 0
+                THEN ABS(si.marked_price * si.quantity)
+              ELSE ABS(si.base_line_total)
+            END
+          ),
+          0
+        ) AS marked_gross_sales,
+        COALESCE(
+          SUM(
+            MAX(
+              (
+                CASE
+                  WHEN COALESCE(si.marked_price, 0) > 0
+                    THEN ABS(si.marked_price * si.quantity)
+                  ELSE ABS(si.base_line_total)
+                END
+              ) - ABS(si.line_total),
+              0
+            )
+          ),
+          0
+        ) AS total_discounts
+      FROM sales s
+      INNER JOIN sale_items si ON si.sale_id = s.id
+      WHERE s.transaction_type = 'sale'
+        AND $whereBase
+      ''', args)).first;
+
     final saleRow = (await db.rawQuery('''
       SELECT
         COUNT(*) AS sale_count,
-        COALESCE(SUM(ABS(s.subtotal_amount)), 0) AS gross_sales,
-        COALESCE(SUM(ABS(s.discount_amount)), 0) AS total_discounts,
         COALESCE(SUM(ABS(s.total_amount)), 0) AS net_sales,
         COALESCE(
-          SUM(CASE WHEN s.payment_method = 'cash' THEN ABS(s.total_amount) ELSE 0 END),
+          SUM(
+            CASE
+              WHEN s.payment_method = 'cash'
+                AND COALESCE(s.is_credit_sale, 0) = 0
+                AND LOWER(COALESCE(s.payment_method, '')) <> 'customer_credit'
+                THEN ABS(s.total_amount)
+              ELSE 0
+            END
+          ),
           0
         ) AS cash_sales,
         COALESCE(
-          SUM(CASE WHEN s.payment_method = 'card' THEN ABS(s.total_amount) ELSE 0 END),
+          SUM(
+            CASE
+              WHEN s.payment_method = 'card'
+                AND COALESCE(s.is_credit_sale, 0) = 0
+                AND LOWER(COALESCE(s.payment_method, '')) <> 'customer_credit'
+                THEN ABS(s.total_amount)
+              ELSE 0
+            END
+          ),
           0
-        ) AS card_sales
+        ) AS card_sales,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(s.is_credit_sale, 0) = 1
+                OR LOWER(COALESCE(s.payment_method, '')) = 'customer_credit'
+                THEN ABS(COALESCE(s.credit_bill_amount, s.total_amount))
+              ELSE 0
+            END
+          ),
+          0
+        ) AS credit_sales,
+        COALESCE(SUM(ABS(COALESCE(s.loyalty_redeemed_value, 0))), 0)
+          AS loyalty_redeemed_total
       FROM sales s
       WHERE s.transaction_type = 'sale'
         AND $whereBase
@@ -5754,12 +5814,16 @@ class DatabaseHelper {
         AND $whereBase
       ''', args)).first;
 
-    final grossSales = ((saleRow['gross_sales'] as num?) ?? 0).toDouble();
-    final totalDiscounts = ((saleRow['total_discounts'] as num?) ?? 0)
+    final grossSales = ((itemDiscountRow['marked_gross_sales'] as num?) ?? 0)
+        .toDouble();
+    final totalDiscounts = ((itemDiscountRow['total_discounts'] as num?) ?? 0)
         .toDouble();
     final netSales = ((saleRow['net_sales'] as num?) ?? 0).toDouble();
     final cashSales = ((saleRow['cash_sales'] as num?) ?? 0).toDouble();
     final cardSales = ((saleRow['card_sales'] as num?) ?? 0).toDouble();
+    final creditSales = ((saleRow['credit_sales'] as num?) ?? 0).toDouble();
+    final loyaltyRedeemedTotal =
+        ((saleRow['loyalty_redeemed_total'] as num?) ?? 0).toDouble();
     final refundTotal = ((refundRow['refund_total'] as num?) ?? 0).toDouble();
     final saleCount = (saleRow['sale_count'] as num?)?.toInt() ?? 0;
     final refundCount = (refundRow['refund_count'] as num?)?.toInt() ?? 0;
@@ -5787,6 +5851,8 @@ class DatabaseHelper {
       'net_after_refunds': _roundMoney(netAfterRefunds),
       'cash_sales': _roundMoney(cashSales),
       'card_sales': _roundMoney(cardSales),
+      'credit_sales': _roundMoney(creditSales),
+      'loyalty_redeemed_total': _roundMoney(loyaltyRedeemedTotal),
       'items_sold': itemsSold,
       'item_line_count': itemLineCount,
       'net_cost_amount': _roundMoney(netCostAmount),
@@ -5842,8 +5908,31 @@ class DatabaseHelper {
           END
         ) AS unit_label,
         COALESCE(SUM(si.quantity), 0) AS quantity_sold,
-        COALESCE(SUM(ABS(si.base_line_total)), 0) AS gross_sales_amount,
-        COALESCE(SUM(ABS(si.item_discount_amount)), 0) AS discount_amount,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(si.marked_price, 0) > 0
+                THEN ABS(si.marked_price * si.quantity)
+              ELSE ABS(si.base_line_total)
+            END
+          ),
+          0
+        ) AS gross_sales_amount,
+        COALESCE(
+          SUM(
+            MAX(
+              (
+                CASE
+                  WHEN COALESCE(si.marked_price, 0) > 0
+                    THEN ABS(si.marked_price * si.quantity)
+                  ELSE ABS(si.base_line_total)
+                END
+              ) - ABS(si.line_total),
+              0
+            )
+          ),
+          0
+        ) AS discount_amount,
         COALESCE(SUM(ABS(si.line_total)), 0) AS net_sales_amount
       FROM sales s
       INNER JOIN sale_items si ON si.sale_id = s.id
@@ -5885,6 +5974,52 @@ class DatabaseHelper {
     final startTime = start ?? DateTime.now();
     final endTime = end ?? DateTime.now();
 
+    final discountRows = await db.rawQuery(
+      '''
+      SELECT
+        COALESCE(NULLIF(TRIM(s.cashier_name), ''), 'Unknown') AS cashier_name,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(si.marked_price, 0) > 0
+                THEN ABS(si.marked_price * si.quantity)
+              ELSE ABS(si.base_line_total)
+            END
+          ),
+          0
+        ) AS gross_sales,
+        COALESCE(
+          SUM(
+            MAX(
+              (
+                CASE
+                  WHEN COALESCE(si.marked_price, 0) > 0
+                    THEN ABS(si.marked_price * si.quantity)
+                  ELSE ABS(si.base_line_total)
+                END
+              ) - ABS(si.line_total),
+              0
+            )
+          ),
+          0
+        ) AS total_discounts
+      FROM sales s
+      INNER JOIN sale_items si ON si.sale_id = s.id
+      WHERE s.transaction_type = 'sale'
+        AND datetime(s.created_at) >= datetime(?)
+        AND datetime(s.created_at) <= datetime(?)
+      GROUP BY COALESCE(NULLIF(TRIM(s.cashier_name), ''), 'Unknown')
+      ''',
+      [startTime.toIso8601String(), endTime.toIso8601String()],
+    );
+    final discountsByCashier = <String, Map<String, double>>{
+      for (final row in discountRows)
+        (row['cashier_name'] ?? 'Unknown').toString(): {
+          'gross_sales': ((row['gross_sales'] as num?) ?? 0).toDouble(),
+          'total_discounts': ((row['total_discounts'] as num?) ?? 0).toDouble(),
+        },
+    };
+
     final rows = await db.rawQuery(
       '''
       SELECT
@@ -5895,10 +6030,6 @@ class DatabaseHelper {
           SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.subtotal_amount) ELSE 0 END),
           0
         ) AS gross_sales,
-        COALESCE(
-          SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.discount_amount) ELSE 0 END),
-          0
-        ) AS total_discounts,
         COALESCE(
           SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.total_amount) ELSE 0 END),
           0
@@ -5911,6 +6042,8 @@ class DatabaseHelper {
           SUM(
             CASE
               WHEN s.transaction_type = 'sale' AND s.payment_method = 'cash'
+                AND COALESCE(s.is_credit_sale, 0) = 0
+                AND LOWER(COALESCE(s.payment_method, '')) <> 'customer_credit'
                 THEN ABS(s.total_amount)
               ELSE 0
             END
@@ -5921,12 +6054,28 @@ class DatabaseHelper {
           SUM(
             CASE
               WHEN s.transaction_type = 'sale' AND s.payment_method = 'card'
+                AND COALESCE(s.is_credit_sale, 0) = 0
+                AND LOWER(COALESCE(s.payment_method, '')) <> 'customer_credit'
                 THEN ABS(s.total_amount)
               ELSE 0
             END
           ),
           0
-        ) AS card_sales
+        ) AS card_sales,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN s.transaction_type = 'sale'
+                AND (
+                  COALESCE(s.is_credit_sale, 0) = 1
+                  OR LOWER(COALESCE(s.payment_method, '')) = 'customer_credit'
+                )
+                THEN ABS(COALESCE(s.credit_bill_amount, s.total_amount))
+              ELSE 0
+            END
+          ),
+          0
+        ) AS credit_sales
       FROM sales s
       WHERE datetime(s.created_at) >= datetime(?)
         AND datetime(s.created_at) <= datetime(?)
@@ -5938,23 +6087,28 @@ class DatabaseHelper {
     );
 
     return rows.map((row) {
+      final cashier = (row['cashier_name'] ?? 'Unknown').toString();
+      final discountSummary = discountsByCashier[cashier];
       final netSales = ((row['net_sales'] as num?) ?? 0).toDouble();
       final refundTotal = ((row['refund_total'] as num?) ?? 0).toDouble();
 
       return {
-        'cashier_name': row['cashier_name'],
+        'cashier_name': cashier,
         'sale_count': (row['sale_count'] as num?)?.toInt() ?? 0,
         'refund_count': (row['refund_count'] as num?)?.toInt() ?? 0,
         'transaction_count':
             ((row['sale_count'] as num?)?.toInt() ?? 0) +
             ((row['refund_count'] as num?)?.toInt() ?? 0),
-        'gross_sales': ((row['gross_sales'] as num?) ?? 0).toDouble(),
-        'total_discounts': ((row['total_discounts'] as num?) ?? 0).toDouble(),
+        'gross_sales':
+            discountSummary?['gross_sales'] ??
+            ((row['gross_sales'] as num?) ?? 0).toDouble(),
+        'total_discounts': discountSummary?['total_discounts'] ?? 0.0,
         'net_sales': netSales,
         'refund_total': refundTotal,
         'net_after_refunds': _roundMoney(netSales - refundTotal),
         'cash_sales': ((row['cash_sales'] as num?) ?? 0).toDouble(),
         'card_sales': ((row['card_sales'] as num?) ?? 0).toDouble(),
+        'credit_sales': ((row['credit_sales'] as num?) ?? 0).toDouble(),
       };
     }).toList();
   }
@@ -9057,10 +9211,6 @@ class DatabaseHelper {
           0
         ) AS gross_sales,
         COALESCE(
-          SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.discount_amount) ELSE 0 END),
-          0
-        ) AS total_discounts,
-        COALESCE(
           SUM(CASE WHEN s.transaction_type = 'sale' THEN ABS(s.total_amount) ELSE 0 END),
           0
         ) AS net_sales,
@@ -9092,7 +9242,32 @@ class DatabaseHelper {
     final itemRows = await db.rawQuery('''
       SELECT
         date(s.created_at) AS sales_date,
-        COALESCE(SUM(si.quantity), 0) AS items_sold
+        COALESCE(SUM(si.quantity), 0) AS items_sold,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(si.marked_price, 0) > 0
+                THEN ABS(si.marked_price * si.quantity)
+              ELSE ABS(si.base_line_total)
+            END
+          ),
+          0
+        ) AS gross_sales,
+        COALESCE(
+          SUM(
+            MAX(
+              (
+                CASE
+                  WHEN COALESCE(si.marked_price, 0) > 0
+                    THEN ABS(si.marked_price * si.quantity)
+                  ELSE ABS(si.base_line_total)
+                END
+              ) - ABS(si.line_total),
+              0
+            )
+          ),
+          0
+        ) AS total_discounts
       FROM sales s
       INNER JOIN sale_items si ON si.sale_id = s.id
       WHERE ${itemConditions.join(' AND ')}
@@ -9104,13 +9279,25 @@ class DatabaseHelper {
         (row['sales_date'] ?? '').toString():
             (row['items_sold'] as num?)?.toInt() ?? 0,
     };
+    final itemGrossByDate = <String, double>{
+      for (final row in itemRows)
+        (row['sales_date'] ?? '').toString():
+            ((row['gross_sales'] as num?) ?? 0).toDouble(),
+    };
+    final itemDiscountsByDate = <String, double>{
+      for (final row in itemRows)
+        (row['sales_date'] ?? '').toString():
+            ((row['total_discounts'] as num?) ?? 0).toDouble(),
+    };
 
     return salesRows.map((row) {
       final salesDate = (row['sales_date'] ?? '').toString();
       final saleCount = (row['sale_count'] as num?)?.toInt() ?? 0;
       final refundCount = (row['refund_count'] as num?)?.toInt() ?? 0;
-      final grossSales = ((row['gross_sales'] as num?) ?? 0).toDouble();
-      final totalDiscounts = ((row['total_discounts'] as num?) ?? 0).toDouble();
+      final grossSales =
+          itemGrossByDate[salesDate] ??
+          ((row['gross_sales'] as num?) ?? 0).toDouble();
+      final totalDiscounts = itemDiscountsByDate[salesDate] ?? 0.0;
       final netSales = ((row['net_sales'] as num?) ?? 0).toDouble();
       final refundTotal = ((row['refund_total'] as num?) ?? 0).toDouble();
 

@@ -20,7 +20,13 @@ class SalesReportScreen extends StatefulWidget {
   State<SalesReportScreen> createState() => _SalesReportScreenState();
 }
 
-enum SalesReportRange { today, last7Days, last30Days, specificDate, customDateRange }
+enum SalesReportRange {
+  today,
+  last7Days,
+  last30Days,
+  specificDate,
+  customDateRange,
+}
 
 class _SalesReportScreenState extends State<SalesReportScreen> {
   static const Color _brand = Color(0xFF2AAA8A);
@@ -51,15 +57,23 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   bool _isExportingPdf = false;
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
-  Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _page =>
+      _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
   Color get _panel => _isDark ? const Color(0xFF0F1C31) : Colors.white;
-  Color get _panelSoft => _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
-  Color get _panelAlt => _isDark ? const Color(0xFF0B1729) : const Color(0xFFFCFDFE);
-  Color get _surfaceAlt => _isDark ? const Color(0xFF0A1628) : const Color(0xFFF7F9FC);
-  Color get _border => _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
-  Color get _textPrimary => _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
-  Color get _textSecondary => _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
-  Color get _muted => _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
+  Color get _panelSoft =>
+      _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get _panelAlt =>
+      _isDark ? const Color(0xFF0B1729) : const Color(0xFFFCFDFE);
+  Color get _surfaceAlt =>
+      _isDark ? const Color(0xFF0A1628) : const Color(0xFFF7F9FC);
+  Color get _border =>
+      _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get _textPrimary =>
+      _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get _textSecondary =>
+      _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get _muted =>
+      _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
   Color get _shadow => Colors.black.withOpacity(_isDark ? 0.24 : 0.05);
 
   @override
@@ -94,7 +108,8 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           end: DateTime(picked.year, picked.month, picked.day, 23, 59, 59, 999),
         );
       case SalesReportRange.customDateRange:
-        final s = _customRangeStart ?? todayStart.subtract(const Duration(days: 6));
+        final s =
+            _customRangeStart ?? todayStart.subtract(const Duration(days: 6));
         final e = _customRangeEnd ?? now;
         return (
           start: DateTime(s.year, s.month, s.day),
@@ -126,10 +141,8 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
       end: current.end,
     );
 
-    final previousSummary = await DatabaseHelper.instance.getCashierSalesSummary(
-      start: previous.start,
-      end: previous.end,
-    );
+    final previousSummary = await DatabaseHelper.instance
+        .getCashierSalesSummary(start: previous.start, end: previous.end);
 
     final dailyTrend = await DatabaseHelper.instance.getSalesTrendByDay(
       start: current.start,
@@ -137,26 +150,31 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
     );
 
     final hourlyTrend = _showHourlyView
-        ? await DatabaseHelper.instance.getHourlySalesSummaryForDay(day: current.start)
+        ? await DatabaseHelper.instance.getHourlySalesSummaryForDay(
+            day: current.start,
+          )
         : <Map<String, dynamic>>[];
 
-    final cashierBreakdown = await DatabaseHelper.instance.getCashierBreakdownSummary(
-      start: current.start,
-      end: current.end,
-      limit: 20,
-    );
+    final cashierBreakdown = await DatabaseHelper.instance
+        .getCashierBreakdownSummary(
+          start: current.start,
+          end: current.end,
+          limit: 20,
+        );
 
-    final productPerformance = await DatabaseHelper.instance.getProductPerformanceSummary(
-      start: current.start,
-      end: current.end,
-      limit: 10,
-    );
+    final productPerformance = await DatabaseHelper.instance
+        .getProductPerformanceSummary(
+          start: current.start,
+          end: current.end,
+          limit: 10,
+        );
 
-    final slowMovers = await DatabaseHelper.instance.getSlowMovingProductsSummary(
-      start: current.start,
-      end: current.end,
-      limit: 10,
-    );
+    final slowMovers = await DatabaseHelper.instance
+        .getSlowMovingProductsSummary(
+          start: current.start,
+          end: current.end,
+          limit: 10,
+        );
 
     if (!mounted) return;
 
@@ -184,8 +202,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
 
     try {
       await WidgetsBinding.instance.endOfFrame;
-      final boundary = _pdfExportKey.currentContext?.findRenderObject()
-          as RenderRepaintBoundary?;
+      final boundary =
+          _pdfExportKey.currentContext?.findRenderObject()
+              as RenderRepaintBoundary?;
 
       if (boundary == null) {
         throw Exception('Report export view was not ready.');
@@ -322,8 +341,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
-    final initialStart = _customRangeStart ?? today.subtract(const Duration(days: 6));
-    final initialEnd   = _customRangeEnd   ?? today;
+    final initialStart =
+        _customRangeStart ?? today.subtract(const Duration(days: 6));
+    final initialEnd = _customRangeEnd ?? today;
 
     final picked = await showDateRangePicker(
       context: context,
@@ -349,8 +369,8 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
 
     setState(() {
       _customRangeStart = picked.start;
-      _customRangeEnd   = picked.end;
-      _selectedRange    = SalesReportRange.customDateRange;
+      _customRangeEnd = picked.end;
+      _selectedRange = SalesReportRange.customDateRange;
     });
     await _loadReport();
   }
@@ -368,7 +388,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   }
 
   String _formatQuantityWithUnit(Map<String, dynamic> row, num value) {
-    final quantityType = (row['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final quantityType = (row['quantity_type'] ?? 'unit')
+        .toString()
+        .toLowerCase();
     final unitLabel = (row['unit_label'] ?? '').toString().trim();
     final formattedQuantity = _formatQuantity(value);
     if (quantityType == 'weight') {
@@ -500,7 +522,11 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
 
   List<Map<String, dynamic>> _filledDailyTrend() {
     final current = _currentRange();
-    final start = DateTime(current.start.year, current.start.month, current.start.day);
+    final start = DateTime(
+      current.start.year,
+      current.start.month,
+      current.start.day,
+    );
     final end = DateTime(current.end.year, current.end.month, current.end.day);
 
     final existingByDate = <String, Map<String, dynamic>>{
@@ -587,10 +613,7 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
             ],
           ),
         ),
-        if (trailing != null) ...[
-          const SizedBox(width: 12),
-          trailing,
-        ],
+        if (trailing != null) ...[const SizedBox(width: 12), trailing],
       ],
     );
   }
@@ -603,12 +626,15 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
     final transactions = ((summary?['transaction_count'] as num?) ?? 0).toInt();
     final itemsSold = ((summary?['items_sold'] as num?) ?? 0).toInt();
     final refunds = ((summary?['refund_total'] as num?) ?? 0).toDouble();
-    final averageSale = ((summary?['average_sale_value'] as num?) ?? 0).toDouble();
+    final averageSale = ((summary?['average_sale_value'] as num?) ?? 0)
+        .toDouble();
     final cashSales = ((summary?['cash_sales'] as num?) ?? 0).toDouble();
     final cardSales = ((summary?['card_sales'] as num?) ?? 0).toDouble();
     final discounts = ((summary?['total_discounts'] as num?) ?? 0).toDouble();
-    final currentNet = ((_summary?['net_after_refunds'] as num?) ?? 0).toDouble();
-    final previousNet = ((_previousSummary?['net_after_refunds'] as num?) ?? 0).toDouble();
+    final currentNet = ((_summary?['net_after_refunds'] as num?) ?? 0)
+        .toDouble();
+    final previousNet = ((_previousSummary?['net_after_refunds'] as num?) ?? 0)
+        .toDouble();
     final deltaPct = _percentChange(currentNet, previousNet);
 
     return Container(
@@ -736,7 +762,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               );
 
               final heroRight = Column(
-                crossAxisAlignment: isWide ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                crossAxisAlignment: isWide
+                    ? CrossAxisAlignment.end
+                    : CrossAxisAlignment.start,
                 children: [
                   if (includeReportControls) ...[
                     Wrap(
@@ -757,8 +785,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                     FilledButton.tonalIcon(
                       onPressed: _loadReport,
                       style: FilledButton.styleFrom(
-                        backgroundColor:
-                            _brand.withOpacity(_isDark ? 0.16 : 0.10),
+                        backgroundColor: _brand.withOpacity(
+                          _isDark ? 0.16 : 0.10,
+                        ),
                         foregroundColor: _brand,
                         padding: const EdgeInsets.symmetric(
                           horizontal: 16,
@@ -798,14 +827,16 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               final columns = constraints.maxWidth >= 1200
                   ? 4
                   : constraints.maxWidth >= 720
-                      ? 2
-                      : 1;
+                  ? 2
+                  : 1;
               const spacing = 12.0;
               final itemWidth = columns == 1
                   ? constraints.maxWidth
-                  : (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+                  : (constraints.maxWidth - (spacing * (columns - 1))) /
+                        columns;
 
-              final overallProfit = ((summary?['estimated_profit'] as num?) ?? 0).toDouble();
+              final overallProfit =
+                  ((summary?['estimated_profit'] as num?) ?? 0).toDouble();
               final cards = [
                 _buildMetricCard(
                   title: 'Transactions',
@@ -840,7 +871,10 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               return Wrap(
                 spacing: spacing,
                 runSpacing: spacing,
-                children: [for (final card in cards) SizedBox(width: itemWidth, child: card)],
+                children: [
+                  for (final card in cards)
+                    SizedBox(width: itemWidth, child: card),
+                ],
               );
             },
           ),
@@ -895,12 +929,20 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           const SizedBox(width: 6),
           Text(
             '${deltaPct >= 0 ? '+' : ''}${deltaPct.toStringAsFixed(1)}%',
-            style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 12),
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w900,
+              fontSize: 12,
+            ),
           ),
           const SizedBox(width: 6),
           Text(
             'vs previous',
-            style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w700, fontSize: 12),
+            style: TextStyle(
+              color: _textSecondary,
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
+            ),
           ),
         ],
       ),
@@ -938,7 +980,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
 
   Widget _buildDateChip() {
     final selected = _selectedRange == SalesReportRange.specificDate;
-    final label = _selectedDate == null ? 'Pick Date' : _formatDate(_selectedDate!);
+    final label = _selectedDate == null
+        ? 'Pick Date'
+        : _formatDate(_selectedDate!);
     return ActionChip(
       avatar: Icon(
         Icons.calendar_month_rounded,
@@ -1020,19 +1064,33 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               children: [
                 Text(
                   title,
-                  style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w700, fontSize: 12),
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   value,
-                  style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w900, fontSize: 22, height: 1.05),
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 22,
+                    height: 1.05,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   subtitle,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: _muted, fontWeight: FontWeight.w600, fontSize: 12, height: 1.35),
+                  style: TextStyle(
+                    color: _muted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
                 ),
               ],
             ),
@@ -1043,10 +1101,12 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   }
 
   Widget _buildTrendPanel() {
-    final currentNet  = ((_summary?['net_after_refunds'] as num?) ?? 0).toDouble();
-    final previousNet = ((_previousSummary?['net_after_refunds'] as num?) ?? 0).toDouble();
-    final deltaPct    = _percentChange(currentNet, previousNet);
-    final deltaColor  = _deltaColor(deltaPct);
+    final currentNet = ((_summary?['net_after_refunds'] as num?) ?? 0)
+        .toDouble();
+    final previousNet = ((_previousSummary?['net_after_refunds'] as num?) ?? 0)
+        .toDouble();
+    final deltaPct = _percentChange(currentNet, previousNet);
+    final deltaColor = _deltaColor(deltaPct);
     final filledTrend = _filledDailyTrend();
 
     // ── Best / Weakest calculations ────────────────────────────────────────
@@ -1057,9 +1117,11 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
 
     if (_showHourlyView && _hourlyTrend.isNotEmpty) {
       bestPoint = (_hourlyTrend.cast<Map<String, dynamic>>()).reduce(
-        (a, b) => (((a['net_after_refunds'] as num?) ?? 0).toDouble() >=
-                    ((b['net_after_refunds'] as num?) ?? 0).toDouble())
-            ? a : b,
+        (a, b) =>
+            (((a['net_after_refunds'] as num?) ?? 0).toDouble() >=
+                ((b['net_after_refunds'] as num?) ?? 0).toDouble())
+            ? a
+            : b,
       );
       // Weakest HOUR with sales > 0
       final withSales = _hourlyTrend
@@ -1067,16 +1129,20 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           .toList();
       if (withSales.isNotEmpty) {
         weakestPoint = (withSales.cast<Map<String, dynamic>>()).reduce(
-          (a, b) => (((a['net_after_refunds'] as num?) ?? 0).toDouble() <=
-                      ((b['net_after_refunds'] as num?) ?? 0).toDouble())
-              ? a : b,
+          (a, b) =>
+              (((a['net_after_refunds'] as num?) ?? 0).toDouble() <=
+                  ((b['net_after_refunds'] as num?) ?? 0).toDouble())
+              ? a
+              : b,
         );
       }
     } else if (filledTrend.isNotEmpty) {
       bestPoint = (filledTrend.cast<Map<String, dynamic>>()).reduce(
-        (a, b) => (((a['net_after_refunds'] as num?) ?? 0).toDouble() >=
-                    ((b['net_after_refunds'] as num?) ?? 0).toDouble())
-            ? a : b,
+        (a, b) =>
+            (((a['net_after_refunds'] as num?) ?? 0).toDouble() >=
+                ((b['net_after_refunds'] as num?) ?? 0).toDouble())
+            ? a
+            : b,
       );
       // Weakest DAY with sales > 0
       final withSales = filledTrend
@@ -1084,35 +1150,45 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           .toList();
       if (withSales.isNotEmpty) {
         weakestPoint = withSales.reduce(
-          (a, b) => (((a['net_after_refunds'] as num?) ?? 0).toDouble() <=
-                      ((b['net_after_refunds'] as num?) ?? 0).toDouble())
-              ? a : b,
+          (a, b) =>
+              (((a['net_after_refunds'] as num?) ?? 0).toDouble() <=
+                  ((b['net_after_refunds'] as num?) ?? 0).toDouble())
+              ? a
+              : b,
         );
       }
     }
 
-    final dailyMax  = filledTrend.fold<double>(0, (m, r) =>
-        math.max(m, ((r['net_after_refunds'] as num?) ?? 0).toDouble()));
-    final hourlyMax = _hourlyTrend.fold<double>(0, (m, r) =>
-        math.max(m, ((r['net_after_refunds'] as num?) ?? 0).toDouble()));
+    final dailyMax = filledTrend.fold<double>(
+      0,
+      (m, r) => math.max(m, ((r['net_after_refunds'] as num?) ?? 0).toDouble()),
+    );
+    final hourlyMax = _hourlyTrend.fold<double>(
+      0,
+      (m, r) => math.max(m, ((r['net_after_refunds'] as num?) ?? 0).toDouble()),
+    );
 
     // ── Label helpers for best/weakest ──────────────────────────────────────
     String bestLabel = '';
     String weakestLabel = '';
     if (_showHourlyView) {
-      bestLabel    = bestPoint == null ? '—'
+      bestLabel = bestPoint == null
+          ? '—'
           : '${_formatHourLabel((bestPoint['hour'] as num?)?.toInt() ?? 0)}  '
-            '${_formatCompactMoney(((bestPoint['net_after_refunds'] as num?) ?? 0).toDouble())}';
-      weakestLabel = weakestPoint == null ? '—'
+                '${_formatCompactMoney(((bestPoint['net_after_refunds'] as num?) ?? 0).toDouble())}';
+      weakestLabel = weakestPoint == null
+          ? '—'
           : '${_formatHourLabel((weakestPoint['hour'] as num?)?.toInt() ?? 0)}  '
-            '${_formatCompactMoney(((weakestPoint['net_after_refunds'] as num?) ?? 0).toDouble())}';
+                '${_formatCompactMoney(((weakestPoint['net_after_refunds'] as num?) ?? 0).toDouble())}';
     } else {
-      bestLabel    = bestPoint == null ? '—'
+      bestLabel = bestPoint == null
+          ? '—'
           : '${_formatShortDate((bestPoint['sales_date'] ?? '').toString())}  '
-            '${_formatCompactMoney(((bestPoint['net_after_refunds'] as num?) ?? 0).toDouble())}';
-      weakestLabel = weakestPoint == null ? '—'
+                '${_formatCompactMoney(((bestPoint['net_after_refunds'] as num?) ?? 0).toDouble())}';
+      weakestLabel = weakestPoint == null
+          ? '—'
           : '${_formatShortDate((weakestPoint['sales_date'] ?? '').toString())}  '
-            '${_formatCompactMoney(((weakestPoint['net_after_refunds'] as num?) ?? 0).toDouble())}';
+                '${_formatCompactMoney(((weakestPoint['net_after_refunds'] as num?) ?? 0).toDouble())}';
     }
 
     // ── Stat cards for right sidebar ─────────────────────────────────────────
@@ -1164,7 +1240,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                     ? 'Hourly sales movement for the selected day.'
                     : 'Daily sales movement across the selected range.',
                 trailing: _buildCapsule(
-                  icon: _showHourlyView ? Icons.schedule_rounded : Icons.date_range_rounded,
+                  icon: _showHourlyView
+                      ? Icons.schedule_rounded
+                      : Icons.date_range_rounded,
                   label: _showHourlyView ? 'Hourly view' : 'Daily view',
                   color: _blue,
                 ),
@@ -1178,7 +1256,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                     : _formatShortDate((row['sales_date'] ?? '').toString()),
                 tooltipLabelBuilder: (row) => _showHourlyView
                     ? _formatHourLabel((row['hour'] as num?)?.toInt() ?? 0)
-                    : _formatFullDateFromRaw((row['sales_date'] ?? '').toString()),
+                    : _formatFullDateFromRaw(
+                        (row['sales_date'] ?? '').toString(),
+                      ),
                 valueBuilder: (row) =>
                     ((row['net_after_refunds'] as num?) ?? 0).toDouble(),
                 color: _blue,
@@ -1356,17 +1436,23 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: TextStyle(
-                        color: _textSecondary,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700)),
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
                 const SizedBox(height: 4),
-                Text(value,
-                    style: TextStyle(
-                        color: _textPrimary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900)),
+                Text(
+                  value,
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
               ],
             ),
           ),
@@ -1385,22 +1471,37 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
     required String emptyMessage,
   }) {
     if (points.isEmpty) {
-      return _buildEmptyState(icon: Icons.bar_chart_rounded, title: emptyMessage);
+      return _buildEmptyState(
+        icon: Icons.bar_chart_rounded,
+        title: emptyMessage,
+      );
     }
 
-    final safeMax    = _roundChartMax(maxValue);
-    final tickValues = List<double>.generate(5, (i) => safeMax - ((safeMax / 4) * i));
-    final baseSlotWidth  = points.length >= 24 ? 34.0
-        : points.length >= 16 ? 40.0
-        : points.length >= 10 ? 50.0 : 62.0;
-    final baseBarWidth   = points.length >= 24 ? 18.0 : 22.0;
+    final safeMax = _roundChartMax(maxValue);
+    final tickValues = List<double>.generate(
+      5,
+      (i) => safeMax - ((safeMax / 4) * i),
+    );
+    final baseSlotWidth = points.length >= 24
+        ? 34.0
+        : points.length >= 16
+        ? 40.0
+        : points.length >= 10
+        ? 50.0
+        : 62.0;
+    final baseBarWidth = points.length >= 24 ? 18.0 : 22.0;
     const chartHeight = 240.0;
-    const yAxisWidth  = 52.0;
-    final step = points.length <= 8 ? 1
-        : points.length <= 14 ? 2
-        : points.length <= 22 ? 3 : 4;
+    const yAxisWidth = 52.0;
+    final step = points.length <= 8
+        ? 1
+        : points.length <= 14
+        ? 2
+        : points.length <= 22
+        ? 3
+        : 4;
 
-    final hoveredIndex = (_hoveredBarIndex != null &&
+    final hoveredIndex =
+        (_hoveredBarIndex != null &&
             _hoveredBarIndex! >= 0 &&
             _hoveredBarIndex! < points.length)
         ? _hoveredBarIndex
@@ -1427,15 +1528,18 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           const SizedBox(height: 14),
           LayoutBuilder(
             builder: (context, constraints) {
-              final availablePlotWidth =
-                  math.max(220.0, constraints.maxWidth - yAxisWidth - 12);
+              final availablePlotWidth = math.max(
+                220.0,
+                constraints.maxWidth - yAxisWidth - 12,
+              );
               final effectivePointCount = math.min(points.length, 30);
-              final slotWidth = math.max(
-                baseSlotWidth,
-                availablePlotWidth / effectivePointCount,
-              ).toDouble();
+              final slotWidth = math
+                  .max(baseSlotWidth, availablePlotWidth / effectivePointCount)
+                  .toDouble();
               final plotWidth = slotWidth * points.length;
-              final barWidth = math.min(slotWidth * 0.56, baseBarWidth + 6).toDouble();
+              final barWidth = math
+                  .min(slotWidth * 0.56, baseBarWidth + 6)
+                  .toDouble();
               const tooltipWidth = 108.0;
 
               return SizedBox(
@@ -1488,183 +1592,277 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                               height: chartHeight + 46,
                               child: Stack(
                                 children: [
-                              // Gridlines
-                              Positioned(
-                                left: 0, right: 0, top: 0, bottom: 42,
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    for (int i = 0; i < tickValues.length; i++)
-                                      Container(height: 1, color: _border),
-                                  ],
-                                ),
-                              ),
-                              // Bars
-                              Positioned(
-                                left: 0, right: 0, top: 0, bottom: 42,
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    for (var i = 0; i < points.length; i++)
-                                      SizedBox(
-                                        width: slotWidth,
-                                        child: Builder(
-                                          builder: (context) {
-                                            final point  = points[i];
-                                            final value  = valueBuilder(point);
-                                            final ratio  = (value / safeMax).clamp(0.0, 1.0);
-                                            final barH   = math.max(8.0, ratio * (chartHeight - 8));
-                                            final isSelected = hoveredIndex == i;
-                                            final isPeak = value == maxValue && maxValue > 0;
+                                  // Gridlines
+                                  Positioned(
+                                    left: 0,
+                                    right: 0,
+                                    top: 0,
+                                    bottom: 42,
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        for (
+                                          int i = 0;
+                                          i < tickValues.length;
+                                          i++
+                                        )
+                                          Container(height: 1, color: _border),
+                                      ],
+                                    ),
+                                  ),
+                                  // Bars
+                                  Positioned(
+                                    left: 0,
+                                    right: 0,
+                                    top: 0,
+                                    bottom: 42,
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        for (var i = 0; i < points.length; i++)
+                                          SizedBox(
+                                            width: slotWidth,
+                                            child: Builder(
+                                              builder: (context) {
+                                                final point = points[i];
+                                                final value = valueBuilder(
+                                                  point,
+                                                );
+                                                final ratio = (value / safeMax)
+                                                    .clamp(0.0, 1.0);
+                                                final barH = math.max(
+                                                  8.0,
+                                                  ratio * (chartHeight - 8),
+                                                );
+                                                final isSelected =
+                                                    hoveredIndex == i;
+                                                final isPeak =
+                                                    value == maxValue &&
+                                                    maxValue > 0;
 
-                                            return Align(
-                                              alignment: Alignment.bottomCenter,
-                                              child: MouseRegion(
-                                                cursor: SystemMouseCursors.click,
-                                                onEnter: (_) => setState(() => _hoveredBarIndex = i),
-                                                onExit: (_) {
-                                                  setState(() {
-                                                    if (_hoveredBarIndex == i) {
-                                                      _hoveredBarIndex = null;
-                                                    }
-                                                  });
-                                                },
-                                                child: GestureDetector(
-                                                  onTap: () => setState(() =>
-                                                      _hoveredBarIndex =
-                                                          _hoveredBarIndex == i ? null : i),
-                                                  child: AnimatedContainer(
-                                                    duration: const Duration(milliseconds: 160),
-                                                    width: isSelected ? barWidth + 5 : barWidth,
-                                                    height: barH,
-                                                    decoration: BoxDecoration(
-                                                      borderRadius: BorderRadius.circular(999),
-                                                      gradient: LinearGradient(
-                                                        begin: Alignment.topCenter,
-                                                        end: Alignment.bottomCenter,
-                                                        colors: isPeak
-                                                            ? [
-                                                                color.withOpacity(0.74),
-                                                                color,
-                                                              ]
-                                                            : isSelected
+                                                return Align(
+                                                  alignment:
+                                                      Alignment.bottomCenter,
+                                                  child: MouseRegion(
+                                                    cursor: SystemMouseCursors
+                                                        .click,
+                                                    onEnter: (_) => setState(
+                                                      () =>
+                                                          _hoveredBarIndex = i,
+                                                    ),
+                                                    onExit: (_) {
+                                                      setState(() {
+                                                        if (_hoveredBarIndex ==
+                                                            i) {
+                                                          _hoveredBarIndex =
+                                                              null;
+                                                        }
+                                                      });
+                                                    },
+                                                    child: GestureDetector(
+                                                      onTap: () => setState(
+                                                        () => _hoveredBarIndex =
+                                                            _hoveredBarIndex ==
+                                                                i
+                                                            ? null
+                                                            : i,
+                                                      ),
+                                                      child: AnimatedContainer(
+                                                        duration:
+                                                            const Duration(
+                                                              milliseconds: 160,
+                                                            ),
+                                                        width: isSelected
+                                                            ? barWidth + 5
+                                                            : barWidth,
+                                                        height: barH,
+                                                        decoration: BoxDecoration(
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                999,
+                                                              ),
+                                                          gradient: LinearGradient(
+                                                            begin: Alignment
+                                                                .topCenter,
+                                                            end: Alignment
+                                                                .bottomCenter,
+                                                            colors: isPeak
                                                                 ? [
-                                                                    color.withOpacity(0.70),
+                                                                    color
+                                                                        .withOpacity(
+                                                                          0.74,
+                                                                        ),
+                                                                    color,
+                                                                  ]
+                                                                : isSelected
+                                                                ? [
+                                                                    color
+                                                                        .withOpacity(
+                                                                          0.70,
+                                                                        ),
                                                                     color,
                                                                   ]
                                                                 : [
-                                                                    color.withOpacity(value <= 0 ? 0.18 : 0.38),
-                                                                    color.withOpacity(value <= 0 ? 0.26 : 0.82),
+                                                                    color.withOpacity(
+                                                                      value <= 0
+                                                                          ? 0.18
+                                                                          : 0.38,
+                                                                    ),
+                                                                    color.withOpacity(
+                                                                      value <= 0
+                                                                          ? 0.26
+                                                                          : 0.82,
+                                                                    ),
                                                                   ],
+                                                          ),
+                                                          boxShadow:
+                                                              isSelected ||
+                                                                  isPeak
+                                                              ? [
+                                                                  BoxShadow(
+                                                                    color: color
+                                                                        .withOpacity(
+                                                                          0.35,
+                                                                        ),
+                                                                    blurRadius:
+                                                                        18,
+                                                                    offset:
+                                                                        const Offset(
+                                                                          0,
+                                                                          8,
+                                                                        ),
+                                                                  ),
+                                                                ]
+                                                              : null,
+                                                        ),
                                                       ),
-                                                      boxShadow: isSelected || isPeak
-                                                          ? [
-                                                              BoxShadow(
-                                                                color: color.withOpacity(0.35),
-                                                                blurRadius: 18,
-                                                                offset: const Offset(0, 8),
-                                                              ),
-                                                            ]
-                                                          : null,
                                                     ),
                                                   ),
-                                                ),
-                                              ),
-                                            );
-                                          },
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                              // X-axis labels
-                              Positioned(
-                                left: 0, right: 0, bottom: 0, height: 28,
-                                child: Row(
-                                  children: [
-                                    for (var i = 0; i < points.length; i++)
-                                      SizedBox(
-                                        width: slotWidth,
-                                        child: Center(
-                                          child: (points.length <= 10 ||
-                                                  i % step == 0 ||
-                                                  i == points.length - 1)
-                                              ? Text(
-                                                  labelBuilder(points[i]),
-                                                  maxLines: 1,
-                                                  textAlign: TextAlign.center,
-                                                  overflow: TextOverflow.ellipsis,
-                                                  style: TextStyle(
-                                                    color: hoveredIndex == i
-                                                        ? color
-                                                        : _textSecondary,
-                                                    fontSize: 11,
-                                                    fontWeight: hoveredIndex == i
-                                                        ? FontWeight.w900
-                                                        : FontWeight.w700,
-                                                    height: 1.1,
-                                                  ),
-                                                )
-                                              : null,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                              // Tooltip tooltip near hovered bar
-                              if (hoveredPoint != null && hoveredIndex != null)
-                                Positioned(
-                                  left: ((hoveredIndex * slotWidth) +
-                                              (slotWidth / 2) -
-                                              (tooltipWidth / 2))
-                                          .clamp(0.0, math.max(0.0, plotWidth - tooltipWidth))
-                                          .toDouble(),
-                                  top: 8,
-                                  child: SizedBox(
-                                    width: tooltipWidth,
-                                    child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: color.withOpacity(_isDark ? 0.95 : 0.98),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(color: color.withOpacity(0.5)),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: color.withOpacity(0.3),
-                                          blurRadius: 12,
-                                          offset: const Offset(0, 4),
-                                        ),
+                                                );
+                                              },
+                                            ),
+                                          ),
                                       ],
                                     ),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            tooltipLabelBuilder(hoveredPoint),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w700,
+                                  ),
+                                  // X-axis labels
+                                  Positioned(
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    height: 28,
+                                    child: Row(
+                                      children: [
+                                        for (var i = 0; i < points.length; i++)
+                                          SizedBox(
+                                            width: slotWidth,
+                                            child: Center(
+                                              child:
+                                                  (points.length <= 10 ||
+                                                      i % step == 0 ||
+                                                      i == points.length - 1)
+                                                  ? Text(
+                                                      labelBuilder(points[i]),
+                                                      maxLines: 1,
+                                                      textAlign:
+                                                          TextAlign.center,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: TextStyle(
+                                                        color: hoveredIndex == i
+                                                            ? color
+                                                            : _textSecondary,
+                                                        fontSize: 11,
+                                                        fontWeight:
+                                                            hoveredIndex == i
+                                                            ? FontWeight.w900
+                                                            : FontWeight.w700,
+                                                        height: 1.1,
+                                                      ),
+                                                    )
+                                                  : null,
                                             ),
                                           ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            _formatMoney(valueBuilder(hoveredPoint)),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w900,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
+                                      ],
                                     ),
                                   ),
-                                ),
+                                  // Tooltip tooltip near hovered bar
+                                  if (hoveredPoint != null &&
+                                      hoveredIndex != null)
+                                    Positioned(
+                                      left:
+                                          ((hoveredIndex * slotWidth) +
+                                                  (slotWidth / 2) -
+                                                  (tooltipWidth / 2))
+                                              .clamp(
+                                                0.0,
+                                                math.max(
+                                                  0.0,
+                                                  plotWidth - tooltipWidth,
+                                                ),
+                                              )
+                                              .toDouble(),
+                                      top: 8,
+                                      child: SizedBox(
+                                        width: tooltipWidth,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 6,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: color.withOpacity(
+                                              _isDark ? 0.95 : 0.98,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            border: Border.all(
+                                              color: color.withOpacity(0.5),
+                                            ),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: color.withOpacity(0.3),
+                                                blurRadius: 12,
+                                                offset: const Offset(0, 4),
+                                              ),
+                                            ],
+                                          ),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                tooltipLabelBuilder(
+                                                  hoveredPoint,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                _formatMoney(
+                                                  valueBuilder(hoveredPoint),
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w900,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
@@ -1683,18 +1881,38 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   }
 
   Widget _buildCompositionPanel(Map<String, dynamic>? summary) {
-    final cashSales    = ((summary?['cash_sales'] as num?) ?? 0).toDouble();
-    final cardSales    = ((summary?['card_sales'] as num?) ?? 0).toDouble();
-    final discounts    = ((summary?['total_discounts'] as num?) ?? 0).toDouble();
-    final refunds      = ((summary?['refund_total'] as num?) ?? 0).toDouble();
-    final grossSales   = ((summary?['gross_sales'] as num?) ?? 0).toDouble();
-    final totalPayments   = cashSales + cardSales;
-    final netAfterRefunds = ((summary?['net_after_refunds'] as num?) ?? 0).toDouble();
-    final cashPct  = totalPayments <= 0 ? 0.0 : (cashSales / totalPayments) * 100.0;
-    final cardPct  = totalPayments <= 0 ? 0.0 : (cardSales / totalPayments) * 100.0;
-    final retainedPct = totalPayments <= 0 ? 0.0 : (netAfterRefunds / totalPayments) * 100.0;
-    final dominantMethod = cashSales >= cardSales ? 'Cash' : 'Card';
-    final dominantColor  = cashSales >= cardSales ? _blue : _success;
+    final cashSales = ((summary?['cash_sales'] as num?) ?? 0).toDouble();
+    final cardSales = ((summary?['card_sales'] as num?) ?? 0).toDouble();
+    final creditSales = ((summary?['credit_sales'] as num?) ?? 0).toDouble();
+    final discounts = ((summary?['total_discounts'] as num?) ?? 0).toDouble();
+    final loyaltyRedeemed = ((summary?['loyalty_redeemed_total'] as num?) ?? 0)
+        .toDouble();
+    final refunds = ((summary?['refund_total'] as num?) ?? 0).toDouble();
+    final grossSales = ((summary?['gross_sales'] as num?) ?? 0).toDouble();
+    final totalPayments = cashSales + cardSales + creditSales;
+    final netAfterRefunds = ((summary?['net_after_refunds'] as num?) ?? 0)
+        .toDouble();
+    final cashPct = totalPayments <= 0
+        ? 0.0
+        : (cashSales / totalPayments) * 100.0;
+    final cardPct = totalPayments <= 0
+        ? 0.0
+        : (cardSales / totalPayments) * 100.0;
+    final creditPct = totalPayments <= 0
+        ? 0.0
+        : (creditSales / totalPayments) * 100.0;
+    final retainedPct = grossSales <= 0
+        ? 0.0
+        : (netAfterRefunds / grossSales) * 100.0;
+    final paymentMethods = [
+      (label: 'Cash', amount: cashSales, pct: cashPct, color: _blue),
+      (label: 'Card', amount: cardSales, pct: cardPct, color: _success),
+      (label: 'Credit', amount: creditSales, pct: creditPct, color: _warning),
+    ]..sort((a, b) => b.amount.compareTo(a.amount));
+    final dominantPayment = paymentMethods.first;
+    final dominantMethod = dominantPayment.label;
+    final dominantColor = dominantPayment.color;
+    final dominantPct = dominantPayment.pct;
     const sectionHeaderGap = 20.0;
 
     return _buildPanel(
@@ -1734,206 +1952,254 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           ),
           const SizedBox(height: 20),
 
-          LayoutBuilder(builder: (context, constraints) {
-            final isWide = constraints.maxWidth >= 900;
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isWide = constraints.maxWidth >= 900;
 
-            // ── SECTION A: Donut pie chart for cash/card ────────────────
-            Widget sectionA = Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Section label
-                Row(
-                  children: [
-                    Container(
-                      width: 3, height: 14,
-                      decoration: BoxDecoration(color: _blue, borderRadius: BorderRadius.circular(3)),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'HOW CUSTOMERS PAID',
-                      style: TextStyle(
-                        color: _muted, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.7,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: sectionHeaderGap),
-
-                // Donut chart centred with legend
-                Center(
-                  child: SizedBox(
-                    width: 200,
-                    height: 200,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        CustomPaint(
-                          size: const Size(200, 200),
-                          painter: _DonutChartPainter(
-                            values: [cashSales, cardSales],
-                            colors: [_blue, _success],
-                            baseColor: _border,
-                            strokeWidth: 26,
-                          ),
-                        ),
-                        // Centre label
-                        Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              _formatCompactMoney(totalPayments),
-                              style: TextStyle(
-                                color: _textPrimary,
-                                fontWeight: FontWeight.w900,
-                                fontSize: 18,
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              'Total',
-                              style: TextStyle(color: _muted, fontSize: 11, fontWeight: FontWeight.w600),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-
-                // Dominant method badge
-                if (totalPayments > 0)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: dominantColor.withOpacity(_isDark ? 0.12 : 0.08),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: dominantColor.withOpacity(0.2)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          dominantMethod == 'Cash' ? Icons.payments_outlined : Icons.credit_card_rounded,
-                          size: 14, color: dominantColor,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '$dominantMethod dominant — ${(dominantMethod == 'Cash' ? cashPct : cardPct).toStringAsFixed(1)}% of revenue',
-                          style: TextStyle(color: dominantColor, fontSize: 12, fontWeight: FontWeight.w700),
-                        ),
-                      ],
-                    ),
-                  ),
-                if (totalPayments > 0) const SizedBox(height: 12),
-
-                // Cash detail
-                _buildDonutLegendRow(
-                  icon: Icons.payments_outlined,
-                  label: 'Cash',
-                  amount: cashSales,
-                  pct: cashPct,
-                  color: _blue,
-                ),
-                const SizedBox(height: 10),
-                // Card detail
-                _buildDonutLegendRow(
-                  icon: Icons.credit_card_rounded,
-                  label: 'Card',
-                  amount: cardSales,
-                  pct: cardPct,
-                  color: _success,
-                ),
-              ],
-            );
-
-            // ── SECTION B: Revenue journey waterfall ────────────────────────
-            Widget sectionB = Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 3,
-                      height: 14,
-                      decoration: BoxDecoration(
-                        color: _brand,
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'REVENUE JOURNEY',
-                      style: TextStyle(
-                        color: _muted,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.7,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: sectionHeaderGap),
-
-                _buildWaterfallStep(
-                  icon: Icons.arrow_circle_up_rounded,
-                  label: 'Gross Sales',
-                  amount: grossSales,
-                  color: _brand,
-                  isStart: true,
-                ),
-                _buildWaterfallConnector(),
-                _buildWaterfallStep(
-                  icon: Icons.local_offer_outlined,
-                  label: 'Discounts Given',
-                  amount: discounts,
-                  color: _warning,
-                  isReduction: true,
-                ),
-                _buildWaterfallConnector(),
-                _buildWaterfallStep(
-                  icon: Icons.replay_rounded,
-                  label: 'Refunds Issued',
-                  amount: refunds,
-                  color: _danger,
-                  isReduction: true,
-                ),
-                _buildWaterfallConnector(isFinal: true),
-                _buildWaterfallStep(
-                  icon: Icons.check_circle_outline_rounded,
-                  label: 'Net Revenue',
-                  amount: netAfterRefunds,
-                  color: _success,
-                  isFinal: true,
-                  retainedPct: retainedPct,
-                ),
-              ],
-            );
-
-            if (isWide) {
-              return Row(
+              // ── SECTION A: Donut pie chart for cash/card ────────────────
+              Widget sectionA = Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(child: sectionA),
-                  const SizedBox(width: 20),
-                  Container(width: 1, color: _border, margin: EdgeInsets.zero),
-                  const SizedBox(width: 20),
-                  Expanded(child: sectionB),
+                  // Section label
+                  Row(
+                    children: [
+                      Container(
+                        width: 3,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: _blue,
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'HOW CUSTOMERS PAID',
+                        style: TextStyle(
+                          color: _muted,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.7,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: sectionHeaderGap),
+
+                  // Donut chart centred with legend
+                  Center(
+                    child: SizedBox(
+                      width: 200,
+                      height: 200,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          CustomPaint(
+                            size: const Size(200, 200),
+                            painter: _DonutChartPainter(
+                              values: [cashSales, cardSales, creditSales],
+                              colors: [_blue, _success, _warning],
+                              baseColor: _border,
+                              strokeWidth: 26,
+                            ),
+                          ),
+                          // Centre label
+                          Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                _formatCompactMoney(totalPayments),
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 18,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                'Total',
+                                style: TextStyle(
+                                  color: _muted,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Dominant method badge
+                  if (totalPayments > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 11,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: dominantColor.withOpacity(_isDark ? 0.12 : 0.08),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: dominantColor.withOpacity(0.2),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            dominantMethod == 'Cash'
+                                ? Icons.payments_outlined
+                                : dominantMethod == 'Card'
+                                ? Icons.credit_card_rounded
+                                : Icons.account_balance_wallet_outlined,
+                            size: 14,
+                            color: dominantColor,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '$dominantMethod dominant - ${dominantPct.toStringAsFixed(1)}% of payments',
+                            style: TextStyle(
+                              color: dominantColor,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (totalPayments > 0) const SizedBox(height: 12),
+
+                  // Cash detail
+                  _buildDonutLegendRow(
+                    icon: Icons.payments_outlined,
+                    label: 'Cash',
+                    amount: cashSales,
+                    pct: cashPct,
+                    color: _blue,
+                  ),
+                  const SizedBox(height: 10),
+                  // Card detail
+                  _buildDonutLegendRow(
+                    icon: Icons.credit_card_rounded,
+                    label: 'Card',
+                    amount: cardSales,
+                    pct: cardPct,
+                    color: _success,
+                  ),
+                  const SizedBox(height: 10),
+                  // Credit detail
+                  _buildDonutLegendRow(
+                    icon: Icons.account_balance_wallet_outlined,
+                    label: 'Credit',
+                    amount: creditSales,
+                    pct: creditPct,
+                    color: _warning,
+                  ),
                 ],
               );
-            }
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                sectionA,
-                const SizedBox(height: 20),
-                Container(height: 1, color: _border),
-                const SizedBox(height: 20),
-                sectionB,
-              ],
-            );
-          }),
+              // ── SECTION B: Revenue journey waterfall ────────────────────────
+              Widget sectionB = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 3,
+                        height: 14,
+                        decoration: BoxDecoration(
+                          color: _brand,
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'REVENUE JOURNEY',
+                        style: TextStyle(
+                          color: _muted,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.7,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: sectionHeaderGap),
+
+                  _buildWaterfallStep(
+                    icon: Icons.arrow_circle_up_rounded,
+                    label: 'Gross Sales',
+                    amount: grossSales,
+                    color: _brand,
+                    isStart: true,
+                  ),
+                  _buildWaterfallConnector(),
+                  _buildWaterfallStep(
+                    icon: Icons.local_offer_outlined,
+                    label: 'Discounts Given',
+                    amount: discounts,
+                    color: _warning,
+                    isReduction: true,
+                  ),
+                  _buildWaterfallConnector(),
+                  _buildWaterfallStep(
+                    icon: Icons.stars_rounded,
+                    label: 'Loyalty Redeemed',
+                    amount: loyaltyRedeemed,
+                    color: _blue,
+                    isReduction: true,
+                  ),
+                  _buildWaterfallConnector(),
+                  _buildWaterfallStep(
+                    icon: Icons.replay_rounded,
+                    label: 'Refunds Issued',
+                    amount: refunds,
+                    color: _danger,
+                    isReduction: true,
+                  ),
+                  _buildWaterfallConnector(isFinal: true),
+                  _buildWaterfallStep(
+                    icon: Icons.check_circle_outline_rounded,
+                    label: 'Net Revenue',
+                    amount: netAfterRefunds,
+                    color: _success,
+                    isFinal: true,
+                    retainedPct: retainedPct,
+                  ),
+                ],
+              );
+
+              if (isWide) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: sectionA),
+                    const SizedBox(width: 20),
+                    Container(
+                      width: 1,
+                      color: _border,
+                      margin: EdgeInsets.zero,
+                    ),
+                    const SizedBox(width: 20),
+                    Expanded(child: sectionB),
+                  ],
+                );
+              }
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  sectionA,
+                  const SizedBox(height: 20),
+                  Container(height: 1, color: _border),
+                  const SizedBox(height: 20),
+                  sectionB,
+                ],
+              );
+            },
+          ),
         ],
       ),
     );
@@ -1968,15 +2234,21 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(label,
-                      style: TextStyle(
-                          color: _textPrimary, fontWeight: FontWeight.w700, fontSize: 13)),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: _textPrimary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                  ),
                   Text(
                     '${pct.toStringAsFixed(1)}%',
                     style: TextStyle(
-                        color: isZero ? _muted : color,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 13),
+                      color: isZero ? _muted : color,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 13,
+                    ),
                   ),
                 ],
               ),
@@ -1988,16 +2260,18 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                   minHeight: 5,
                   backgroundColor: _border,
                   valueColor: AlwaysStoppedAnimation<Color>(
-                      isZero ? color.withOpacity(0.2) : color.withOpacity(0.8)),
+                    isZero ? color.withOpacity(0.2) : color.withOpacity(0.8),
+                  ),
                 ),
               ),
               const SizedBox(height: 4),
               Text(
                 _formatMoney(amount),
                 style: TextStyle(
-                    color: isZero ? _muted : _textSecondary,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12),
+                  color: isZero ? _muted : _textSecondary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
               ),
             ],
           ),
@@ -2038,7 +2312,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
             child: Text(
               label,
               style: TextStyle(
-                color: _textPrimary, fontWeight: FontWeight.w700, fontSize: 13,
+                color: _textPrimary,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
               ),
             ),
           ),
@@ -2086,9 +2362,7 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
         vertical: isFinal ? 18 : 14,
       ),
       decoration: BoxDecoration(
-        color: isFinal
-            ? color.withOpacity(_isDark ? 0.12 : 0.07)
-            : _surfaceAlt,
+        color: isFinal ? color.withOpacity(_isDark ? 0.12 : 0.07) : _surfaceAlt,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: isFinal ? color.withOpacity(0.28) : _border,
@@ -2127,9 +2401,10 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                     Text(
                       '−  ',
                       style: TextStyle(
-                          color: color,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 14),
+                        color: color,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 14,
+                      ),
                     ),
                   Text(
                     _formatMoney(amount),
@@ -2145,7 +2420,10 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                 Text(
                   '${retainedPct.toStringAsFixed(1)}% retained',
                   style: TextStyle(
-                      color: color, fontSize: 11, fontWeight: FontWeight.w700),
+                    color: color,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
             ],
           ),
@@ -2163,9 +2441,7 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           Container(
             width: 1.5,
             height: 20,
-            color: isFinal
-                ? _success.withOpacity(0.4)
-                : _border,
+            color: isFinal ? _success.withOpacity(0.4) : _border,
           ),
         ],
       ),
@@ -2179,7 +2455,8 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
         children: [
           _buildSectionHeader(
             title: 'Cashier breakdown',
-            subtitle: 'Who sold the most and who handled refunds in this range.',
+            subtitle:
+                'Who sold the most and who handled refunds in this range.',
             trailing: _buildCapsule(
               icon: Icons.groups_rounded,
               label: '${_cashierBreakdown.length} cashiers',
@@ -2188,9 +2465,14 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           ),
           const SizedBox(height: 12),
           if (_cashierBreakdown.isEmpty)
-            _buildEmptyState(icon: Icons.groups_rounded, title: 'No cashier data found for this range.')
+            _buildEmptyState(
+              icon: Icons.groups_rounded,
+              title: 'No cashier data found for this range.',
+            )
           else
-            ..._cashierBreakdown.asMap().entries.map((entry) => _buildCashierRow(entry.value, entry.key)),
+            ..._cashierBreakdown.asMap().entries.map(
+              (entry) => _buildCashierRow(entry.value, entry.key),
+            ),
         ],
       ),
     );
@@ -2200,13 +2482,16 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
     final cashierName = (row['cashier_name'] ?? 'Unknown').toString();
     final saleCount = (row['sale_count'] as num?)?.toInt() ?? 0;
     final refundCount = (row['refund_count'] as num?)?.toInt() ?? 0;
-    final netAfterRefunds = ((row['net_after_refunds'] as num?) ?? 0).toDouble();
+    final netAfterRefunds = ((row['net_after_refunds'] as num?) ?? 0)
+        .toDouble();
     final avgSale = saleCount <= 0 ? 0.0 : netAfterRefunds / saleCount;
     final rankColor = _textSecondary;
 
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: _border))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: _border)),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2220,7 +2505,11 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
             child: Center(
               child: Text(
                 '#${index + 1}',
-                style: TextStyle(color: rankColor, fontWeight: FontWeight.w900, fontSize: 12),
+                style: TextStyle(
+                  color: rankColor,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 12,
+                ),
               ),
             ),
           ),
@@ -2231,14 +2520,21 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               children: [
                 Text(
                   cashierName,
-                  style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w800, fontSize: 15),
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: _withMetaDividers([
                     _buildMetaText('$saleCount sales'),
-                    _buildMetaText('$refundCount refunds', color: refundCount > 0 ? _danger : _textSecondary),
+                    _buildMetaText(
+                      '$refundCount refunds',
+                      color: refundCount > 0 ? _danger : _textSecondary,
+                    ),
                     _buildMetaText('Avg ${_formatMoney(avgSale)}'),
                   ]),
                 ),
@@ -2251,12 +2547,20 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
             children: [
               Text(
                 _formatMoney(netAfterRefunds),
-                style: TextStyle(color: _textPrimary, fontSize: 18, fontWeight: FontWeight.w900),
+                style: TextStyle(
+                  color: _textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
               const SizedBox(height: 4),
               Text(
                 'Net after refunds',
-                style: TextStyle(color: _textSecondary, fontSize: 12, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  color: _textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),
@@ -2281,9 +2585,14 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           ),
           const SizedBox(height: 12),
           if (_productPerformance.isEmpty)
-            _buildEmptyState(icon: Icons.inventory_2_rounded, title: 'No product sales found for this range.')
+            _buildEmptyState(
+              icon: Icons.inventory_2_rounded,
+              title: 'No product sales found for this range.',
+            )
           else
-            ..._productPerformance.asMap().entries.map((entry) => _buildProductRow(entry.value, entry.key)),
+            ..._productPerformance.asMap().entries.map(
+              (entry) => _buildProductRow(entry.value, entry.key),
+            ),
         ],
       ),
     );
@@ -2302,7 +2611,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
 
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: _border))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: _border)),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2316,7 +2627,11 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
             child: Center(
               child: Text(
                 '#${index + 1}',
-                style: TextStyle(color: rankColor, fontWeight: FontWeight.w900, fontSize: 12),
+                style: TextStyle(
+                  color: rankColor,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 12,
+                ),
               ),
             ),
           ),
@@ -2327,7 +2642,11 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               children: [
                 Text(
                   productName,
-                  style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w800, fontSize: 15),
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
@@ -2340,7 +2659,10 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                         _formatRefundedText(row, refundedQty),
                         color: _danger,
                       ),
-                    _buildMetaText('Margin ${marginPercent.toStringAsFixed(1)}%', color: _success),
+                    _buildMetaText(
+                      'Margin ${marginPercent.toStringAsFixed(1)}%',
+                      color: _success,
+                    ),
                   ]),
                 ),
               ],
@@ -2352,12 +2674,20 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
             children: [
               Text(
                 _formatMoney(netSales),
-                style: TextStyle(color: _textPrimary, fontSize: 18, fontWeight: FontWeight.w900),
+                style: TextStyle(
+                  color: _textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
               const SizedBox(height: 4),
               Text(
                 'Profit ${_formatMoney(estimatedProfit)}',
-                style: TextStyle(color: profitColor, fontSize: 12, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  color: profitColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),
@@ -2382,9 +2712,14 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           ),
           const SizedBox(height: 12),
           if (_slowMovers.isEmpty)
-            _buildEmptyState(icon: Icons.hourglass_bottom_rounded, title: 'No slow movers found for this range.')
+            _buildEmptyState(
+              icon: Icons.hourglass_bottom_rounded,
+              title: 'No slow movers found for this range.',
+            )
           else
-            ..._slowMovers.asMap().entries.map((entry) => _buildSlowMoverRow(entry.value, entry.key)),
+            ..._slowMovers.asMap().entries.map(
+              (entry) => _buildSlowMoverRow(entry.value, entry.key),
+            ),
         ],
       ),
     );
@@ -2401,7 +2736,9 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
 
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: _border))),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: _border)),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2415,7 +2752,11 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
             child: Center(
               child: Text(
                 '#${index + 1}',
-                style: TextStyle(color: statusColor, fontWeight: FontWeight.w900, fontSize: 12),
+                style: TextStyle(
+                  color: statusColor,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 12,
+                ),
               ),
             ),
           ),
@@ -2426,7 +2767,11 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               children: [
                 Text(
                   productName,
-                  style: TextStyle(color: _textPrimary, fontWeight: FontWeight.w800, fontSize: 15),
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
@@ -2440,7 +2785,8 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                       color: quantitySold <= 0 ? _danger : _textSecondary,
                     ),
                     _buildMetaText(_formatStockText(row, stock)),
-                    if (isDeadStock) _buildMetaText('Dead stock', color: _danger),
+                    if (isDeadStock)
+                      _buildMetaText('Dead stock', color: _danger),
                   ]),
                 ),
               ],
@@ -2452,12 +2798,20 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
             children: [
               Text(
                 _formatMoney(stockValue),
-                style: TextStyle(color: _textPrimary, fontSize: 18, fontWeight: FontWeight.w900),
+                style: TextStyle(
+                  color: _textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
               const SizedBox(height: 4),
               Text(
                 'Stock value',
-                style: TextStyle(color: _textSecondary, fontSize: 12, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  color: _textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),
@@ -2489,7 +2843,11 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
     return widgets;
   }
 
-  Widget _buildMetaText(String label, {Color? color, FontWeight weight = FontWeight.w700}) {
+  Widget _buildMetaText(
+    String label, {
+    Color? color,
+    FontWeight weight = FontWeight.w700,
+  }) {
     return Text(
       label,
       style: TextStyle(
@@ -2507,12 +2865,19 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
         Container(
           width: 10,
           height: 10,
-          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(999)),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(999),
+          ),
         ),
         const SizedBox(width: 6),
         Text(
           label,
-          style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w700, fontSize: 12),
+          style: TextStyle(
+            color: _textSecondary,
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+          ),
         ),
       ],
     );
@@ -2542,7 +2907,10 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
           Text(
             title,
             textAlign: TextAlign.center,
-            style: TextStyle(color: _textSecondary, fontWeight: FontWeight.w700),
+            style: TextStyle(
+              color: _textSecondary,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ],
       ),
@@ -2628,10 +2996,7 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _buildTopHero(
-                          summary,
-                          includeReportControls: false,
-                        ),
+                        _buildTopHero(summary, includeReportControls: false),
                         const SizedBox(height: 16),
                         _buildTrendPanel(),
                         const SizedBox(height: 16),
@@ -2745,10 +3110,7 @@ class _LegendTag extends StatelessWidget {
   final String label;
   final Color color;
 
-  const _LegendTag({
-    required this.label,
-    required this.color,
-  });
+  const _LegendTag({required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {
