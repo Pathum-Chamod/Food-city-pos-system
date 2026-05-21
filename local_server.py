@@ -3875,6 +3875,37 @@ def _extract_item_discount_amount(item):
     return parse_float(item.get("item_discount_amount"), 0.0)
 
 
+def _extract_item_marked_gross(item):
+    quantity = max(_extract_item_quantity(item), 0)
+    product = item.get("product", {}) or {}
+    marked_candidates = [
+        parse_float(item.get("marked_price"), -1),
+        parse_float(item.get("customer_pricing_original_price"), -1),
+        parse_float(item.get("price_override_original_price"), -1),
+        parse_float(item.get("system_unit_price"), -1),
+        parse_float(product.get("selling_price", product.get("price")), -1),
+    ]
+    marked_price = max(marked_candidates)
+
+    base_line_total = _extract_item_base_line_total(item)
+    if marked_price >= 0 and quantity > 0:
+        marked_gross = abs(marked_price * quantity)
+        if base_line_total is not None:
+            return max(marked_gross, abs(base_line_total))
+        return marked_gross
+
+    if base_line_total is not None:
+        return abs(base_line_total)
+
+    return _extract_item_sales_amount(item)
+
+
+def _extract_item_markdown_amount(item):
+    marked_gross = _extract_item_marked_gross(item)
+    final_total = _extract_item_sales_amount(item)
+    return max(0.0, marked_gross - final_total)
+
+
 def _extract_item_cost_snapshot(item):
     for key in ["cost_price_snapshot", "unit_cost", "cost_price"]:
         if item.get(key) is not None:
@@ -4613,6 +4644,9 @@ def _sales_rows_between_values(cursor, start_sql_value, end_sql_value):
             COALESCE(transaction_type, 'sale') AS transaction_type,
             COALESCE(items_count, 0) AS items_count,
             COALESCE(gross_profit, 0) AS gross_profit,
+            COALESCE(is_credit_sale, 0) AS is_credit_sale,
+            COALESCE(credit_bill_amount, 0) AS credit_bill_amount,
+            COALESCE(loyalty_redeemed_value, 0) AS loyalty_redeemed_value,
             cashier_name,
             items,
             created_at
@@ -4662,6 +4696,8 @@ def _build_owner_sales_report(cursor, params):
     refunds = 0.0
     cash_sales = 0.0
     card_sales = 0.0
+    credit_sales = 0.0
+    loyalty_redeemed_total = 0.0
     legacy_untyped_payment_sales = 0.0
     items_sold = 0
     sale_count = 0
@@ -4681,6 +4717,9 @@ def _build_owner_sales_report(cursor, params):
         subtotal_amount = abs(parse_float(row["subtotal_amount"], 0.0))
         discount_amount = abs(parse_float(row["discount_amount"], 0.0))
         payment_method = str(row["payment_method"] or "").strip().lower()
+        is_credit_sale = parse_int(row["is_credit_sale"], 0) == 1 or payment_method == "customer_credit"
+        credit_bill_amount = abs(parse_float(row["credit_bill_amount"], 0.0))
+        loyalty_redeemed_value = abs(parse_float(row["loyalty_redeemed_value"], 0.0))
         created_at = str(row["created_at"] or "")
         sale_day = created_at[:10]
         sale_hour = _extract_sale_hour(created_at)
@@ -4751,25 +4790,39 @@ def _build_owner_sales_report(cursor, params):
             cashier_bucket["refund_total"] += total_amount
         else:
             sale_count += 1
-            effective_subtotal = subtotal_amount if subtotal_amount > 0 else total_amount + discount_amount
+            item_discount_total = sum(_extract_item_markdown_amount(item) for item in items)
+            item_marked_total = sum(_extract_item_marked_gross(item) for item in items)
+            item_final_total = sum(_extract_item_sales_amount(item) for item in items)
+            if item_final_total > 0:
+                effective_discount = item_discount_total
+                effective_subtotal = item_marked_total
+            else:
+                effective_discount = max(0.0, discount_amount - loyalty_redeemed_value)
+                effective_subtotal = max(
+                    subtotal_amount + effective_discount,
+                    total_amount + loyalty_redeemed_value + effective_discount,
+                )
             gross_sales += effective_subtotal
-            discounts += discount_amount
+            discounts += effective_discount
             sales_net += total_amount
+            loyalty_redeemed_total += loyalty_redeemed_value
             day_bucket["sale_count"] += 1
             day_bucket["gross_sales"] += effective_subtotal
-            day_bucket["discounts"] += discount_amount
+            day_bucket["discounts"] += effective_discount
             day_bucket["net_sales"] += total_amount
             hour_bucket["sale_count"] += 1
             hour_bucket["transaction_count"] += 1
             hour_bucket["gross_sales"] += effective_subtotal
-            hour_bucket["discounts"] += discount_amount
+            hour_bucket["discounts"] += effective_discount
             hour_bucket["net_sales"] += total_amount
             cashier_bucket["sale_count"] += 1
             cashier_bucket["transaction_count"] += 1
             cashier_bucket["gross_sales"] += effective_subtotal
-            cashier_bucket["discounts"] += discount_amount
+            cashier_bucket["discounts"] += effective_discount
             cashier_bucket["net_sales"] += total_amount
-            if payment_method == "card":
+            if is_credit_sale:
+                credit_sales += credit_bill_amount if credit_bill_amount > 0 else total_amount
+            elif payment_method == "card":
                 card_sales += total_amount
             elif payment_method == "cash":
                 cash_sales += total_amount
@@ -4955,6 +5008,8 @@ def _build_owner_sales_report(cursor, params):
             "refund_count": refund_count,
             "cash_sales": round(cash_sales, 2),
             "card_sales": round(card_sales, 2),
+            "credit_sales": round(credit_sales, 2),
+            "loyalty_redeemed_total": round(loyalty_redeemed_total, 2),
             "legacy_untyped_payment_sales": round(legacy_untyped_payment_sales, 2),
             "payment_data_complete": legacy_untyped_payment_sales <= 0.0,
             "sale_count": sale_count,

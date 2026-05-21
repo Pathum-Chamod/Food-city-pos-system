@@ -2070,6 +2070,7 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                       ),
                     ),
                   if (totalPayments > 0) const SizedBox(height: 12),
+                  if (isWide) const Spacer(),
 
                   // Cash detail
                   _buildDonutLegendRow(
@@ -2172,19 +2173,21 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
               );
 
               if (isWide) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: sectionA),
-                    const SizedBox(width: 20),
-                    Container(
-                      width: 1,
-                      color: _border,
-                      margin: EdgeInsets.zero,
-                    ),
-                    const SizedBox(width: 20),
-                    Expanded(child: sectionB),
-                  ],
+                return IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: sectionA),
+                      const SizedBox(width: 20),
+                      Container(
+                        width: 1,
+                        color: _border,
+                        margin: EdgeInsets.zero,
+                      ),
+                      const SizedBox(width: 20),
+                      Expanded(child: sectionB),
+                    ],
+                  ),
                 );
               }
 

@@ -1169,6 +1169,8 @@ class AdminProvider with ChangeNotifier {
         'refunds': 0.0,
         'cash_sales': 0.0,
         'card_sales': 0.0,
+        'credit_sales': 0.0,
+        'loyalty_redeemed_total': 0.0,
         'transaction_count': transactionCount,
         'items_sold': 0,
         'average_sale': averageSale,

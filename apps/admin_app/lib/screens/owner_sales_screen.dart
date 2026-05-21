@@ -290,6 +290,8 @@ class _SalesSnapshot {
     required this.refunds,
     required this.cashSales,
     required this.cardSales,
+    required this.creditSales,
+    required this.loyaltyRedeemed,
     required this.paymentDataComplete,
     required this.legacyUntypedPaymentSales,
     required this.itemsSold,
@@ -305,6 +307,8 @@ class _SalesSnapshot {
   final double refunds;
   final double cashSales;
   final double cardSales;
+  final double creditSales;
+  final double loyaltyRedeemed;
   final bool paymentDataComplete;
   final double legacyUntypedPaymentSales;
   final int itemsSold;
@@ -325,6 +329,9 @@ class _SalesSnapshot {
       refunds: (summary['refunds'] as num?)?.toDouble() ?? 0.0,
       cashSales: (summary['cash_sales'] as num?)?.toDouble() ?? 0.0,
       cardSales: (summary['card_sales'] as num?)?.toDouble() ?? 0.0,
+      creditSales: (summary['credit_sales'] as num?)?.toDouble() ?? 0.0,
+      loyaltyRedeemed:
+          (summary['loyalty_redeemed_total'] as num?)?.toDouble() ?? 0.0,
       paymentDataComplete:
           (summary['payment_data_complete'] as bool?) ??
               (legacyUntypedPaymentSales <= 0),
@@ -497,7 +504,9 @@ class _SalesReportContent extends StatelessWidget {
           child: _PaymentReductionCard(
             cashSales: snapshot.cashSales,
             cardSales: snapshot.cardSales,
+            creditSales: snapshot.creditSales,
             discounts: snapshot.discounts,
+            loyaltyRedeemed: snapshot.loyaltyRedeemed,
             refunds: snapshot.refunds,
             grossSales: snapshot.grossSales,
             formatMoney: formatMoney,
@@ -1773,7 +1782,9 @@ class _PaymentReductionCard extends StatelessWidget {
   const _PaymentReductionCard({
     required this.cashSales,
     required this.cardSales,
+    required this.creditSales,
     required this.discounts,
+    required this.loyaltyRedeemed,
     required this.refunds,
     required this.grossSales,
     required this.formatMoney,
@@ -1781,25 +1792,35 @@ class _PaymentReductionCard extends StatelessWidget {
 
   final double cashSales;
   final double cardSales;
+  final double creditSales;
   final double discounts;
+  final double loyaltyRedeemed;
   final double refunds;
   final double grossSales;
   final String Function(num value) formatMoney;
 
   @override
   Widget build(BuildContext context) {
-    final paymentTotal = cashSales + cardSales;
+    final paymentTotal = cashSales + cardSales + creditSales;
     final hasCashPayments = cashSales > 0.009;
     final hasCardPayments = cardSales > 0.009;
-    final useCashOnlyDesign = hasCashPayments && !hasCardPayments;
+    final hasCreditPayments = creditSales > 0.009;
+    final useCashOnlyDesign =
+        hasCashPayments && !hasCardPayments && !hasCreditPayments;
     final cashPct = paymentTotal > 0 ? (cashSales / paymentTotal) * 100.0 : 0.0;
     final cardPct = paymentTotal > 0 ? (cardSales / paymentTotal) * 100.0 : 0.0;
+    final creditPct =
+        paymentTotal > 0 ? (creditSales / paymentTotal) * 100.0 : 0.0;
     final refundPct = grossSales > 0 ? (refunds / grossSales) * 100.0 : 0.0;
     final discountPct =
         grossSales > 0 ? (discounts / grossSales) * 100.0 : 0.0;
+    final loyaltyPct =
+        grossSales > 0 ? (loyaltyRedeemed / grossSales) * 100.0 : 0.0;
+    final totalReductions = discounts + loyaltyRedeemed + refunds;
     final reductionPct =
-        grossSales > 0 ? ((discounts + refunds) / grossSales) * 100.0 : 0.0;
-    final hasReductions = refunds > 0.009 || discounts > 0.009;
+        grossSales > 0 ? (totalReductions / grossSales) * 100.0 : 0.0;
+    final hasReductions =
+        refunds > 0.009 || discounts > 0.009 || loyaltyRedeemed > 0.009;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1822,10 +1843,11 @@ class _PaymentReductionCard extends StatelessWidget {
               height: compact ? 168 : 186,
               child: CustomPaint(
                 painter: _DonutPainter(
-                  values: [cashSales, cardSales],
+                  values: [cashSales, cardSales, creditSales],
                   colors: const [
                     _SalesPalette.primaryBright,
                     _SalesPalette.successBright,
+                    _SalesPalette.warning,
                   ],
                 ),
                 child: Center(
@@ -1918,6 +1940,15 @@ class _PaymentReductionCard extends StatelessWidget {
                 percent: cardPct,
                 color: _SalesPalette.successBright,
               ),
+              if (hasCreditPayments) ...[
+                const SizedBox(height: 10),
+                _PaymentLegendTile(
+                  label: 'Credit sales',
+                  value: formatMoney(creditSales),
+                  percent: creditPct,
+                  color: _SalesPalette.warning,
+                ),
+              ],
               if (hasReductions) ...[
                 const SizedBox(height: 14),
                 if (refunds > 0)
@@ -1926,9 +1957,10 @@ class _PaymentReductionCard extends StatelessWidget {
                     value:
                         '${formatMoney(refunds)} - ${refundPct.toStringAsFixed(1)}%',
                     color: _SalesPalette.danger,
-                    background: const Color(0xFFFEE4E2),
-                  ),
-                if (refunds > 0 && discounts > 0) const SizedBox(height: 8),
+                      background: const Color(0xFFFEE4E2),
+                    ),
+                if (refunds > 0 && (discounts > 0 || loyaltyRedeemed > 0))
+                  const SizedBox(height: 8),
                 if (discounts > 0)
                   _ReductionPill(
                     label: 'Discounts',
@@ -1936,6 +1968,16 @@ class _PaymentReductionCard extends StatelessWidget {
                         '${formatMoney(discounts)} - ${discountPct.toStringAsFixed(1)}%',
                     color: _SalesPalette.warning,
                     background: _SalesPalette.warningSoft,
+                  ),
+                if (discounts > 0 && loyaltyRedeemed > 0)
+                  const SizedBox(height: 8),
+                if (loyaltyRedeemed > 0)
+                  _ReductionPill(
+                    label: 'Loyalty redeemed',
+                    value:
+                        '${formatMoney(loyaltyRedeemed)} - ${loyaltyPct.toStringAsFixed(1)}%',
+                    color: _SalesPalette.primaryBright,
+                    background: const Color(0xFFEAF2FF),
                   ),
               ],
             ],
@@ -1952,7 +1994,7 @@ class _PaymentReductionCard extends StatelessWidget {
               ),
               _PaymentHealthData(
                 label: 'Total reductions',
-                value: formatMoney(discounts + refunds),
+                value: formatMoney(totalReductions),
                 tone: _SalesPalette.violet,
               ),
             ],
@@ -1978,7 +2020,8 @@ class _PaymentReductionCard extends StatelessWidget {
                       color: _SalesPalette.danger,
                       background: const Color(0xFFFEE4E2),
                     ),
-                  if (refunds > 0 && discounts > 0) const SizedBox(height: 8),
+                  if (refunds > 0 && (discounts > 0 || loyaltyRedeemed > 0))
+                    const SizedBox(height: 8),
                   if (discounts > 0)
                     _ReductionPill(
                       label: 'Discounts',
@@ -1986,6 +2029,16 @@ class _PaymentReductionCard extends StatelessWidget {
                           '${formatMoney(discounts)} - ${discountPct.toStringAsFixed(1)}%',
                       color: _SalesPalette.warning,
                       background: _SalesPalette.warningSoft,
+                    ),
+                  if (discounts > 0 && loyaltyRedeemed > 0)
+                    const SizedBox(height: 8),
+                  if (loyaltyRedeemed > 0)
+                    _ReductionPill(
+                      label: 'Loyalty redeemed',
+                      value:
+                          '${formatMoney(loyaltyRedeemed)} - ${loyaltyPct.toStringAsFixed(1)}%',
+                      color: _SalesPalette.primaryBright,
+                      background: const Color(0xFFEAF2FF),
                     ),
                 ],
                 const SizedBox(height: 14),
