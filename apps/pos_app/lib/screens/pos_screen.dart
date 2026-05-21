@@ -169,6 +169,12 @@ class _PosScreenState extends State<PosScreen> {
   DateTime? _lastCustomerShortcutAt;
   DateTime? _lastCustomerBackspaceAt;
   bool _isPriceModePromptOpen = false;
+  bool _isRestoringActiveCartSnapshot = false;
+  bool _didAttemptActiveCartRestore = false;
+  bool _isActiveCartSaveRunning = false;
+  int _activeCartSaveVersion = 0;
+  int _activeCartSavedVersion = 0;
+  CartProvider? _activeCartAutosaveProvider;
 
   final ScrollController _cartScrollController = ScrollController();
   int _lastCartItemCount = 0;
@@ -253,6 +259,8 @@ class _PosScreenState extends State<PosScreen> {
     _startAutoRefresh();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _attachActiveCartAutosave();
+      await _restoreActiveCartSnapshotIfAny();
       await _restoreHardwareConnections();
       _focusBarcodeField();
       if (PosFeatureFlags.enableShiftManagement) {
@@ -266,6 +274,7 @@ class _PosScreenState extends State<PosScreen> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleHardwareKeyboardEvent);
+    _activeCartAutosaveProvider?.removeListener(_queueActiveCartSnapshotSave);
     _productRefreshTimer?.cancel();
     _barcodeScannerSubmitTimer?.cancel();
     _cartSelectionHideTimer?.cancel();
@@ -285,6 +294,153 @@ class _PosScreenState extends State<PosScreen> {
     _checkoutLoyaltyFocusNode.dispose();
     _keyboardListenerFocusNode.dispose();
     super.dispose();
+  }
+
+  String _currentCashierName() {
+    return context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+  }
+
+  void _attachActiveCartAutosave() {
+    if (!mounted || _activeCartAutosaveProvider != null) return;
+    final cart = context.read<CartProvider>();
+    _activeCartAutosaveProvider = cart;
+    cart.addListener(_queueActiveCartSnapshotSave);
+  }
+
+  void _queueActiveCartSnapshotSave() {
+    if (_isRestoringActiveCartSnapshot) return;
+
+    _activeCartSaveVersion += 1;
+    if (!_isActiveCartSaveRunning) {
+      unawaited(_drainActiveCartSnapshotSaves());
+    }
+  }
+
+  Future<void> _drainActiveCartSnapshotSaves() async {
+    if (_isActiveCartSaveRunning) return;
+    _isActiveCartSaveRunning = true;
+
+    try {
+      while (mounted && _activeCartSavedVersion < _activeCartSaveVersion) {
+        final versionToSave = _activeCartSaveVersion;
+        await _persistActiveCartSnapshot();
+        _activeCartSavedVersion = versionToSave;
+      }
+    } finally {
+      _isActiveCartSaveRunning = false;
+      if (mounted && _activeCartSavedVersion < _activeCartSaveVersion) {
+        unawaited(_drainActiveCartSnapshotSaves());
+      }
+    }
+  }
+
+  Future<void> _persistActiveCartSnapshot() async {
+    final cart = context.read<CartProvider>();
+    final cashierName = _currentCashierName();
+
+    if (cart.items.isEmpty) {
+      await DatabaseHelper.instance.clearActiveCartSnapshot(
+        cashierName: cashierName,
+      );
+      return;
+    }
+
+    final loyaltyError = _checkoutLoyaltyRedemptionError(cart);
+    final loyaltyPointsToSave = loyaltyError == null
+        ? _checkoutLoyaltyPointsToRedeem
+        : 0;
+    final loyaltyValueToSave = loyaltyPointsToSave > 0
+        ? _checkoutLoyaltyRedeemedValue(cart)
+        : 0.0;
+
+    await DatabaseHelper.instance.saveActiveCartSnapshot(
+      cashierName: cashierName,
+      isRefundMode: cart.isRefundMode,
+      discountType: cart.discountType,
+      discountValue: cart.discountValue,
+      items: cart.getCartItemsAsMap(),
+      selectedPriceType: cart.selectedPriceType.dbValue,
+      selectedCustomer: cart.selectedCustomer,
+      loyaltyPointsRedeemed: loyaltyPointsToSave,
+      loyaltyRedeemedValue: loyaltyValueToSave,
+    );
+  }
+
+  Future<void> _restoreActiveCartSnapshotIfAny() async {
+    if (!mounted || _didAttemptActiveCartRestore) return;
+    _didAttemptActiveCartRestore = true;
+
+    final cart = context.read<CartProvider>();
+    if (cart.items.isNotEmpty) return;
+
+    final snapshot = await DatabaseHelper.instance.getActiveCartSnapshot(
+      cashierName: _currentCashierName(),
+    );
+    if (!mounted || snapshot == null) return;
+
+    final restoreError = (snapshot['resume_error'] ?? '').toString().trim();
+    if (restoreError.isNotEmpty) {
+      _showInfoMessage(restoreError, backgroundColor: _dangerColor);
+      return;
+    }
+
+    final restoredRawItems = snapshot['items'];
+    final restoredItems = restoredRawItems is List
+        ? restoredRawItems
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList()
+        : <Map<String, dynamic>>[];
+
+    final restoredSelectedPriceType =
+        (snapshot['selected_price_type'] ?? 'selling').toString();
+    final preparedItems = _prepareResumedCartItems(
+      restoredItems,
+      fallbackPriceType: restoredSelectedPriceType,
+    );
+
+    if (preparedItems.isEmpty) return;
+
+    final restoredCustomerSnapshot = CustomerService.instance
+        .customerFromHeldCartRow(snapshot);
+    Customer? restoredCustomer = restoredCustomerSnapshot;
+    final restoredCustomerId = restoredCustomerSnapshot?.id;
+    if (restoredCustomerId != null && restoredCustomerId > 0) {
+      restoredCustomer =
+          await CustomerService.instance.getCustomerById(restoredCustomerId) ??
+          restoredCustomerSnapshot;
+    }
+
+    _isRestoringActiveCartSnapshot = true;
+    try {
+      cart.loadHeldCart(
+        items: preparedItems,
+        isRefundMode: (snapshot['is_refund_mode'] ?? false) == true,
+        discountType: (snapshot['discount_type'] ?? 'none').toString(),
+        discountValue: ((snapshot['discount_value'] as num?) ?? 0).toDouble(),
+        selectedPriceType: restoredSelectedPriceType,
+        selectedCustomer: restoredCustomer,
+      );
+
+      final restoredLoyaltyPoints =
+          ((snapshot['loyalty_points_redeemed'] as num?) ?? 0).toInt();
+      if (restoredLoyaltyPoints > 0 && restoredCustomer != null) {
+        _setCheckoutLoyaltyPoints(restoredLoyaltyPoints);
+      } else {
+        _resetCheckoutLoyaltyRedemption(updateUi: false);
+      }
+    } finally {
+      _isRestoringActiveCartSnapshot = false;
+    }
+
+    _showInfoMessage(
+      'Recovered the last active cart after shutdown.',
+      backgroundColor: _successColor,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollCartToLatest(animated: false);
+    });
   }
 
   bool _handleHardwareKeyboardEvent(KeyEvent event) {
@@ -1105,6 +1261,7 @@ class _PosScreenState extends State<PosScreen> {
   void _resetCheckoutLoyaltyRedemption({bool updateUi = true}) {
     _checkoutLoyaltyPointsToRedeem = 0;
     _checkoutLoyaltyController.clear();
+    _queueActiveCartSnapshotSave();
     if (updateUi && mounted) setState(() {});
   }
 
@@ -1221,6 +1378,7 @@ class _PosScreenState extends State<PosScreen> {
 
   void _applyCheckoutLoyaltyText(String value) {
     _checkoutLoyaltyPointsToRedeem = int.tryParse(value.trim()) ?? 0;
+    _queueActiveCartSnapshotSave();
     setState(() {});
   }
 
@@ -1234,6 +1392,7 @@ class _PosScreenState extends State<PosScreen> {
           ? TextSelection(baseOffset: 0, extentOffset: text.length)
           : TextSelection.collapsed(offset: text.length),
     );
+    _queueActiveCartSnapshotSave();
     if (mounted) setState(() {});
   }
 
@@ -5026,6 +5185,9 @@ class _PosScreenState extends State<PosScreen> {
         }
       }
 
+      await DatabaseHelper.instance.clearActiveCartSnapshot(
+        cashierName: cashierName,
+      );
       cart.clearCart();
       _resetCheckoutLoyaltyRedemption(updateUi: false);
 
@@ -5629,6 +5791,9 @@ class _PosScreenState extends State<PosScreen> {
         loyaltyRedeemedValue: loyaltyValueToHold,
       );
 
+      await DatabaseHelper.instance.clearActiveCartSnapshot(
+        cashierName: cashierName,
+      );
       cart.clearCart();
       _resetCheckoutLoyaltyRedemption(updateUi: false);
 

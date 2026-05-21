@@ -65,7 +65,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 30,
+        version: 31,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -621,6 +621,8 @@ class DatabaseHelper {
         updated_at TEXT NOT NULL
       )
     ''');
+
+    await _createActiveCartSnapshotsTable(db);
 
     await db.execute('''
       CREATE TABLE sync_queue (
@@ -1401,6 +1403,35 @@ class DatabaseHelper {
     if (oldVersion < 30) {
       await _createSaleItemBatchesTable(db);
     }
+
+    if (oldVersion < 31) {
+      await _createActiveCartSnapshotsTable(db);
+    }
+  }
+
+  Future<void> _createActiveCartSnapshotsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS active_cart_snapshots (
+        cashier_name TEXT PRIMARY KEY,
+        is_refund_mode INTEGER NOT NULL DEFAULT 0,
+        selected_price_type TEXT NOT NULL DEFAULT 'selling',
+        discount_type TEXT NOT NULL DEFAULT 'none',
+        discount_value REAL NOT NULL DEFAULT 0,
+        customer_id INTEGER,
+        customer_name_snapshot TEXT,
+        customer_phone_snapshot TEXT,
+        customer_code_snapshot TEXT,
+        loyalty_points_redeemed INTEGER NOT NULL DEFAULT 0,
+        loyalty_redeemed_value REAL NOT NULL DEFAULT 0,
+        items_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+  }
+
+  Future<void> _ensureActiveCartSnapshotSchema(Database db) async {
+    await _createActiveCartSnapshotsTable(db);
   }
 
   Future<void> _ensureSalesHistoryIndexes(Database db) async {
@@ -5977,6 +6008,119 @@ class DatabaseHelper {
       'created_at': now,
       'updated_at': now,
     });
+  }
+
+  Future<void> saveActiveCartSnapshot({
+    required String cashierName,
+    required bool isRefundMode,
+    required String discountType,
+    required double discountValue,
+    required List<Map<String, dynamic>> items,
+    String selectedPriceType = 'selling',
+    Customer? selectedCustomer,
+    int loyaltyPointsRedeemed = 0,
+    double loyaltyRedeemedValue = 0.0,
+  }) async {
+    final db = await database;
+    await _ensureActiveCartSnapshotSchema(db);
+
+    if (items.isEmpty) {
+      await clearActiveCartSnapshot(cashierName: cashierName);
+      return;
+    }
+
+    final now = DateTime.now().toIso8601String();
+    final existing = await db.query(
+      'active_cart_snapshots',
+      columns: const ['created_at'],
+      where: 'cashier_name = ?',
+      whereArgs: [cashierName],
+      limit: 1,
+    );
+
+    await db.insert('active_cart_snapshots', {
+      'cashier_name': cashierName,
+      'is_refund_mode': isRefundMode ? 1 : 0,
+      'selected_price_type': isRefundMode
+          ? 'selling'
+          : _normalizePriceType(selectedPriceType),
+      'discount_type': isRefundMode
+          ? 'none'
+          : _normalizeDiscountType(discountType),
+      'discount_value': isRefundMode ? 0.0 : discountValue,
+      'customer_id': selectedCustomer?.id,
+      'customer_name_snapshot': selectedCustomer?.displayName,
+      'customer_phone_snapshot': selectedCustomer?.hasPhone == true
+          ? selectedCustomer?.phone?.trim()
+          : null,
+      'customer_code_snapshot': selectedCustomer?.displayCode,
+      'loyalty_points_redeemed': loyaltyPointsRedeemed < 0
+          ? 0
+          : loyaltyPointsRedeemed,
+      'loyalty_redeemed_value': loyaltyRedeemedValue < 0
+          ? 0.0
+          : _roundMoney(loyaltyRedeemedValue),
+      'items_json': jsonEncode(items),
+      'created_at': existing.isEmpty
+          ? now
+          : (existing.first['created_at'] ?? now).toString(),
+      'updated_at': now,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<Map<String, dynamic>?> getActiveCartSnapshot({
+    required String cashierName,
+  }) async {
+    final db = await database;
+    await _ensureActiveCartSnapshotSchema(db);
+
+    final rows = await db.query(
+      'active_cart_snapshots',
+      where: 'cashier_name = ?',
+      whereArgs: [cashierName],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+
+    final row = rows.first;
+    final itemsJson = (row['items_json'] ?? '[]').toString();
+    final decodedItems = _decodeHeldCartItemsJson(itemsJson);
+    final hadStoredItems =
+        itemsJson.trim().isNotEmpty && itemsJson.trim() != '[]';
+    if (hadStoredItems && decodedItems.isEmpty) {
+      return {'resume_error': 'The saved active cart contains invalid data.'};
+    }
+
+    return {
+      'cashier_name': row['cashier_name'],
+      'is_refund_mode': ((row['is_refund_mode'] as num?) ?? 0).toInt() == 1,
+      'selected_price_type': (row['selected_price_type'] ?? 'selling')
+          .toString(),
+      'discount_type': (row['discount_type'] ?? 'none').toString(),
+      'discount_value': ((row['discount_value'] as num?) ?? 0).toDouble(),
+      'customer_id': row['customer_id'],
+      'customer_name_snapshot': row['customer_name_snapshot'],
+      'customer_phone_snapshot': row['customer_phone_snapshot'],
+      'customer_code_snapshot': row['customer_code_snapshot'],
+      'loyalty_points_redeemed': ((row['loyalty_points_redeemed'] as num?) ?? 0)
+          .toInt(),
+      'loyalty_redeemed_value': ((row['loyalty_redeemed_value'] as num?) ?? 0)
+          .toDouble(),
+      'items': decodedItems,
+      'created_at': row['created_at'],
+      'updated_at': row['updated_at'],
+    };
+  }
+
+  Future<void> clearActiveCartSnapshot({required String cashierName}) async {
+    final db = await database;
+    await _ensureActiveCartSnapshotSchema(db);
+
+    await db.delete(
+      'active_cart_snapshots',
+      where: 'cashier_name = ?',
+      whereArgs: [cashierName],
+    );
   }
 
   Future<List<Map<String, dynamic>>> getHeldCartsForCashier(
