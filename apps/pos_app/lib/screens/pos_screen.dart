@@ -130,6 +130,7 @@ class _PosScreenState extends State<PosScreen> {
   static const Duration _customerRemoveEscapeWindow = Duration(
     milliseconds: 900,
   );
+  static const Duration _loyaltyShortcutWindow = Duration(milliseconds: 520);
   List<Product> _products = [];
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
@@ -154,6 +155,7 @@ class _PosScreenState extends State<PosScreen> {
   ProductPriceType? _lastPriceModePreviousType;
   DateTime? _lastPriceModeTapAt;
   DateTime? _lastCustomerRemoveEscapeAt;
+  DateTime? _lastLoyaltyShortcutAt;
   bool _isPriceModePromptOpen = false;
 
   final ScrollController _cartScrollController = ScrollController();
@@ -167,6 +169,7 @@ class _PosScreenState extends State<PosScreen> {
       TextEditingController();
   final FocusNode _barcodeFocusNode = FocusNode();
   final FocusNode _searchFocusNode = FocusNode();
+  final FocusNode _checkoutLoyaltyFocusNode = FocusNode();
   final FocusNode _keyboardListenerFocusNode = FocusNode();
 
   String _searchQuery = '';
@@ -246,6 +249,7 @@ class _PosScreenState extends State<PosScreen> {
     _cartScrollController.dispose();
     _barcodeFocusNode.dispose();
     _searchFocusNode.dispose();
+    _checkoutLoyaltyFocusNode.dispose();
     _keyboardListenerFocusNode.dispose();
     super.dispose();
   }
@@ -396,6 +400,20 @@ class _PosScreenState extends State<PosScreen> {
         return true;
       }
 
+      if (canUseLetterCartShortcut &&
+          event.logicalKey == LogicalKeyboardKey.keyL) {
+        final now = DateTime.now();
+        final isSecondPress =
+            _lastLoyaltyShortcutAt != null &&
+            now.difference(_lastLoyaltyShortcutAt!) <= _loyaltyShortcutWindow;
+        _lastLoyaltyShortcutAt = now;
+        if (isSecondPress) {
+          _lastLoyaltyShortcutAt = null;
+          _focusCheckoutLoyaltyField(cart);
+        }
+        return true;
+      }
+
       if (event.logicalKey == LogicalKeyboardKey.escape) {
         if (_searchFocusNode.hasFocus) {
           if (_searchController.text.isNotEmpty) {
@@ -455,7 +473,15 @@ class _PosScreenState extends State<PosScreen> {
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
     if (isEnterKey &&
         _activeModalCount == 0 &&
+        _checkoutLoyaltyFocusNode.hasFocus) {
+      _submitCheckoutLoyaltyField(cart);
+      return true;
+    }
+
+    if (isEnterKey &&
+        _activeModalCount == 0 &&
         !_searchFocusNode.hasFocus &&
+        !_checkoutLoyaltyFocusNode.hasFocus &&
         _barcodeController.text.trim().isEmpty &&
         cart.items.isNotEmpty &&
         !_isProcessingCheckout &&
@@ -1079,6 +1105,52 @@ class _PosScreenState extends State<PosScreen> {
     setState(() {});
   }
 
+  void _setCheckoutLoyaltyPoints(int points, {bool selectText = false}) {
+    final safePoints = points < 0 ? 0 : points;
+    _checkoutLoyaltyPointsToRedeem = safePoints;
+    final text = safePoints == 0 ? '' : safePoints.toString();
+    _checkoutLoyaltyController.value = TextEditingValue(
+      text: text,
+      selection: selectText
+          ? TextSelection(baseOffset: 0, extentOffset: text.length)
+          : TextSelection.collapsed(offset: text.length),
+    );
+    if (mounted) setState(() {});
+  }
+
+  void _focusCheckoutLoyaltyField(CartProvider cart) {
+    final maxPoints = _maxCheckoutRedeemablePoints(cart);
+    if (!_canUseCheckoutLoyalty(cart) || maxPoints <= 0) {
+      _showInfoMessage(
+        _checkoutLoyaltyReason(cart),
+        backgroundColor: _warningColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    Future.delayed(const Duration(milliseconds: 20), () {
+      if (!mounted || _activeModalCount > 0) return;
+      _checkoutLoyaltyFocusNode.requestFocus();
+      _checkoutLoyaltyController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _checkoutLoyaltyController.text.length,
+      );
+    });
+  }
+
+  void _submitCheckoutLoyaltyField(CartProvider cart) {
+    final maxPoints = _maxCheckoutRedeemablePoints(cart);
+    final text = _checkoutLoyaltyController.text.trim();
+    if (text.isEmpty && maxPoints > 0) {
+      _setCheckoutLoyaltyPoints(maxPoints, selectText: true);
+    } else {
+      _applyCheckoutLoyaltyText(text);
+    }
+    _checkoutLoyaltyFocusNode.unfocus();
+    _focusBarcodeField();
+  }
+
   Future<void> _openCustomerPicker(CartProvider cart) async {
     if (_activeModalCount > 0) return;
 
@@ -1181,93 +1253,96 @@ class _PosScreenState extends State<PosScreen> {
       );
     }
 
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: _panelSoft,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _borderColor),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: toneSoft,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: tone.withOpacity(0.24)),
+    return SizedBox(
+      height: 76,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: _panelSoft,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _borderColor),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: toneSoft,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: tone.withOpacity(0.24)),
+              ),
+              child: Icon(
+                hasCustomer ? Icons.person_rounded : Icons.storefront_rounded,
+                color: tone,
+                size: 20,
+              ),
             ),
-            child: Icon(
-              hasCustomer ? Icons.person_rounded : Icons.storefront_rounded,
-              color: tone,
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: InkWell(
-              borderRadius: BorderRadius.circular(14),
-              onTap: () => _openCustomerPicker(cart),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      hasCustomer ? customer!.displayName : 'Walk-in Customer',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 13,
+            const SizedBox(width: 10),
+            Expanded(
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => _openCustomerPicker(cart),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        customer?.displayName ?? 'Walk-in Customer',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _textPrimary,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 13,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      hasCustomer
-                          ? cart.customerDisplaySubtitle
-                          : 'Ctrl + B to search / add customer',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 11,
+                      const SizedBox(height: 3),
+                      Text(
+                        hasCustomer
+                            ? cart.customerDisplaySubtitle
+                            : 'Ctrl + B to search / add customer',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _textSecondary,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 11,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 6),
-          miniIconButton(
-            icon: hasCustomer
-                ? Icons.swap_horiz_rounded
-                : Icons.person_search_rounded,
-            onPressed: () => _openCustomerPicker(cart),
-          ),
-          if (hasCustomer)
+            const SizedBox(width: 6),
             miniIconButton(
-              icon: Icons.close_rounded,
-              color: _dangerColor,
-              onPressed: () async {
-                await cart.clearCustomer();
-                _resetCheckoutLoyaltyRedemption(updateUi: false);
-                _showInfoMessage(
-                  'Customer removed. Using Walk-in Customer.',
-                  backgroundColor: _accentBlue,
-                );
-                _focusBarcodeField();
-              },
+              icon: hasCustomer
+                  ? Icons.swap_horiz_rounded
+                  : Icons.person_search_rounded,
+              onPressed: () => _openCustomerPicker(cart),
             ),
-          miniIconButton(
-            icon: Icons.manage_accounts_rounded,
-            onPressed: _openCustomerManagement,
-          ),
-        ],
+            if (hasCustomer)
+              miniIconButton(
+                icon: Icons.close_rounded,
+                color: _dangerColor,
+                onPressed: () async {
+                  await cart.clearCustomer();
+                  _resetCheckoutLoyaltyRedemption(updateUi: false);
+                  _showInfoMessage(
+                    'Customer removed. Using Walk-in Customer.',
+                    backgroundColor: _accentBlue,
+                  );
+                  _focusBarcodeField();
+                },
+              ),
+            miniIconButton(
+              icon: Icons.manage_accounts_rounded,
+              onPressed: _openCustomerManagement,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1298,6 +1373,7 @@ class _PosScreenState extends State<PosScreen> {
     if (!mounted || _activeModalCount > 0) return;
     Future.delayed(const Duration(milliseconds: 50), () {
       if (!mounted || _activeModalCount > 0) return;
+      if (_checkoutLoyaltyFocusNode.hasFocus) return;
       _barcodeFocusNode.requestFocus();
     });
   }
@@ -6634,6 +6710,17 @@ class _PosScreenState extends State<PosScreen> {
                   ),
                 ),
                 const SizedBox(width: 6),
+                if (customerPricingLabel.isNotEmpty) ...[
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 140),
+                    child: _buildCartTag(
+                      label: customerPricingLabel,
+                      color: customerPricingColor,
+                      icon: Icons.local_offer_rounded,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                ],
                 IconButton(
                   tooltip: item.discountAmount > 0
                       ? 'Edit item discount'
@@ -6698,36 +6785,16 @@ class _PosScreenState extends State<PosScreen> {
                 fontSize: 10.5,
               ),
             ),
-            if (customerPricingLabel.isNotEmpty) ...[
-              const SizedBox(height: 5),
-              Wrap(
-                spacing: 6,
-                runSpacing: 5,
-                children: [
-                  _buildCartTag(
-                    label: customerPricingLabel,
-                    color: customerPricingColor,
-                    icon: Icons.local_offer_rounded,
-                  ),
-                  if (item.hasPriceOverride)
-                    _buildCartTag(
-                      label: 'Override Applied',
-                      color: _warningColor,
-                      icon: Icons.admin_panel_settings_rounded,
-                    ),
-                ],
-              ),
-              if (!item.hasPriceOverride) ...[
-                const SizedBox(height: 4),
-                Text(
-                  _customerPricingSavingsText(item),
-                  style: TextStyle(
-                    color: customerPricingColor,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 9.8,
-                  ),
+            if (customerPricingLabel.isNotEmpty && !item.hasPriceOverride) ...[
+              const SizedBox(height: 4),
+              Text(
+                _customerPricingSavingsText(item),
+                style: TextStyle(
+                  color: customerPricingColor,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 9.8,
                 ),
-              ],
+              ),
             ],
             if (item.hasPriceOverride) ...[
               const SizedBox(height: 3),
@@ -7020,205 +7087,205 @@ class _PosScreenState extends State<PosScreen> {
     final reason = _checkoutLoyaltyReason(cart);
     final isActive = _checkoutLoyaltyPointsToRedeem > 0 && redeemedValue > 0;
     final tone = isActive ? _brandColor : _accentBlue;
-    final title = customer == null
-        ? 'Loyalty'
-        : '${customer.loyaltyPointsBalance} pts';
+    final title = 'Loyalty';
+    final subtitle = customer == null
+        ? reason
+        : canRedeem
+        ? '${customer.loyaltyPointsBalance} pts available - Max $maxPoints'
+        : reason;
+    final statusText =
+        visibleError ??
+        (isActive
+            ? 'Redeeming $_checkoutLoyaltyPointsToRedeem pts - Rs. ${redeemedValue.toStringAsFixed(2)}'
+            : 'Press L twice to edit, Enter to apply max');
 
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: isActive ? _brandSoft : _panelSoft,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: isActive ? _brandColor.withValues(alpha: 0.30) : _borderColor,
+    return SizedBox(
+      height: 126,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: isActive ? _brandSoft : _panelSoft,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: isActive
+                ? _brandColor.withValues(alpha: 0.30)
+                : _borderColor,
+          ),
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: tone.withValues(alpha: _isDark ? 0.16 : 0.11),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(Icons.card_giftcard_rounded, color: tone, size: 18),
-              ),
-              const SizedBox(width: 9),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 13,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      canRedeem ? 'Max $maxPoints pts' : reason,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: canRedeem ? _textSecondary : _mutedIcon,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 10.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (isActive)
-                TextButton(
-                  onPressed: () {
-                    _resetCheckoutLoyaltyRedemption();
-                    _focusBarcodeField();
-                  },
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    foregroundColor: _dangerColor,
-                    textStyle: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w900,
-                    ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: tone.withValues(alpha: _isDark ? 0.16 : 0.11),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Text('Clear'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 9),
-          Row(
-            children: [
-              Expanded(
-                child: SizedBox(
-                  height: 38,
-                  child: TextField(
-                    controller: _checkoutLoyaltyController,
-                    enabled: canRedeem,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    style: TextStyle(
-                      color: _textPrimary,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 12,
-                    ),
-                    decoration: InputDecoration(
-                      hintText: canRedeem ? 'Redeem pts' : 'Unavailable',
-                      errorText: visibleError,
-                      filled: true,
-                      fillColor: _inputFill,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(13),
-                        borderSide: BorderSide(color: _borderColor),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(13),
-                        borderSide: BorderSide(color: _borderColor),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(13),
-                        borderSide: BorderSide(color: _brandColor, width: 1.3),
-                      ),
-                      errorStyle: const TextStyle(height: 0.01, fontSize: 0),
-                    ),
-                    onChanged: _applyCheckoutLoyaltyText,
-                    onSubmitted: (_) => _focusBarcodeField(),
+                  child: Icon(
+                    Icons.card_giftcard_rounded,
+                    color: tone,
+                    size: 18,
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                height: 38,
-                child: FilledButton.icon(
-                  onPressed: canRedeem
-                      ? () {
-                          _checkoutLoyaltyPointsToRedeem = maxPoints;
-                          _checkoutLoyaltyController.text = maxPoints
-                              .toString();
-                          _checkoutLoyaltyController.selection = TextSelection(
-                            baseOffset: 0,
-                            extentOffset:
-                                _checkoutLoyaltyController.text.length,
-                          );
-                          setState(() {});
-                          _focusBarcodeField();
-                        }
-                      : null,
-                  icon: const Icon(Icons.auto_awesome_rounded, size: 14),
-                  label: const Text('Max'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: _brandColor,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: _isDark
-                        ? Colors.white10
-                        : Colors.black12,
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    textStyle: const TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w900,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(13),
-                    ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _textPrimary,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: canRedeem ? _textSecondary : _mutedIcon,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 10.5,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-            ],
-          ),
-          if (visibleError != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              visibleError,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: _dangerColor,
-                fontSize: 10.5,
-                fontWeight: FontWeight.w700,
-              ),
+                SizedBox(
+                  width: 52,
+                  child: isActive
+                      ? TextButton(
+                          onPressed: () {
+                            _resetCheckoutLoyaltyRedemption();
+                            _focusBarcodeField();
+                          },
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            foregroundColor: _dangerColor,
+                            textStyle: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          child: const Text('Clear'),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ],
             ),
-          ] else if (isActive) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 9),
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    'Redeeming $_checkoutLoyaltyPointsToRedeem pts',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: _textSecondary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
+                  child: SizedBox(
+                    height: 38,
+                    child: TextField(
+                      controller: _checkoutLoyaltyController,
+                      focusNode: _checkoutLoyaltyFocusNode,
+                      enabled: canRedeem,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: canRedeem ? 'Redeem pts' : 'Unavailable',
+                        errorText: visibleError,
+                        filled: true,
+                        fillColor: _inputFill,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(13),
+                          borderSide: BorderSide(color: _borderColor),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(13),
+                          borderSide: BorderSide(color: _borderColor),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(13),
+                          borderSide: BorderSide(
+                            color: _brandColor,
+                            width: 1.3,
+                          ),
+                        ),
+                        errorStyle: const TextStyle(height: 0.01, fontSize: 0),
+                      ),
+                      onChanged: _applyCheckoutLoyaltyText,
+                      onSubmitted: (_) => _submitCheckoutLoyaltyField(cart),
                     ),
                   ),
                 ),
-                Text(
-                  '- Rs. ${redeemedValue.toStringAsFixed(2)}',
-                  style: TextStyle(
-                    color: _brandColor,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
+                const SizedBox(width: 8),
+                SizedBox(
+                  height: 38,
+                  child: FilledButton.icon(
+                    onPressed: canRedeem
+                        ? () {
+                            _setCheckoutLoyaltyPoints(
+                              maxPoints,
+                              selectText: true,
+                            );
+                            _checkoutLoyaltyFocusNode.unfocus();
+                            _focusBarcodeField();
+                          }
+                        : null,
+                    icon: const Icon(Icons.auto_awesome_rounded, size: 14),
+                    label: const Text('Max'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _brandColor,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: _isDark
+                          ? Colors.white10
+                          : Colors.black12,
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      textStyle: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w900,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                    ),
                   ),
                 ),
               ],
             ),
+            const SizedBox(height: 6),
+            SizedBox(
+              height: 14,
+              child: Text(
+                statusText,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: visibleError != null
+                      ? _dangerColor
+                      : isActive
+                      ? _brandColor
+                      : _textSecondary,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -7250,12 +7317,13 @@ class _PosScreenState extends State<PosScreen> {
                 ? _dangerColor
                 : _textPrimary,
           ),
-          if (loyaltyValue > 0)
-            _buildSummaryLine(
-              label: 'Loyalty',
-              value: '- Rs. ${loyaltyValue.toStringAsFixed(2)}',
-              valueColor: _brandColor,
-            ),
+          _buildSummaryLine(
+            label: 'Loyalty',
+            value: loyaltyValue > 0
+                ? '- Rs. ${loyaltyValue.toStringAsFixed(2)}'
+                : 'Rs. 0.00',
+            valueColor: loyaltyValue > 0 ? _brandColor : _textSecondary,
+          ),
           const SizedBox(height: 6),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),

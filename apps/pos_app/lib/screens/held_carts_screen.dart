@@ -91,7 +91,6 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
       PosRouteNames.heldCarts,
       _focusSearchField,
     );
-    _focusSearchField();
   }
 
   @override
@@ -986,70 +985,6 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: modeSoft,
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(
-                              color: modeColor.withOpacity(0.22),
-                            ),
-                          ),
-                          child: Text(
-                            isRefundMode ? 'Refund' : 'Sale',
-                            style: TextStyle(
-                              color: modeColor,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                        if (customer != null) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _brandSoft,
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(
-                                color: _brand.withOpacity(0.22),
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.person_rounded,
-                                  size: 13,
-                                  color: _brand,
-                                ),
-                                const SizedBox(width: 5),
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 150,
-                                  ),
-                                  child: Text(
-                                    customer.displayName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: _brand,
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
                         const SizedBox(width: 8),
                         InkWell(
                           borderRadius: BorderRadius.circular(12),
