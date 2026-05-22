@@ -395,18 +395,6 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                 : Icons.trending_up_rounded,
             color: summary.availableCredit < 0 ? _danger : _blue,
           ),
-          const SizedBox(width: 12),
-          OutlinedButton.icon(
-            onPressed: _postAdjustment,
-            icon: const Icon(Icons.tune_rounded),
-            label: const Text('Adjustment'),
-          ),
-          const SizedBox(width: 10),
-          ElevatedButton.icon(
-            onPressed: _receivePayment,
-            icon: const Icon(Icons.payments_rounded),
-            label: const Text('Receive Payment'),
-          ),
         ],
       ),
     );
@@ -486,6 +474,25 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
           },
         );
       }).toList(),
+    );
+  }
+
+  Widget _ledgerActionButton({
+    required VoidCallback onPressed,
+    required IconData icon,
+    required String label,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      label: Text(label),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(120, 40),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        foregroundColor: _brand,
+        side: BorderSide(color: _brand.withValues(alpha: 0.42)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+      ),
     );
   }
 
@@ -585,12 +592,6 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
               ],
             ),
           ),
-          const SizedBox(width: 12),
-          _amountColumn('Debit', entry.debit, _warning),
-          const SizedBox(width: 12),
-          _amountColumn('Credit', entry.credit, _brand),
-          const SizedBox(width: 12),
-          _amountColumn('Balance', entry.balanceAfter, _textPrimary),
           if (entry.normalizedType == 'payment' && entry.paymentId != null) ...[
             const SizedBox(width: 10),
             IconButton(
@@ -606,35 +607,58 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
                 icon: const Icon(Icons.undo_rounded),
                 color: _danger,
               ),
+            const SizedBox(width: 14),
+          ] else ...[
+            const SizedBox(width: 14),
           ],
+          _amountRow(entry),
         ],
       ),
     );
   }
 
-  Widget _amountColumn(String label, double amount, Color color) {
+  Widget _amountRow(CustomerLedgerEntry entry) {
     return SizedBox(
-      width: 115,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      width: 410,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          Text(
-            _money(amount),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.w900,
-              fontSize: 13,
-            ),
-          ),
-          const SizedBox(height: 3),
+          _amountItem('Debit', entry.debit, _warning),
+          const SizedBox(width: 18),
+          _amountItem('Credit', entry.credit, _brand),
+          const SizedBox(width: 18),
+          _amountItem('Balance', entry.balanceAfter, _textPrimary, emphasize: true),
+        ],
+      ),
+    );
+  }
+
+  Widget _amountItem(
+    String label,
+    double amount,
+    Color color, {
+    bool emphasize = false,
+  }) {
+    return SizedBox(
+      width: 125,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
           Text(
             label,
             style: TextStyle(
               color: _textSecondary,
               fontWeight: FontWeight.w700,
               fontSize: 11,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _money(amount),
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w900,
+              fontSize: emphasize ? 14 : 13,
             ),
           ),
         ],
@@ -666,7 +690,23 @@ class _CustomerLedgerScreenState extends State<CustomerLedgerScreen> {
             children: [
               _summaryCard(),
               const SizedBox(height: 14),
-              _filterBar(),
+              Row(
+                children: [
+                  Expanded(child: _filterBar()),
+                  const SizedBox(width: 12),
+                  _ledgerActionButton(
+                    onPressed: _postAdjustment,
+                    icon: Icons.tune_rounded,
+                    label: 'Adjustment',
+                  ),
+                  const SizedBox(width: 10),
+                  ElevatedButton.icon(
+                    onPressed: _receivePayment,
+                    icon: const Icon(Icons.payments_rounded),
+                    label: const Text('Receive Payment'),
+                  ),
+                ],
+              ),
               const SizedBox(height: 14),
               Expanded(
                 child: _isLoading

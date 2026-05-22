@@ -459,11 +459,6 @@ class _PosScreenState extends State<PosScreen> {
     if (_activeModalCount == 0 &&
         (keyboard.isControlPressed || keyboard.isMetaPressed) &&
         !keyboard.isAltPressed) {
-      if (event.logicalKey == LogicalKeyboardKey.keyB) {
-        unawaited(_openCustomerPicker(cart));
-        return true;
-      }
-
       if (event.logicalKey == LogicalKeyboardKey.keyD) {
         _clearSelectedItemDiscount(cart);
         return true;

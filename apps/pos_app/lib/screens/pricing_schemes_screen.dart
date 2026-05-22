@@ -24,7 +24,6 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
   Map<int, int> _categoryCounts = {};
   Map<int, int> _customerCounts = {};
   bool _isLoading = true;
-  bool _includeInactive = true;
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _blue = Color(0xFF4B8DFF);
@@ -73,7 +72,7 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
     try {
       final service = PricingSchemeService.instance;
       final results = await Future.wait([
-        service.getPricingSchemes(activeOnly: !_includeInactive),
+        service.getPricingSchemes(activeOnly: false),
         service.getRuleCountsByScheme(),
         service.getCategoryCountsByScheme(),
         service.getCustomerCountsByDirectScheme(),
@@ -340,7 +339,6 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
                         scheme.isActive ? 'Active' : 'Inactive',
                         scheme.isActive ? _brand : _danger,
                       ),
-                      _chip('Priority ${scheme.priority}', _blue),
                     ],
                   ),
                   const SizedBox(height: 6),
@@ -449,11 +447,6 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addScheme,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Add Scheme'),
-      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(22),
@@ -505,22 +498,10 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
                         ),
                       ),
                     ),
-                    Text(
-                      'Show inactive',
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    Switch(
-                      value: _includeInactive,
-                      activeThumbColor: _brand,
-                      onChanged: (value) {
-                        setState(() {
-                          _includeInactive = value;
-                        });
-                        _loadSchemes();
-                      },
+                    ElevatedButton.icon(
+                      onPressed: _addScheme,
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text('Add Scheme'),
                     ),
                   ],
                 ),

@@ -30,7 +30,6 @@ class _CustomerCreditReportScreenState
 
   List<Map<String, dynamic>> _rows = [];
   bool _isLoading = true;
-  bool _includeZeroBalance = false;
   String _query = '';
   String _filter = 'outstanding';
   int? _selectedSearchResultIndex;
@@ -232,7 +231,7 @@ class _CustomerCreditReportScreenState
 
     try {
       final rows = await CustomerCreditService.instance
-          .getCreditCustomersReport(includeZeroBalance: _includeZeroBalance);
+          .getCreditCustomersReport(includeZeroBalance: true);
 
       if (!mounted) return;
       setState(() {
@@ -602,25 +601,22 @@ class _CustomerCreditReportScreenState
                 : balance > 0
                 ? _warning
                 : _brand,
+            emphasize: true,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 16),
           _amountBlock(
             label: 'Limit',
             value: _money(limit),
             color: _textPrimary,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 16),
           _amountBlock(
             label: available < 0 ? 'Over' : 'Available',
             value: _money(available.abs()),
             color: available < 0 ? _danger : _blue,
           ),
-          const SizedBox(width: 12),
-          OutlinedButton.icon(
-            onPressed: () => _openLedger(row),
-            icon: const Icon(Icons.list_alt_rounded, size: 16),
-            label: const Text('Ledger'),
-          ),
+          const SizedBox(width: 28),
+          _ledgerActionButton(onPressed: () => _openLedger(row)),
           const SizedBox(width: 8),
           ElevatedButton.icon(
             onPressed: () => _receivePayment(row),
@@ -636,9 +632,10 @@ class _CustomerCreditReportScreenState
     required String label,
     required String value,
     required Color color,
+    bool emphasize = false,
   }) {
     return SizedBox(
-      width: 115,
+      width: emphasize ? 138 : 115,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
@@ -649,19 +646,34 @@ class _CustomerCreditReportScreenState
             style: TextStyle(
               color: color,
               fontWeight: FontWeight.w900,
-              fontSize: 13,
+              fontSize: emphasize ? 22 : 13,
             ),
           ),
-          const SizedBox(height: 3),
+          const SizedBox(height: 2),
           Text(
             label,
             style: TextStyle(
               color: _textSecondary,
               fontWeight: FontWeight.w700,
-              fontSize: 11,
+              fontSize: emphasize ? 12 : 11,
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _ledgerActionButton({required VoidCallback onPressed}) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: const Icon(Icons.menu_book_rounded, size: 16),
+      label: const Text('Ledger'),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(120, 40),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        foregroundColor: _brand,
+        side: BorderSide(color: _brand.withValues(alpha: 0.42)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
       ),
     );
   }
@@ -762,37 +774,6 @@ class _CustomerCreditReportScreenState
                                 _selectedSearchResultIndex = null;
                               });
                             },
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          decoration: BoxDecoration(
-                            color: _panelSoft,
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(color: _border),
-                          ),
-                          child: Row(
-                            children: [
-                              Text(
-                                'Include zero balance',
-                                style: TextStyle(
-                                  color: _textPrimary,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              Switch(
-                                value: _includeZeroBalance,
-                                activeThumbColor: _brand,
-                                onChanged: (value) {
-                                  setState(() {
-                                    _includeZeroBalance = value;
-                                    _selectedSearchResultIndex = null;
-                                  });
-                                  _loadReport();
-                                },
-                              ),
-                            ],
                           ),
                         ),
                       ],

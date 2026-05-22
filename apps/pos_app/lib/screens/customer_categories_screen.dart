@@ -23,7 +23,6 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
   List<PricingScheme> _schemes = [];
   Map<int, int> _customerCounts = {};
   bool _isLoading = true;
-  bool _includeInactive = true;
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _blue = Color(0xFF4B8DFF);
@@ -72,7 +71,7 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
     try {
       final service = PricingSchemeService.instance;
       final results = await Future.wait([
-        service.getCustomerCategories(activeOnly: !_includeInactive),
+        service.getCustomerCategories(activeOnly: false),
         service.getPricingSchemes(activeOnly: false),
         service.getCustomerCountsByCategory(),
       ]);
@@ -402,11 +401,6 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addCategory,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Add Category'),
-      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(22),
@@ -458,22 +452,10 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
                         ),
                       ),
                     ),
-                    Text(
-                      'Show inactive',
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    Switch(
-                      value: _includeInactive,
-                      activeThumbColor: _brand,
-                      onChanged: (value) {
-                        setState(() {
-                          _includeInactive = value;
-                        });
-                        _loadCategories();
-                      },
+                    ElevatedButton.icon(
+                      onPressed: _addCategory,
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text('Add Category'),
                     ),
                   ],
                 ),

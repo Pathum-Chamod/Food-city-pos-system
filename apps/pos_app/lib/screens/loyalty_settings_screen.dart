@@ -1189,98 +1189,56 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
 
     return Scaffold(
       backgroundColor: _page,
+      appBar: AppBar(
+        title: const Text('Loyalty Settings'),
+        actions: [
+          TextButton.icon(
+            onPressed: () {
+              setState(() => _includeInactive = !_includeInactive);
+              _load();
+            },
+            icon: Icon(
+              _includeInactive
+                  ? Icons.visibility_rounded
+                  : Icons.visibility_off_rounded,
+            ),
+            label: Text(_includeInactive ? 'Showing Inactive' : 'Active Only'),
+          ),
+          const SizedBox(width: 6),
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: _load,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
-              child: Row(
-                children: [
-                  IconButton(
-                    tooltip: 'Back',
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.arrow_back_rounded),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: _brand.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: _brand.withValues(alpha: 0.24)),
-                    ),
-                    child: const Icon(Icons.stars_rounded, color: _brand),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Loyalty Program',
-                          style: TextStyle(
-                            color: _textPrimary,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Manage earning rules, redemption limits, and excluded items.',
-                          style: TextStyle(
-                            color: _textSecondary,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  TextButton.icon(
-                    onPressed: () {
-                      setState(() => _includeInactive = !_includeInactive);
-                      _load();
-                    },
-                    icon: Icon(
-                      _includeInactive
-                          ? Icons.visibility_rounded
-                          : Icons.visibility_off_rounded,
-                    ),
-                    label: Text(
-                      _includeInactive ? 'Showing Inactive' : 'Active Only',
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    tooltip: 'Refresh',
-                    onPressed: _load,
-                    icon: const Icon(Icons.refresh_rounded),
-                  ),
-                ],
-              ),
-            ),
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 22),
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: _panel,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: _border),
-              ),
-              child: TabBar(
-                controller: _tabController,
-                indicatorSize: TabBarIndicatorSize.tab,
-                indicator: BoxDecoration(
-                  color: _brand.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: _brand.withValues(alpha: 0.28)),
+              padding: const EdgeInsets.fromLTRB(22, 14, 22, 10),
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _panel,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: _border),
                 ),
-                dividerColor: Colors.transparent,
-                tabs: const [
-                  Tab(icon: Icon(Icons.tune_rounded), text: 'Settings'),
-                  Tab(icon: Icon(Icons.category_outlined), text: 'Categories'),
-                  Tab(icon: Icon(Icons.inventory_2_outlined), text: 'Products'),
-                ],
+                child: TabBar(
+                  controller: _tabController,
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  indicator: BoxDecoration(
+                    color: _brand.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _brand.withValues(alpha: 0.28)),
+                  ),
+                  dividerColor: Colors.transparent,
+                  tabs: const [
+                    Tab(icon: Icon(Icons.tune_rounded), text: 'Settings'),
+                    Tab(icon: Icon(Icons.category_outlined), text: 'Categories'),
+                    Tab(icon: Icon(Icons.inventory_2_outlined), text: 'Products'),
+                  ],
+                ),
               ),
             ),
             Expanded(

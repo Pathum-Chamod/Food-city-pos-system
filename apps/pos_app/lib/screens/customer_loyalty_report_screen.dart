@@ -29,7 +29,6 @@ class _CustomerLoyaltyReportScreenState
   List<Map<String, dynamic>> _customers = [];
   List<Map<String, dynamic>> _ledgerRows = [];
   bool _isLoading = true;
-  bool _includeZeroBalance = true;
   String _query = '';
   String _entryFilter = 'all';
   int? _selectedSearchResultIndex;
@@ -174,7 +173,7 @@ class _CustomerLoyaltyReportScreenState
       final summary = await service.getLoyaltyReportSummary();
       final customers = await service.getLoyaltyCustomersReport(
         query: _query,
-        includeZeroBalance: _includeZeroBalance,
+        includeZeroBalance: false,
       );
       final ledgerRows = await service.getLoyaltyLedgerReport(
         entryType: _entryFilter,
@@ -184,7 +183,11 @@ class _CustomerLoyaltyReportScreenState
       if (!mounted) return;
       setState(() {
         _summary = summary;
-        _customers = customers;
+        _customers = customers.where((row) {
+          final earned = _readInt(row['loyalty_lifetime_earned']);
+          final redeemed = _readInt(row['loyalty_lifetime_redeemed']);
+          return earned > 0 || redeemed > 0;
+        }).toList();
         _ledgerRows = ledgerRows;
         _isLoading = false;
       });
@@ -429,58 +432,83 @@ class _CustomerLoyaltyReportScreenState
               ),
             ),
           ),
-          _smallMetric('Balance', balance.toString(), _brand),
-          const SizedBox(width: 10),
-          _smallMetric(
-            'Earned',
-            _readInt(row['loyalty_lifetime_earned']).toString(),
-            _success,
+          SizedBox(
+            width: 90,
+            child: _metricText(
+              'Balance',
+              balance.toString(),
+              _success,
+              emphasize: true,
+            ),
           ),
-          const SizedBox(width: 10),
-          _smallMetric(
-            'Redeemed',
-            _readInt(row['loyalty_lifetime_redeemed']).toString(),
-            _warning,
+          const SizedBox(width: 14),
+          SizedBox(
+            width: 90,
+            child: _metricText(
+              'Earned',
+              _readInt(row['loyalty_lifetime_earned']).toString(),
+              _brand,
+            ),
           ),
-          const SizedBox(width: 10),
-          OutlinedButton.icon(
-            onPressed: () => _openCustomerLedger(row),
-            icon: const Icon(Icons.list_alt_rounded, size: 16),
-            label: const Text('Ledger'),
+          const SizedBox(width: 14),
+          SizedBox(
+            width: 90,
+            child: _metricText(
+              'Redeemed',
+              _readInt(row['loyalty_lifetime_redeemed']).toString(),
+              _warning,
+            ),
           ),
+          const SizedBox(width: 14),
+          _ledgerActionButton(onPressed: () => _openCustomerLedger(row)),
         ],
       ),
     );
   }
 
-  Widget _smallMetric(String label, String value, Color color) {
-    return Container(
-      width: 104,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: _panelSoft,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: color, fontWeight: FontWeight.w900),
+  Widget _metricText(
+    String label,
+    String value,
+    Color color, {
+    bool emphasize = false,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.w900,
+            fontSize: emphasize ? 24 : null,
           ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: TextStyle(
-              color: _textSecondary,
-              fontWeight: FontWeight.w700,
-              fontSize: 11,
-            ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: TextStyle(
+            color: _textSecondary,
+            fontWeight: FontWeight.w700,
+            fontSize: 11,
           ),
-        ],
+        ),
+      ],
+    );
+  }
+
+  Widget _ledgerActionButton({required VoidCallback onPressed}) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: const Icon(Icons.menu_book_rounded, size: 16),
+      label: const Text('Ledger'),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(120, 40),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        foregroundColor: _brand,
+        side: BorderSide(color: _brand.withValues(alpha: 0.42)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
       ),
     );
   }
@@ -655,18 +683,6 @@ class _CustomerLoyaltyReportScreenState
                                   _onSearchChanged(value);
                                 },
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            FilterChip(
-                              selected: !_includeZeroBalance,
-                              label: const Text('With Balance'),
-                              onSelected: (value) async {
-                                setState(() {
-                                  _includeZeroBalance = !value;
-                                  _selectedSearchResultIndex = null;
-                                });
-                                await _loadReport();
-                              },
                             ),
                           ],
                         ),

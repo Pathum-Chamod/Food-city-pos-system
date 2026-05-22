@@ -384,14 +384,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     await _loadCustomer();
   }
 
-  Color _creditStatusColor(CustomerCreditSummary summary) {
-    if (summary.isBlocked) return _danger;
-    if (summary.isWatchlist) return _warning;
-    if (summary.isOverLimit) return _danger;
-    if (!summary.creditEnabled) return _textSecondary;
-    return _brand;
-  }
-
   Future<void> _openReceipt(int saleId) async {
     if (saleId <= 0) return;
     await TransactionHistoryScreen.showReceiptDialogForTransaction(
@@ -590,629 +582,271 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   Widget _creditAccountCard(Customer customer) {
     final summary =
         _creditSummary ?? CustomerCreditSummary.empty(customer.id ?? 0);
-    final statusColor = _creditStatusColor(summary);
     final balanceColor = summary.currentBalance > 0
         ? _warning
         : summary.currentBalance < 0
         ? _blue
         : _brand;
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _panel,
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(
-          color: summary.creditEnabled
-              ? statusColor.withValues(alpha: 0.38)
-              : _border,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _creditMiniMetric(
+          label: 'Balance',
+          value: _money(summary.currentBalance),
+          icon: Icons.payments_rounded,
+          color: balanceColor,
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: statusColor.withValues(alpha: 0.24),
-                  ),
-                ),
-                child: Icon(
-                  Icons.account_balance_wallet_rounded,
-                  color: statusColor,
-                  size: 27,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Credit Account',
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      summary.creditEnabled
-                          ? '${summary.statusLabel} • ${summary.isOverLimit ? 'Over limit' : 'Available credit ${_money(summary.availableCredit)}'}'
-                          : 'Credit is not enabled for this customer.',
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 7,
-                ),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: statusColor.withValues(alpha: 0.24),
-                  ),
-                ),
-                child: Text(
-                  summary.creditEnabled ? summary.statusLabel : 'Disabled',
-                  style: TextStyle(
-                    color: statusColor,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
-                onPressed: _openCreditSettings,
-                icon: const Icon(Icons.settings_rounded),
-                label: Text(
-                  summary.creditEnabled ? 'Edit Settings' : 'Enable Credit',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              _creditMiniMetric(
-                label: 'Balance',
-                value: _money(summary.currentBalance),
-                icon: Icons.payments_rounded,
-                color: balanceColor,
-              ),
-              const SizedBox(width: 10),
-              _creditMiniMetric(
-                label: 'Limit',
-                value: _money(summary.creditLimit),
-                icon: Icons.speed_rounded,
-                color: _brand,
-              ),
-              const SizedBox(width: 10),
-              _creditMiniMetric(
-                label: summary.availableCredit < 0
-                    ? 'Over Limit By'
-                    : 'Available',
-                value: _money(summary.availableCredit.abs()),
-                icon: summary.availableCredit < 0
-                    ? Icons.warning_rounded
-                    : Icons.trending_up_rounded,
-                color: summary.availableCredit < 0 ? _danger : _blue,
-              ),
-            ],
-          ),
+        const SizedBox(height: 10),
+        _creditMiniMetric(
+          label: 'Limit',
+          value: _money(summary.creditLimit),
+          icon: Icons.speed_rounded,
+          color: _brand,
+        ),
+        const SizedBox(height: 10),
+        _creditMiniMetric(
+          label: summary.availableCredit < 0 ? 'Over Limit By' : 'Available',
+          value: _money(summary.availableCredit.abs()),
+          icon: summary.availableCredit < 0
+              ? Icons.warning_rounded
+              : Icons.trending_up_rounded,
+          color: summary.availableCredit < 0 ? _danger : _blue,
+        ),
+        const SizedBox(height: 16),
+        OutlinedButton.icon(
+          onPressed: _openCustomerLedger,
+          icon: const Icon(Icons.list_alt_rounded),
+          label: const Text('View Ledger'),
+        ),
+        const SizedBox(height: 10),
+        ElevatedButton.icon(
+          onPressed: _receiveCustomerPayment,
+          icon: const Icon(Icons.payments_rounded),
+          label: const Text('Receive Payment'),
+        ),
+        if ((summary.creditNote ?? '').trim().isNotEmpty) ...[
           const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _openCustomerLedger,
-                  icon: const Icon(Icons.list_alt_rounded),
-                  label: const Text('View Ledger'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _receiveCustomerPayment,
-                  icon: const Icon(Icons.payments_rounded),
-                  label: const Text('Receive Payment'),
-                ),
-              ),
-            ],
-          ),
-          if ((summary.creditNote ?? '').trim().isNotEmpty) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: _panelSoft,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: _border),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.note_alt_rounded, color: _textSecondary, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      summary.creditNote!.trim(),
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontWeight: FontWeight.w700,
-                        height: 1.35,
-                      ),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: _panelSoft,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: _border),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.note_alt_rounded, color: _textSecondary, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    summary.creditNote!.trim(),
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontWeight: FontWeight.w700,
+                      height: 1.35,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ],
-      ),
+      ],
     );
   }
-
   Widget _creditMiniMetric({
     required String label,
     required String value,
     required IconData icon,
     required Color color,
   }) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: _panelSoft,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _border),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: _textPrimary,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 14,
-                    ),
+    return Container(
+      height: 64,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _panelSoft,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 14,
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: _textSecondary,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 11,
-                    ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _loyaltyCard(Customer customer) {
     final settings = _loyaltySettings ?? LoyaltySettings.defaults();
-    final isGloballyEnabled = settings.isEnabled;
-    final isCustomerEnabled = customer.loyaltyEnabled;
-    final isActive = isGloballyEnabled && isCustomerEnabled;
-    final statusColor = isActive
-        ? _brand
-        : isGloballyEnabled
-        ? _warning
-        : _textSecondary;
-    final statusLabel = isActive
-        ? 'Enabled'
-        : isGloballyEnabled
-        ? 'Customer Off'
-        : 'Module Off';
     final redeemValue =
         customer.loyaltyPointsBalance * settings.safePointValueAmount;
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _panel,
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(
-          color: isActive ? _brand.withValues(alpha: 0.34) : _border,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _stackedMiniMetric(
+          label: 'Points Balance',
+          value: customer.loyaltyPointsBalance.toString(),
+          icon: Icons.stars_rounded,
+          color: _brand,
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: statusColor.withValues(alpha: 0.24),
-                  ),
-                ),
-                child: Icon(
-                  Icons.card_giftcard_rounded,
-                  color: statusColor,
-                  size: 27,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Loyalty Points',
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      !isGloballyEnabled
-                          ? 'Global loyalty is disabled in settings.'
-                          : isCustomerEnabled
-                          ? 'Customer can earn and redeem points when eligible.'
-                          : 'Customer is excluded from earning and redeeming points.',
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 7,
-                ),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: statusColor.withValues(alpha: 0.24),
-                  ),
-                ),
-                child: Text(
-                  statusLabel,
-                  style: TextStyle(
-                    color: statusColor,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
-                onPressed: () => _setCustomerLoyaltyEnabled(!isCustomerEnabled),
-                icon: Icon(
-                  isCustomerEnabled
-                      ? Icons.block_rounded
-                      : Icons.check_circle_rounded,
-                ),
-                label: Text(isCustomerEnabled ? 'Disable' : 'Enable'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              _pricingMiniMetric(
-                label: 'Points Balance',
-                value: customer.loyaltyPointsBalance.toString(),
-                icon: Icons.stars_rounded,
-                color: _brand,
-              ),
-              const SizedBox(width: 10),
-              _pricingMiniMetric(
-                label: 'Redeem Value',
-                value: _money(redeemValue),
-                icon: Icons.payments_rounded,
-                color: _blue,
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              _pricingMiniMetric(
-                label: 'Lifetime Earned',
-                value: customer.loyaltyLifetimeEarned.toString(),
-                icon: Icons.trending_up_rounded,
-                color: _success,
-              ),
-              const SizedBox(width: 10),
-              _pricingMiniMetric(
-                label: 'Lifetime Redeemed',
-                value: customer.loyaltyLifetimeRedeemed.toString(),
-                icon: Icons.redeem_rounded,
-                color: _warning,
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _openLoyaltyLedger,
-                  icon: const Icon(Icons.list_alt_rounded),
-                  label: const Text('View Loyalty Ledger'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+        const SizedBox(height: 10),
+        _stackedMiniMetric(
+          label: 'Redeem Value',
+          value: _money(redeemValue),
+          icon: Icons.payments_rounded,
+          color: _blue,
+        ),
+        const SizedBox(height: 10),
+        _stackedMiniMetric(
+          label: 'Lifetime Earned',
+          value: customer.loyaltyLifetimeEarned.toString(),
+          icon: Icons.trending_up_rounded,
+          color: _success,
+        ),
+        const SizedBox(height: 10),
+        _stackedMiniMetric(
+          label: 'Lifetime Redeemed',
+          value: customer.loyaltyLifetimeRedeemed.toString(),
+          icon: Icons.redeem_rounded,
+          color: _warning,
+        ),
+        const SizedBox(height: 16),
+        OutlinedButton.icon(
+          onPressed: _openLoyaltyLedger,
+          icon: const Icon(Icons.list_alt_rounded),
+          label: const Text('View Loyalty Ledger'),
+        ),
+      ],
     );
   }
-
   Widget _pricingDiscountsCard(Customer customer) {
     final hasCustomerRules = _activeCustomerRuleCount > 0;
     final statusColor = hasCustomerRules ? _brand : _textSecondary;
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _panel,
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(
-          color: hasCustomerRules ? _brand.withValues(alpha: 0.34) : _border,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Divider(color: _border, height: 1),
+        const SizedBox(height: 14),
+        Text(
+          'Special Prices & Discounts',
+          style: TextStyle(
+            color: _textPrimary,
+            fontSize: 17,
+            fontWeight: FontWeight.w900,
+          ),
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: statusColor.withValues(alpha: 0.24),
-                  ),
-                ),
-                child: Icon(
-                  Icons.local_offer_rounded,
+        const SizedBox(height: 5),
+        Text(
+          'Customer-only prices or discounts for all items, categories, or products.',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: _textSecondary,
+            fontWeight: FontWeight.w700,
+            height: 1.25,
+          ),
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: statusColor.withValues(alpha: 0.24)),
+              ),
+              child: Text(
+                '$_activeCustomerRuleCount Active Rules',
+                style: TextStyle(
                   color: statusColor,
-                  size: 27,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 12,
                 ),
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Special Prices & Discounts',
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Set customer-only rules for all items, item categories, or specific products.',
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 7,
-                ),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: _isDark ? 0.16 : 0.10),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: statusColor.withValues(alpha: 0.24),
-                  ),
-                ),
-                child: Text(
-                  '$_activeCustomerRuleCount Rules',
-                  style: TextStyle(
-                    color: statusColor,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: ElevatedButton.icon(
                 onPressed: _openProductPrices,
                 icon: const Icon(Icons.price_change_rounded),
                 label: const Text('Manage Rules'),
               ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              _pricingMiniMetric(
-                label: 'Active Rules',
-                value: _activeCustomerRuleCount.toString(),
-                icon: Icons.inventory_2_rounded,
-                color: _brand,
-              ),
-              const SizedBox(width: 10),
-              _pricingMiniMetric(
-                label: 'Rule Targets',
-                value: 'All / Category / Item',
-                icon: Icons.category_rounded,
-                color: _warning,
-              ),
-              const SizedBox(width: 10),
-              _pricingMiniMetric(
-                label: 'Rule Actions',
-                value: 'Price / Discount',
-                icon: Icons.tune_rounded,
-                color: _blue,
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _openProductPrices,
-                  icon: const Icon(Icons.price_change_rounded),
-                  label: const Text('Manage Customer Item & Category Rules'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+            ),
+          ],
+        ),
+      ],
     );
   }
-
   Widget _categorySchemeCard(Customer customer) {
     final category = _categoryFor(customer.customerCategoryId);
     final noSchemeSelected = customer.pricingSchemeId == 0;
     final directScheme = _schemeFor(customer.pricingSchemeId);
     final inheritedScheme = _schemeFor(category?.defaultPricingSchemeId);
-    final activeScheme = noSchemeSelected
-        ? null
-        : directScheme ?? inheritedScheme;
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: _panel,
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: _border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: _blue.withValues(alpha: _isDark ? 0.16 : 0.10),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: _blue.withValues(alpha: 0.24)),
-                ),
-                child: const Icon(
-                  Icons.account_tree_rounded,
-                  color: _blue,
-                  size: 27,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Category & Scheme',
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      activeScheme == null
-                          ? noSchemeSelected
-                                ? 'No pricing scheme is applied for this customer.'
-                                : 'No pricing scheme is assigned yet.'
-                          : directScheme == null
-                          ? 'Using category default scheme.'
-                          : 'Using direct customer scheme.',
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              ElevatedButton.icon(
-                onPressed: _openCategoryAssignment,
-                icon: const Icon(Icons.tune_rounded),
-                label: const Text('Edit Assignment'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              _pricingMiniMetric(
-                label: 'Category',
-                value: _categoryDisplayName(category),
-                icon: Icons.groups_2_rounded,
-                color: _brand,
-              ),
-              const SizedBox(width: 10),
-              _pricingMiniMetric(
-                label: 'Inherited Scheme',
-                value: _schemeDisplayName(inheritedScheme),
-                icon: Icons.call_merge_rounded,
-                color: _warning,
-              ),
-              const SizedBox(width: 10),
-              _pricingMiniMetric(
-                label: 'Direct Scheme',
-                value: noSchemeSelected
-                    ? 'No Scheme'
-                    : _schemeDisplayName(directScheme),
-                icon: Icons.sell_rounded,
-                color: _blue,
-              ),
-            ],
-          ),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _stackedMiniMetric(
+          label: 'Category',
+          value: _categoryDisplayName(category),
+          icon: Icons.groups_2_rounded,
+          color: _brand,
+        ),
+        const SizedBox(height: 10),
+        _stackedMiniMetric(
+          label: 'Inherited Scheme',
+          value: _schemeDisplayName(inheritedScheme),
+          icon: Icons.call_merge_rounded,
+          color: _warning,
+        ),
+        const SizedBox(height: 10),
+        _stackedMiniMetric(
+          label: 'Direct Scheme',
+          value: noSchemeSelected ? 'No Scheme' : _schemeDisplayName(directScheme),
+          icon: Icons.sell_rounded,
+          color: _blue,
+        ),
+        const SizedBox(height: 14),
+        ElevatedButton.icon(
+          onPressed: _openCategoryAssignment,
+          icon: const Icon(Icons.tune_rounded),
+          label: const Text('Edit Assignment'),
+        ),
+      ],
     );
   }
-
   CustomerCategory? _categoryFor(int? id) {
     if (id == null || id <= 0) return null;
     for (final category in _categories) {
@@ -1243,52 +877,251 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         : '${scheme.displayName} (inactive)';
   }
 
-  Widget _pricingMiniMetric({
+  Widget _stackedMiniMetric({
     required String label,
     required String value,
     required IconData icon,
     required Color color,
   }) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: _panelSoft,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _border),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: _textPrimary,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 14,
-                    ),
+    return Container(
+      height: 64,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _panelSoft,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 14,
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: _textSecondary,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 11,
-                    ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _loyaltyToggle(Customer customer) {
+    final settings = _loyaltySettings ?? LoyaltySettings.defaults();
+    final enabled = settings.isEnabled && customer.loyaltyEnabled;
+    final toggleColor = enabled ? _brand : _textSecondary;
+
+    return Container(
+      height: 38,
+      padding: const EdgeInsets.only(left: 12, right: 4),
+      decoration: BoxDecoration(
+        color: toggleColor.withValues(alpha: _isDark ? 0.16 : 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: toggleColor.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            enabled ? 'On' : 'Off',
+            style: TextStyle(
+              color: toggleColor,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          Transform.scale(
+            scale: 0.78,
+            child: Switch(
+              value: customer.loyaltyEnabled,
+              activeThumbColor: _brand,
+              inactiveThumbColor: _textSecondary,
+              inactiveTrackColor: _textSecondary.withValues(alpha: 0.22),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              onChanged: (_) =>
+                  _setCustomerLoyaltyEnabled(!customer.loyaltyEnabled),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _creditSettingsButton(Customer customer) {
+    final summary =
+        _creditSummary ?? CustomerCreditSummary.empty(customer.id ?? 0);
+    return ElevatedButton.icon(
+      onPressed: _openCreditSettings,
+      icon: const Icon(Icons.settings_rounded),
+      label: Text(summary.creditEnabled ? 'Edit Settings' : 'Enable Credit'),
+    );
+  }
+
+  Widget _customerProgramGroups(Customer customer) {
+    Widget loyaltyColumn() => _detailGroupColumn(
+      title: 'Loyalty',
+      subtitle: 'Points, redemption value, and earning status.',
+      icon: Icons.card_giftcard_rounded,
+      color: _brand,
+      trailing: _loyaltyToggle(customer),
+      children: [_loyaltyCard(customer)],
+    );
+
+    Widget pricingColumn() => _detailGroupColumn(
+      title: 'Pricing Scheme',
+      subtitle: 'Category assignment, schemes, and customer-only prices.',
+      icon: Icons.account_tree_rounded,
+      color: _blue,
+      children: [
+        _categorySchemeCard(customer),
+        const SizedBox(height: 14),
+        _pricingDiscountsCard(customer),
+      ],
+    );
+
+    Widget creditColumn() => _detailGroupColumn(
+      title: 'Credit Account',
+      subtitle: 'Balance, credit limit, ledger, and payments.',
+      icon: Icons.account_balance_wallet_rounded,
+      color: _warning,
+      trailing: _creditSettingsButton(customer),
+      children: [_creditAccountCard(customer)],
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final useThreeColumns = constraints.maxWidth >= 1280;
+        if (!useThreeColumns) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              loyaltyColumn(),
+              const SizedBox(height: 18),
+              pricingColumn(),
+              const SizedBox(height: 18),
+              creditColumn(),
+            ],
+          );
+        }
+
+        return SizedBox(
+          height: 560,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: loyaltyColumn()),
+              const SizedBox(width: 16),
+              Expanded(child: pricingColumn()),
+              const SizedBox(width: 16),
+              Expanded(child: creditColumn()),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _detailGroupColumn({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required List<Widget> children,
+    Widget? trailing,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _isDark ? const Color(0xFF0B182A) : Colors.white,
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+        boxShadow: [
+          if (!_isDark)
+            BoxShadow(
+              color: const Color(0xFF16314F).withValues(alpha: 0.06),
+              blurRadius: 18,
+              offset: const Offset(0, 10),
+            ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: _isDark ? 0.16 : 0.10),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: color.withValues(alpha: 0.24)),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        height: 1.25,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (trailing != null) ...[
+                const SizedBox(width: 10),
+                trailing,
+              ],
+            ],
+          ),
+          const SizedBox(height: 14),
+          ...children,
+        ],
       ),
     );
   }
@@ -1422,13 +1255,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                   children: [
                     _profileCard(customer),
                     const SizedBox(height: 16),
-                    _creditAccountCard(customer),
-                    const SizedBox(height: 16),
-                    _loyaltyCard(customer),
-                    const SizedBox(height: 16),
-                    _categorySchemeCard(customer),
-                    const SizedBox(height: 16),
-                    _pricingDiscountsCard(customer),
+                    _customerProgramGroups(customer),
                     const SizedBox(height: 16),
                     Row(
                       children: [

@@ -14,6 +14,7 @@ import 'providers/app_theme_provider.dart';
 import 'navigation/pos_route_names.dart';
 import 'navigation/route_search_focus_registry.dart';
 import 'screens/cashier_summary_screen.dart';
+import 'screens/customer_management_screen.dart';
 import 'screens/expiry_alerts_screen.dart';
 import 'screens/held_carts_screen.dart';
 import 'screens/inventory_screen.dart';
@@ -205,6 +206,10 @@ class _PosAppState extends State<PosApp> {
       }
       if (!hasShift && key == LogicalKeyboardKey.keyU) {
         _runGlobalShortcut(_openUserManagement);
+        return true;
+      }
+      if (!hasShift && key == LogicalKeyboardKey.keyB) {
+        _runGlobalShortcut(_openCustomerManagement);
         return true;
       }
       if (hasShift && key == LogicalKeyboardKey.keyP) {
@@ -699,6 +704,19 @@ class _PosAppState extends State<PosApp> {
     await showHardwareSetupDialog(context);
   }
 
+  Future<void> _openCustomerManagement() {
+    return _runProtectedManagerAction(
+      () {
+        return _pushOrRevealRoute(
+          routeName: PosRouteNames.customerManagement,
+          builder: (context) => const CustomerManagementScreen(),
+        );
+      },
+      permission: PosPermission.customersView,
+      title: 'Open Customer Management',
+    );
+  }
+
   Future<void> _showShortcutLegend() async {
     final context = AppSnackBar.navigatorKey.currentContext;
     if (context == null || _isShortcutLegendOpen) return;
@@ -864,6 +882,7 @@ class _PosAppState extends State<PosApp> {
             shortcutRow('Ctrl + H', 'Held carts'),
             shortcutRow('Ctrl + R', 'Sales report'),
             shortcutRow('Ctrl + U', 'User management'),
+            shortcutRow('Ctrl + B', 'Customer management'),
             shortcutRow('Ctrl + S', 'Cashier summary'),
             shortcutRow('Ctrl + Shift + P', 'Presentation settings'),
             shortcutRow('Ctrl + Shift + H', 'Hardware setup'),
@@ -1295,6 +1314,9 @@ class _PosAppState extends State<PosApp> {
             },
             const SingleActivator(LogicalKeyboardKey.keyU, control: true): () {
               _runGlobalShortcutFromIntent(_openUserManagement);
+            },
+            const SingleActivator(LogicalKeyboardKey.keyB, control: true): () {
+              _runGlobalShortcutFromIntent(_openCustomerManagement);
             },
             const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
               _runGlobalShortcutFromIntent(_openCashierSummary);

@@ -34,7 +34,6 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
 
   List<Customer> _customers = [];
   bool _isLoading = true;
-  bool _includeInactive = false;
   String _query = '';
   int? _selectedSearchResultIndex;
   Timer? _searchSelectionTimer;
@@ -184,7 +183,7 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
     try {
       final rows = await CustomerService.instance.getCustomers(
         query: _query,
-        activeOnly: !_includeInactive,
+        activeOnly: false,
         limit: 300,
       );
 
@@ -631,11 +630,6 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addCustomer,
-        icon: const Icon(Icons.person_add_rounded),
-        label: const Text('Add Customer'),
-      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(22),
@@ -709,34 +703,10 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                       ),
                     ),
                     const SizedBox(width: 14),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: _panelSoft,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: _border),
-                      ),
-                      child: Row(
-                        children: [
-                          Text(
-                            'Show inactive',
-                            style: TextStyle(
-                              color: _textPrimary,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          Switch(
-                            value: _includeInactive,
-                            activeThumbColor: _brand,
-                            onChanged: (value) {
-                              setState(() {
-                                _includeInactive = value;
-                              });
-                              _loadCustomers();
-                            },
-                          ),
-                        ],
-                      ),
+                    ElevatedButton.icon(
+                      onPressed: _addCustomer,
+                      icon: const Icon(Icons.person_add_rounded),
+                      label: const Text('Add Customer'),
                     ),
                   ],
                 ),
