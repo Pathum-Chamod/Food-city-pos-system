@@ -656,6 +656,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       ],
     );
   }
+
   Widget _creditMiniMetric({
     required String label,
     required String value,
@@ -663,8 +664,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     required Color color,
   }) {
     return Container(
-      height: 64,
-      padding: const EdgeInsets.all(14),
+      height: 72,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: _panelSoft,
         borderRadius: BorderRadius.circular(18),
@@ -677,6 +678,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
                   value,
@@ -686,6 +688,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     color: _textPrimary,
                     fontWeight: FontWeight.w900,
                     fontSize: 14,
+                    height: 1.05,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -695,6 +698,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     color: _textSecondary,
                     fontWeight: FontWeight.w700,
                     fontSize: 11,
+                    height: 1.05,
                   ),
                 ),
               ],
@@ -749,6 +753,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       ],
     );
   }
+
   Widget _pricingDiscountsCard(Customer customer) {
     final hasCustomerRules = _activeCustomerRuleCount > 0;
     final statusColor = hasCustomerRules ? _brand : _textSecondary;
@@ -809,6 +814,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       ],
     );
   }
+
   Widget _categorySchemeCard(Customer customer) {
     final category = _categoryFor(customer.customerCategoryId);
     final noSchemeSelected = customer.pricingSchemeId == 0;
@@ -834,7 +840,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         const SizedBox(height: 10),
         _stackedMiniMetric(
           label: 'Direct Scheme',
-          value: noSchemeSelected ? 'No Scheme' : _schemeDisplayName(directScheme),
+          value: noSchemeSelected
+              ? 'No Scheme'
+              : _schemeDisplayName(directScheme),
           icon: Icons.sell_rounded,
           color: _blue,
         ),
@@ -847,6 +855,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       ],
     );
   }
+
   CustomerCategory? _categoryFor(int? id) {
     if (id == null || id <= 0) return null;
     for (final category in _categories) {
@@ -884,8 +893,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     required Color color,
   }) {
     return Container(
-      height: 64,
-      padding: const EdgeInsets.all(14),
+      height: 72,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: _panelSoft,
         borderRadius: BorderRadius.circular(18),
@@ -908,6 +917,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     color: _textPrimary,
                     fontWeight: FontWeight.w900,
                     fontSize: 14,
+                    height: 1.05,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -919,6 +929,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     color: _textSecondary,
                     fontWeight: FontWeight.w700,
                     fontSize: 11,
+                    height: 1.05,
                   ),
                 ),
               ],
@@ -1113,10 +1124,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                   ],
                 ),
               ),
-              if (trailing != null) ...[
-                const SizedBox(width: 10),
-                trailing,
-              ],
+              if (trailing != null) ...[const SizedBox(width: 10), trailing],
             ],
           ),
           const SizedBox(height: 14),
