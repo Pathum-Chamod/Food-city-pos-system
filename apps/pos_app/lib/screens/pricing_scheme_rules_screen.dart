@@ -130,6 +130,7 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
       context: context,
       products: _products,
       categories: _categories,
+      existingRules: _rules,
     );
     if (result == null) return;
 
@@ -154,7 +155,7 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
   }) async {
     try {
       await PricingSchemeService.instance.upsertPricingSchemeRule(
-        id: existingRule?.id,
+        id: existingRule?.id ?? result.overwriteRuleId,
         schemeId: widget.scheme.id ?? 0,
         applyTo: result.applyTo,
         category: result.category,

@@ -17,6 +17,7 @@ class PricingSchemeRuleDialogResult {
     this.priority = 100,
     this.isActive = true,
     this.note,
+    this.overwriteRuleId,
   });
 
   final PricingSchemeRuleApplyTo applyTo;
@@ -29,12 +30,14 @@ class PricingSchemeRuleDialogResult {
   final int priority;
   final bool isActive;
   final String? note;
+  final int? overwriteRuleId;
 }
 
 Future<PricingSchemeRuleDialogResult?> showPricingSchemeRuleDialog({
   required BuildContext context,
   required List<Product> products,
   required List<String> categories,
+  List<PricingSchemeRule> existingRules = const [],
   PricingSchemeRule? rule,
   String titleNoun = 'Scheme Rule',
 }) {
@@ -44,6 +47,7 @@ Future<PricingSchemeRuleDialogResult?> showPricingSchemeRuleDialog({
     builder: (_) => _PricingSchemeRuleDialog(
       products: products,
       categories: categories,
+      existingRules: existingRules,
       rule: rule,
       titleNoun: titleNoun,
     ),
@@ -54,12 +58,14 @@ class _PricingSchemeRuleDialog extends StatefulWidget {
   const _PricingSchemeRuleDialog({
     required this.products,
     required this.categories,
+    required this.existingRules,
     this.rule,
     required this.titleNoun,
   });
 
   final List<Product> products;
   final List<String> categories;
+  final List<PricingSchemeRule> existingRules;
   final PricingSchemeRule? rule;
   final String titleNoun;
 
@@ -72,8 +78,14 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
   late final TextEditingController _searchController;
   late final TextEditingController _discountController;
   late final TextEditingController _fixedPriceController;
-  late final TextEditingController _priorityController;
-  late final TextEditingController _noteController;
+  late final FocusNode _productSearchFocusNode;
+  final LayerLink _productSearchLayerLink = LayerLink();
+  final LayerLink _categoryLayerLink = LayerLink();
+  final GlobalKey _productSearchFieldKey = GlobalKey();
+  final GlobalKey _categoryFieldKey = GlobalKey();
+  OverlayEntry? _productSearchOverlay;
+  OverlayEntry? _categoryOverlay;
+  bool _isSelectingProductFromOverlay = false;
 
   late PricingSchemeRuleApplyTo _applyTo;
   late PricingSchemeRuleType _ruleType;
@@ -81,12 +93,44 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
   String? _category;
   Product? _product;
   bool _isActive = true;
+  late int _priority;
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _blue = Color(0xFF4B8DFF);
   static const Color _warning = Color(0xFFFFB65C);
 
   bool get _isEdit => widget.rule != null;
+  bool get _isSpecificProductTarget =>
+      _applyTo == PricingSchemeRuleApplyTo.product;
+  bool get _allowFixedPrice => _isSpecificProductTarget;
+
+  List<PricingSchemeRuleType> get _availableRuleTypes {
+    if (_allowFixedPrice) return PricingSchemeRuleType.values;
+    return PricingSchemeRuleType.values
+        .where((t) => t != PricingSchemeRuleType.fixedPrice)
+        .toList();
+  }
+
+  String _targetSummary() {
+    switch (_applyTo) {
+      case PricingSchemeRuleApplyTo.all:
+        return 'All Products';
+      case PricingSchemeRuleApplyTo.category:
+        return _category?.trim().isNotEmpty == true
+            ? 'Category: ${_category!.trim()}'
+            : 'Category Rule';
+      case PricingSchemeRuleApplyTo.product:
+        final name = _product?.name.trim();
+        final barcode = _product?.barcode.trim();
+        if (name != null && name.isNotEmpty) {
+          return barcode != null && barcode.isNotEmpty
+              ? '$name ($barcode)'
+              : name;
+        }
+        if (barcode != null && barcode.isNotEmpty) return barcode;
+        return 'Specific Product';
+    }
+  }
 
   @override
   void initState() {
@@ -109,10 +153,22 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
           ? ''
           : rule!.fixedPrice!.toStringAsFixed(2),
     );
-    _priorityController = TextEditingController(
-      text: (rule?.priority ?? 100).toString(),
-    );
-    _noteController = TextEditingController(text: rule?.note ?? '');
+    _priority = rule?.priority ?? 100;
+    _enforceRuleTypeCompatibility();
+    _productSearchFocusNode = FocusNode();
+    _productSearchFocusNode.addListener(() {
+      if (_productSearchFocusNode.hasFocus) {
+        _refreshProductSearchOverlay();
+      } else {
+        Future.delayed(const Duration(milliseconds: 120), () {
+          if (!mounted) return;
+          if (_isSelectingProductFromOverlay) return;
+          if (!_productSearchFocusNode.hasFocus) {
+            _hideProductSearchOverlay();
+          }
+        });
+      }
+    });
   }
 
   @override
@@ -120,8 +176,9 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
     _searchController.dispose();
     _discountController.dispose();
     _fixedPriceController.dispose();
-    _priorityController.dispose();
-    _noteController.dispose();
+    _productSearchFocusNode.dispose();
+    _hideProductSearchOverlay();
+    _hideCategoryOverlay();
     super.dispose();
   }
 
@@ -148,12 +205,284 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
 
   String _money(num value) => 'Rs. ${value.toDouble().toStringAsFixed(2)}';
 
-  String? _cleanOptional(String value) {
-    final text = value.trim();
-    return text.isEmpty ? null : text;
+  List<Product> get _filteredProductSearchResults {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) return const [];
+    return widget.products
+        .where(
+          (product) =>
+              product.name.toLowerCase().contains(query) ||
+              product.barcode.toLowerCase().contains(query) ||
+              product.category.toLowerCase().contains(query),
+        )
+        .take(20)
+        .toList();
   }
 
-  void _submit() {
+  double get _productSearchOverlayWidth {
+    final box =
+        _productSearchFieldKey.currentContext?.findRenderObject() as RenderBox?;
+    return box?.size.width ?? 280;
+  }
+
+  double get _categoryOverlayWidth {
+    final box =
+        _categoryFieldKey.currentContext?.findRenderObject() as RenderBox?;
+    return box?.size.width ?? 280;
+  }
+
+  void _refreshProductSearchOverlay() {
+    final query = _searchController.text.trim();
+    if (!mounted || !_productSearchFocusNode.hasFocus || query.isEmpty) {
+      _hideProductSearchOverlay();
+      return;
+    }
+
+    if (_productSearchOverlay == null) {
+      _productSearchOverlay = OverlayEntry(
+        builder: (context) => _buildProductSearchOverlay(),
+      );
+      Overlay.of(context, rootOverlay: true).insert(_productSearchOverlay!);
+    } else {
+      _productSearchOverlay!.markNeedsBuild();
+    }
+  }
+
+  void _hideProductSearchOverlay() {
+    _productSearchOverlay?.remove();
+    _productSearchOverlay = null;
+  }
+
+  void _toggleCategoryOverlay() {
+    if (_categoryOverlay != null) {
+      _hideCategoryOverlay();
+      return;
+    }
+    _showCategoryOverlay();
+  }
+
+  void _showCategoryOverlay() {
+    if (!mounted) return;
+    _hideProductSearchOverlay();
+    _categoryOverlay = OverlayEntry(
+      builder: (context) => _buildCategoryOverlay(),
+    );
+    Overlay.of(context, rootOverlay: true).insert(_categoryOverlay!);
+  }
+
+  void _hideCategoryOverlay() {
+    _categoryOverlay?.remove();
+    _categoryOverlay = null;
+  }
+
+  Widget _buildProductSearchOverlay() {
+    final products = _filteredProductSearchResults;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Positioned.fill(
+      child: Stack(
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: _hideProductSearchOverlay,
+          ),
+          CompositedTransformFollower(
+            link: _productSearchLayerLink,
+            showWhenUnlinked: false,
+            offset: const Offset(0, 4),
+            targetAnchor: Alignment.bottomLeft,
+            followerAnchor: Alignment.topLeft,
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  width: _productSearchOverlayWidth,
+                  constraints: const BoxConstraints(maxHeight: 220),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF12233A) : Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: isDark
+                          ? const Color(0xFF2A3A52)
+                          : const Color(0xFFD9E3EE),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(
+                          alpha: isDark ? 0.30 : 0.12,
+                        ),
+                        blurRadius: 18,
+                        offset: const Offset(0, 10),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: products.isEmpty
+                        ? const Padding(
+                            padding: EdgeInsets.all(14),
+                            child: Text(
+                              'No matching products found.',
+                              style: TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            shrinkWrap: true,
+                            itemCount: products.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 2),
+                            itemBuilder: (context, index) {
+                              final product = products[index];
+                              return ListTile(
+                                dense: true,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                leading: const Icon(Icons.inventory_2_rounded),
+                                title: Text(
+                                  product.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                subtitle: Text(
+                                  '${product.barcode} - ${product.category}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                onTap: () {
+                                  _isSelectingProductFromOverlay = true;
+                                  setState(() {
+                                    _product = product;
+                                    _searchController.clear();
+                                  });
+                                  _hideProductSearchOverlay();
+                                  Future.delayed(
+                                    const Duration(milliseconds: 140),
+                                    () =>
+                                        _isSelectingProductFromOverlay = false,
+                                  );
+                                },
+                              );
+                            },
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCategoryOverlay() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Positioned.fill(
+      child: Stack(
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: _hideCategoryOverlay,
+          ),
+          CompositedTransformFollower(
+            link: _categoryLayerLink,
+            showWhenUnlinked: false,
+            offset: const Offset(0, 4),
+            targetAnchor: Alignment.bottomLeft,
+            followerAnchor: Alignment.topLeft,
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  width: _categoryOverlayWidth,
+                  constraints: const BoxConstraints(maxHeight: 220),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF12233A) : Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: isDark
+                          ? const Color(0xFF2A3A52)
+                          : const Color(0xFFD9E3EE),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(
+                          alpha: isDark ? 0.30 : 0.12,
+                        ),
+                        blurRadius: 18,
+                        offset: const Offset(0, 10),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: ListView.separated(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      shrinkWrap: true,
+                      itemCount: widget.categories.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 2),
+                      itemBuilder: (context, index) {
+                        final category = widget.categories[index];
+                        final selected = _category == category;
+                        return ListTile(
+                          dense: true,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          title: Text(
+                            category,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: selected
+                              ? const Icon(
+                                  Icons.check_circle_rounded,
+                                  color: _brand,
+                                  size: 18,
+                                )
+                              : null,
+                          onTap: () {
+                            setState(() {
+                              _category = category;
+                            });
+                            _hideCategoryOverlay();
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _enforceRuleTypeCompatibility() {
+    if (!_allowFixedPrice && _ruleType == PricingSchemeRuleType.fixedPrice) {
+      _ruleType = PricingSchemeRuleType.priceType;
+      _fixedPriceController.clear();
+    }
+  }
+
+  PricingSchemeRule? get _conflictingSpecificProductRule {
+    if (!_isSpecificProductTarget || _product == null) return null;
+    final currentId = widget.rule?.id;
+    for (final existing in widget.existingRules) {
+      if (existing.applyTo != PricingSchemeRuleApplyTo.product) continue;
+      if ((existing.barcode ?? '').trim() != _product!.barcode.trim()) continue;
+      if (currentId != null && existing.id == currentId) continue;
+      return existing;
+    }
+    return null;
+  }
+
+  Future<void> _submit() async {
     if (_applyTo == PricingSchemeRuleApplyTo.category &&
         (_category == null || _category!.trim().isEmpty)) {
       _showMessage('Select a product category.');
@@ -161,12 +490,6 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
     }
     if (_applyTo == PricingSchemeRuleApplyTo.product && _product == null) {
       _showMessage('Select a product.');
-      return;
-    }
-
-    final priority = int.tryParse(_priorityController.text.trim());
-    if (priority == null) {
-      _showMessage('Priority must be a whole number.');
       return;
     }
 
@@ -188,6 +511,33 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
       return;
     }
 
+    int? overwriteRuleId;
+    final conflictingRule = _conflictingSpecificProductRule;
+    if (conflictingRule != null) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Replace Existing Product Rule?'),
+          content: Text(
+            'A rule already exists for ${_product?.name ?? 'this product'}. Saving now will replace that existing rule. Continue?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Replace Rule'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      if (!mounted) return;
+      overwriteRuleId = conflictingRule.id;
+    }
+
     Navigator.of(context).pop(
       PricingSchemeRuleDialogResult(
         applyTo: _applyTo,
@@ -205,9 +555,10 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
         fixedPrice: _ruleType == PricingSchemeRuleType.fixedPrice
             ? fixedPrice
             : null,
-        priority: priority,
+        priority: _priority,
         isActive: _isActive,
-        note: _cleanOptional(_noteController.text),
+        note: widget.rule?.note,
+        overwriteRuleId: overwriteRuleId,
       ),
     );
   }
@@ -266,7 +617,7 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
       insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: 860,
+          maxWidth: 1220,
           maxHeight: availableHeight < 520 ? 520 : availableHeight,
         ),
         child: Container(
@@ -295,34 +646,53 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(child: _targetPanel(panelSoft, border)),
-                          const SizedBox(width: 14),
-                          Expanded(child: _rulePanel(panelSoft, border)),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      _previewPanel(
+                      if (_isEdit)
+                        _lockedTargetPanel(
+                          panelSoft,
+                          border,
+                          textPrimary,
+                          textSecondary,
+                        )
+                      else
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            if (constraints.maxWidth < 940) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _targetPanel(panelSoft, border),
+                                  const SizedBox(height: 12),
+                                  _rulePanel(panelSoft, border),
+                                ],
+                              );
+                            }
+                            return IntrinsicHeight(
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Expanded(
+                                    child: _targetPanel(panelSoft, border),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: _rulePanel(panelSoft, border),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      if (_isEdit) const SizedBox(height: 12),
+                      if (_isEdit) _rulePanel(panelSoft, border),
+                      const SizedBox(height: 16),
+                      _activeSwitch(
                         panelSoft,
                         border,
                         textPrimary,
                         textSecondary,
                       ),
-                      const SizedBox(height: 14),
-                      TextField(
-                        controller: _noteController,
-                        minLines: 2,
-                        maxLines: 4,
-                        decoration: _inputDecoration(
-                          label: 'Note',
-                          icon: Icons.note_alt_rounded,
-                          hint: 'Optional',
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      _activeSwitch(
+                      const SizedBox(height: 18),
+                      _previewPanel(
                         panelSoft,
                         border,
                         textPrimary,
@@ -385,7 +755,7 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
               ),
               const SizedBox(height: 4),
               Text(
-                'Choose what the rule applies to, then choose how price is calculated.',
+                'Set what this rule applies to and how pricing should behave.',
                 style: TextStyle(
                   color: textSecondary,
                   fontWeight: FontWeight.w700,
@@ -404,7 +774,7 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
 
   Widget _targetPanel(Color panelSoft, Color border) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: panelSoft,
         borderRadius: BorderRadius.circular(18),
@@ -413,115 +783,211 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SegmentedButton<PricingSchemeRuleApplyTo>(
-            segments: PricingSchemeRuleApplyTo.values
+          const Text(
+            'Applies To',
+            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: PricingSchemeRuleApplyTo.values
                 .map(
-                  (value) => ButtonSegment<PricingSchemeRuleApplyTo>(
-                    value: value,
-                    label: Text(value.label),
+                  (value) => Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: _applyToChoiceCard(
+                        value: value,
+                        selected: _applyTo == value,
+                        onTap: () => setState(() {
+                          _applyTo = value;
+                          _hideCategoryOverlay();
+                          _hideProductSearchOverlay();
+                          _enforceRuleTypeCompatibility();
+                        }),
+                      ),
+                    ),
                   ),
                 )
                 .toList(),
-            selected: {_applyTo},
-            onSelectionChanged: (values) {
-              setState(() {
-                _applyTo = values.first;
-              });
-            },
           ),
           const SizedBox(height: 14),
           if (_applyTo == PricingSchemeRuleApplyTo.category)
-            DropdownButtonFormField<String>(
-              initialValue: _category,
-              decoration: _inputDecoration(
-                label: 'Product category',
-                icon: Icons.category_rounded,
-              ),
-              items: widget.categories
-                  .map(
-                    (category) => DropdownMenuItem<String>(
-                      value: category,
-                      child: Text(category),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                setState(() {
-                  _category = value;
-                });
-              },
-            )
+            _categoryPicker()
           else if (_applyTo == PricingSchemeRuleApplyTo.product)
             _productPicker()
           else
             const Text(
-              'This rule applies to every product unless a more specific rule wins.',
+              'This rule applies to all products unless a more specific rule overrides it.',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
+          if (_conflictingSpecificProductRule != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _warning.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _warning.withValues(alpha: 0.30)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: _warning),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This product already has a rule. Saving will replace it after confirmation.',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 
+  Widget _lockedTargetPanel(
+    Color panelSoft,
+    Color border,
+    Color textPrimary,
+    Color textSecondary,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: panelSoft,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: _brand.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _brand.withValues(alpha: 0.30)),
+            ),
+            child: const Icon(Icons.lock_rounded, color: _brand, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Rule Target (Locked)',
+                  style: TextStyle(
+                    color: textPrimary,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _targetSummary(),
+                  style: TextStyle(
+                    color: textSecondary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _applyToChoiceCard({
+    required PricingSchemeRuleApplyTo value,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final border = isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+    final bg = selected
+        ? _brand.withValues(alpha: isDark ? 0.20 : 0.12)
+        : Colors.transparent;
+    final outline = selected
+        ? _brand.withValues(alpha: 0.40)
+        : border.withValues(alpha: 0.9);
+    final textColor = selected
+        ? _brand
+        : (isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B));
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minWidth: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: outline),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              selected
+                  ? Icons.check_circle_rounded
+                  : Icons.radio_button_unchecked_rounded,
+              size: 16,
+              color: textColor,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                value.label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: textColor,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _productPicker() {
-    final query = _searchController.text.trim().toLowerCase();
-    final products = query.isEmpty
-        ? widget.products.take(12).toList()
-        : widget.products
-              .where(
-                (product) =>
-                    product.name.toLowerCase().contains(query) ||
-                    product.barcode.toLowerCase().contains(query) ||
-                    product.category.toLowerCase().contains(query),
-              )
-              .take(20)
-              .toList();
+    final hasQuery = _searchController.text.trim().isNotEmpty;
     final selected = _product;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TextField(
-          controller: _searchController,
-          decoration: _inputDecoration(
-            label: 'Search product',
-            icon: Icons.search_rounded,
-            hint: 'Name, barcode, or category',
+        CompositedTransformTarget(
+          link: _productSearchLayerLink,
+          child: TextField(
+            key: _productSearchFieldKey,
+            controller: _searchController,
+            focusNode: _productSearchFocusNode,
+            decoration: _inputDecoration(
+              label: 'Search product',
+              icon: Icons.search_rounded,
+              hint: 'Name, barcode, or category',
+            ),
+            onChanged: (_) {
+              setState(() {});
+              _refreshProductSearchOverlay();
+            },
+            onTap: _refreshProductSearchOverlay,
           ),
-          onChanged: (_) => setState(() {}),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 8),
         if (selected != null)
           _selectedProductCard(selected)
-        else
-          SizedBox(
-            height: 210,
-            child: products.isEmpty
-                ? const Center(child: Text('No matching products found.'))
-                : ListView.separated(
-                    itemCount: products.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 6),
-                    itemBuilder: (context, index) {
-                      final product = products[index];
-                      return ListTile(
-                        dense: true,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        leading: const Icon(Icons.inventory_2_rounded),
-                        title: Text(product.name),
-                        subtitle: Text(
-                          '${product.barcode} - ${product.category}',
-                        ),
-                        onTap: () {
-                          setState(() {
-                            _product = product;
-                          });
-                        },
-                      );
-                    },
-                  ),
-          ),
+        else if (!hasQuery)
+          const SizedBox.shrink(),
       ],
     );
   }
@@ -543,9 +1009,51 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
     );
   }
 
+  Widget _categoryPicker() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final value = (_category == null || _category!.trim().isEmpty)
+        ? 'Select category'
+        : _category!;
+    final textColor = (_category == null || _category!.trim().isEmpty)
+        ? (isDark ? const Color(0xFF94A7BE) : const Color(0xFF6C829C))
+        : (isDark ? const Color(0xFFEAF1FB) : const Color(0xFF163250));
+
+    return CompositedTransformTarget(
+      link: _categoryLayerLink,
+      child: InkWell(
+        key: _categoryFieldKey,
+        borderRadius: BorderRadius.circular(16),
+        onTap: _toggleCategoryOverlay,
+        child: InputDecorator(
+          decoration: _inputDecoration(
+            label: 'Product category',
+            icon: Icons.category_rounded,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: textColor,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(Icons.keyboard_arrow_down_rounded, size: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _rulePanel(Color panelSoft, Color border) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: panelSoft,
         borderRadius: BorderRadius.circular(18),
@@ -554,13 +1062,20 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          const Text(
+            'Price Rule',
+            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
+          ),
+          const SizedBox(height: 10),
           DropdownButtonFormField<PricingSchemeRuleType>(
-            initialValue: _ruleType,
+            initialValue: _availableRuleTypes.contains(_ruleType)
+                ? _ruleType
+                : _availableRuleTypes.first,
             decoration: _inputDecoration(
               label: 'Rule type',
               icon: Icons.tune_rounded,
             ),
-            items: PricingSchemeRuleType.values
+            items: _availableRuleTypes
                 .map(
                   (type) => DropdownMenuItem<PricingSchemeRuleType>(
                     value: type,
@@ -634,16 +1149,6 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
               'No discount keeps the matching item on normal/default pricing and blocks discount rules.',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _priorityController,
-            keyboardType: TextInputType.number,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            decoration: _inputDecoration(
-              label: 'Priority',
-              icon: Icons.low_priority_rounded,
-            ),
-          ),
         ],
       ),
     );
@@ -660,36 +1165,125 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
     final normalPrice = product?.sellingPrice ?? 0.0;
     final newPrice = product == null ? 0.0 : _previewPrice(product);
     final difference = newPrice - normalPrice;
+    final hasPreview = product != null;
+    final targetSummary = _targetSummary();
+    final effectSummary = _ruleEffectDescription();
+    final currentRuleDetails = _currentAppliedRuleDetails();
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: panelSoft,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: border),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.visibility_rounded, color: _blue),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              product == null
-                  ? 'Preview appears after products exist.'
-                  : '${product.name}: normal ${_money(normalPrice)} -> rule ${_money(newPrice)}',
-              style: TextStyle(color: textPrimary, fontWeight: FontWeight.w900),
-            ),
+          Row(
+            children: [
+              Icon(Icons.visibility_rounded, color: _blue),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Rule Description',
+                  style: TextStyle(
+                    color: textPrimary,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              if (hasPreview)
+                Text(
+                  difference == 0 ? 'No change' : _money(difference.abs()),
+                  style: TextStyle(
+                    color: difference <= 0 ? _brand : _warning,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+            ],
           ),
+          const SizedBox(height: 8),
           Text(
-            difference == 0 ? 'No change' : _money(difference.abs()),
+            'Applies to: $targetSummary',
             style: TextStyle(
-              color: difference <= 0 ? _brand : _warning,
-              fontWeight: FontWeight.w900,
+              color: textPrimary,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
             ),
           ),
+          const SizedBox(height: 3),
+          Text(
+            effectSummary,
+            style: TextStyle(
+              color: textSecondary,
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
+            ),
+          ),
+          if (hasPreview) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Preview on ${product.name}: ${_money(normalPrice)} -> ${_money(newPrice)}',
+              style: TextStyle(
+                color: textSecondary,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+            ),
+          ],
+          if (_isEdit && currentRuleDetails != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              currentRuleDetails,
+              style: TextStyle(
+                color: textPrimary,
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  String _ruleEffectDescription() {
+    switch (_ruleType) {
+      case PricingSchemeRuleType.priceType:
+        return 'Matching items use "${_priceType.label}" as the final selling price.';
+      case PricingSchemeRuleType.percentDiscount:
+        final discount =
+            double.tryParse(_discountController.text.trim()) ?? 0.0;
+        return 'Matching items get ${discount.toStringAsFixed(2)}% off from their selling price.';
+      case PricingSchemeRuleType.fixedPrice:
+        final fixed = double.tryParse(_fixedPriceController.text.trim());
+        if (fixed == null) {
+          return 'Matching item price will be forced to a fixed value once entered.';
+        }
+        return 'Matching item price is forced to ${_money(fixed)} regardless of normal/sale/wholesale values.';
+      case PricingSchemeRuleType.noDiscount:
+        return 'Discounting is blocked for matching items, so they remain on default pricing.';
+    }
+  }
+
+  String? _currentAppliedRuleDetails() {
+    final rule = widget.rule;
+    if (rule == null) return null;
+
+    String detail =
+        'Current saved rule: ${rule.applyTo.label} -> ${rule.ruleType.label}';
+    if (rule.ruleType == PricingSchemeRuleType.priceType &&
+        rule.priceType != null) {
+      detail += ' (${rule.priceType!.label})';
+    } else if (rule.ruleType == PricingSchemeRuleType.percentDiscount) {
+      detail += ' (${rule.discountPercent.toStringAsFixed(2)}%)';
+    } else if (rule.ruleType == PricingSchemeRuleType.fixedPrice &&
+        rule.fixedPrice != null) {
+      detail += ' (${_money(rule.fixedPrice!)})';
+    }
+    detail += rule.isActive ? ' [Active]' : ' [Inactive]';
+    return detail;
   }
 
   double _previewPrice(Product product) {
@@ -715,7 +1309,7 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
     Color textSecondary,
   ) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
         color: panelSoft,
         borderRadius: BorderRadius.circular(18),

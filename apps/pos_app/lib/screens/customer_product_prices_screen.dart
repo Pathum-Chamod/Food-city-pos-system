@@ -167,12 +167,14 @@ class _CustomerProductPricesScreenState
       context: context,
       products: _products,
       categories: _categories,
+      existingRules: _rules.map((e) => e.asPricingSchemeRule()).toList(),
       titleNoun: 'Customer Rule',
     );
     if (result == null) return;
 
     try {
       await CustomerPricingService.instance.upsertCustomerRule(
+        id: result.overwriteRuleId,
         customerId: customerId,
         applyTo: result.applyTo,
         category: result.category,
@@ -209,6 +211,7 @@ class _CustomerProductPricesScreenState
       context: context,
       products: _products,
       categories: _categories,
+      existingRules: _rules.map((e) => e.asPricingSchemeRule()).toList(),
       rule: rule.asPricingSchemeRule(),
       titleNoun: 'Customer Rule',
     );
