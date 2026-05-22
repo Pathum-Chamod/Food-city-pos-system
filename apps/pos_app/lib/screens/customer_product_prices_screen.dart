@@ -29,7 +29,6 @@ class _CustomerProductPricesScreenState
   bool _isLoading = true;
 
   static const Color _brand = Color(0xFF2AAA8A);
-  static const Color _warning = Color(0xFFFFB65C);
   static const Color _danger = Color(0xFFFF6B7A);
   static const Color _success = Color(0xFF1FCF9A);
 
@@ -273,6 +272,52 @@ class _CustomerProductPricesScreenState
     }
   }
 
+  Future<void> _deleteRule(CustomerPricingRule rule) async {
+    final id = rule.id ?? 0;
+    if (id <= 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Rule'),
+          content: const Text(
+            'Delete this customer rule permanently?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(backgroundColor: _danger),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await CustomerPricingService.instance.deleteCustomerRule(id: id);
+      await _logPricingUpdate(
+        'Customer-specific pricing rule deleted for ${widget.customer.displayName}',
+      );
+      if (!mounted) return;
+      _showMessage('Customer rule deleted.', color: _success);
+      await _loadData();
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage(
+        e.toString().replaceFirst('Exception: ', ''),
+        color: _danger,
+      );
+    }
+  }
+
   InputDecoration _searchDecoration() {
     return InputDecoration(
       labelText: 'Search customer rules',
@@ -319,11 +364,6 @@ class _CustomerProductPricesScreenState
             icon: const Icon(Icons.refresh_rounded),
           ),
         ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isLoading ? null : _addRule,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Add Rule'),
       ),
       body: SafeArea(
         child: _isLoading
@@ -504,27 +544,53 @@ class _CustomerProductPricesScreenState
             ),
           ),
           const SizedBox(width: 12),
-          _amountColumn(
-            label: 'Priority',
-            value: rule.priority.toString(),
-            color: _warning,
-          ),
-          const SizedBox(width: 12),
-          IconButton(
-            tooltip: 'Edit',
-            onPressed: () => _editRule(rule),
-            icon: const Icon(Icons.edit_rounded),
-          ),
-          IconButton(
-            tooltip: rule.isActive ? 'Deactivate' : 'Activate',
-            onPressed: () => _toggleActive(rule),
-            icon: Icon(
-              rule.isActive
-                  ? Icons.toggle_on_rounded
-                  : Icons.toggle_off_rounded,
-              color: rule.isActive ? _brand : _textSecondary,
-              size: 32,
-            ),
+          PopupMenuButton<String>(
+            tooltip: 'Actions',
+            icon: Icon(Icons.more_vert_rounded, color: _textSecondary),
+            onSelected: (value) {
+              switch (value) {
+                case 'edit':
+                  _editRule(rule);
+                  break;
+                case 'toggle':
+                  _toggleActive(rule);
+                  break;
+                case 'delete':
+                  _deleteRule(rule);
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem<String>(
+                value: 'edit',
+                child: ListTile(
+                  dense: true,
+                  leading: Icon(Icons.edit_rounded),
+                  title: Text('Edit'),
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'toggle',
+                child: ListTile(
+                  dense: true,
+                  leading: Icon(
+                    rule.isActive
+                        ? Icons.toggle_on_rounded
+                        : Icons.toggle_off_rounded,
+                    color: rule.isActive ? _brand : _textSecondary,
+                  ),
+                  title: Text(rule.isActive ? 'Deactivate' : 'Activate'),
+                ),
+              ),
+              const PopupMenuItem<String>(
+                value: 'delete',
+                child: ListTile(
+                  dense: true,
+                  leading: Icon(Icons.delete_outline_rounded),
+                  title: Text('Delete'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -587,37 +653,4 @@ class _CustomerProductPricesScreenState
     }
   }
 
-  Widget _amountColumn({
-    required String label,
-    required String value,
-    required Color color,
-  }) {
-    return SizedBox(
-      width: 118,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Text(
-            value,
-            textAlign: TextAlign.right,
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.w900,
-              fontSize: 15,
-            ),
-          ),
-          const SizedBox(height: 3),
-          Text(
-            label,
-            textAlign: TextAlign.right,
-            style: TextStyle(
-              color: _textSecondary,
-              fontWeight: FontWeight.w700,
-              fontSize: 11,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }

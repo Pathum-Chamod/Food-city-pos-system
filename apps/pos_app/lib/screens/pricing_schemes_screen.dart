@@ -219,6 +219,44 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
     }
   }
 
+  Future<void> _deleteScheme(PricingScheme scheme) async {
+    final id = scheme.id ?? 0;
+    if (id <= 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Pricing Scheme'),
+          content: Text(
+            'Delete "${scheme.displayName}"? This action is permanent and only works when no linked rules/assignments exist.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(backgroundColor: _danger),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    try {
+      await PricingSchemeService.instance.deletePricingScheme(id: id);
+      await _logPricingUpdate('Pricing scheme "${scheme.displayName}" deleted');
+      _showMessage('Pricing scheme deleted.', color: _success);
+      await _loadSchemes();
+    } catch (e) {
+      _showMessage(_cleanError(e), color: _danger);
+    }
+  }
+
   Future<void> _openRules(PricingScheme scheme) async {
     await Navigator.push(
       context,
@@ -371,27 +409,64 @@ class _PricingSchemesScreenState extends State<PricingSchemesScreen> {
               label: const Text('Rules'),
             ),
             const SizedBox(width: 8),
-            IconButton(
-              tooltip: 'Duplicate',
-              onPressed: () => _duplicateScheme(scheme),
-              icon: const Icon(Icons.copy_rounded),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: 'Edit',
-              onPressed: () => _editScheme(scheme),
-              icon: const Icon(Icons.edit_rounded),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: scheme.isActive ? 'Deactivate' : 'Reactivate',
-              onPressed: () => _toggleActive(scheme),
-              icon: Icon(
-                scheme.isActive
-                    ? Icons.block_rounded
-                    : Icons.check_circle_rounded,
-                color: scheme.isActive ? _danger : _brand,
-              ),
+            PopupMenuButton<String>(
+              tooltip: 'Actions',
+              icon: Icon(Icons.more_vert_rounded, color: _textSecondary),
+              onSelected: (value) {
+                switch (value) {
+                  case 'duplicate':
+                    _duplicateScheme(scheme);
+                    break;
+                  case 'edit':
+                    _editScheme(scheme);
+                    break;
+                  case 'toggle':
+                    _toggleActive(scheme);
+                    break;
+                  case 'delete':
+                    _deleteScheme(scheme);
+                    break;
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem<String>(
+                  value: 'duplicate',
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.copy_rounded),
+                    title: Text('Duplicate'),
+                  ),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'edit',
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.edit_rounded),
+                    title: Text('Edit'),
+                  ),
+                ),
+                PopupMenuItem<String>(
+                  value: 'toggle',
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(
+                      scheme.isActive
+                          ? Icons.block_rounded
+                          : Icons.check_circle_rounded,
+                      color: scheme.isActive ? _danger : _brand,
+                    ),
+                    title: Text(scheme.isActive ? 'Deactivate' : 'Reactivate'),
+                  ),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'delete',
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.delete_outline_rounded),
+                    title: Text('Delete'),
+                  ),
+                ),
+              ],
             ),
           ],
         ),

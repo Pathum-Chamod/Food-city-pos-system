@@ -596,6 +596,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           value: _money(summary.currentBalance),
           icon: Icons.payments_rounded,
           color: balanceColor,
+          prominent: true,
         ),
         const SizedBox(height: 10),
         _creditMiniMetric(
@@ -614,13 +615,10 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           color: summary.availableCredit < 0 ? _danger : _blue,
         ),
         const SizedBox(height: 16),
-        SizedBox(
-          height: 42,
-          child: OutlinedButton.icon(
-            onPressed: _openCustomerLedger,
-            icon: const Icon(Icons.list_alt_rounded),
-            label: const Text('View Ledger'),
-          ),
+        OutlinedButton.icon(
+          onPressed: _openCustomerLedger,
+          icon: const Icon(Icons.list_alt_rounded),
+          label: const Text('View Ledger'),
         ),
         const Spacer(),
         if ((summary.creditNote ?? '').trim().isNotEmpty) ...[
@@ -653,13 +651,10 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           ),
           const SizedBox(height: 10),
         ],
-        SizedBox(
-          height: 42,
-          child: ElevatedButton.icon(
-            onPressed: _receiveCustomerPayment,
-            icon: const Icon(Icons.payments_rounded),
-            label: const Text('Receive Payment'),
-          ),
+        ElevatedButton.icon(
+          onPressed: _receiveCustomerPayment,
+          icon: const Icon(Icons.payments_rounded),
+          label: const Text('Receive Payment'),
         ),
       ],
     );
@@ -670,7 +665,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     required String value,
     required IconData icon,
     required Color color,
+    bool prominent = false,
   }) {
+    final effectiveIconColor = prominent
+        ? color
+        : color.withValues(alpha: 0.72);
+    final effectiveValueColor = prominent ? _textPrimary : _textSecondary;
+
     return Container(
       height: 72,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -681,7 +682,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       ),
       child: Row(
         children: [
-          Icon(icon, color: color, size: 20),
+          Icon(icon, color: effectiveIconColor, size: 20),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -693,9 +694,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: _textPrimary,
+                    color: effectiveValueColor,
                     fontWeight: FontWeight.w900,
-                    fontSize: 14,
+                    fontSize: prominent ? 18 : 16,
                     height: 1.05,
                   ),
                 ),
@@ -705,7 +706,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                   style: TextStyle(
                     color: _textSecondary,
                     fontWeight: FontWeight.w700,
-                    fontSize: 11,
+                    fontSize: 12,
                     height: 1.05,
                   ),
                 ),
@@ -730,6 +731,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           value: customer.loyaltyPointsBalance.toString(),
           icon: Icons.stars_rounded,
           color: _brand,
+          prominent: true,
         ),
         const SizedBox(height: 10),
         _stackedMiniMetric(
@@ -753,13 +755,10 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           color: _warning,
         ),
         const Spacer(),
-        SizedBox(
-          height: 42,
-          child: OutlinedButton.icon(
-            onPressed: _openLoyaltyLedger,
-            icon: const Icon(Icons.list_alt_rounded),
-            label: const Text('View Loyalty Ledger'),
-          ),
+        OutlinedButton.icon(
+          onPressed: _openLoyaltyLedger,
+          icon: const Icon(Icons.list_alt_rounded),
+          label: const Text('View Loyalty Ledger'),
         ),
       ],
     );
@@ -840,6 +839,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           value: _categoryDisplayName(category),
           icon: Icons.groups_2_rounded,
           color: _brand,
+          muted: false,
         ),
         const SizedBox(height: 10),
         _stackedMiniMetric(
@@ -847,6 +847,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           value: _schemeDisplayName(inheritedScheme),
           icon: Icons.call_merge_rounded,
           color: _warning,
+          muted: false,
         ),
         const SizedBox(height: 10),
         _stackedMiniMetric(
@@ -856,15 +857,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               : _schemeDisplayName(directScheme),
           icon: Icons.sell_rounded,
           color: _blue,
+          muted: false,
         ),
         const SizedBox(height: 14),
-        SizedBox(
-          height: 42,
-          child: ElevatedButton.icon(
-            onPressed: _openCategoryAssignment,
-            icon: const Icon(Icons.tune_rounded),
-            label: const Text('Edit Assignment'),
-          ),
+        ElevatedButton.icon(
+          onPressed: _openCategoryAssignment,
+          icon: const Icon(Icons.tune_rounded),
+          label: const Text('Edit Assignment'),
         ),
       ],
     );
@@ -905,7 +904,16 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     required String value,
     required IconData icon,
     required Color color,
+    bool prominent = false,
+    bool muted = true,
   }) {
+    final effectiveIconColor = prominent || !muted
+        ? color
+        : color.withValues(alpha: 0.72);
+    final effectiveValueColor = prominent || !muted
+        ? _textPrimary
+        : _textSecondary;
+
     return Container(
       height: 72,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -916,7 +924,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       ),
       child: Row(
         children: [
-          Icon(icon, color: color, size: 20),
+          Icon(icon, color: effectiveIconColor, size: 20),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -928,9 +936,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: _textPrimary,
+                    color: effectiveValueColor,
                     fontWeight: FontWeight.w900,
-                    fontSize: 14,
+                    fontSize: prominent ? 18 : 16,
                     height: 1.05,
                   ),
                 ),
@@ -942,7 +950,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                   style: TextStyle(
                     color: _textSecondary,
                     fontWeight: FontWeight.w700,
-                    fontSize: 11,
+                    fontSize: 12,
                     height: 1.05,
                   ),
                 ),
@@ -1230,12 +1238,6 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               fontSize: 15,
             ),
           ),
-          const SizedBox(width: 12),
-          OutlinedButton.icon(
-            onPressed: () => _openReceipt(saleId),
-            icon: const Icon(Icons.visibility_rounded, size: 16),
-            label: const Text('Receipt'),
-          ),
         ],
       ),
     );
@@ -1395,7 +1397,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                         itemCount: _history.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (context, index) {
-                          return _historyRow(_history[index]);
+                          return InkWell(onTap: () => _openReceipt((((_history[index]['id'] as num?) ?? 0).toInt())), child: _historyRow(_history[index]));
                         },
                       ),
                   ],

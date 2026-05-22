@@ -294,6 +294,47 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
     }
   }
 
+  Future<void> _deleteCustomer(Customer customer) async {
+    final customerId = customer.id ?? 0;
+    if (customerId <= 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Customer'),
+          content: Text(
+            'Delete ${customer.displayName}? This action is permanent and only works when no linked history exists.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(backgroundColor: _danger),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await CustomerService.instance.deleteCustomer(customerId: customerId);
+      _showMessage('Customer deleted.', color: _success);
+      await _loadCustomers();
+    } catch (e) {
+      _showMessage(
+        e.toString().replaceFirst('Exception: ', ''),
+        color: _danger,
+      );
+    }
+  }
+
   Future<void> _openCreditReport() async {
     await Navigator.push(
       context,
@@ -555,23 +596,56 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                IconButton(
-                  tooltip: 'Edit',
-                  onPressed: () => _editCustomer(customer),
-                  icon: const Icon(Icons.edit_rounded),
+                PopupMenuButton<String>(
+                  tooltip: 'Actions',
+                  icon: Icon(Icons.more_vert_rounded, color: _textSecondary),
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'edit':
+                        _editCustomer(customer);
+                        break;
+                      case 'toggle':
+                        _toggleActive(customer);
+                        break;
+                      case 'delete':
+                        _deleteCustomer(customer);
+                        break;
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem<String>(
+                      value: 'edit',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.edit_rounded),
+                        title: Text('Edit'),
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'toggle',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(
+                          customer.isActive
+                              ? Icons.person_off_rounded
+                              : Icons.person_add_alt_rounded,
+                          color: customer.isActive ? _danger : _brand,
+                        ),
+                        title: Text(
+                          customer.isActive ? 'Deactivate' : 'Reactivate',
+                        ),
+                      ),
+                    ),
+                    const PopupMenuItem<String>(
+                      value: 'delete',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.delete_outline_rounded),
+                        title: Text('Delete'),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: customer.isActive ? 'Deactivate' : 'Reactivate',
-                  onPressed: () => _toggleActive(customer),
-                  icon: Icon(
-                    customer.isActive
-                        ? Icons.person_off_rounded
-                        : Icons.person_add_alt_rounded,
-                    color: customer.isActive ? _danger : _brand,
-                  ),
-                ),
-                const SizedBox(width: 8),
                 Icon(Icons.chevron_right_rounded, color: _textSecondary),
               ],
             ),
