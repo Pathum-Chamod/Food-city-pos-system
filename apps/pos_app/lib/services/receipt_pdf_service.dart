@@ -123,10 +123,10 @@ class ReceiptPdfService {
           paymentMethodLower == 'customer_credit' ||
           paymentMethodLower == 'customer_credit_refund';
       final hasLoyalty =
-          loyaltyPointsEarned != 0 ||
           loyaltyPointsRedeemed != 0 ||
-          loyaltyTotalPoints != null ||
-          loyaltyRedeemedValue.abs() > 0.000001;
+          loyaltyRedeemedValue.abs() > 0.000001 ||
+          loyaltyPointsEarned != 0 ||
+          loyaltyTotalPoints != null;
 
       pdf.addPage(
         pw.MultiPage(
@@ -275,16 +275,10 @@ class ReceiptPdfService {
                   _receiptLabelValue('Change', _formatMoney(changeAmount)),
                 if (hasLoyalty) ...[
                   pw.SizedBox(height: 4),
-                  if (loyaltyPointsRedeemed != 0)
+                  if (loyaltyPointsRedeemed != 0 ||
+                      loyaltyRedeemedValue.abs() > 0.000001)
                     _receiptLabelValue(
                       'Loyalty redeemed',
-                      '${loyaltyPointsRedeemed.abs()} pts',
-                      fontSize: 7,
-                      valueColor: PdfColors.grey700,
-                    ),
-                  if (loyaltyRedeemedValue.abs() > 0.000001)
-                    _receiptLabelValue(
-                      'Loyalty value',
                       _formatMoney(loyaltyRedeemedValue.abs()),
                       fontSize: 7,
                       valueColor: PdfColors.grey700,

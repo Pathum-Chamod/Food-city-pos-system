@@ -213,10 +213,10 @@ class ReceiptPrinterService {
           paymentMethodLower == 'customer_credit' ||
           paymentMethodLower == 'customer_credit_refund';
       final hasLoyalty =
-          loyaltyPointsEarned != 0 ||
           loyaltyPointsRedeemed != 0 ||
-          loyaltyTotalPoints != null ||
-          loyaltyRedeemedValue.abs() > 0.000001;
+          loyaltyRedeemedValue.abs() > 0.000001 ||
+          loyaltyPointsEarned != 0 ||
+          loyaltyTotalPoints != null;
 
       // Reset + basic formatting
       bytes.addAll(_escInit());
@@ -407,17 +407,11 @@ class ReceiptPrinterService {
 
       if (hasLoyalty) {
         bytes.addAll(_feed(1));
-        if (loyaltyPointsRedeemed != 0) {
+        if (loyaltyPointsRedeemed != 0 ||
+            loyaltyRedeemedValue.abs() > 0.000001) {
           bytes.addAll(
             _text(
-              '${_labelValue('Loyalty redeemed', '${loyaltyPointsRedeemed.abs()} pts')}\n',
-            ),
-          );
-        }
-        if (loyaltyRedeemedValue.abs() > 0.000001) {
-          bytes.addAll(
-            _text(
-              '${_labelValue('Loyalty value', 'Rs.${loyaltyRedeemedValue.abs().toStringAsFixed(2)}')}\n',
+              '${_labelValue('Loyalty redeemed', 'Rs.${loyaltyRedeemedValue.abs().toStringAsFixed(2)}')}\n',
             ),
           );
         }

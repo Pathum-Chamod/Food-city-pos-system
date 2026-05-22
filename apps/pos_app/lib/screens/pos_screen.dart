@@ -297,7 +297,9 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   String _currentCashierName() {
-    return context.read<AuthProvider>().currentUser?.name ?? 'Unknown';
+    final auth = context.read<AuthProvider>();
+    if (auth.isPresentationLogin) return 'Cashier';
+    return auth.currentUser?.name ?? 'Unknown';
   }
 
   void _attachActiveCartAutosave() {
@@ -796,6 +798,9 @@ class _PosScreenState extends State<PosScreen> {
 
   Widget _buildWelcomeOverlay(AuthProvider auth) {
     final userName = _resolveWelcomeName(auth);
+    final welcomeTitle = auth.isPresentationLogin
+        ? 'Welcome'
+        : 'Welcome, $userName';
 
     return IgnorePointer(
       child: SafeArea(
@@ -877,7 +882,7 @@ class _PosScreenState extends State<PosScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Welcome, $userName',
+                                    welcomeTitle,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
@@ -6659,7 +6664,9 @@ class _PosScreenState extends State<PosScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          auth.currentUser?.name ?? 'Not Logged In',
+                          auth.isPresentationLogin
+                              ? 'Cashier'
+                              : (auth.currentUser?.name ?? 'Not Logged In'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
