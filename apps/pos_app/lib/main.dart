@@ -861,14 +861,23 @@ class _PosAppState extends State<PosApp> {
             shortcutRow('F5', 'Open held carts'),
             shortcutRow('F6', 'Apply cart discount'),
             shortcutRow('F7', 'Focus product search'),
+            shortcutRow('Double F7', 'Open/close product search'),
+            shortcutRow('Double C', 'Focus customer search'),
+            shortcutRow('Double L', 'Focus loyalty field'),
+            shortcutRow(
+              'Double Backspace (Customer Search)',
+              'Clear and focus back to POS screen barcode',
+            ),
+            shortcutRow(
+              'Double Backspace (Loyalty)',
+              'Clear and focus back to POS screen barcode',
+            ),
             shortcutRow('Shift + Esc', 'Open logout confirmation'),
           ]);
           final heldBillsSection = section('Held Bills', [
             shortcutRow('1 - 9', 'Select visible held bill'),
             shortcutRow('Double 1 - 9', 'Resume selected held bill to cart'),
             shortcutRow('Up / Down', 'Move held bill selection'),
-            shortcutRow('Page Up', 'Select top held bill'),
-            shortcutRow('Page Down', 'Select bottom held bill'),
             shortcutRow('Enter', 'Resume selected held bill'),
             shortcutRow('Delete', 'Delete selected held bill'),
           ]);
@@ -896,18 +905,14 @@ class _PosAppState extends State<PosApp> {
           ]);
 
           final landscapeColumns = <List<Widget>>[
-            [posFlowSection, posActionsSection, heldBillsSection],
+            [posFlowSection, posActionsSection],
             [priceModesSection, modulesSection],
-            [cartActionsSection, popupRulesSection],
+            [cartActionsSection, popupRulesSection, heldBillsSection],
           ];
           final mediumColumns = <List<Widget>>[
-            [
-              posFlowSection,
-              posActionsSection,
-              heldBillsSection,
-              popupRulesSection,
-            ],
+            [posFlowSection, posActionsSection, popupRulesSection],
             [priceModesSection, cartActionsSection, modulesSection],
+            [heldBillsSection],
           ];
           final allSections = <Widget>[
             posFlowSection,
