@@ -614,21 +614,18 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           color: summary.availableCredit < 0 ? _danger : _blue,
         ),
         const SizedBox(height: 16),
-        OutlinedButton.icon(
-          onPressed: _openCustomerLedger,
-          icon: const Icon(Icons.list_alt_rounded),
-          label: const Text('View Ledger'),
+        SizedBox(
+          height: 42,
+          child: OutlinedButton.icon(
+            onPressed: _openCustomerLedger,
+            icon: const Icon(Icons.list_alt_rounded),
+            label: const Text('View Ledger'),
+          ),
         ),
-        const SizedBox(height: 10),
-        ElevatedButton.icon(
-          onPressed: _receiveCustomerPayment,
-          icon: const Icon(Icons.payments_rounded),
-          label: const Text('Receive Payment'),
-        ),
+        const Spacer(),
         if ((summary.creditNote ?? '').trim().isNotEmpty) ...[
-          const SizedBox(height: 14),
           Container(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               color: _panelSoft,
               borderRadius: BorderRadius.circular(18),
@@ -642,6 +639,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                 Expanded(
                   child: Text(
                     summary.creditNote!.trim(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: _textSecondary,
                       fontWeight: FontWeight.w700,
@@ -652,7 +651,16 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               ],
             ),
           ),
+          const SizedBox(height: 10),
         ],
+        SizedBox(
+          height: 42,
+          child: ElevatedButton.icon(
+            onPressed: _receiveCustomerPayment,
+            icon: const Icon(Icons.payments_rounded),
+            label: const Text('Receive Payment'),
+          ),
+        ),
       ],
     );
   }
@@ -744,11 +752,14 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           icon: Icons.redeem_rounded,
           color: _warning,
         ),
-        const SizedBox(height: 16),
-        OutlinedButton.icon(
-          onPressed: _openLoyaltyLedger,
-          icon: const Icon(Icons.list_alt_rounded),
-          label: const Text('View Loyalty Ledger'),
+        const Spacer(),
+        SizedBox(
+          height: 42,
+          child: OutlinedButton.icon(
+            onPressed: _openLoyaltyLedger,
+            icon: const Icon(Icons.list_alt_rounded),
+            label: const Text('View Loyalty Ledger'),
+          ),
         ),
       ],
     );
@@ -847,10 +858,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           color: _blue,
         ),
         const SizedBox(height: 14),
-        ElevatedButton.icon(
-          onPressed: _openCategoryAssignment,
-          icon: const Icon(Icons.tune_rounded),
-          label: const Text('Edit Assignment'),
+        SizedBox(
+          height: 42,
+          child: ElevatedButton.icon(
+            onPressed: _openCategoryAssignment,
+            icon: const Icon(Icons.tune_rounded),
+            label: const Text('Edit Assignment'),
+          ),
         ),
       ],
     );
@@ -998,7 +1012,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       icon: Icons.card_giftcard_rounded,
       color: _brand,
       trailing: _loyaltyToggle(customer),
-      children: [_loyaltyCard(customer)],
+      children: [Expanded(child: _loyaltyCard(customer))],
     );
 
     Widget pricingColumn() => _detailGroupColumn(
@@ -1008,7 +1022,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       color: _blue,
       children: [
         _categorySchemeCard(customer),
-        const SizedBox(height: 14),
+        const Spacer(),
         _pricingDiscountsCard(customer),
       ],
     );
@@ -1019,7 +1033,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       icon: Icons.account_balance_wallet_rounded,
       color: _warning,
       trailing: _creditSettingsButton(customer),
-      children: [_creditAccountCard(customer)],
+      children: [Expanded(child: _creditAccountCard(customer))],
     );
 
     return LayoutBuilder(
@@ -1029,17 +1043,17 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              loyaltyColumn(),
+              SizedBox(height: 520, child: loyaltyColumn()),
               const SizedBox(height: 18),
-              pricingColumn(),
+              SizedBox(height: 520, child: pricingColumn()),
               const SizedBox(height: 18),
-              creditColumn(),
+              SizedBox(height: 520, child: creditColumn()),
             ],
           );
         }
 
         return SizedBox(
-          height: 560,
+          height: 520,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -1127,8 +1141,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               if (trailing != null) ...[const SizedBox(width: 10), trailing],
             ],
           ),
-          const SizedBox(height: 14),
-          ...children,
+          const SizedBox(height: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children,
+            ),
+          ),
         ],
       ),
     );
