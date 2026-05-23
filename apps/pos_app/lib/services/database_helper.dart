@@ -2424,10 +2424,66 @@ class DatabaseHelper {
     }
   }
 
-  Future<List<Product>> getProducts() async {
+  Future<List<Product>> getProducts({int? limit, int offset = 0}) async {
     final db = await database;
-    final maps = await db.query('products', orderBy: 'name ASC');
+    final maps = await db.query(
+      'products',
+      orderBy: 'name ASC',
+      limit: limit,
+      offset: offset < 0 ? 0 : offset,
+    );
     return maps.map((map) => Product.fromMap(map)).toList();
+  }
+
+  Future<Map<String, dynamic>> getInventorySummaryTotals() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT
+        COALESCE(SUM(CASE WHEN COALESCE(is_active, 1) = 1 THEN 1 ELSE 0 END), 0) AS active_product_count,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(is_active, 1) = 1
+                   AND COALESCE(stock, 0) > 0
+                   AND COALESCE(stock, 0) <= COALESCE(min_stock_level, 0)
+              THEN 1
+              ELSE 0
+            END
+          ),
+          0
+        ) AS low_stock_count,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(is_active, 1) = 1
+                   AND COALESCE(stock, 0) <= 0
+              THEN 1
+              ELSE 0
+            END
+          ),
+          0
+        ) AS out_of_stock_count,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN COALESCE(is_active, 1) = 1
+              THEN COALESCE(cost_price, 0) * COALESCE(stock, 0)
+              ELSE 0
+            END
+          ),
+          0
+        ) AS stock_value
+      FROM products
+    ''');
+
+    final row = rows.isNotEmpty ? rows.first : const <String, Object?>{};
+    return {
+      'active_product_count':
+          (row['active_product_count'] as num?)?.toInt() ?? 0,
+      'low_stock_count': (row['low_stock_count'] as num?)?.toInt() ?? 0,
+      'out_of_stock_count': (row['out_of_stock_count'] as num?)?.toInt() ?? 0,
+      'stock_value': ((row['stock_value'] as num?) ?? 0).toDouble(),
+    };
   }
 
   Future<void> replaceProductsFromBackend(List<Product> backendProducts) async {

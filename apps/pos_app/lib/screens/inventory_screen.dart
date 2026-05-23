@@ -59,6 +59,12 @@ class _BulkImportPreviewRow {
 
 class _InventoryScreenState extends State<InventoryScreen> {
   static const String _inventoryViewPrefKey = 'inventory_compact_table_view';
+  static const int _initialProductFetchLimit = 50;
+  static const int _defaultProductFetchLimit = 200;
+  static List<Product> _cachedProducts = <Product>[];
+  static bool _cachedHasMoreProducts = true;
+  static Map<String, dynamic>? _cachedInventorySummary;
+  static bool? _cachedCompactTableView;
   final TextEditingController _searchController = TextEditingController();
   late final FocusNode _searchFocusNode;
   final ScrollController _pageScrollController = ScrollController();
@@ -66,17 +72,24 @@ class _InventoryScreenState extends State<InventoryScreen> {
   List<Product> _products = [];
   List<Map<String, dynamic>> _recentMovements = [];
   bool _isLoading = true;
+  bool _isLoadingMoreProducts = false;
   bool _isRefreshing = false;
   String _searchQuery = '';
   InventoryFilter _selectedFilter = InventoryFilter.all;
   bool _isBulkDeleteMode = false;
-  bool _isCompactTableView = false;
+  bool _isCompactTableView = _cachedCompactTableView ?? false;
   int? _selectedSearchResultIndex;
   Timer? _searchSelectionTimer;
   final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
   final Set<String> _selectedProductBarcodes = <String>{};
   final Map<String, String> _supplierNameByBarcode = <String, String>{};
   String? _bulkDeletePerformedByLabel;
+  int _loadedProductOffset = 0;
+  bool _hasMoreProducts = true;
+  int? _summaryActiveProductCount;
+  int? _summaryLowStockCount;
+  int? _summaryOutOfStockCount;
+  double? _summaryStockValue;
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _screenBackground =>
@@ -455,6 +468,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
   void initState() {
     super.initState();
     _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
+    _pageScrollController.addListener(_handleInfiniteScroll);
+    if (_cachedProducts.isNotEmpty) {
+      _products = List<Product>.from(_cachedProducts);
+      _loadedProductOffset = _products.length;
+      _hasMoreProducts = _cachedHasMoreProducts;
+      _isLoading = false;
+    }
+    if (_cachedInventorySummary != null) {
+      _summaryActiveProductCount =
+          (_cachedInventorySummary!['active_product_count'] as num?)?.toInt();
+      _summaryLowStockCount =
+          (_cachedInventorySummary!['low_stock_count'] as num?)?.toInt();
+      _summaryOutOfStockCount =
+          (_cachedInventorySummary!['out_of_stock_count'] as num?)?.toInt();
+      _summaryStockValue =
+          ((_cachedInventorySummary!['stock_value'] as num?) ?? 0).toDouble();
+    }
     _restoreViewPreference();
     _loadData(showLoader: true);
     RouteSearchFocusRegistry.register(
@@ -468,6 +498,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getBool(_inventoryViewPrefKey);
     if (!mounted || saved == null) return;
+    _cachedCompactTableView = saved;
     setState(() {
       _isCompactTableView = saved;
     });
@@ -476,6 +507,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Future<void> _persistViewPreference() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_inventoryViewPrefKey, _isCompactTableView);
+    _cachedCompactTableView = _isCompactTableView;
   }
 
   Future<void> _toggleViewMode() async {
@@ -636,20 +668,38 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Future<void> _loadData({bool showLoader = false}) async {
     if (showLoader && mounted) {
       setState(() {
-        _isLoading = true;
+        _isLoading = _products.isEmpty;
       });
     }
 
     try {
-      final products = await DatabaseHelper.instance.getProducts();
-      final movements = await DatabaseHelper.instance.getInventoryMovements(
+      final fetchLimit = _products.isEmpty
+          ? _initialProductFetchLimit
+          : _defaultProductFetchLimit;
+      final products = await DatabaseHelper.instance.getProducts(
+        limit: fetchLimit,
+        offset: 0,
+      );
+      final movementsFuture = DatabaseHelper.instance.getInventoryMovements(
         limit: 8,
       );
-      final mappings = await DatabaseHelper.instance.getSupplierProductMappings(
+      final mappingsFuture = DatabaseHelper.instance.getSupplierProductMappings(
         limit: 5000,
       );
-      final latestReceiptSuppliers = await DatabaseHelper.instance
+      final latestReceiptSuppliersFuture = DatabaseHelper.instance
           .getLatestReceiptSuppliersByBarcode(limit: 5000);
+      final summaryFuture = DatabaseHelper.instance.getInventorySummaryTotals();
+
+      final results = await Future.wait<dynamic>([
+        movementsFuture,
+        mappingsFuture,
+        latestReceiptSuppliersFuture,
+        summaryFuture,
+      ]);
+      final movements = results[0] as List<Map<String, dynamic>>;
+      final mappings = results[1] as List<SupplierProductMapping>;
+      final latestReceiptSuppliers = results[2] as Map<String, String>;
+      final summary = results[3] as Map<String, dynamic>;
 
       final supplierByBarcode = <String, String>{};
       latestReceiptSuppliers.forEach((barcode, supplierName) {
@@ -669,18 +719,70 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
       setState(() {
         _products = products;
+        _loadedProductOffset = products.length;
+        _hasMoreProducts = products.length == fetchLimit;
         _recentMovements = movements;
         _supplierNameByBarcode
           ..clear()
           ..addAll(supplierByBarcode);
+        _summaryActiveProductCount =
+            (summary['active_product_count'] as num?)?.toInt() ?? 0;
+        _summaryLowStockCount =
+            (summary['low_stock_count'] as num?)?.toInt() ?? 0;
+        _summaryOutOfStockCount =
+            (summary['out_of_stock_count'] as num?)?.toInt() ?? 0;
+        _summaryStockValue = ((summary['stock_value'] as num?) ?? 0).toDouble();
         _isLoading = false;
+        _isLoadingMoreProducts = false;
       });
+      _cachedProducts = List<Product>.from(_products);
+      _cachedHasMoreProducts = _hasMoreProducts;
+      _cachedInventorySummary = summary;
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
+        _isLoadingMoreProducts = false;
       });
       _showMessage('Could not load inventory data.', isError: true);
+    }
+  }
+
+  void _handleInfiniteScroll() {
+    if (_searchQuery.trim().isNotEmpty) return;
+    if (_isLoading || _isLoadingMoreProducts || !_hasMoreProducts) return;
+    if (!_pageScrollController.hasClients) return;
+    final position = _pageScrollController.position;
+    if (position.maxScrollExtent <= 0) return;
+    if (position.pixels >= (position.maxScrollExtent - 560)) {
+      unawaited(_loadMoreProducts());
+    }
+  }
+
+  Future<void> _loadMoreProducts() async {
+    if (_isLoading || _isLoadingMoreProducts || !_hasMoreProducts) return;
+    setState(() {
+      _isLoadingMoreProducts = true;
+    });
+    try {
+      final products = await DatabaseHelper.instance.getProducts(
+        limit: _defaultProductFetchLimit,
+        offset: _loadedProductOffset,
+      );
+      if (!mounted) return;
+      setState(() {
+        _products = [..._products, ...products];
+        _loadedProductOffset += products.length;
+        _hasMoreProducts = products.length == _defaultProductFetchLimit;
+        _isLoadingMoreProducts = false;
+      });
+      _cachedProducts = List<Product>.from(_products);
+      _cachedHasMoreProducts = _hasMoreProducts;
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingMoreProducts = false;
+      });
     }
   }
 
@@ -6423,6 +6525,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   Widget build(BuildContext context) {
     final visibleProducts = _filteredProducts;
+    final activeCount =
+        _summaryActiveProductCount ??
+        (_cachedInventorySummary?['active_product_count'] as num?)?.toInt() ??
+        _activeProductCount;
+    final lowStockCount =
+        _summaryLowStockCount ??
+        (_cachedInventorySummary?['low_stock_count'] as num?)?.toInt() ??
+        _lowStockCount;
+    final outOfStockCount =
+        _summaryOutOfStockCount ??
+        (_cachedInventorySummary?['out_of_stock_count'] as num?)?.toInt() ??
+        _outOfStockCount;
+    final stockValue =
+        _summaryStockValue ??
+        ((_cachedInventorySummary?['stock_value'] as num?)?.toDouble()) ??
+        _stockValue;
 
     return Scaffold(
       backgroundColor: _screenBackground,
@@ -6463,7 +6581,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           width: cardWidth,
                           child: _buildSummaryCard(
                             title: 'Products',
-                            value: _activeProductCount.toString(),
+                            value: activeCount.toString(),
                             icon: Icons.inventory_2_outlined,
                             accent: _accentBlue,
                           ),
@@ -6472,7 +6590,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           width: cardWidth,
                           child: _buildSummaryCard(
                             title: 'Low Stock',
-                            value: _lowStockCount.toString(),
+                            value: lowStockCount.toString(),
                             icon: Icons.warning_amber_rounded,
                             accent: _warningColor,
                           ),
@@ -6481,7 +6599,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           width: cardWidth,
                           child: _buildSummaryCard(
                             title: 'Out of Stock',
-                            value: _outOfStockCount.toString(),
+                            value: outOfStockCount.toString(),
                             icon: Icons.remove_shopping_cart_rounded,
                             accent: _dangerColor,
                           ),
@@ -6490,7 +6608,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           width: cardWidth,
                           child: _buildSummaryCard(
                             title: 'Stock Value',
-                            value: 'Rs. ${_stockValue.toStringAsFixed(2)}',
+                            value: 'Rs. ${stockValue.toStringAsFixed(2)}',
                             icon: Icons.payments_outlined,
                             accent: _successColor,
                           ),
@@ -6837,22 +6955,50 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                 ),
                               ),
                             ),
+                            if (_isLoadingMoreProducts)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    color: _brandColor,
+                                  ),
+                                ),
+                              ),
                           ],
                         )
                       else
-                        ...visibleProducts.indexed.map(
-                          (entry) => Padding(
-                            key: _searchResultKeys.putIfAbsent(
-                              entry.$1,
-                              GlobalKey.new,
+                        Column(
+                          children: [
+                            ...visibleProducts.indexed.map(
+                              (entry) => Padding(
+                                key: _searchResultKeys.putIfAbsent(
+                                  entry.$1,
+                                  GlobalKey.new,
+                                ),
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: _buildProductRow(
+                                  entry.$2,
+                                  isKeyboardSelected:
+                                      _selectedSearchResultIndex == entry.$1,
+                                ),
+                              ),
                             ),
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: _buildProductRow(
-                              entry.$2,
-                              isKeyboardSelected:
-                                  _selectedSearchResultIndex == entry.$1,
-                            ),
-                          ),
+                            if (_isLoadingMoreProducts)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    color: _brandColor,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                     ],
                   ),
