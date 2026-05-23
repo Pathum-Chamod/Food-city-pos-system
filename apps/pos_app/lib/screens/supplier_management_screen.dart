@@ -1146,30 +1146,37 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                 ],
               );
 
-              final right = OutlinedButton.icon(
-                onPressed: _isRefreshing ? null : _refresh,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: ui.textPrimary,
-                  side: BorderSide(color: ui.borderStrong),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+              final right = Tooltip(
+                message: 'Refresh suppliers',
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _isRefreshing ? null : _refresh,
+                    borderRadius: BorderRadius.circular(14),
+                    child: Ink(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: ui.surfaceAlt,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: ui.border),
+                      ),
+                      child: _isRefreshing
+                          ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: ui.brand,
+                              ),
+                            )
+                          : Icon(
+                              Icons.refresh_rounded,
+                              size: 18,
+                              color: ui.brand,
+                            ),
+                    ),
                   ),
                 ),
-                icon: _isRefreshing
-                    ? SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: ui.brand,
-                        ),
-                      )
-                    : const Icon(Icons.refresh_rounded, size: 18),
-                label: const Text('Refresh'),
               );
 
               if (compact) {
@@ -1344,18 +1351,100 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 1120;
-          final searchWidth = compact
-              ? constraints.maxWidth
-              : constraints.maxWidth * 0.42;
           final buttonWidth = compact ? (constraints.maxWidth - 10) / 2 : null;
 
-          return Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: TextField(
+                    controller: _supplierSearchController,
+                    focusNode: _supplierSearchFocusNode,
+                    autofocus: true,
+                    decoration: _fieldDecoration(
+                      hintText: 'Search supplier by name, phone, or id',
+                      icon: Icons.search_rounded,
+                      suffixIcon: _supplierSearchController.text.isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () {
+                                _supplierSearchController.clear();
+                                setState(() {
+                                  _selectedSearchResultIndex = null;
+                                });
+                                _loadAll(refreshFromBackend: false);
+                              },
+                              icon: Icon(
+                                Icons.close_rounded,
+                                color: ui.textMuted,
+                              ),
+                            ),
+                    ),
+                    onChanged: (_) => setState(() {
+                      _selectedSearchResultIndex = null;
+                    }),
+                    onSubmitted: (_) => _loadAll(refreshFromBackend: false),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    SizedBox(
+                      width: buttonWidth,
+                      child: OutlinedButton.icon(
+                        onPressed: () => _openSupplierHistory(null),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: ui.textPrimary,
+                          side: BorderSide(color: ui.borderStrong),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 16,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        icon: const Icon(Icons.history_rounded, size: 18),
+                        label: const Text('Receive History'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: buttonWidth,
+                      child: ElevatedButton.icon(
+                        onPressed: _hasManagementAccess
+                            ? () => _showSupplierFormDialog()
+                            : () => _showMessage(
+                                'Only management users can add suppliers.',
+                                isError: true,
+                              ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: ui.brand,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 16,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        icon: const Icon(Icons.add_business_outlined, size: 18),
+                        label: const Text('Add Supplier'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          }
+
+          return Row(
             children: [
-              SizedBox(
-                width: searchWidth,
+              Expanded(
                 child: TextField(
                   controller: _supplierSearchController,
                   focusNode: _supplierSearchFocusNode,
@@ -1385,8 +1474,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                   onSubmitted: (_) => _loadAll(refreshFromBackend: false),
                 ),
               ),
+              const SizedBox(width: 10),
               SizedBox(
-                width: compact ? buttonWidth : 190,
+                width: 190,
                 child: OutlinedButton.icon(
                   onPressed: () => _openSupplierHistory(null),
                   style: OutlinedButton.styleFrom(
@@ -1404,8 +1494,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                   label: const Text('Receive History'),
                 ),
               ),
+              const SizedBox(width: 10),
               SizedBox(
-                width: compact ? buttonWidth : 180,
+                width: 180,
                 child: ElevatedButton.icon(
                   onPressed: _hasManagementAccess
                       ? () => _showSupplierFormDialog()

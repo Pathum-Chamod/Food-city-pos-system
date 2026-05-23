@@ -5005,7 +5005,24 @@ class DatabaseHelper {
         fs.loyalty_note,
         fs.created_at,
         COUNT(si.id) AS item_line_count,
-        COALESCE(SUM(si.quantity), 0) AS item_quantity_total
+        COALESCE(SUM(si.quantity), 0) AS item_quantity_total,
+        COALESCE(
+          SUM(
+            MAX(
+              ABS(COALESCE(si.base_line_total, 0)) - ABS(COALESCE(si.line_total, 0)),
+              0
+            )
+          ),
+          0
+        ) AS item_savings_total,
+        COALESCE(SUM(ABS(COALESCE(si.customer_pricing_discount_amount, 0))), 0)
+          AS customer_pricing_savings_total,
+        COALESCE(SUM(ABS(COALESCE(si.explicit_item_discount_amount, 0))), 0)
+          AS explicit_item_discount_total,
+        COALESCE(SUM(ABS(COALESCE(si.cart_discount_amount, 0))), 0)
+          AS cart_discount_total,
+        COALESCE(SUM(ABS(COALESCE(si.item_discount_amount, 0))), 0)
+          AS item_discount_total
       FROM filtered_sales fs
       LEFT JOIN sale_items si ON si.sale_id = fs.id
       GROUP BY
@@ -5075,6 +5092,12 @@ class DatabaseHelper {
             'created_at': row['created_at'],
             'item_line_count': row['item_line_count'],
             'item_quantity_total': row['item_quantity_total'],
+            'item_savings_total': row['item_savings_total'],
+            'customer_pricing_savings_total':
+                row['customer_pricing_savings_total'],
+            'explicit_item_discount_total': row['explicit_item_discount_total'],
+            'cart_discount_total': row['cart_discount_total'],
+            'item_discount_total': row['item_discount_total'],
           },
         )
         .toList();
@@ -6675,6 +6698,40 @@ class DatabaseHelper {
               SupplierProductMapping.fromMap(Map<String, dynamic>.from(row)),
         )
         .toList();
+  }
+
+  Future<Map<String, String>> getLatestReceiptSuppliersByBarcode({
+    int limit = 5000,
+  }) async {
+    final db = await database;
+    final safeLimit = limit <= 0 ? 5000 : limit;
+    final rows = await db.rawQuery(
+      '''
+      SELECT sr.barcode, sr.supplier_name
+      FROM stock_receipts sr
+      INNER JOIN (
+        SELECT barcode, MAX(created_at) AS latest_created_at
+        FROM stock_receipts
+        WHERE TRIM(COALESCE(supplier_name, '')) <> ''
+        GROUP BY barcode
+      ) latest
+        ON latest.barcode = sr.barcode
+       AND latest.latest_created_at = sr.created_at
+      WHERE TRIM(COALESCE(sr.barcode, '')) <> ''
+      ORDER BY sr.created_at DESC
+      LIMIT ?
+      ''',
+      [safeLimit],
+    );
+
+    final map = <String, String>{};
+    for (final row in rows) {
+      final barcode = (row['barcode'] ?? '').toString().trim();
+      final supplier = (row['supplier_name'] ?? '').toString().trim();
+      if (barcode.isEmpty || supplier.isEmpty) continue;
+      map.putIfAbsent(barcode, () => supplier);
+    }
+    return map;
   }
 
   String _supplierBatchPrefix(String supplierName) {

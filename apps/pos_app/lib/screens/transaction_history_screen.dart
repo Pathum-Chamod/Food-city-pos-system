@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../navigation/pos_route_names.dart';
 import '../navigation/route_search_focus_registry.dart';
@@ -638,6 +639,7 @@ class TransactionHistoryScreen extends StatefulWidget {
 }
 
 class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
+  static const String _txViewPrefKey = 'tx_history_compact_table_view';
   final TextEditingController _searchController = TextEditingController();
   late final FocusNode _searchFocusNode;
   final ScrollController _pageScrollController = ScrollController();
@@ -648,6 +650,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   String _dateFilter = 'all';
   String _searchQuery = '';
   DateTime? _selectedDate;
+  bool _isCompactTableView = false;
   int? _selectedSearchResultIndex;
   Timer? _searchSelectionTimer;
   final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
@@ -657,12 +660,34 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   void initState() {
     super.initState();
     _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
+    _restoreViewPreference();
     _loadTransactions();
     RouteSearchFocusRegistry.register(
       PosRouteNames.transactionHistory,
       _focusSearchField,
     );
     _focusSearchField();
+  }
+
+  Future<void> _restoreViewPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getBool(_txViewPrefKey);
+    if (!mounted || saved == null) return;
+    setState(() {
+      _isCompactTableView = saved;
+    });
+  }
+
+  Future<void> _persistViewPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_txViewPrefKey, _isCompactTableView);
+  }
+
+  Future<void> _toggleViewMode() async {
+    setState(() {
+      _isCompactTableView = !_isCompactTableView;
+    });
+    await _persistViewPreference();
   }
 
   @override
@@ -1223,7 +1248,6 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     required Color accent,
   }) {
     return Container(
-      width: 240,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: palette.surface,
@@ -1275,9 +1299,278 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
               ],
             ),
           ),
+          const SizedBox(width: 12),
+          Tooltip(
+            message: 'Refresh transactions',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _isRefreshing ? null : _refresh,
+                borderRadius: BorderRadius.circular(14),
+                child: Ink(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: palette.soft,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: palette.border),
+                  ),
+                  child: _isRefreshing
+                      ? SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: palette.brand,
+                          ),
+                        )
+                      : Icon(
+                          Icons.refresh_rounded,
+                          size: 18,
+                          color: palette.brand,
+                        ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  Widget _buildTransactionTableHeader(_TxPalette palette) {
+    TextStyle headerStyle = TextStyle(
+      color: palette.textSecondary,
+      fontWeight: FontWeight.w800,
+      fontSize: 12,
+    );
+
+    Widget headerCell(String label, int flex, {TextAlign? align}) {
+      return Expanded(
+        flex: flex,
+        child: Text(label, style: headerStyle, textAlign: align),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: palette.surfaceAlt,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: palette.border),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 240,
+            child: Text('Transaction ID', style: headerStyle),
+          ),
+          SizedBox(
+            width: 132,
+            child: Text(
+              'Number Of Items',
+              style: headerStyle,
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const SizedBox(width: 72),
+          SizedBox(width: 150, child: Text('Sale Type', style: headerStyle)),
+          headerCell('Payment Type', 12),
+          headerCell('Customer', 14),
+          headerCell('Cashier', 12),
+          headerCell('Date and Time', 16),
+          headerCell('Discounts', 12, align: TextAlign.right),
+          headerCell('Total', 12, align: TextAlign.right),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTransactionTableRow(
+    _TxPalette palette,
+    Map<String, dynamic> tx, {
+    bool isKeyboardSelected = false,
+  }) {
+    final id = tx['id'];
+    final itemCount = ((tx['item_line_count'] as num?) ?? 0).toInt();
+    final type = (tx['transaction_type'] ?? 'sale').toString().toLowerCase();
+    final paymentType = _paymentLabel((tx['payment_method'] ?? '').toString());
+    final customerName = _customerName(tx).trim();
+    final cashier = (tx['cashier_name'] ?? 'Unknown').toString();
+    final createdAt = (tx['created_at'] ?? '').toString();
+    final discountAmount = _tableDiscountAmount(tx);
+    final total = ((tx['total_amount'] as num?) ?? 0).toDouble().abs();
+    final typeColor = _tableSaleTypeColor(palette, tx, type);
+    final saleTypeLabel = _tableSaleTypeLabel(tx, type);
+
+    Widget cell(
+      String value,
+      int flex, {
+      TextAlign? align,
+      Color? color,
+      FontWeight? weight,
+    }) {
+      return Expanded(
+        flex: flex,
+        child: Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: align,
+          style: TextStyle(
+            color: color ?? palette.textPrimary,
+            fontWeight: weight ?? FontWeight.w700,
+            fontSize: 13,
+          ),
+        ),
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openTransaction(tx),
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: palette.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isKeyboardSelected ? palette.brand : palette.border,
+              width: isKeyboardSelected ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 240,
+                child: Text(
+                  'Transaction #$id',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: palette.textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 132,
+                child: Text(
+                  itemCount.toString(),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: palette.textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 72),
+              SizedBox(
+                width: 150,
+                child: Text(
+                  saleTypeLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: typeColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              cell(paymentType, 12),
+              cell(customerName.isEmpty ? 'N/A' : customerName, 14),
+              cell(cashier, 12),
+              cell(_formatDateTime(createdAt), 16),
+              cell(
+                discountAmount > 0
+                    ? 'Rs. ${discountAmount.toStringAsFixed(2)}'
+                    : 'N/A',
+                12,
+                align: TextAlign.right,
+                color: discountAmount > 0
+                    ? palette.textPrimary
+                    : palette.textSecondary,
+              ),
+              cell(
+                'Rs. ${total.toStringAsFixed(2)}',
+                12,
+                align: TextAlign.right,
+                color: typeColor,
+                weight: FontWeight.w900,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _tableSaleTypeLabel(Map<String, dynamic> tx, String type) {
+    if (_isCreditSale(tx)) {
+      return type == 'refund' ? 'Credit Refund' : 'Credit Sale';
+    }
+    return _typeLabel(type);
+  }
+
+  Color _tableSaleTypeColor(
+    _TxPalette palette,
+    Map<String, dynamic> tx,
+    String type,
+  ) {
+    if (_isCreditSale(tx)) {
+      return const Color(0xFFFFB65C);
+    }
+    return _typeColor(palette, type);
+  }
+
+  double _tableDiscountAmount(Map<String, dynamic> tx) {
+    final subtotal = ((tx['subtotal_amount'] as num?) ?? 0).toDouble().abs();
+    final total = ((tx['total_amount'] as num?) ?? 0).toDouble().abs();
+    final billDiscount = ((tx['discount_amount'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+    final loyaltyRedeemed = ((tx['loyalty_redeemed_value'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+    final itemSavingsTotal = ((tx['item_savings_total'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+    final customerPricingSavings =
+        ((tx['customer_pricing_savings_total'] as num?) ?? 0).toDouble().abs();
+    final explicitItemDiscount =
+        ((tx['explicit_item_discount_total'] as num?) ?? 0).toDouble().abs();
+    final cartDiscount = ((tx['cart_discount_total'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+    final itemDiscountTotal = ((tx['item_discount_total'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+
+    final effectiveFromTotals = (subtotal - total)
+        .clamp(0.0, double.infinity)
+        .toDouble();
+    if (effectiveFromTotals > 0) return effectiveFromTotals;
+
+    // Avoid summing overlapping discount fields; pick the strongest plausible
+    // source so a single discount is not counted multiple times.
+    final candidateA = billDiscount + loyaltyRedeemed;
+    final candidateB = itemSavingsTotal + loyaltyRedeemed;
+    final candidateC = itemDiscountTotal + loyaltyRedeemed;
+    final candidateD =
+        customerPricingSavings +
+        explicitItemDiscount +
+        cartDiscount +
+        loyaltyRedeemed;
+
+    var resolved = candidateA;
+    if (candidateB > resolved) resolved = candidateB;
+    if (candidateC > resolved) resolved = candidateC;
+    if (candidateD > resolved) resolved = candidateD;
+    return resolved;
   }
 
   Widget _buildToolbarCard(_TxPalette palette) {
@@ -1323,24 +1616,6 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                       _selectedSearchResultIndex = null;
                     });
                   },
-                ),
-              ),
-              const SizedBox(width: 12),
-              SizedBox(
-                height: 52,
-                child: ElevatedButton.icon(
-                  onPressed: _isRefreshing ? null : _refresh,
-                  icon: _isRefreshing
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.refresh_rounded, size: 18),
-                  label: const Text('Refresh'),
                 ),
               ),
             ],
@@ -1721,48 +1996,128 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                   children: [
                     _buildHeader(palette),
                     const SizedBox(height: 16),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        _buildSummaryCard(
-                          palette: palette,
-                          title: 'Transactions',
-                          value: _transactions.length.toString(),
-                          icon: Icons.receipt_long_outlined,
-                          accent: palette.accentBlue,
-                        ),
-                        _buildSummaryCard(
-                          palette: palette,
-                          title: 'Sales',
-                          value: _saleCount.toString(),
-                          icon: Icons.point_of_sale_outlined,
-                          accent: palette.success,
-                        ),
-                        _buildSummaryCard(
-                          palette: palette,
-                          title: 'Refunds',
-                          value: _refundCount.toString(),
-                          icon: Icons.undo_outlined,
-                          accent: palette.danger,
-                        ),
-                      ],
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        const gap = 12.0;
+                        final isWide = constraints.maxWidth >= 1080;
+                        final isMedium = constraints.maxWidth >= 640;
+                        final columns = isWide ? 3 : (isMedium ? 2 : 1);
+                        final cardWidth =
+                            (constraints.maxWidth - ((columns - 1) * gap)) /
+                            columns;
+                        return Wrap(
+                          spacing: gap,
+                          runSpacing: gap,
+                          children: [
+                            SizedBox(
+                              width: cardWidth,
+                              child: _buildSummaryCard(
+                                palette: palette,
+                                title: 'Transactions',
+                                value: _transactions.length.toString(),
+                                icon: Icons.receipt_long_outlined,
+                                accent: palette.accentBlue,
+                              ),
+                            ),
+                            SizedBox(
+                              width: cardWidth,
+                              child: _buildSummaryCard(
+                                palette: palette,
+                                title: 'Sales',
+                                value: _saleCount.toString(),
+                                icon: Icons.point_of_sale_outlined,
+                                accent: palette.success,
+                              ),
+                            ),
+                            SizedBox(
+                              width: cardWidth,
+                              child: _buildSummaryCard(
+                                palette: palette,
+                                title: 'Refunds',
+                                value: _refundCount.toString(),
+                                icon: Icons.undo_outlined,
+                                accent: palette.danger,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 16),
                     _buildToolbarCard(palette),
                     const SizedBox(height: 16),
-                    Text(
-                      'Transactions (${visibleTransactions.length})',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                        color: palette.textPrimary,
-                      ),
+                    Row(
+                      children: [
+                        Text(
+                          'Transactions (${visibleTransactions.length})',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                            color: palette.textPrimary,
+                          ),
+                        ),
+                        const Spacer(),
+                        FilledButton.tonalIcon(
+                          onPressed: _toggleViewMode,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _isCompactTableView
+                                ? palette.brandSoft
+                                : palette.soft,
+                            foregroundColor: _isCompactTableView
+                                ? palette.brand
+                                : palette.textPrimary,
+                            side: BorderSide(
+                              color: _isCompactTableView
+                                  ? palette.brand.withOpacity(0.35)
+                                  : palette.border,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
+                            ),
+                          ),
+                          icon: Icon(
+                            _isCompactTableView
+                                ? Icons.view_agenda_rounded
+                                : Icons.table_rows_rounded,
+                            size: 18,
+                          ),
+                          label: Text(
+                            _isCompactTableView ? 'Cards View' : 'Table View',
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 12),
-                    if (visibleTransactions.isEmpty)
-                      _buildEmptyState(palette)
-                    else
+                    if (visibleTransactions.isEmpty) ...[
+                      _buildEmptyState(palette),
+                    ] else if (_isCompactTableView) ...[
+                      Column(
+                        children: [
+                          _buildTransactionTableHeader(palette),
+                          const SizedBox(height: 10),
+                          ...visibleTransactions.indexed.map(
+                            (entry) => Padding(
+                              key: _searchResultKeys.putIfAbsent(
+                                entry.$1,
+                                GlobalKey.new,
+                              ),
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: _buildTransactionTableRow(
+                                palette,
+                                entry.$2,
+                                isKeyboardSelected:
+                                    _selectedSearchResultIndex == entry.$1,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ] else ...[
                       ...visibleTransactions.indexed.map(
                         (entry) => Padding(
                           key: _searchResultKeys.putIfAbsent(
@@ -1778,6 +2133,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                           ),
                         ),
                       ),
+                    ],
                   ],
                 ),
         ),

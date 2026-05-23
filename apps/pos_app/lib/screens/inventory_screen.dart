@@ -7,6 +7,7 @@ import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/pos_supplier.dart';
 import '../models/supplier_product_mapping.dart';
@@ -57,6 +58,7 @@ class _BulkImportPreviewRow {
 }
 
 class _InventoryScreenState extends State<InventoryScreen> {
+  static const String _inventoryViewPrefKey = 'inventory_compact_table_view';
   final TextEditingController _searchController = TextEditingController();
   late final FocusNode _searchFocusNode;
   final ScrollController _pageScrollController = ScrollController();
@@ -68,10 +70,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
   String _searchQuery = '';
   InventoryFilter _selectedFilter = InventoryFilter.all;
   bool _isBulkDeleteMode = false;
+  bool _isCompactTableView = false;
   int? _selectedSearchResultIndex;
   Timer? _searchSelectionTimer;
   final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
   final Set<String> _selectedProductBarcodes = <String>{};
+  final Map<String, String> _supplierNameByBarcode = <String, String>{};
   String? _bulkDeletePerformedByLabel;
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
@@ -451,12 +455,34 @@ class _InventoryScreenState extends State<InventoryScreen> {
   void initState() {
     super.initState();
     _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
+    _restoreViewPreference();
     _loadData(showLoader: true);
     RouteSearchFocusRegistry.register(
       PosRouteNames.inventory,
       _focusSearchField,
     );
     _focusSearchField();
+  }
+
+  Future<void> _restoreViewPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getBool(_inventoryViewPrefKey);
+    if (!mounted || saved == null) return;
+    setState(() {
+      _isCompactTableView = saved;
+    });
+  }
+
+  Future<void> _persistViewPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_inventoryViewPrefKey, _isCompactTableView);
+  }
+
+  Future<void> _toggleViewMode() async {
+    setState(() {
+      _isCompactTableView = !_isCompactTableView;
+    });
+    await _persistViewPreference();
   }
 
   @override
@@ -619,12 +645,34 @@ class _InventoryScreenState extends State<InventoryScreen> {
       final movements = await DatabaseHelper.instance.getInventoryMovements(
         limit: 8,
       );
+      final mappings = await DatabaseHelper.instance.getSupplierProductMappings(
+        limit: 5000,
+      );
+      final latestReceiptSuppliers = await DatabaseHelper.instance
+          .getLatestReceiptSuppliersByBarcode(limit: 5000);
+
+      final supplierByBarcode = <String, String>{};
+      latestReceiptSuppliers.forEach((barcode, supplierName) {
+        final normalizedBarcode = barcode.trim();
+        final normalizedSupplier = supplierName.trim();
+        if (normalizedBarcode.isEmpty || normalizedSupplier.isEmpty) return;
+        supplierByBarcode[normalizedBarcode] = normalizedSupplier;
+      });
+      for (final mapping in mappings) {
+        final barcode = mapping.barcode.trim();
+        final supplierName = mapping.supplierName.trim();
+        if (barcode.isEmpty || supplierName.isEmpty) continue;
+        supplierByBarcode[barcode] = supplierName;
+      }
 
       if (!mounted) return;
 
       setState(() {
         _products = products;
         _recentMovements = movements;
+        _supplierNameByBarcode
+          ..clear()
+          ..addAll(supplierByBarcode);
         _isLoading = false;
       });
     } catch (e) {
@@ -6139,6 +6187,239 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+  Widget _buildCompactTableHeader() {
+    TextStyle headerStyle = TextStyle(
+      color: _textSecondary,
+      fontWeight: FontWeight.w800,
+      fontSize: 12,
+    );
+
+    Widget headerCell(String label, int flex, {TextAlign? align}) {
+      return Expanded(
+        flex: flex,
+        child: Text(label, style: headerStyle, textAlign: align),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: _panelAlt,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _borderColor),
+      ),
+      child: Row(
+        children: [
+          headerCell('Name', 26),
+          headerCell('Barcode', 16),
+          headerCell('Category', 14),
+          headerCell('Supplier', 14),
+          headerCell('Stock', 12, align: TextAlign.right),
+          headerCell('Selling Price', 14, align: TextAlign.right),
+          headerCell('Cost Price', 14, align: TextAlign.right),
+          const SizedBox(width: 40),
+          SizedBox(
+            width: 224,
+            child: Text(
+              'Action Buttons',
+              style: headerStyle,
+              textAlign: TextAlign.right,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactProductRow(
+    Product product, {
+    bool isKeyboardSelected = false,
+  }) {
+    final isSelectedForDelete = _selectedProductBarcodes.contains(
+      product.barcode,
+    );
+    final statusColor = product.isOutOfStock
+        ? _dangerColor
+        : (product.isLowStock ? _warningColor : _brandColor);
+    final supplierName =
+        _supplierNameByBarcode[product.barcode]?.trim().isNotEmpty == true
+        ? _supplierNameByBarcode[product.barcode]!.trim()
+        : '-';
+
+    Widget cell(String value, int flex, {TextAlign? align, Color? color}) {
+      return Expanded(
+        flex: flex,
+        child: Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: align,
+          style: TextStyle(
+            color: color ?? _textPrimary,
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+          ),
+        ),
+      );
+    }
+
+    Widget rowAction({
+      required IconData icon,
+      required String tooltip,
+      required VoidCallback onTap,
+      required Color iconColor,
+    }) {
+      return Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: _panelAlt,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _borderColor),
+            ),
+            child: Icon(icon, size: 16, color: iconColor),
+          ),
+        ),
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          if (_isBulkDeleteMode) {
+            _toggleProductSelection(product);
+          } else {
+            _openProductDetail(product);
+          }
+        },
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: _panelSoft,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isKeyboardSelected
+                  ? _brandColor
+                  : (isSelectedForDelete ? _dangerColor : _borderColor),
+              width: isKeyboardSelected || isSelectedForDelete ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              if (_isBulkDeleteMode)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Checkbox(
+                    value: isSelectedForDelete,
+                    onChanged: (_) => _toggleProductSelection(product),
+                    activeColor: _dangerColor,
+                  ),
+                ),
+              cell(product.name, 26),
+              cell(product.barcode, 16, color: _textSecondary),
+              cell(product.category, 14, color: _textSecondary),
+              cell(supplierName, 14, color: _textSecondary),
+              cell(
+                _formatProductQuantity(product, product.stock),
+                12,
+                align: TextAlign.right,
+                color: statusColor,
+              ),
+              cell(
+                _formatCurrency(product.sellingPrice),
+                14,
+                align: TextAlign.right,
+                color: _brandColor,
+              ),
+              cell(
+                _formatCurrency(product.costPrice),
+                14,
+                align: TextAlign.right,
+              ),
+              const SizedBox(width: 40),
+              SizedBox(
+                width: 224,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (!_isBulkDeleteMode) ...[
+                      rowAction(
+                        icon: Icons.inventory_2_rounded,
+                        tooltip: 'Receive stock',
+                        onTap: () => _openReceiveFlow(initialProduct: product),
+                        iconColor: _brandColor,
+                      ),
+                      const SizedBox(width: 10),
+                      rowAction(
+                        icon: Icons.tune_rounded,
+                        tooltip: 'Adjust stock',
+                        onTap: () => _openAdjustFlow(initialProduct: product),
+                        iconColor: _warningColor,
+                      ),
+                      const SizedBox(width: 10),
+                      rowAction(
+                        icon: Icons.sell_outlined,
+                        tooltip: 'Change price',
+                        onTap: () =>
+                            _openPriceChangeFlow(initialProduct: product),
+                        iconColor: const Color(0xFF8B5CF6),
+                      ),
+                      const SizedBox(width: 10),
+                      PopupMenuButton<String>(
+                        tooltip: 'More actions',
+                        onSelected: (value) =>
+                            _handleProductMenuAction(value, product),
+                        itemBuilder: (context) => const [
+                          PopupMenuItem<String>(
+                            value: 'edit',
+                            child: Text('Edit Item'),
+                          ),
+                          PopupMenuItem<String>(
+                            value: 'history',
+                            child: Text('View History'),
+                          ),
+                          PopupMenuDivider(),
+                          PopupMenuItem<String>(
+                            value: 'delete',
+                            child: Text(
+                              'Delete Item',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          ),
+                        ],
+                        child: Container(
+                          width: 34,
+                          height: 34,
+                          decoration: BoxDecoration(
+                            color: _panelAlt,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: _borderColor),
+                          ),
+                          child: Icon(
+                            Icons.more_horiz_rounded,
+                            size: 16,
+                            color: _textSecondary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final visibleProducts = _filteredProducts;
@@ -6291,79 +6572,100 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         ],
                       ),
                       const SizedBox(height: 14),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          _buildFilterChip(
-                            label: 'All',
-                            filter: InventoryFilter.all,
-                          ),
-                          _buildFilterChip(
-                            label: 'In Stock',
-                            filter: InventoryFilter.inStock,
-                          ),
-                          _buildFilterChip(
-                            label: 'Low Stock',
-                            filter: InventoryFilter.lowStock,
-                          ),
-                          _buildFilterChip(
-                            label: 'Out of Stock',
-                            filter: InventoryFilter.outOfStock,
-                          ),
-                          _buildFilterChip(
-                            label: 'Inactive',
-                            filter: InventoryFilter.inactive,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          _buildQuickActionButton(
-                            title: 'Add Product',
-                            icon: Icons.add_box_outlined,
-                            onTap: () => _openAddProductFlow(),
-                          ),
-                          _buildQuickActionButton(
-                            title: 'Bulk Upload',
-                            icon: Icons.upload_file_outlined,
-                            onTap: () => _openBulkUploadFlow(),
-                          ),
-                          _buildQuickActionButton(
-                            title: _isBulkDeleteMode
-                                ? 'Exit Bulk Delete'
-                                : 'Bulk Delete',
-                            icon: _isBulkDeleteMode
-                                ? Icons.close_rounded
-                                : Icons.delete_outline_rounded,
-                            onTap: _isBulkDeleteMode
-                                ? _exitBulkDeleteMode
-                                : _enterBulkDeleteMode,
-                          ),
-                          _buildQuickActionButton(
-                            title: 'Receive Stock',
-                            icon: Icons.inventory_2_rounded,
-                            onTap: () => _openReceiveFlow(),
-                          ),
-                          _buildQuickActionButton(
-                            title: 'Adjust Stock',
-                            icon: Icons.tune_rounded,
-                            onTap: () => _openAdjustFlow(),
-                          ),
-                          _buildQuickActionButton(
-                            title: 'Change Price',
-                            icon: Icons.sell_outlined,
-                            onTap: () => _openPriceChangeFlow(),
-                          ),
-                          _buildQuickActionButton(
-                            title: 'Count Stock',
-                            icon: Icons.playlist_add_check_circle_outlined,
-                            onTap: () => _openStockTakeScreen(),
-                          ),
-                        ],
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact = constraints.maxWidth < 1240;
+                          final filters = Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _buildFilterChip(
+                                label: 'All',
+                                filter: InventoryFilter.all,
+                              ),
+                              _buildFilterChip(
+                                label: 'In Stock',
+                                filter: InventoryFilter.inStock,
+                              ),
+                              _buildFilterChip(
+                                label: 'Low Stock',
+                                filter: InventoryFilter.lowStock,
+                              ),
+                              _buildFilterChip(
+                                label: 'Out of Stock',
+                                filter: InventoryFilter.outOfStock,
+                              ),
+                            ],
+                          );
+                          final actions = Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            alignment: WrapAlignment.end,
+                            children: [
+                              _buildQuickActionButton(
+                                title: 'Add Product',
+                                icon: Icons.add_box_outlined,
+                                onTap: () => _openAddProductFlow(),
+                              ),
+                              _buildQuickActionButton(
+                                title: 'Bulk Upload',
+                                icon: Icons.upload_file_outlined,
+                                onTap: () => _openBulkUploadFlow(),
+                              ),
+                              _buildQuickActionButton(
+                                title: _isBulkDeleteMode
+                                    ? 'Exit Bulk Delete'
+                                    : 'Bulk Delete',
+                                icon: _isBulkDeleteMode
+                                    ? Icons.close_rounded
+                                    : Icons.delete_outline_rounded,
+                                onTap: _isBulkDeleteMode
+                                    ? _exitBulkDeleteMode
+                                    : _enterBulkDeleteMode,
+                              ),
+                              _buildQuickActionButton(
+                                title: 'Receive Stock',
+                                icon: Icons.inventory_2_rounded,
+                                onTap: () => _openReceiveFlow(),
+                              ),
+                              _buildQuickActionButton(
+                                title: 'Adjust Stock',
+                                icon: Icons.tune_rounded,
+                                onTap: () => _openAdjustFlow(),
+                              ),
+                              _buildQuickActionButton(
+                                title: 'Change Price',
+                                icon: Icons.sell_outlined,
+                                onTap: () => _openPriceChangeFlow(),
+                              ),
+                            ],
+                          );
+
+                          if (compact) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                filters,
+                                const SizedBox(height: 12),
+                                actions,
+                              ],
+                            );
+                          }
+
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: filters),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.topRight,
+                                  child: actions,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                       if (_isBulkDeleteMode) ...[
                         const SizedBox(height: 14),
@@ -6438,11 +6740,39 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             ),
                           ),
                           const Spacer(),
-                          Text(
-                            '${visibleProducts.length} shown',
-                            style: TextStyle(
-                              color: _textSecondary,
-                              fontWeight: FontWeight.w700,
+                          FilledButton.tonalIcon(
+                            onPressed: _toggleViewMode,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _isCompactTableView
+                                  ? _brandSoft
+                                  : _panelAlt,
+                              foregroundColor: _isCompactTableView
+                                  ? _brandColor
+                                  : _textPrimary,
+                              side: BorderSide(
+                                color: _isCompactTableView
+                                    ? _brandColor.withOpacity(0.35)
+                                    : _borderColor,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 10,
+                              ),
+                            ),
+                            icon: Icon(
+                              _isCompactTableView
+                                  ? Icons.view_agenda_rounded
+                                  : Icons.table_rows_rounded,
+                              size: 18,
+                            ),
+                            label: Text(
+                              _isCompactTableView ? 'Cards View' : 'Table View',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ),
                         ],
@@ -6485,6 +6815,27 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               ),
                             ],
                           ),
+                        )
+                      else if (_isCompactTableView)
+                        Column(
+                          children: [
+                            _buildCompactTableHeader(),
+                            const SizedBox(height: 10),
+                            ...visibleProducts.indexed.map(
+                              (entry) => Padding(
+                                key: _searchResultKeys.putIfAbsent(
+                                  entry.$1,
+                                  GlobalKey.new,
+                                ),
+                                padding: const EdgeInsets.only(bottom: 10),
+                                child: _buildCompactProductRow(
+                                  entry.$2,
+                                  isKeyboardSelected:
+                                      _selectedSearchResultIndex == entry.$1,
+                                ),
+                              ),
+                            ),
+                          ],
                         )
                       else
                         ...visibleProducts.indexed.map(
