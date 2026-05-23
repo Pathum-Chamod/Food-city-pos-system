@@ -6164,47 +6164,59 @@ class _InventoryScreenState extends State<InventoryScreen> {
               children: [
                 _buildHeaderCard(),
                 const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    SizedBox(
-                      width: 250,
-                      child: _buildSummaryCard(
-                        title: 'Products',
-                        value: _activeProductCount.toString(),
-                        icon: Icons.inventory_2_outlined,
-                        accent: _accentBlue,
-                      ),
-                    ),
-                    SizedBox(
-                      width: 250,
-                      child: _buildSummaryCard(
-                        title: 'Low Stock',
-                        value: _lowStockCount.toString(),
-                        icon: Icons.warning_amber_rounded,
-                        accent: _warningColor,
-                      ),
-                    ),
-                    SizedBox(
-                      width: 250,
-                      child: _buildSummaryCard(
-                        title: 'Out of Stock',
-                        value: _outOfStockCount.toString(),
-                        icon: Icons.remove_shopping_cart_rounded,
-                        accent: _dangerColor,
-                      ),
-                    ),
-                    SizedBox(
-                      width: 250,
-                      child: _buildSummaryCard(
-                        title: 'Stock Value',
-                        value: 'Rs. ${_stockValue.toStringAsFixed(2)}',
-                        icon: Icons.payments_outlined,
-                        accent: _successColor,
-                      ),
-                    ),
-                  ],
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    const gap = 12.0;
+                    final isWide = constraints.maxWidth >= 1080;
+                    final isMedium = constraints.maxWidth >= 640;
+                    final columns = isWide ? 4 : (isMedium ? 2 : 1);
+                    final cardWidth =
+                        (constraints.maxWidth - ((columns - 1) * gap)) /
+                        columns;
+
+                    return Wrap(
+                      spacing: gap,
+                      runSpacing: gap,
+                      children: [
+                        SizedBox(
+                          width: cardWidth,
+                          child: _buildSummaryCard(
+                            title: 'Products',
+                            value: _activeProductCount.toString(),
+                            icon: Icons.inventory_2_outlined,
+                            accent: _accentBlue,
+                          ),
+                        ),
+                        SizedBox(
+                          width: cardWidth,
+                          child: _buildSummaryCard(
+                            title: 'Low Stock',
+                            value: _lowStockCount.toString(),
+                            icon: Icons.warning_amber_rounded,
+                            accent: _warningColor,
+                          ),
+                        ),
+                        SizedBox(
+                          width: cardWidth,
+                          child: _buildSummaryCard(
+                            title: 'Out of Stock',
+                            value: _outOfStockCount.toString(),
+                            icon: Icons.remove_shopping_cart_rounded,
+                            accent: _dangerColor,
+                          ),
+                        ),
+                        SizedBox(
+                          width: cardWidth,
+                          child: _buildSummaryCard(
+                            title: 'Stock Value',
+                            value: 'Rs. ${_stockValue.toStringAsFixed(2)}',
+                            icon: Icons.payments_outlined,
+                            accent: _successColor,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 16),
                 Container(

@@ -1533,46 +1533,88 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                               ),
                               const SizedBox(height: 14),
                             ],
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                _buildFilterChip(
-                                  label: 'All',
-                                  filter: InventoryHistoryFilter.all,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Receives',
-                                  filter: InventoryHistoryFilter.receives,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Adjustments',
-                                  filter: InventoryHistoryFilter.adjustments,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Counts',
-                                  filter: InventoryHistoryFilter.counts,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Sales',
-                                  filter: InventoryHistoryFilter.sales,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Refunds',
-                                  filter: InventoryHistoryFilter.refunds,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Price Changes',
-                                  filter: InventoryHistoryFilter.priceChanges,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Min Stock',
-                                  filter: InventoryHistoryFilter.minStock,
-                                ),
-                                _buildDateChip(),
-                                if (_selectedDate != null)
-                                  _buildClearDateChip(),
-                              ],
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final compact = constraints.maxWidth < 980;
+                                return Wrap(
+                                  spacing: 12,
+                                  runSpacing: 8,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  alignment: WrapAlignment.start,
+                                  children: [
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: [
+                                        _buildFilterChip(
+                                          label: 'All',
+                                          filter: InventoryHistoryFilter.all,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Receives',
+                                          filter:
+                                              InventoryHistoryFilter.receives,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Adjustments',
+                                          filter:
+                                              InventoryHistoryFilter
+                                                  .adjustments,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Counts',
+                                          filter: InventoryHistoryFilter.counts,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Sales',
+                                          filter: InventoryHistoryFilter.sales,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Refunds',
+                                          filter:
+                                              InventoryHistoryFilter.refunds,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Price Changes',
+                                          filter:
+                                              InventoryHistoryFilter
+                                                  .priceChanges,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Min Stock',
+                                          filter:
+                                              InventoryHistoryFilter.minStock,
+                                        ),
+                                      ],
+                                    ),
+                                    if (compact)
+                                      Wrap(
+                                        spacing: 8,
+                                        runSpacing: 8,
+                                        children: [
+                                          _buildDateChip(),
+                                          if (_selectedDate != null)
+                                            _buildClearDateChip(),
+                                        ],
+                                      )
+                                    else
+                                      SizedBox(
+                                        width: 220,
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.end,
+                                          children: [
+                                            _buildDateChip(),
+                                            if (_selectedDate != null) ...[
+                                              const SizedBox(width: 8),
+                                              _buildClearDateChip(),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                  ],
+                                );
+                              },
                             ),
                             const SizedBox(height: 14),
                             Container(
