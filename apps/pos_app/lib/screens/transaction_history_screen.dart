@@ -640,26 +640,54 @@ class TransactionHistoryScreen extends StatefulWidget {
 
 class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   static const String _txViewPrefKey = 'tx_history_compact_table_view';
+  static const int _defaultTransactionFetchLimit = 200;
+  static const int _initialTransactionFetchLimit = 50;
+  static List<Map<String, dynamic>> _cachedTransactions =
+      <Map<String, dynamic>>[];
+  static bool _cachedHasMoreTransactions = true;
+  static Map<String, dynamic>? _cachedSummary;
+  static bool? _cachedCompactTableView;
   final TextEditingController _searchController = TextEditingController();
   late final FocusNode _searchFocusNode;
   final ScrollController _pageScrollController = ScrollController();
 
   bool _isLoading = true;
+  bool _isLoadingMore = false;
   bool _isRefreshing = false;
   String _filter = 'all';
   String _dateFilter = 'all';
   String _searchQuery = '';
   DateTime? _selectedDate;
-  bool _isCompactTableView = false;
+  bool _isCompactTableView = _cachedCompactTableView ?? false;
   int? _selectedSearchResultIndex;
   Timer? _searchSelectionTimer;
   final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
   List<Map<String, dynamic>> _transactions = [];
+  int _loadedOffset = 0;
+  bool _hasMoreTransactions = true;
+  int? _summaryTransactionCount;
+  int? _summarySaleCount;
+  int? _summaryRefundCount;
+
+  bool get _isInitialHydration => _isLoading && _transactions.isEmpty;
 
   @override
   void initState() {
     super.initState();
     _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
+    _pageScrollController.addListener(_handleInfiniteScroll);
+    if (_cachedTransactions.isNotEmpty) {
+      _transactions = List<Map<String, dynamic>>.from(_cachedTransactions);
+      _loadedOffset = _transactions.length;
+      _hasMoreTransactions = _cachedHasMoreTransactions;
+      _isLoading = false;
+    }
+    if (_cachedSummary != null) {
+      _summaryTransactionCount = (_cachedSummary!['transaction_count'] as num?)
+          ?.toInt();
+      _summarySaleCount = (_cachedSummary!['sale_count'] as num?)?.toInt();
+      _summaryRefundCount = (_cachedSummary!['refund_count'] as num?)?.toInt();
+    }
     _restoreViewPreference();
     _loadTransactions();
     RouteSearchFocusRegistry.register(
@@ -673,6 +701,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getBool(_txViewPrefKey);
     if (!mounted || saved == null) return;
+    _cachedCompactTableView = saved;
     setState(() {
       _isCompactTableView = saved;
     });
@@ -681,6 +710,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   Future<void> _persistViewPreference() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_txViewPrefKey, _isCompactTableView);
+    _cachedCompactTableView = _isCompactTableView;
   }
 
   Future<void> _toggleViewMode() async {
@@ -701,6 +731,18 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _handleInfiniteScroll() {
+    if (_searchQuery.trim().isNotEmpty) return;
+    if (_isLoading || _isLoadingMore || !_hasMoreTransactions) return;
+    if (!_pageScrollController.hasClients) return;
+
+    final position = _pageScrollController.position;
+    if (position.maxScrollExtent <= 0) return;
+    if (position.pixels >= (position.maxScrollExtent - 560)) {
+      unawaited(_loadMoreTransactions());
+    }
   }
 
   void _focusSearchField() {
@@ -823,9 +865,17 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   }
 
   Future<void> _loadTransactions() async {
+    await _loadMoreTransactions(reset: true);
+  }
+
+  Future<void> _loadMoreTransactions({bool reset = false}) async {
     if (mounted) {
       setState(() {
-        _isLoading = true;
+        if (reset) {
+          _isLoading = _transactions.isEmpty;
+        } else {
+          _isLoadingMore = true;
+        }
       });
     }
 
@@ -851,20 +901,58 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
             999,
           );
 
-    final transactions = await DatabaseHelper.instance.getRecentTransactions(
+    final offset = reset ? 0 : _loadedOffset;
+    final fetchLimit = reset && _transactions.isEmpty
+        ? _initialTransactionFetchLimit
+        : _defaultTransactionFetchLimit;
+    final transactionsFuture = DatabaseHelper.instance.getRecentTransactions(
       transactionType: type,
       creditSaleOnly: creditSaleOnly,
       start: start,
       end: end,
-      limit: null,
+      limit: fetchLimit,
+      offset: offset,
     );
+    final summaryFuture = reset
+        ? DatabaseHelper.instance.getTransactionHistorySummary(
+            transactionType: type,
+            creditSaleOnly: creditSaleOnly,
+            start: start,
+            end: end,
+          )
+        : Future<Map<String, dynamic>?>.value(null);
+    final results = await Future.wait<dynamic>([
+      transactionsFuture,
+      summaryFuture,
+    ]);
+    final transactions = results[0] as List<Map<String, dynamic>>;
+    final summary = results[1] as Map<String, dynamic>?;
 
     if (!mounted) return;
 
     setState(() {
-      _transactions = transactions;
+      if (reset) {
+        _transactions = transactions;
+      } else {
+        _transactions = [..._transactions, ...transactions];
+      }
+      _loadedOffset = (reset ? 0 : _loadedOffset) + transactions.length;
+      _hasMoreTransactions = transactions.length == fetchLimit;
+      if (summary != null) {
+        _summaryTransactionCount =
+            (summary['transaction_count'] as num?)?.toInt() ?? 0;
+        _summarySaleCount = (summary['sale_count'] as num?)?.toInt() ?? 0;
+        _summaryRefundCount = (summary['refund_count'] as num?)?.toInt() ?? 0;
+      }
       _isLoading = false;
+      _isLoadingMore = false;
     });
+
+    _cachedTransactions = List<Map<String, dynamic>>.from(_transactions);
+    _cachedHasMoreTransactions = _hasMoreTransactions;
+    if (summary != null) {
+      _cachedSummary = summary;
+    }
   }
 
   Future<void> _refresh() async {
@@ -875,7 +963,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     });
 
     try {
-      await _loadTransactions();
+      await _loadMoreTransactions(reset: true);
     } finally {
       if (!mounted) return;
       setState(() {
@@ -989,7 +1077,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       _dateFilter = 'specific';
       _selectedDate = _normalizedDay(picked);
     });
-    await _loadTransactions();
+    await _loadMoreTransactions(reset: true);
   }
 
   Future<void> _selectToday() async {
@@ -999,7 +1087,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       _dateFilter = 'today';
       _selectedDate = null;
     });
-    await _loadTransactions();
+    await _loadMoreTransactions(reset: true);
   }
 
   Future<void> _clearDateFilter() async {
@@ -1009,7 +1097,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       _dateFilter = 'all';
       _selectedDate = null;
     });
-    await _loadTransactions();
+    await _loadMoreTransactions(reset: true);
   }
 
   String _formatDate(DateTime value) {
@@ -1297,39 +1385,6 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                   ),
                 ),
               ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          Tooltip(
-            message: 'Refresh transactions',
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: _isRefreshing ? null : _refresh,
-                borderRadius: BorderRadius.circular(14),
-                child: Ink(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: palette.soft,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: palette.border),
-                  ),
-                  child: _isRefreshing
-                      ? SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: palette.brand,
-                          ),
-                        )
-                      : Icon(
-                          Icons.refresh_rounded,
-                          size: 18,
-                          color: palette.brand,
-                        ),
-                ),
-              ),
             ),
           ),
         ],
@@ -1967,6 +2022,38 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
               ],
             ),
           ),
+          Tooltip(
+            message: 'Refresh transactions',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _isRefreshing ? null : _refresh,
+                borderRadius: BorderRadius.circular(14),
+                child: Ink(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: palette.soft,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: palette.border),
+                  ),
+                  child: _isRefreshing
+                      ? SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: palette.brand,
+                          ),
+                        )
+                      : Icon(
+                          Icons.refresh_rounded,
+                          size: 18,
+                          color: palette.brand,
+                        ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1976,6 +2063,18 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   Widget build(BuildContext context) {
     final palette = _TxPalette.of(context);
     final visibleTransactions = _visibleTransactions;
+    final totalTransactionCount =
+        _summaryTransactionCount ??
+        (_cachedSummary?['transaction_count'] as num?)?.toInt();
+    final totalSaleCount =
+        _summarySaleCount ?? (_cachedSummary?['sale_count'] as num?)?.toInt();
+    final totalRefundCount =
+        _summaryRefundCount ??
+        (_cachedSummary?['refund_count'] as num?)?.toInt();
+    final transactionCountLabel = totalTransactionCount?.toString() ?? '...';
+    final summaryTransactionsValue = totalTransactionCount?.toString() ?? '--';
+    final summarySalesValue = totalSaleCount?.toString() ?? '--';
+    final summaryRefundsValue = totalRefundCount?.toString() ?? '--';
 
     return Scaffold(
       backgroundColor: palette.background,
@@ -1988,154 +2087,150 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
               end: Alignment.bottomRight,
             ),
           ),
-          child: _isLoading
-              ? Center(child: CircularProgressIndicator(color: palette.brand))
-              : ListView(
-                  controller: _pageScrollController,
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    _buildHeader(palette),
-                    const SizedBox(height: 16),
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        const gap = 12.0;
-                        final isWide = constraints.maxWidth >= 1080;
-                        final isMedium = constraints.maxWidth >= 640;
-                        final columns = isWide ? 3 : (isMedium ? 2 : 1);
-                        final cardWidth =
-                            (constraints.maxWidth - ((columns - 1) * gap)) /
-                            columns;
-                        return Wrap(
-                          spacing: gap,
-                          runSpacing: gap,
-                          children: [
-                            SizedBox(
-                              width: cardWidth,
-                              child: _buildSummaryCard(
-                                palette: palette,
-                                title: 'Transactions',
-                                value: _transactions.length.toString(),
-                                icon: Icons.receipt_long_outlined,
-                                accent: palette.accentBlue,
-                              ),
-                            ),
-                            SizedBox(
-                              width: cardWidth,
-                              child: _buildSummaryCard(
-                                palette: palette,
-                                title: 'Sales',
-                                value: _saleCount.toString(),
-                                icon: Icons.point_of_sale_outlined,
-                                accent: palette.success,
-                              ),
-                            ),
-                            SizedBox(
-                              width: cardWidth,
-                              child: _buildSummaryCard(
-                                palette: palette,
-                                title: 'Refunds',
-                                value: _refundCount.toString(),
-                                icon: Icons.undo_outlined,
-                                accent: palette.danger,
-                              ),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    _buildToolbarCard(palette),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Text(
-                          'Transactions (${visibleTransactions.length})',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                            color: palette.textPrimary,
-                          ),
+          child: ListView(
+            controller: _pageScrollController,
+            padding: const EdgeInsets.all(16),
+            children: [
+              _buildHeader(palette),
+              const SizedBox(height: 16),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  const gap = 12.0;
+                  final isWide = constraints.maxWidth >= 1080;
+                  final isMedium = constraints.maxWidth >= 640;
+                  final columns = isWide ? 3 : (isMedium ? 2 : 1);
+                  final cardWidth =
+                      (constraints.maxWidth - ((columns - 1) * gap)) / columns;
+                  return Wrap(
+                    spacing: gap,
+                    runSpacing: gap,
+                    children: [
+                      SizedBox(
+                        width: cardWidth,
+                        child: _buildSummaryCard(
+                          palette: palette,
+                          title: 'Transactions',
+                          value: summaryTransactionsValue,
+                          icon: Icons.receipt_long_outlined,
+                          accent: palette.accentBlue,
                         ),
-                        const Spacer(),
-                        FilledButton.tonalIcon(
-                          onPressed: _toggleViewMode,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: _isCompactTableView
-                                ? palette.brandSoft
-                                : palette.soft,
-                            foregroundColor: _isCompactTableView
-                                ? palette.brand
-                                : palette.textPrimary,
-                            side: BorderSide(
-                              color: _isCompactTableView
-                                  ? palette.brand.withOpacity(0.35)
-                                  : palette.border,
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 10,
-                            ),
-                          ),
-                          icon: Icon(
-                            _isCompactTableView
-                                ? Icons.view_agenda_rounded
-                                : Icons.table_rows_rounded,
-                            size: 18,
-                          ),
-                          label: Text(
-                            _isCompactTableView ? 'Cards View' : 'Table View',
-                            style: const TextStyle(fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    if (visibleTransactions.isEmpty) ...[
-                      _buildEmptyState(palette),
-                    ] else if (_isCompactTableView) ...[
-                      Column(
-                        children: [
-                          _buildTransactionTableHeader(palette),
-                          const SizedBox(height: 10),
-                          ...visibleTransactions.indexed.map(
-                            (entry) => Padding(
-                              key: _searchResultKeys.putIfAbsent(
-                                entry.$1,
-                                GlobalKey.new,
-                              ),
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: _buildTransactionTableRow(
-                                palette,
-                                entry.$2,
-                                isKeyboardSelected:
-                                    _selectedSearchResultIndex == entry.$1,
-                              ),
-                            ),
-                          ),
-                        ],
                       ),
-                    ] else ...[
-                      ...visibleTransactions.indexed.map(
-                        (entry) => Padding(
-                          key: _searchResultKeys.putIfAbsent(
-                            entry.$1,
-                            GlobalKey.new,
-                          ),
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: _buildTransactionCard(
-                            palette,
-                            entry.$2,
-                            isKeyboardSelected:
-                                _selectedSearchResultIndex == entry.$1,
-                          ),
+                      SizedBox(
+                        width: cardWidth,
+                        child: _buildSummaryCard(
+                          palette: palette,
+                          title: 'Sales',
+                          value: summarySalesValue,
+                          icon: Icons.point_of_sale_outlined,
+                          accent: palette.success,
+                        ),
+                      ),
+                      SizedBox(
+                        width: cardWidth,
+                        child: _buildSummaryCard(
+                          palette: palette,
+                          title: 'Refunds',
+                          value: summaryRefundsValue,
+                          icon: Icons.undo_outlined,
+                          accent: palette.danger,
                         ),
                       ),
                     ],
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              _buildToolbarCard(palette),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Text(
+                    'Transactions ($transactionCountLabel)',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      color: palette.textPrimary,
+                    ),
+                  ),
+                  const Spacer(),
+                  FilledButton.tonalIcon(
+                    onPressed: _toggleViewMode,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _isCompactTableView
+                          ? palette.brandSoft
+                          : palette.soft,
+                      foregroundColor: _isCompactTableView
+                          ? palette.brand
+                          : palette.textPrimary,
+                      side: BorderSide(
+                        color: _isCompactTableView
+                            ? palette.brand.withOpacity(0.35)
+                            : palette.border,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                    ),
+                    icon: Icon(
+                      _isCompactTableView
+                          ? Icons.view_agenda_rounded
+                          : Icons.table_rows_rounded,
+                      size: 18,
+                    ),
+                    label: Text(
+                      _isCompactTableView ? 'Cards View' : 'Table View',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (_isLoading && _transactions.isEmpty) ...[
+                const SizedBox(height: 220),
+              ] else if (visibleTransactions.isEmpty) ...[
+                _buildEmptyState(palette),
+              ] else if (_isCompactTableView) ...[
+                Column(
+                  children: [
+                    _buildTransactionTableHeader(palette),
+                    const SizedBox(height: 10),
+                    ...visibleTransactions.indexed.map(
+                      (entry) => Padding(
+                        key: _searchResultKeys.putIfAbsent(
+                          entry.$1,
+                          GlobalKey.new,
+                        ),
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _buildTransactionTableRow(
+                          palette,
+                          entry.$2,
+                          isKeyboardSelected:
+                              _selectedSearchResultIndex == entry.$1,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
+              ] else ...[
+                ...visibleTransactions.indexed.map(
+                  (entry) => Padding(
+                    key: _searchResultKeys.putIfAbsent(entry.$1, GlobalKey.new),
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _buildTransactionCard(
+                      palette,
+                      entry.$2,
+                      isKeyboardSelected:
+                          _selectedSearchResultIndex == entry.$1,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

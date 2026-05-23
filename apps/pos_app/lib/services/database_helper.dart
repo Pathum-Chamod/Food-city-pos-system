@@ -4900,6 +4900,7 @@ class DatabaseHelper {
     DateTime? start,
     DateTime? end,
     int? limit = 50,
+    int offset = 0,
   }) async {
     final db = await database;
 
@@ -4934,8 +4935,11 @@ class DatabaseHelper {
     final whereClause = whereParts.isEmpty
         ? ''
         : 'WHERE ${whereParts.join(' AND ')}';
-    final limitClause = limit == null ? '' : 'LIMIT ?';
-    final queryArgs = <Object?>[...whereArgs, if (limit != null) limit];
+    final limitClause = limit == null ? '' : 'LIMIT ? OFFSET ?';
+    final queryArgs = <Object?>[
+      ...whereArgs,
+      if (limit != null) ...[limit, offset < 0 ? 0 : offset],
+    ];
 
     final rows = await db.rawQuery('''
       WITH filtered_sales AS (
@@ -5101,6 +5105,63 @@ class DatabaseHelper {
           },
         )
         .toList();
+  }
+
+  Future<Map<String, dynamic>> getTransactionHistorySummary({
+    String? transactionType,
+    bool creditSaleOnly = false,
+    DateTime? start,
+    DateTime? end,
+  }) async {
+    final db = await database;
+
+    final whereParts = <String>[];
+    final whereArgs = <Object?>[];
+
+    if (transactionType != null && transactionType.isNotEmpty) {
+      whereParts.add('s.transaction_type = ?');
+      whereArgs.add(transactionType);
+    }
+
+    if (creditSaleOnly) {
+      whereParts.add('''
+        s.transaction_type = 'sale'
+        AND (
+          COALESCE(s.is_credit_sale, 0) = 1
+          OR LOWER(COALESCE(s.payment_method, '')) = 'customer_credit'
+        )
+      ''');
+    }
+
+    if (start != null) {
+      whereParts.add('s.created_at >= ?');
+      whereArgs.add(start.toIso8601String());
+    }
+
+    if (end != null) {
+      whereParts.add('s.created_at <= ?');
+      whereArgs.add(end.toIso8601String());
+    }
+
+    final whereClause = whereParts.isEmpty
+        ? ''
+        : 'WHERE ${whereParts.join(' AND ')}';
+
+    final rows = await db.rawQuery('''
+      SELECT
+        COUNT(*) AS transaction_count,
+        COALESCE(SUM(CASE WHEN s.transaction_type = 'sale' THEN 1 ELSE 0 END), 0) AS sale_count,
+        COALESCE(SUM(CASE WHEN s.transaction_type = 'refund' THEN 1 ELSE 0 END), 0) AS refund_count
+      FROM sales s
+      $whereClause
+      ''', whereArgs);
+
+    final row = rows.isNotEmpty ? rows.first : const <String, Object?>{};
+    return {
+      'transaction_count': (row['transaction_count'] as num?)?.toInt() ?? 0,
+      'sale_count': (row['sale_count'] as num?)?.toInt() ?? 0,
+      'refund_count': (row['refund_count'] as num?)?.toInt() ?? 0,
+    };
   }
 
   Future<Map<String, dynamic>?> getTransactionSummary(int saleId) async {

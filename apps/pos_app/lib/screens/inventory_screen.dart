@@ -6789,7 +6789,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         ),
                       ),
                       const SizedBox(height: 14),
-                      if (visibleProducts.isEmpty)
+                      if (_isLoading)
+                        const SizedBox(height: 240)
+                      else if (visibleProducts.isEmpty)
                         Container(
                           width: double.infinity,
                           padding: const EdgeInsets.all(28),
@@ -6880,7 +6882,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         ],
                       ),
                       const SizedBox(height: 10),
-                      if (_recentMovements.isEmpty)
+                      if (_isLoading)
+                        const SizedBox(height: 120)
+                      else if (_recentMovements.isEmpty)
                         Container(
                           width: double.infinity,
                           padding: const EdgeInsets.all(24),

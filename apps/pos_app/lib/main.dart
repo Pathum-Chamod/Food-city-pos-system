@@ -513,9 +513,14 @@ class _PosAppState extends State<PosApp> {
 
     unawaited(
       navigator.push(
-        MaterialPageRoute<void>(
+        PageRouteBuilder<void>(
           settings: RouteSettings(name: routeName),
-          builder: builder,
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              builder(context),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+              child,
         ),
       ),
     );
