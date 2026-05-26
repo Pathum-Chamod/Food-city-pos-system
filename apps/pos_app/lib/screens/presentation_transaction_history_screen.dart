@@ -7,6 +7,7 @@ import '../services/database_helper.dart';
 import '../services/presentation_mode_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
+import '../services/receipt_text_utils.dart';
 import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 
@@ -72,6 +73,7 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
   static List<Map<String, dynamic>> _buildReceiptItems(
     List<Map<String, dynamic>> items,
     Map<String, dynamic> summary,
+    AppLanguage language,
   ) {
     final discountType = (summary['discount_type'] ?? 'none').toString();
 
@@ -99,7 +101,11 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
                 : 0.0);
 
       return {
-        'name': (item['product_name'] ?? 'Item').toString(),
+        'name': ProductNameHelper.displayNameFromMap(
+          item,
+          language,
+          fallback: 'Item',
+        ),
         'qty': ((item['quantity'] as num?) ?? 0).toDouble().abs(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
         'markedPrice':
@@ -192,7 +198,8 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
         (summary['transaction_type'] ?? 'sale').toString().toLowerCase() ==
         'refund';
 
-    final receiptItems = _buildReceiptItems(items, summary);
+    final language = context.read<LanguageProvider>().language;
+    final receiptItems = _buildReceiptItems(items, summary, language);
     final receiptItemDiscountTotal = _receiptItemDiscountTotal(receiptItems);
     final receiptCartDiscountAmount =
         (discountAmount - receiptItemDiscountTotal)
@@ -200,22 +207,47 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
             .toDouble();
     final receiptSubtotal = _receiptSubtotal(receiptItems);
 
-    final response = await printer.printReceipt(
-      transactionId: resolvedDisplayId,
-      cashierName: cashierName,
-      paymentMethod: paymentMethod,
-      items: receiptItems,
-      subtotal: receiptSubtotal,
-      discountAmount: receiptCartDiscountAmount,
-      discountType: discountType,
-      discountValue: discountValue,
-      total: total,
-      amountTendered: paymentMethod.toLowerCase() == 'cash'
-          ? amountTendered
-          : null,
-      changeAmount: paymentMethod.toLowerCase() == 'cash' ? changeAmount : null,
-      isRefund: isRefund,
-    );
+    final response =
+        ReceiptTextUtils.receiptNeedsUnicodePath(
+          language: language,
+          items: receiptItems,
+        )
+        ? await printer.printReceiptImage(
+            transactionId: resolvedDisplayId,
+            cashierName: cashierName,
+            paymentMethod: paymentMethod,
+            items: receiptItems,
+            subtotal: receiptSubtotal,
+            discountAmount: receiptCartDiscountAmount,
+            discountType: discountType,
+            discountValue: discountValue,
+            total: total,
+            amountTendered: paymentMethod.toLowerCase() == 'cash'
+                ? amountTendered
+                : null,
+            changeAmount: paymentMethod.toLowerCase() == 'cash'
+                ? changeAmount
+                : null,
+            isRefund: isRefund,
+          )
+        : await printer.printReceipt(
+            transactionId: resolvedDisplayId,
+            cashierName: cashierName,
+            paymentMethod: paymentMethod,
+            items: receiptItems,
+            subtotal: receiptSubtotal,
+            discountAmount: receiptCartDiscountAmount,
+            discountType: discountType,
+            discountValue: discountValue,
+            total: total,
+            amountTendered: paymentMethod.toLowerCase() == 'cash'
+                ? amountTendered
+                : null,
+            changeAmount: paymentMethod.toLowerCase() == 'cash'
+                ? changeAmount
+                : null,
+            isRefund: isRefund,
+          );
 
     if (!context.mounted) return response.isSuccess;
 
@@ -270,7 +302,8 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
         (summary['transaction_type'] ?? 'sale').toString().toLowerCase() ==
         'refund';
 
-    final receiptItems = _buildReceiptItems(items, summary);
+    final language = context.read<LanguageProvider>().language;
+    final receiptItems = _buildReceiptItems(items, summary, language);
     final receiptItemDiscountTotal = _receiptItemDiscountTotal(receiptItems);
     final receiptCartDiscountAmount =
         (discountAmount - receiptItemDiscountTotal)
@@ -376,8 +409,8 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
             .toDouble();
         final changeAmount = ((summary['change_amount'] as num?) ?? 0)
             .toDouble();
-        final receiptItems = _buildReceiptItems(items, summary);
         final language = dialogContext.read<LanguageProvider>().language;
+        final receiptItems = _buildReceiptItems(items, summary, language);
         final discountPercentLabel = discountAmount > 0
             ? _discountPercentLabel(
                 discountAmount: discountAmount,

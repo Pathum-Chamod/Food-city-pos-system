@@ -2,9 +2,11 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:image/image.dart' as image_lib;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import 'receipt_printer_service.dart';
 import 'receipt_text_utils.dart';
 
 class ReceiptPdfResponse {
@@ -117,6 +119,49 @@ class ReceiptPdfService {
   }) async {
     String? outputPath;
     try {
+      if (ReceiptTextUtils.receiptContainsSinhala(
+        items: items,
+        extraText: [
+          storeName,
+          storeAddress,
+          storePhone,
+          cashierName,
+          customerName ?? '',
+          customerPhone ?? '',
+          customerCode ?? '',
+          footerNote ?? '',
+        ],
+      )) {
+        return saveReceiptImagePdf(
+          transactionId: transactionId,
+          cashierName: cashierName,
+          paymentMethod: paymentMethod,
+          customerName: customerName,
+          items: items,
+          subtotal: subtotal,
+          discountAmount: discountAmount,
+          discountType: discountType,
+          discountValue: discountValue,
+          total: total,
+          amountTendered: amountTendered,
+          changeAmount: changeAmount,
+          storeName: storeName,
+          storeAddress: storeAddress,
+          storePhone: storePhone,
+          isRefund: isRefund,
+          isCreditSale: isCreditSale,
+          creditPreviousBalance: creditPreviousBalance,
+          creditBillAmount: creditBillAmount,
+          creditNewBalance: creditNewBalance,
+          creditLimit: creditLimit,
+          creditApprovedBy: creditApprovedBy,
+          loyaltyPointsEarned: loyaltyPointsEarned,
+          loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+          loyaltyTotalPoints: loyaltyTotalPoints,
+          loyaltyRedeemedValue: loyaltyRedeemedValue,
+          footerNote: footerNote,
+        );
+      }
       final now = DateTime.now();
       final fileName =
           'receipt_${transactionId}_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}.pdf';
@@ -423,6 +468,152 @@ class ReceiptPdfService {
               ],
             ),
           ],
+        ),
+      );
+
+      final pdfBytes = await pdf.save();
+      if (pdfBytes.isEmpty) {
+        return const ReceiptPdfResponse(
+          isSuccess: false,
+          message: 'Could not save PDF: generated receipt file was empty.',
+        );
+      }
+
+      outputPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save receipt as PDF',
+        fileName: fileName,
+        type: FileType.custom,
+        allowedExtensions: const ['pdf'],
+      );
+
+      if (outputPath == null || outputPath.trim().isEmpty) {
+        return const ReceiptPdfResponse(
+          isSuccess: false,
+          message: 'PDF save canceled.',
+        );
+      }
+
+      final file = File(outputPath);
+      await file.writeAsBytes(pdfBytes, flush: true);
+      final writtenBytes = await file.length();
+      if (writtenBytes <= 0) {
+        if (await file.exists()) {
+          await file.delete();
+        }
+        return const ReceiptPdfResponse(
+          isSuccess: false,
+          message: 'Could not save PDF: no data was written to the file.',
+        );
+      }
+
+      return ReceiptPdfResponse(
+        isSuccess: true,
+        message: 'Receipt PDF saved to $outputPath',
+        filePath: outputPath,
+      );
+    } catch (e) {
+      final path = outputPath;
+      if (path != null && path.trim().isNotEmpty) {
+        final file = File(path);
+        if (await file.exists() && await file.length() == 0) {
+          await file.delete();
+        }
+      }
+      return ReceiptPdfResponse(
+        isSuccess: false,
+        message: 'Could not save PDF: $e',
+      );
+    }
+  }
+
+  Future<ReceiptPdfResponse> saveReceiptImagePdf({
+    required int transactionId,
+    required String cashierName,
+    required String paymentMethod,
+    String? customerName,
+    required List<Map<String, dynamic>> items,
+    required double subtotal,
+    required double discountAmount,
+    String discountType = 'none',
+    double discountValue = 0.0,
+    required double total,
+    double? amountTendered,
+    double? changeAmount,
+    String storeName = 'FOOD CITY',
+    String storeAddress = 'No. 1, Main Street',
+    String storePhone = '+94 11 000 0000',
+    bool isRefund = false,
+    bool isCreditSale = false,
+    double? creditPreviousBalance,
+    double? creditBillAmount,
+    double? creditNewBalance,
+    double? creditLimit,
+    String? creditApprovedBy,
+    int loyaltyPointsEarned = 0,
+    int loyaltyPointsRedeemed = 0,
+    int? loyaltyTotalPoints,
+    double loyaltyRedeemedValue = 0.0,
+    String? footerNote,
+  }) async {
+    String? outputPath;
+    try {
+      final now = DateTime.now();
+      final fileName =
+          'receipt_${transactionId}_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}.pdf';
+      final imageBytes = await ReceiptPrinterService.instance
+          .renderReceiptImage(
+            transactionId: transactionId,
+            cashierName: cashierName,
+            paymentMethod: paymentMethod,
+            customerName: customerName,
+            items: items,
+            subtotal: subtotal,
+            discountAmount: discountAmount,
+            discountType: discountType,
+            discountValue: discountValue,
+            total: total,
+            amountTendered: amountTendered,
+            changeAmount: changeAmount,
+            storeName: storeName,
+            storeAddress: storeAddress,
+            storePhone: storePhone,
+            isRefund: isRefund,
+            isCreditSale: isCreditSale,
+            creditPreviousBalance: creditPreviousBalance,
+            creditBillAmount: creditBillAmount,
+            creditNewBalance: creditNewBalance,
+            creditLimit: creditLimit,
+            creditApprovedBy: creditApprovedBy,
+            loyaltyPointsEarned: loyaltyPointsEarned,
+            loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+            loyaltyTotalPoints: loyaltyTotalPoints,
+            loyaltyRedeemedValue: loyaltyRedeemedValue,
+            footerNote: footerNote,
+          );
+      final decoded = image_lib.decodePng(imageBytes);
+      if (decoded == null || decoded.width <= 0 || decoded.height <= 0) {
+        return const ReceiptPdfResponse(
+          isSuccess: false,
+          message: 'Could not save PDF: generated receipt image was invalid.',
+        );
+      }
+
+      final pageWidth = 80 * PdfPageFormat.mm;
+      final imageHeight = pageWidth * decoded.height / decoded.width;
+      final minHeight = 80 * PdfPageFormat.mm;
+      final pageHeight = imageHeight < minHeight ? minHeight : imageHeight;
+      final pdf = pw.Document();
+      final receiptImage = pw.MemoryImage(imageBytes);
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat(pageWidth, pageHeight),
+          margin: pw.EdgeInsets.zero,
+          build: (context) => pw.Image(
+            receiptImage,
+            width: pageWidth,
+            height: imageHeight,
+            fit: pw.BoxFit.fill,
+          ),
         ),
       );
 

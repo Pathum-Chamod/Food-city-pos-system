@@ -542,7 +542,7 @@ class ReceiptPrinterService {
     }
 
     try {
-      final imageBytes = await _renderReceiptImage(
+      final imageBytes = await renderReceiptImage(
         transactionId: transactionId,
         cashierName: cashierName,
         paymentMethod: paymentMethod,
@@ -616,7 +616,7 @@ class ReceiptPrinterService {
     }
   }
 
-  Future<Uint8List> _renderReceiptImage({
+  Future<Uint8List> renderReceiptImage({
     required int transactionId,
     required String cashierName,
     required String paymentMethod,
@@ -645,7 +645,6 @@ class ReceiptPrinterService {
     required double loyaltyRedeemedValue,
     String? footerNote,
   }) async {
-    final lines = <_ReceiptImageLine>[];
     final now = DateTime.now();
     final dateStr =
         '${now.day.toString().padLeft(2, '0')}/'
@@ -660,55 +659,208 @@ class ReceiptPrinterService {
         paymentMethodLower == 'customer_credit' ||
         paymentMethodLower == 'customer_credit_refund';
 
-    void add(
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.drawColor(const ui.Color(0xFFFFFFFF), BlendMode.src);
+
+    var y = 26.0;
+    const horizontalPadding = 48.0;
+    final maxWidth = _imageReceiptWidth - (horizontalPadding * 2);
+    final contentRight = _imageReceiptWidth - horizontalPadding;
+
+    double drawText(
       String text, {
-      double size = 24,
+      double size = 18,
       bool bold = false,
       TextAlign align = TextAlign.left,
       double before = 0,
       double after = 4,
+      double? x,
+      double? width,
     }) {
-      if (before > 0) lines.add(_ReceiptImageLine.spacer(before));
-      lines.add(
-        _ReceiptImageLine.text(
-          text,
-          size: size,
-          bold: bold,
-          align: align,
-          after: after,
-        ),
+      y += before;
+      final painter = _textPainter(
+        text,
+        size: size,
+        bold: bold,
+        align: align,
+        maxWidth: width ?? maxWidth,
       );
+      final paintX =
+          x ??
+          switch (align) {
+            TextAlign.center => (_imageReceiptWidth - painter.width) / 2,
+            TextAlign.right => contentRight - painter.width,
+            _ => horizontalPadding,
+          };
+      painter.paint(canvas, Offset(paintX, y));
+      y += painter.height + after;
+      return painter.height;
     }
 
-    void divider({bool heavy = false}) {
-      lines.add(_ReceiptImageLine.divider(heavy: heavy));
+    void drawDashedDivider({bool heavy = false}) {
+      y += heavy ? 8 : 10;
+      final paint = Paint()
+        ..color = const ui.Color(0xFF000000)
+        ..strokeWidth = heavy ? 3.0 : 1.6;
+      var x = horizontalPadding;
+      final dashWidth = heavy ? 11.0 : 7.0;
+      final gapWidth = heavy ? 4.0 : 5.0;
+      while (x < contentRight) {
+        final end = (x + dashWidth).clamp(horizontalPadding, contentRight);
+        canvas.drawLine(Offset(x, y), Offset(end.toDouble(), y), paint);
+        x += dashWidth + gapWidth;
+      }
+      y += heavy ? 16 : 14;
     }
 
-    void pair(String label, String value, {bool bold = false}) {
-      lines.add(_ReceiptImageLine.pair(label, value, bold: bold));
+    void drawThinDivider() {
+      y += 4;
+      final paint = Paint()
+        ..color = const ui.Color(0xFF9E9E9E)
+        ..strokeWidth = 1.0;
+      canvas.drawLine(
+        Offset(horizontalPadding, y),
+        Offset(contentRight, y),
+        paint,
+      );
+      y += 14;
     }
 
-    add(storeName.toUpperCase(), size: 34, bold: true, align: TextAlign.center);
-    if (storeAddress.trim().isNotEmpty) {
-      add(storeAddress.trim(), size: 20, align: TextAlign.center);
+    void drawPair(
+      String label,
+      String value, {
+      bool bold = false,
+      double size = 17,
+      double? valueSize,
+      double after = 4,
+    }) {
+      final labelPainter = _textPainter(
+        label,
+        size: size,
+        bold: bold,
+        maxWidth: maxWidth * 0.46,
+      );
+      final valuePainter = _textPainter(
+        value,
+        size: valueSize ?? size,
+        bold: bold,
+        align: TextAlign.right,
+        maxWidth: maxWidth * 0.52,
+      );
+      labelPainter.paint(canvas, Offset(horizontalPadding, y));
+      valuePainter.paint(canvas, Offset(contentRight - valuePainter.width, y));
+      y +=
+          (labelPainter.height > valuePainter.height
+              ? labelPainter.height
+              : valuePainter.height) +
+          after;
     }
-    if (storePhone.trim().isNotEmpty) {
-      add('Tel: ${storePhone.trim()}', size: 20, align: TextAlign.center);
+
+    void drawTableText(
+      String text, {
+      required double x,
+      required double width,
+      double size = 15,
+      bool bold = false,
+      TextAlign align = TextAlign.left,
+    }) {
+      final painter = _textPainter(
+        text,
+        size: size,
+        bold: bold,
+        align: align,
+        maxWidth: width,
+      );
+      final paintX = switch (align) {
+        TextAlign.right => x + width - painter.width,
+        TextAlign.center => x + (width - painter.width) / 2,
+        _ => x,
+      };
+      painter.paint(canvas, Offset(paintX, y));
     }
-    add(
-      isRefund ? '*** REFUND RECEIPT ***' : 'SALES RECEIPT',
-      size: 23,
+
+    double tableTextHeight(
+      String text, {
+      required double width,
+      double size = 15,
+      bool bold = false,
+      TextAlign align = TextAlign.left,
+    }) {
+      return _textPainter(
+        text,
+        size: size,
+        bold: bold,
+        align: align,
+        maxWidth: width,
+      ).height;
+    }
+
+    drawText(
+      storeName.toUpperCase(),
+      size: 30,
       bold: true,
       align: TextAlign.center,
-      before: 8,
+      after: 3,
     );
-    divider();
-    pair('Date', dateStr);
-    pair('Txn', '#$transactionId');
-    pair('Cashier', cashierName);
+    if (storeAddress.trim().isNotEmpty) {
+      drawText(
+        storeAddress.trim(),
+        size: 17,
+        align: TextAlign.center,
+        after: 2,
+      );
+    }
+    if (storePhone.trim().isNotEmpty) {
+      drawText(
+        'Tel: ${storePhone.trim()}',
+        size: 17,
+        align: TextAlign.center,
+        after: 8,
+      );
+    }
+    drawText(
+      isRefund ? '*** REFUND RECEIPT ***' : 'SALES RECEIPT',
+      size: 21,
+      bold: true,
+      align: TextAlign.center,
+      after: 0,
+    );
+    drawDashedDivider();
+    drawPair('Date', dateStr);
+    drawPair('Txn', '#$transactionId');
+    drawPair('Cashier', cashierName);
     final customer = (customerName ?? '').trim();
-    if (customer.isNotEmpty) pair('Customer', customer);
-    divider();
+    if (customer.isNotEmpty) drawPair('Customer', customer);
+    drawDashedDivider();
+
+    final col1X = horizontalPadding;
+    final col1W = maxWidth * 0.30;
+    final col2X = col1X + col1W;
+    final col2W = maxWidth * 0.27;
+    final col3X = col2X + col2W;
+    final col3W = maxWidth * 0.13;
+    final col4X = col3X + col3W;
+    final col4W = contentRight - col4X;
+
+    drawTableText('Unit price', x: col1X, width: col1W, bold: true);
+    drawTableText('Mark price', x: col2X, width: col2W, bold: true);
+    drawTableText(
+      'Qty',
+      x: col3X,
+      width: col3W,
+      bold: true,
+      align: TextAlign.right,
+    );
+    drawTableText(
+      'Total',
+      x: col4X,
+      width: col4W,
+      bold: true,
+      align: TextAlign.right,
+    );
+    y += 25;
+    drawThinDivider();
 
     for (final item in items) {
       final name = (item['name'] ?? 'Item').toString().trim();
@@ -730,20 +882,51 @@ class ReceiptPrinterService {
         discountType: itemDiscountType,
         discountValue: itemDiscountValue,
       );
-      add(name.isEmpty ? 'Item' : name, size: 23, bold: true, before: 4);
       final unitPriceText = itemDiscountAmount > 0
           ? '${_imageMoney(unitPrice)} (-$discountPercent%)'
           : _imageMoney(unitPrice);
-      add(
-        '${_formatQuantity(qty)} x $unitPriceText   Mark ${_imageMoney(markedPrice)}',
-        size: 19,
+
+      drawText(name.isEmpty ? 'Item' : name, size: 18, bold: true, after: 6);
+      drawTableText(unitPriceText, x: col1X, width: col1W, size: 15);
+      drawTableText(_imageMoney(markedPrice), x: col2X, width: col2W, size: 15);
+      drawTableText(
+        _formatQuantity(qty),
+        x: col3X,
+        width: col3W,
+        size: 15,
+        align: TextAlign.right,
       );
-      pair('Line total', _imageMoney(lineTotal), bold: true);
+      drawTableText(
+        _imageMoney(lineTotal),
+        x: col4X,
+        width: col4W,
+        size: 15,
+        bold: true,
+        align: TextAlign.right,
+      );
+      final rowHeight = [
+        tableTextHeight(unitPriceText, width: col1W, size: 15),
+        tableTextHeight(_imageMoney(markedPrice), width: col2W, size: 15),
+        tableTextHeight(
+          _formatQuantity(qty),
+          width: col3W,
+          size: 15,
+          align: TextAlign.right,
+        ),
+        tableTextHeight(
+          _imageMoney(lineTotal),
+          width: col4W,
+          size: 15,
+          bold: true,
+          align: TextAlign.right,
+        ),
+      ].reduce((a, b) => a > b ? a : b);
+      y += rowHeight + 13;
     }
 
-    divider();
     if ((subtotal - total).abs() > 0.000001 || discountAmount > 0) {
-      pair('Subtotal', _imageMoney(subtotal));
+      drawDashedDivider();
+      drawPair('Subtotal', _imageMoney(subtotal));
     }
     if (discountAmount > 0) {
       final percent = _discountPercentLabel(
@@ -752,12 +935,19 @@ class ReceiptPrinterService {
         discountType: discountType,
         discountValue: discountValue,
       );
-      pair('Discount ($percent%)', '- ${_imageMoney(discountAmount)}');
+      drawPair('Discount ($percent%)', '- ${_imageMoney(discountAmount)}');
     }
-    divider(heavy: true);
-    pair(isRefund ? 'REFUND TOTAL' : 'TOTAL', _imageMoney(total), bold: true);
-    divider(heavy: true);
-    pair(
+    drawDashedDivider(heavy: true);
+    drawPair(
+      isRefund ? 'REFUND TOTAL' : 'TOTAL',
+      _imageMoney(total),
+      bold: true,
+      size: 21,
+      valueSize: 22,
+      after: 2,
+    );
+    drawDashedDivider(heavy: true);
+    drawPair(
       'Paid by',
       isCustomerCredit
           ? (isRefund ? 'CUSTOMER CREDIT REFUND' : 'CUSTOMER CREDIT')
@@ -766,117 +956,58 @@ class ReceiptPrinterService {
 
     if (isCustomerCredit) {
       if (creditPreviousBalance != null) {
-        pair('Prev. Balance', _imageMoney(creditPreviousBalance));
+        drawPair('Prev. Balance', _imageMoney(creditPreviousBalance));
       }
-      pair(
+      drawPair(
         isRefund ? 'This Refund' : 'This Bill',
         _imageMoney(creditBillAmount ?? total),
       );
       if (creditNewBalance != null) {
-        pair('New Balance', _imageMoney(creditNewBalance));
+        drawPair('New Balance', _imageMoney(creditNewBalance));
       }
       if (creditLimit != null && creditLimit > 0) {
-        pair('Credit Limit', _imageMoney(creditLimit));
+        drawPair('Credit Limit', _imageMoney(creditLimit));
       }
       if ((creditApprovedBy ?? '').trim().isNotEmpty) {
-        pair('Approved By', creditApprovedBy!.trim());
+        drawPair('Approved By', creditApprovedBy!.trim());
       }
     } else if (!isRefund && paymentMethodLower == 'cash') {
-      if (amountTendered != null) pair('Tendered', _imageMoney(amountTendered));
-      if (changeAmount != null) pair('Change', _imageMoney(changeAmount));
+      if (amountTendered != null) {
+        drawPair('Tendered', _imageMoney(amountTendered));
+      }
+      if (changeAmount != null) drawPair('Change', _imageMoney(changeAmount));
     }
 
     if (loyaltyPointsRedeemed != 0 || loyaltyRedeemedValue.abs() > 0.000001) {
-      pair('Loyalty redeemed', _imageMoney(loyaltyRedeemedValue.abs()));
+      y += 4;
+      drawPair(
+        'Loyalty redeemed',
+        _imageMoney(loyaltyRedeemedValue.abs()),
+        size: 15,
+      );
     }
     if (loyaltyPointsEarned != 0) {
-      pair(
+      drawPair(
         isRefund ? 'Loyalty points reversed' : 'Loyalty points earned',
         '${loyaltyPointsEarned.abs()} pts',
+        size: 15,
       );
     }
     if (loyaltyTotalPoints != null) {
-      pair('Total Loyalty points', '${loyaltyTotalPoints.abs()} pts');
+      drawPair(
+        'Total Loyalty points',
+        '${loyaltyTotalPoints.abs()} pts',
+        size: 15,
+      );
     }
 
-    add(
+    drawText(
       footerNote ?? 'Thank you for shopping with us!',
-      size: 20,
+      size: 16,
       align: TextAlign.center,
-      before: 14,
+      before: 22,
       after: 0,
     );
-
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    canvas.drawColor(const ui.Color(0xFFFFFFFF), BlendMode.src);
-
-    var y = 18.0;
-    const horizontalPadding = 20.0;
-    final maxWidth = _imageReceiptWidth - (horizontalPadding * 2);
-    for (final line in lines) {
-      if (line.kind == _ReceiptImageLineKind.spacer) {
-        y += line.height;
-        continue;
-      }
-      if (line.kind == _ReceiptImageLineKind.divider) {
-        final paint = Paint()
-          ..color = const ui.Color(0xFF000000)
-          ..strokeWidth = line.heavy ? 3 : 1.5;
-        canvas.drawLine(
-          Offset(horizontalPadding, y + 8),
-          Offset(_imageReceiptWidth - horizontalPadding, y + 8),
-          paint,
-        );
-        y += line.heavy ? 24 : 20;
-        continue;
-      }
-      if (line.kind == _ReceiptImageLineKind.pair) {
-        final labelPainter = _textPainter(
-          line.text,
-          size: line.bold ? 22 : 20,
-          bold: line.bold,
-          maxWidth: maxWidth * 0.46,
-        );
-        final valuePainter = _textPainter(
-          line.value,
-          size: line.bold ? 24 : 20,
-          bold: line.bold,
-          align: TextAlign.right,
-          maxWidth: maxWidth * 0.50,
-        );
-        labelPainter.paint(canvas, Offset(horizontalPadding, y));
-        valuePainter.paint(
-          canvas,
-          Offset(
-            _imageReceiptWidth - horizontalPadding - valuePainter.width,
-            y,
-          ),
-        );
-        y +=
-            (labelPainter.height > valuePainter.height
-                ? labelPainter.height
-                : valuePainter.height) +
-            6;
-        continue;
-      }
-
-      final painter = _textPainter(
-        line.text,
-        size: line.size,
-        bold: line.bold,
-        align: line.align,
-        maxWidth: maxWidth,
-      );
-      final x = switch (line.align) {
-        TextAlign.center => (_imageReceiptWidth - painter.width) / 2,
-        TextAlign.right =>
-          _imageReceiptWidth - horizontalPadding - painter.width,
-        _ => horizontalPadding,
-      };
-      painter.paint(canvas, Offset(x, y));
-      y += painter.height + line.after;
-    }
 
     final picture = recorder.endRecording();
     final image = await picture.toImage(_imageReceiptWidth, y.ceil() + 24);
@@ -903,12 +1034,11 @@ class ReceiptPrinterService {
           fontSize: size,
           height: 1.16,
           fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-          fontFamily: 'Nirmala UI',
-          fontFamilyFallback: const ['Segoe UI', 'Arial'],
         ),
       ),
       textAlign: align,
       textDirection: ui.TextDirection.ltr,
+      locale: const ui.Locale('si', 'LK'),
       maxLines: null,
     )..layout(maxWidth: maxWidth);
     return painter;
@@ -1030,74 +1160,4 @@ class ReceiptPrinterService {
 
     return lines;
   }
-}
-
-enum _ReceiptImageLineKind { text, pair, divider, spacer }
-
-class _ReceiptImageLine {
-  _ReceiptImageLine._({
-    required this.kind,
-    this.text = '',
-    this.value = '',
-    this.size = 20,
-    this.bold = false,
-    this.align = TextAlign.left,
-    this.after = 0,
-    this.height = 0,
-    this.heavy = false,
-  });
-
-  factory _ReceiptImageLine.text(
-    String text, {
-    required double size,
-    required bool bold,
-    required TextAlign align,
-    required double after,
-  }) {
-    return _ReceiptImageLine._(
-      kind: _ReceiptImageLineKind.text,
-      text: text,
-      size: size,
-      bold: bold,
-      align: align,
-      after: after,
-    );
-  }
-
-  factory _ReceiptImageLine.pair(
-    String text,
-    String value, {
-    bool bold = false,
-  }) {
-    return _ReceiptImageLine._(
-      kind: _ReceiptImageLineKind.pair,
-      text: text,
-      value: value,
-      bold: bold,
-    );
-  }
-
-  factory _ReceiptImageLine.divider({bool heavy = false}) {
-    return _ReceiptImageLine._(
-      kind: _ReceiptImageLineKind.divider,
-      heavy: heavy,
-    );
-  }
-
-  factory _ReceiptImageLine.spacer(double height) {
-    return _ReceiptImageLine._(
-      kind: _ReceiptImageLineKind.spacer,
-      height: height,
-    );
-  }
-
-  final _ReceiptImageLineKind kind;
-  final String text;
-  final String value;
-  final double size;
-  final bool bold;
-  final TextAlign align;
-  final double after;
-  final double height;
-  final bool heavy;
 }
