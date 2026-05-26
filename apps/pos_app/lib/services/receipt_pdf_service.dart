@@ -600,7 +600,7 @@ class ReceiptPdfService {
 
       final pageWidth = 80 * PdfPageFormat.mm;
       final imageHeight = pageWidth * decoded.height / decoded.width;
-      final minHeight = 80 * PdfPageFormat.mm;
+      final minHeight = 297 * PdfPageFormat.mm;
       final pageHeight = imageHeight < minHeight ? minHeight : imageHeight;
       final pdf = pw.Document();
       final receiptImage = pw.MemoryImage(imageBytes);

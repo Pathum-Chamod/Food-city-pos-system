@@ -658,13 +658,24 @@ class ReceiptPrinterService {
         isCreditSale ||
         paymentMethodLower == 'customer_credit' ||
         paymentMethodLower == 'customer_credit_refund';
+    final markedItemsTotal = items.fold<double>(0, (sum, item) {
+      final qty = ((item['qty'] as num?) ?? 0).toDouble().abs();
+      final unitPrice = ((item['unitPrice'] as num?) ?? 0).toDouble().abs();
+      final markedPrice = ((item['markedPrice'] as num?) ?? unitPrice)
+          .toDouble()
+          .abs();
+      return sum + (markedPrice * qty);
+    });
+    final totalSavings = markedItemsTotal > total.abs()
+        ? markedItemsTotal - total.abs()
+        : 0.0;
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     canvas.drawColor(const ui.Color(0xFFFFFFFF), BlendMode.src);
 
-    var y = 26.0;
-    const horizontalPadding = 48.0;
+    var y = 20.0;
+    const horizontalPadding = 32.0;
     final maxWidth = _imageReceiptWidth - (horizontalPadding * 2);
     final contentRight = _imageReceiptWidth - horizontalPadding;
 
@@ -677,6 +688,7 @@ class ReceiptPrinterService {
       double after = 4,
       double? x,
       double? width,
+      ui.Color color = const ui.Color(0xFF000000),
     }) {
       y += before;
       final painter = _textPainter(
@@ -685,6 +697,7 @@ class ReceiptPrinterService {
         bold: bold,
         align: align,
         maxWidth: width ?? maxWidth,
+        color: color,
       );
       final paintX =
           x ??
@@ -699,7 +712,7 @@ class ReceiptPrinterService {
     }
 
     void drawDashedDivider({bool heavy = false}) {
-      y += heavy ? 8 : 10;
+      y += heavy ? 8 : 9;
       final paint = Paint()
         ..color = const ui.Color(0xFF000000)
         ..strokeWidth = heavy ? 3.0 : 1.6;
@@ -711,11 +724,11 @@ class ReceiptPrinterService {
         canvas.drawLine(Offset(x, y), Offset(end.toDouble(), y), paint);
         x += dashWidth + gapWidth;
       }
-      y += heavy ? 16 : 14;
+      y += heavy ? 14 : 12;
     }
 
     void drawThinDivider() {
-      y += 4;
+      y += 5;
       final paint = Paint()
         ..color = const ui.Color(0xFF9E9E9E)
         ..strokeWidth = 1.0;
@@ -724,22 +737,25 @@ class ReceiptPrinterService {
         Offset(contentRight, y),
         paint,
       );
-      y += 14;
+      y += 12;
     }
 
     void drawPair(
       String label,
       String value, {
       bool bold = false,
-      double size = 17,
+      double size = 21,
       double? valueSize,
-      double after = 4,
+      ui.Color labelColor = const ui.Color(0xFF000000),
+      ui.Color valueColor = const ui.Color(0xFF000000),
+      double after = 6,
     }) {
       final labelPainter = _textPainter(
         label,
         size: size,
         bold: bold,
         maxWidth: maxWidth * 0.46,
+        color: labelColor,
       );
       final valuePainter = _textPainter(
         value,
@@ -747,6 +763,7 @@ class ReceiptPrinterService {
         bold: bold,
         align: TextAlign.right,
         maxWidth: maxWidth * 0.52,
+        color: valueColor,
       );
       labelPainter.paint(canvas, Offset(horizontalPadding, y));
       valuePainter.paint(canvas, Offset(contentRight - valuePainter.width, y));
@@ -798,40 +815,41 @@ class ReceiptPrinterService {
 
     drawText(
       storeName.toUpperCase(),
-      size: 30,
+      size: 40,
       bold: true,
       align: TextAlign.center,
-      after: 3,
+      after: 6,
     );
     if (storeAddress.trim().isNotEmpty) {
       drawText(
         storeAddress.trim(),
-        size: 17,
+        size: 21,
         align: TextAlign.center,
-        after: 2,
+        after: 4,
       );
     }
     if (storePhone.trim().isNotEmpty) {
       drawText(
         'Tel: ${storePhone.trim()}',
-        size: 17,
+        size: 20,
         align: TextAlign.center,
-        after: 8,
+        after: 12,
       );
     }
     drawText(
       isRefund ? '*** REFUND RECEIPT ***' : 'SALES RECEIPT',
-      size: 21,
+      size: 27,
       bold: true,
       align: TextAlign.center,
-      after: 0,
+      after: 4,
     );
     drawDashedDivider();
-    drawPair('Date', dateStr);
-    drawPair('Txn', '#$transactionId');
-    drawPair('Cashier', cashierName);
+    drawPair('Date', dateStr, after: 7);
+    drawPair('Txn', '#$transactionId', after: 7);
+    drawPair('Cashier', cashierName, after: 7);
     final customer = (customerName ?? '').trim();
-    if (customer.isNotEmpty) drawPair('Customer', customer);
+    if (customer.isNotEmpty) drawPair('Customer', customer, after: 7);
+    y += 9;
     drawDashedDivider();
 
     final col1X = horizontalPadding;
@@ -843,12 +861,13 @@ class ReceiptPrinterService {
     final col4X = col3X + col3W;
     final col4W = contentRight - col4X;
 
-    drawTableText('Unit price', x: col1X, width: col1W, bold: true);
-    drawTableText('Mark price', x: col2X, width: col2W, bold: true);
+    drawTableText('Unit price', x: col1X, width: col1W, size: 17, bold: true);
+    drawTableText('Mark price', x: col2X, width: col2W, size: 17, bold: true);
     drawTableText(
       'Qty',
       x: col3X,
       width: col3W,
+      size: 17,
       bold: true,
       align: TextAlign.right,
     );
@@ -856,11 +875,13 @@ class ReceiptPrinterService {
       'Total',
       x: col4X,
       width: col4W,
+      size: 17,
       bold: true,
       align: TextAlign.right,
     );
-    y += 25;
+    y += 26;
     drawThinDivider();
+    y += 20;
 
     for (final item in items) {
       final name = (item['name'] ?? 'Item').toString().trim();
@@ -886,47 +907,48 @@ class ReceiptPrinterService {
           ? '${_imageMoney(unitPrice)} (-$discountPercent%)'
           : _imageMoney(unitPrice);
 
-      drawText(name.isEmpty ? 'Item' : name, size: 18, bold: true, after: 6);
-      drawTableText(unitPriceText, x: col1X, width: col1W, size: 15);
-      drawTableText(_imageMoney(markedPrice), x: col2X, width: col2W, size: 15);
+      drawText(name.isEmpty ? 'Item' : name, size: 22, bold: true, after: 8);
+      drawTableText(unitPriceText, x: col1X, width: col1W, size: 19);
+      drawTableText(_imageMoney(markedPrice), x: col2X, width: col2W, size: 19);
       drawTableText(
         _formatQuantity(qty),
         x: col3X,
         width: col3W,
-        size: 15,
+        size: 19,
         align: TextAlign.right,
       );
       drawTableText(
         _imageMoney(lineTotal),
         x: col4X,
         width: col4W,
-        size: 15,
+        size: 19,
         bold: true,
         align: TextAlign.right,
       );
       final rowHeight = [
-        tableTextHeight(unitPriceText, width: col1W, size: 15),
-        tableTextHeight(_imageMoney(markedPrice), width: col2W, size: 15),
+        tableTextHeight(unitPriceText, width: col1W, size: 19),
+        tableTextHeight(_imageMoney(markedPrice), width: col2W, size: 19),
         tableTextHeight(
           _formatQuantity(qty),
           width: col3W,
-          size: 15,
+          size: 19,
           align: TextAlign.right,
         ),
         tableTextHeight(
           _imageMoney(lineTotal),
           width: col4W,
-          size: 15,
+          size: 19,
           bold: true,
           align: TextAlign.right,
         ),
       ].reduce((a, b) => a > b ? a : b);
-      y += rowHeight + 13;
+      y += rowHeight + 23;
     }
 
     if ((subtotal - total).abs() > 0.000001 || discountAmount > 0) {
       drawDashedDivider();
-      drawPair('Subtotal', _imageMoney(subtotal));
+      y += 5;
+      drawPair('Subtotal', _imageMoney(subtotal), after: 6);
     }
     if (discountAmount > 0) {
       final percent = _discountPercentLabel(
@@ -935,18 +957,25 @@ class ReceiptPrinterService {
         discountType: discountType,
         discountValue: discountValue,
       );
-      drawPair('Discount ($percent%)', '- ${_imageMoney(discountAmount)}');
+      drawPair(
+        'Discount ($percent%)',
+        '- ${_imageMoney(discountAmount)}',
+        valueColor: const ui.Color(0xFFC62828),
+        after: 8,
+      );
     }
     drawDashedDivider(heavy: true);
+    y += 10;
     drawPair(
       isRefund ? 'REFUND TOTAL' : 'TOTAL',
       _imageMoney(total),
       bold: true,
-      size: 21,
-      valueSize: 22,
-      after: 2,
+      size: 30,
+      valueSize: 31,
+      after: 14,
     );
     drawDashedDivider(heavy: true);
+    y += 10;
     drawPair(
       'Paid by',
       isCustomerCredit
@@ -956,56 +985,78 @@ class ReceiptPrinterService {
 
     if (isCustomerCredit) {
       if (creditPreviousBalance != null) {
-        drawPair('Prev. Balance', _imageMoney(creditPreviousBalance));
+        drawPair('Prev. Balance', _imageMoney(creditPreviousBalance), after: 7);
       }
       drawPair(
         isRefund ? 'This Refund' : 'This Bill',
         _imageMoney(creditBillAmount ?? total),
+        after: 7,
       );
       if (creditNewBalance != null) {
-        drawPair('New Balance', _imageMoney(creditNewBalance));
+        drawPair('New Balance', _imageMoney(creditNewBalance), after: 7);
       }
       if (creditLimit != null && creditLimit > 0) {
-        drawPair('Credit Limit', _imageMoney(creditLimit));
+        drawPair('Credit Limit', _imageMoney(creditLimit), after: 7);
       }
       if ((creditApprovedBy ?? '').trim().isNotEmpty) {
-        drawPair('Approved By', creditApprovedBy!.trim());
+        drawPair('Approved By', creditApprovedBy!.trim(), after: 7);
       }
     } else if (!isRefund && paymentMethodLower == 'cash') {
       if (amountTendered != null) {
-        drawPair('Tendered', _imageMoney(amountTendered));
+        drawPair('Tendered', _imageMoney(amountTendered), after: 7);
       }
-      if (changeAmount != null) drawPair('Change', _imageMoney(changeAmount));
+      if (changeAmount != null) {
+        drawPair('Change', _imageMoney(changeAmount), after: 7);
+      }
     }
 
     if (loyaltyPointsRedeemed != 0 || loyaltyRedeemedValue.abs() > 0.000001) {
-      y += 4;
+      y += 12;
       drawPair(
         'Loyalty redeemed',
         _imageMoney(loyaltyRedeemedValue.abs()),
-        size: 15,
+        size: 18,
+        valueColor: const ui.Color(0xFF777777),
+        after: 7,
       );
     }
     if (loyaltyPointsEarned != 0) {
       drawPair(
         isRefund ? 'Loyalty points reversed' : 'Loyalty points earned',
         '${loyaltyPointsEarned.abs()} pts',
-        size: 15,
+        size: 18,
+        valueColor: const ui.Color(0xFF777777),
+        after: 7,
       );
     }
     if (loyaltyTotalPoints != null) {
       drawPair(
         'Total Loyalty points',
         '${loyaltyTotalPoints.abs()} pts',
-        size: 15,
+        size: 18,
+        valueColor: const ui.Color(0xFF777777),
+        after: 8,
+      );
+    }
+
+    if (!isRefund && totalSavings > 0.000001) {
+      y += 8;
+      drawThinDivider();
+      drawText(
+        'You Save: ${_imageMoney(totalSavings)}!',
+        size: 24,
+        bold: true,
+        align: TextAlign.center,
+        before: 8,
+        after: 14,
       );
     }
 
     drawText(
       footerNote ?? 'Thank you for shopping with us!',
-      size: 16,
+      size: 22,
       align: TextAlign.center,
-      before: 22,
+      before: !isRefund && totalSavings > 0.000001 ? 0 : 18,
       after: 0,
     );
 
@@ -1025,12 +1076,13 @@ class ReceiptPrinterService {
     bool bold = false,
     TextAlign align = TextAlign.left,
     required double maxWidth,
+    ui.Color color = const ui.Color(0xFF000000),
   }) {
     final painter = TextPainter(
       text: TextSpan(
         text: text,
         style: TextStyle(
-          color: const ui.Color(0xFF000000),
+          color: color,
           fontSize: size,
           height: 1.16,
           fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
