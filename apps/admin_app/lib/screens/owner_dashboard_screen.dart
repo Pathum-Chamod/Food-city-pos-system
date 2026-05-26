@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/admin_provider.dart';
+import '../utils/product_name_helper.dart';
 
 class OwnerDashboardScreen extends StatelessWidget {
   const OwnerDashboardScreen({super.key});
@@ -639,7 +640,8 @@ class _ProductPreviewTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final productName = (product['product_name'] ?? 'Unknown item').toString();
+    final productName = ProductNameHelper.fromRow(product);
+    final sinhalaName = ProductNameHelper.sinhalaFromRow(product);
     final quantity = (product['quantity_sold'] as num?)?.toDouble() ?? 0.0;
     final totalSales = (product['total_sales'] as num?)?.toDouble() ?? 0.0;
 
@@ -659,12 +661,28 @@ class _ProductPreviewTile extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              productName,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF1E293B),
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  productName,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1E293B),
+                  ),
+                ),
+                if (sinhalaName != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    sinhalaName,
+                    style: const TextStyle(
+                      color: Color(0xFF667085),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
           const SizedBox(width: 8),

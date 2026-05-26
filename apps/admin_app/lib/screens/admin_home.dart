@@ -4,6 +4,7 @@ import 'package:shared/shared.dart';
 
 import '../models/stock_adjustment_request.dart';
 import '../providers/admin_provider.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import 'inventory_history_screen.dart';
 import 'stock_take_screen.dart';
@@ -87,6 +88,8 @@ class _AdminHomeState extends State<AdminHome> {
   void _showProductActionsSheet(Product product) {
     final statusText = _getStockStatus(product);
     final statusColor = _getStockStatusColor(product);
+    final productName = ProductNameHelper.primary(product);
+    final sinhalaName = ProductNameHelper.sinhala(product);
 
     showModalBottomSheet(
       context: context,
@@ -102,12 +105,22 @@ class _AdminHomeState extends State<AdminHome> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  product.name,
+                  productName,
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+                if (sinhalaName != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    sinhalaName,
+                    style: TextStyle(
+                      color: Colors.grey[700],
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 6),
                 Text(
                   'Barcode: ${product.barcode}',
@@ -164,7 +177,7 @@ class _AdminHomeState extends State<AdminHome> {
                     _showEditPriceDialog(
                       this.context,
                       product.barcode,
-                      product.name,
+                      productName,
                       product.price,
                     );
                   },
@@ -195,7 +208,8 @@ class _AdminHomeState extends State<AdminHome> {
                     Navigator.push(
                       this.context,
                       MaterialPageRoute(
-                        builder: (_) => InventoryHistoryScreen(product: product),
+                        builder: (_) =>
+                            InventoryHistoryScreen(product: product),
                       ),
                     );
                   },
@@ -229,7 +243,7 @@ class _AdminHomeState extends State<AdminHome> {
           }
 
           return AlertDialog(
-            title: Text('Adjust Stock\n${product.name}'),
+            title: Text('Adjust Stock\n${ProductNameHelper.primary(product)}'),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -291,7 +305,9 @@ class _AdminHomeState extends State<AdminHome> {
                   const SizedBox(height: 14),
                   TextField(
                     controller: qtyController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     onChanged: (_) => setDialogState(() {}),
                     decoration: InputDecoration(
                       labelText: adjustmentType == 'set_exact'
@@ -342,8 +358,8 @@ class _AdminHomeState extends State<AdminHome> {
                   backgroundColor: adjustmentType == 'increase'
                       ? Colors.green
                       : adjustmentType == 'decrease'
-                          ? Colors.orange
-                          : Colors.blue,
+                      ? Colors.orange
+                      : Colors.blue,
                 ),
                 onPressed: () {
                   final qty = double.tryParse(qtyController.text.trim()) ?? -1;
@@ -391,8 +407,8 @@ class _AdminHomeState extends State<AdminHome> {
                       final actionText = adjustmentType == 'increase'
                           ? 'Increase by $qty'
                           : adjustmentType == 'decrease'
-                              ? 'Decrease by $qty'
-                              : 'Set exact stock to $qty';
+                          ? 'Decrease by $qty'
+                          : 'Set exact stock to $qty';
 
                       return AlertDialog(
                         title: const Text('Confirm Stock Adjustment'),
@@ -401,7 +417,7 @@ class _AdminHomeState extends State<AdminHome> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              product.name,
+                              ProductNameHelper.primary(product),
                               style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                               ),
@@ -443,8 +459,8 @@ class _AdminHomeState extends State<AdminHome> {
                                 final message = adjustmentType == 'increase'
                                     ? 'Stock increased successfully.'
                                     : adjustmentType == 'decrease'
-                                        ? 'Stock decreased successfully.'
-                                        : 'Exact stock updated successfully.';
+                                    ? 'Stock decreased successfully.'
+                                    : 'Exact stock updated successfully.';
 
                                 AppSnackBar.show(
                                   context,
@@ -522,7 +538,7 @@ class _AdminHomeState extends State<AdminHome> {
                         .map(
                           (p) => DropdownMenuItem(
                             value: p.barcode,
-                            child: Text(p.name),
+                            child: Text(ProductNameHelper.primary(p)),
                           ),
                         )
                         .toList(),
@@ -544,9 +560,20 @@ class _AdminHomeState extends State<AdminHome> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            selectedProduct.name,
+                            ProductNameHelper.primary(selectedProduct),
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
+                          if (ProductNameHelper.sinhala(selectedProduct) !=
+                              null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              ProductNameHelper.sinhala(selectedProduct)!,
+                              style: TextStyle(
+                                color: Colors.grey[700],
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 6),
                           Text('Barcode: ${selectedProduct.barcode}'),
                           const SizedBox(height: 6),
@@ -567,7 +594,9 @@ class _AdminHomeState extends State<AdminHome> {
                   TextField(
                     controller: qtyController,
                     enabled: !isSubmitting,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     onChanged: (_) => setDialogState(() {}),
                     decoration: const InputDecoration(
                       labelText: 'Quantity Received',
@@ -731,7 +760,7 @@ class _AdminHomeState extends State<AdminHome> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Choose supplier for\n${product.name}',
+                  'Choose supplier for\n${ProductNameHelper.primary(product)}',
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -774,9 +803,7 @@ class _AdminHomeState extends State<AdminHome> {
 
     return products.where((product) {
       final matchesSearch =
-          query.isEmpty ||
-          product.name.toLowerCase().contains(query) ||
-          product.barcode.toLowerCase().contains(query);
+          query.isEmpty || ProductNameHelper.matches(product, query);
 
       final matchesFilter = switch (_stockFilter) {
         'in_stock' => product.stock > 10,
@@ -1004,10 +1031,16 @@ class _AdminHomeState extends State<AdminHome> {
           child: Icon(Icons.inventory_2, color: color),
         ),
         title: Text(
-          product.name,
+          ProductNameHelper.primary(product),
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        subtitle: Text('Barcode: ${product.barcode}'),
+        subtitle: Text(
+          [
+            if (ProductNameHelper.sinhala(product) != null)
+              ProductNameHelper.sinhala(product)!,
+            'Barcode: ${product.barcode}',
+          ].join('\n'),
+        ),
         trailing: SizedBox(
           width: 120,
           child: Column(
@@ -1055,7 +1088,9 @@ class _AdminHomeState extends State<AdminHome> {
       final name = supplier.name.toString().toLowerCase();
       final phone = supplier.phone.toString().toLowerCase();
       final id = supplier.id.toString().toLowerCase();
-      return name.contains(query) || phone.contains(query) || id.contains(query);
+      return name.contains(query) ||
+          phone.contains(query) ||
+          id.contains(query);
     }).toList();
   }
 
@@ -1431,13 +1466,31 @@ class _AdminHomeState extends State<AdminHome> {
                                                     CrossAxisAlignment.start,
                                                 children: [
                                                   Text(
-                                                    product.name,
+                                                    ProductNameHelper.primary(
+                                                      product,
+                                                    ),
                                                     style: const TextStyle(
                                                       fontWeight:
                                                           FontWeight.bold,
                                                       fontSize: 16,
                                                     ),
                                                   ),
+                                                  if (ProductNameHelper.sinhala(
+                                                        product,
+                                                      ) !=
+                                                      null) ...[
+                                                    const SizedBox(height: 3),
+                                                    Text(
+                                                      ProductNameHelper.sinhala(
+                                                        product,
+                                                      )!,
+                                                      style: TextStyle(
+                                                        color: Colors.grey[700],
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                      ),
+                                                    ),
+                                                  ],
                                                   const SizedBox(height: 4),
                                                   Text(
                                                     'Barcode: ${product.barcode}',
@@ -1450,7 +1503,8 @@ class _AdminHomeState extends State<AdminHome> {
                                                     '${product.quantityType.label} (${product.unitLabel})',
                                                     style: TextStyle(
                                                       color: Colors.grey[600],
-                                                      fontWeight: FontWeight.w600,
+                                                      fontWeight:
+                                                          FontWeight.w600,
                                                     ),
                                                   ),
                                                 ],
@@ -1472,9 +1526,9 @@ class _AdminHomeState extends State<AdminHome> {
                                             Container(
                                               padding:
                                                   const EdgeInsets.symmetric(
-                                                horizontal: 10,
-                                                vertical: 6,
-                                              ),
+                                                    horizontal: 10,
+                                                    vertical: 6,
+                                                  ),
                                               decoration: BoxDecoration(
                                                 color: statusColor.withOpacity(
                                                   0.12,
@@ -1632,9 +1686,7 @@ class _AdminHomeState extends State<AdminHome> {
                     const Card(
                       child: Padding(
                         padding: EdgeInsets.all(24),
-                        child: Center(
-                          child: Text('No suppliers found.'),
-                        ),
+                        child: Center(child: Text('No suppliers found.')),
                       ),
                     )
                   else
@@ -1695,12 +1747,14 @@ class _AdminHomeState extends State<AdminHome> {
                                           MaterialPageRoute(
                                             builder: (_) =>
                                                 SupplierManagementScreen(
-                                              supplier: supplier,
-                                            ),
+                                                  supplier: supplier,
+                                                ),
                                           ),
                                         );
                                       },
-                                      icon: const Icon(Icons.dashboard_outlined),
+                                      icon: const Icon(
+                                        Icons.dashboard_outlined,
+                                      ),
                                       label: const Text('Open Workspace'),
                                     ),
                                   ),
@@ -1740,9 +1794,7 @@ class _AdminHomeState extends State<AdminHome> {
             onPressed: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => const StockTakeScreen(),
-                ),
+                MaterialPageRoute(builder: (_) => const StockTakeScreen()),
               );
             },
           ),

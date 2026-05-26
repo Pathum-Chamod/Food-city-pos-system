@@ -16,6 +16,7 @@ import '../navigation/pos_route_names.dart';
 import '../providers/auth_provider.dart';
 import '../providers/cart_provider.dart';
 import '../providers/app_theme_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/customer_service.dart';
 import '../services/customer_credit_service.dart';
@@ -24,6 +25,7 @@ import '../services/permission_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import '../services/sync_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/admin_dialogs.dart';
 import '../widgets/premium_dialog.dart';
 import '../widgets/app_snackbar.dart';
@@ -2752,6 +2754,13 @@ class _PosScreenState extends State<PosScreen> {
     return '${_formatQuantity(quantity)} pcs';
   }
 
+  String _displayProductName(Product product) {
+    return ProductNameHelper.displayName(
+      product,
+      context.read<LanguageProvider>().language,
+    );
+  }
+
   CartItem? _selectedCartItem(CartProvider cart, {bool showMessage = true}) {
     if (cart.items.isEmpty) {
       if (showMessage) {
@@ -2837,7 +2846,7 @@ class _PosScreenState extends State<PosScreen> {
         maxQuantity != null &&
         maxQuantity <= _quantityEpsilon) {
       _showInfoMessage(
-        'No stock is available to increase ${item.product.name}.',
+        'No stock is available to increase ${_displayProductName(item.product)}.',
         backgroundColor: _dangerColor,
       );
       _focusBarcodeField();
@@ -2892,7 +2901,7 @@ class _PosScreenState extends State<PosScreen> {
     if (maxQuantity != null &&
         _quantityExceeds(item.quantity + 1.0, maxQuantity)) {
       _showInfoMessage(
-        'Cannot exceed available stock for ${item.product.name}.',
+        'Cannot exceed available stock for ${_displayProductName(item.product)}.',
         backgroundColor: _dangerColor,
       );
       _focusBarcodeField();
@@ -3070,7 +3079,8 @@ class _PosScreenState extends State<PosScreen> {
 
     final confirmed = await _showKeyboardConfirmDialog(
       title: 'Remove Selected Item?',
-      message: 'Remove ${item.product.name} from the current cart?',
+      message:
+          'Remove ${_displayProductName(item.product)} from the current cart?',
       confirmLabel: 'Remove',
       icon: Icons.delete_outline_rounded,
       confirmColor: _dangerColor,
@@ -3435,7 +3445,7 @@ class _PosScreenState extends State<PosScreen> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '${item.product.name} • ${item.product.barcode}',
+                                '${_displayProductName(item.product)} • ${item.product.barcode}',
                                 style: TextStyle(
                                   color: _textSecondary,
                                   fontWeight: FontWeight.w700,
@@ -4014,14 +4024,13 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   List<Product> get _filteredProducts {
-    final query = _searchQuery.trim().toLowerCase();
+    final query = _searchQuery.trim();
 
     if (query.isEmpty) return _products;
 
-    return _products.where((product) {
-      return product.name.toLowerCase().contains(query) ||
-          product.barcode.toLowerCase().contains(query);
-    }).toList();
+    return _products
+        .where((product) => ProductNameHelper.matchesProduct(product, query))
+        .toList();
   }
 
   // ignore: unused_element
@@ -4176,7 +4185,7 @@ class _PosScreenState extends State<PosScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      product.name,
+                                      _displayProductName(product),
                                       style: TextStyle(
                                         color: _textSecondary,
                                         fontWeight: FontWeight.w700,
@@ -4399,7 +4408,7 @@ class _PosScreenState extends State<PosScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      product.name,
+                                      _displayProductName(product),
                                       style: TextStyle(
                                         color: _textSecondary,
                                         fontWeight: FontWeight.w700,
@@ -4534,7 +4543,7 @@ class _PosScreenState extends State<PosScreen> {
           remainingStock != null &&
           remainingStock <= _quantityEpsilon) {
         _showInfoMessage(
-          'Cannot add more than available stock for ${product.name}.',
+          'Cannot add more than available stock for ${_displayProductName(product)}.',
           backgroundColor: _dangerColor,
         );
         return;
@@ -4570,7 +4579,7 @@ class _PosScreenState extends State<PosScreen> {
     if (!cart.isRefundMode &&
         _quantityExceeds(currentQtyInCart + quantityToAdd, product.stock)) {
       _showInfoMessage(
-        'Cannot add more than available stock for ${product.name}.',
+        'Cannot add more than available stock for ${_displayProductName(product)}.',
         backgroundColor: _dangerColor,
       );
       return;
@@ -4610,7 +4619,11 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _showExpiredBatchBlockDialog(
     Map<String, dynamic> warning,
   ) async {
-    final productName = (warning['product_name'] ?? 'This product').toString();
+    final productName = ProductNameHelper.displayNameFromMap(
+      warning,
+      context.read<LanguageProvider>().language,
+      fallback: 'This product',
+    );
     final expiryDate = (warning['expiry_date'] ?? '').toString();
     final quantity = _sanitizeQuantity(
       ((warning['remaining_quantity'] as num?) ?? 0).toDouble(),
@@ -4659,7 +4672,11 @@ class _PosScreenState extends State<PosScreen> {
   Future<bool> _showExpiresTodayConfirmDialog(
     Map<String, dynamic> warning,
   ) async {
-    final productName = (warning['product_name'] ?? 'This product').toString();
+    final productName = ProductNameHelper.displayNameFromMap(
+      warning,
+      context.read<LanguageProvider>().language,
+      fallback: 'This product',
+    );
     final expiryDate = (warning['expiry_date'] ?? '').toString();
     final quantity = _sanitizeQuantity(
       ((warning['remaining_quantity'] as num?) ?? 0).toDouble(),
@@ -4892,7 +4909,11 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   void _showTomorrowExpiryToast(Map<String, dynamic> warning) {
-    final productName = (warning['product_name'] ?? 'This product').toString();
+    final productName = ProductNameHelper.displayNameFromMap(
+      warning,
+      context.read<LanguageProvider>().language,
+      fallback: 'This product',
+    );
     _showInfoMessage(
       '$productName expires tomorrow. Check Expiry Alerts.',
       backgroundColor: _warningColor,
@@ -4903,7 +4924,11 @@ class _PosScreenState extends State<PosScreen> {
   void _showWeeklyExpiryToastOncePerSession(Map<String, dynamic> warning) {
     final batchId = (warning['id'] as num?)?.toInt() ?? 0;
     final expiryDate = (warning['expiry_date'] ?? '').toString();
-    final productName = (warning['product_name'] ?? 'This product').toString();
+    final productName = ProductNameHelper.displayNameFromMap(
+      warning,
+      context.read<LanguageProvider>().language,
+      fallback: 'This product',
+    );
     final sessionKey = '$batchId|$expiryDate';
     if (_weeklyExpiryWarningSessionKeys.contains(sessionKey)) return;
 
@@ -6763,6 +6788,37 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  Widget _buildLanguageToggle() {
+    final language = context.watch<LanguageProvider>().language;
+
+    return SizedBox(
+      height: 38,
+      child: SegmentedButton<AppLanguage>(
+        showSelectedIcon: false,
+        selected: {language},
+        style: ButtonStyle(
+          visualDensity: VisualDensity.compact,
+          padding: WidgetStateProperty.all(
+            const EdgeInsets.symmetric(horizontal: 10),
+          ),
+          textStyle: WidgetStateProperty.all(
+            const TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
+          ),
+        ),
+        segments: const [
+          ButtonSegment(value: AppLanguage.english, label: Text('EN')),
+          ButtonSegment(value: AppLanguage.sinhala, label: Text('සිං')),
+        ],
+        onSelectionChanged: (selected) {
+          if (selected.isEmpty) return;
+          final next = selected.first;
+          unawaited(context.read<LanguageProvider>().setLanguage(next));
+          _focusBarcodeField();
+        },
+      ),
+    );
+  }
+
   Widget _buildCatalogPanel(CartProvider cart) {
     return Container(
       decoration: _panelDecoration(color: _panelColor),
@@ -6796,6 +6852,8 @@ class _PosScreenState extends State<PosScreen> {
                   ],
                 ),
                 const Spacer(),
+                _buildLanguageToggle(),
+                const SizedBox(width: 8),
                 _buildIconSurfaceButton(
                   tooltip: 'Refresh items',
                   icon: Icons.refresh_rounded,
@@ -6844,7 +6902,7 @@ class _PosScreenState extends State<PosScreen> {
               },
               decoration: InputDecoration(
                 labelText: 'Search products',
-                hintText: 'Search by product name or barcode',
+                hintText: 'Search by barcode, English, or Sinhala name',
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 14,
                   vertical: 14,
@@ -7010,6 +7068,10 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Widget _buildProductCard(Product product, CartProvider cart) {
+    final productName = ProductNameHelper.displayName(
+      product,
+      context.watch<LanguageProvider>().language,
+    );
     final isOutOfStock =
         _sanitizeQuantity(product.stock) <= _quantityEpsilon &&
         !cart.isRefundMode;
@@ -7034,7 +7096,7 @@ class _PosScreenState extends State<PosScreen> {
               await AdminDialogs.showEditPriceDialog(
                 context,
                 product.barcode,
-                product.name,
+                _displayProductName(product),
                 product.sellingPrice,
                 () async {
                   await _refreshProductsFromBackendAndReload(
@@ -7109,7 +7171,7 @@ class _PosScreenState extends State<PosScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      product.name,
+                      productName,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -7502,6 +7564,10 @@ class _PosScreenState extends State<PosScreen> {
     required int index,
     required bool isSelected,
   }) {
+    final productName = ProductNameHelper.displayName(
+      item.product,
+      context.watch<LanguageProvider>().language,
+    );
     final currentStock = _getCurrentStock(
       item.product.barcode,
       fallback: item.product.stock,
@@ -7549,7 +7615,7 @@ class _PosScreenState extends State<PosScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    item.product.name,
+                    productName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -7691,7 +7757,7 @@ class _PosScreenState extends State<PosScreen> {
                           maxQuantity != null &&
                           maxQuantity <= _quantityEpsilon) {
                         _showInfoMessage(
-                          'No stock is available to increase ${item.product.name}.',
+                          'No stock is available to increase ${_displayProductName(item.product)}.',
                           backgroundColor: _dangerColor,
                         );
                         return;
@@ -7747,7 +7813,7 @@ class _PosScreenState extends State<PosScreen> {
                           maxQuantity != null &&
                           maxQuantity <= _quantityEpsilon) {
                         _showInfoMessage(
-                          'No stock is available to increase ${item.product.name}.',
+                          'No stock is available to increase ${_displayProductName(item.product)}.',
                           backgroundColor: _dangerColor,
                         );
                         return;
@@ -7810,7 +7876,7 @@ class _PosScreenState extends State<PosScreen> {
                                     currentStock,
                                   )) {
                                 _showInfoMessage(
-                                  'Cannot exceed available stock for ${item.product.name}.',
+                                  'Cannot exceed available stock for ${_displayProductName(item.product)}.',
                                   backgroundColor: _dangerColor,
                                 );
                                 return;

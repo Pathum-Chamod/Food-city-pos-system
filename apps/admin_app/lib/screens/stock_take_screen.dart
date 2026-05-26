@@ -6,6 +6,7 @@ import 'package:shared/shared.dart';
 import '../models/stock_adjustment_request.dart';
 import '../providers/admin_provider.dart';
 import '../services/stock_take_session_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import 'stock_take_history_screen.dart';
 
@@ -155,7 +156,9 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     if ((quantity - quantity.roundToDouble()).abs() < _quantityEpsilon) {
       return quantity.round().toString();
     }
-    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatProductQuantity(Product product, num value) =>
@@ -167,12 +170,11 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     return products.where((product) {
       final countedQty = _countedQuantities[product.barcode];
       final hasCount = countedQty != null;
-      final hasDiscrepancy = hasCount && !_quantitiesEqual(countedQty, product.stock);
+      final hasDiscrepancy =
+          hasCount && !_quantitiesEqual(countedQty, product.stock);
 
       final matchesQuery =
-          query.isEmpty ||
-          product.name.toLowerCase().contains(query) ||
-          product.barcode.toLowerCase().contains(query);
+          query.isEmpty || ProductNameHelper.matches(product, query);
 
       final matchesFilter = switch (_filter) {
         'counted' => hasCount,
@@ -224,7 +226,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     _barcodeController.clear();
 
-    AppSnackBar.show(context, message: 'Counted 1 x ${matchedProduct.name}');
+    AppSnackBar.show(
+      context,
+      message: 'Counted 1 x ${ProductNameHelper.primary(matchedProduct)}',
+    );
   }
 
   Future<void> _showSetCountDialog(Product product) async {
@@ -237,10 +242,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('Set Count\n${product.name}'),
+        title: Text('Set Count\n${ProductNameHelper.primary(product)}'),
         content: TextField(
           controller: controller,
-          keyboardType: TextInputType.numberWithOptions(decimal: _isWeighted(product)),
+          keyboardType: TextInputType.numberWithOptions(
+            decimal: _isWeighted(product),
+          ),
           inputFormatters: _isWeighted(product)
               ? <TextInputFormatter>[
                   FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,3}$')),
@@ -349,7 +356,12 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     final discrepancies = products
         .where((product) => _countedQuantities.containsKey(product.barcode))
-        .where((product) => !_quantitiesEqual(_countedQuantities[product.barcode]!, product.stock))
+        .where(
+          (product) => !_quantitiesEqual(
+            _countedQuantities[product.barcode]!,
+            product.stock,
+          ),
+        )
         .toList();
 
     if (discrepancies.isEmpty) {
@@ -421,7 +433,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       historyLines.add(
         StockTakeHistoryLine(
           barcode: product.barcode,
-          productName: product.name,
+          productName: ProductNameHelper.primary(product),
           systemStock: product.stock,
           countedStock: countedQty,
           applied: success,
@@ -431,7 +443,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       if (success) {
         successCount += 1;
       } else {
-        failedProducts.add(product.name);
+        failedProducts.add(ProductNameHelper.primary(product));
       }
     }
 
@@ -591,9 +603,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
             color: selected ? const Color(0xFFE9DDF8) : Colors.white,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: selected
-                  ? const Color(0xFFD5C1F2)
-                  : Colors.grey.shade300,
+              color: selected ? const Color(0xFFD5C1F2) : Colors.grey.shade300,
             ),
           ),
           child: Padding(
@@ -606,9 +616,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  color: selected
-                      ? const Color(0xFF6F4BB8)
-                      : Colors.black87,
+                  color: selected ? const Color(0xFF6F4BB8) : Colors.black87,
                 ),
               ),
             ),
@@ -696,12 +704,22 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        product.name,
+                        ProductNameHelper.primary(product),
                         style: const TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 15,
                         ),
                       ),
+                      if (ProductNameHelper.sinhala(product) != null) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          ProductNameHelper.sinhala(product)!,
+                          style: TextStyle(
+                            color: Colors.grey[700],
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 4),
                       Text(
                         'Barcode: ${product.barcode}',
@@ -736,7 +754,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                _buildMiniPill('System: ${_formatProductQuantity(product, product.stock)}', Colors.grey),
+                _buildMiniPill(
+                  'System: ${_formatProductQuantity(product, product.stock)}',
+                  Colors.grey,
+                ),
                 _buildMiniPill(
                   hasCount ? 'Counted: $countedQty' : 'Counted: —',
                   Colors.indigo,
@@ -1005,7 +1026,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                               SizedBox(
                                 height: 56,
                                 child: ElevatedButton.icon(
-                                  onPressed: () => _incrementByBarcode(products),
+                                  onPressed: () =>
+                                      _incrementByBarcode(products),
                                   icon: const Icon(Icons.add),
                                   label: const Text('Count'),
                                   style: ElevatedButton.styleFrom(

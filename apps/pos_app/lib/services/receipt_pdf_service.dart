@@ -1,8 +1,11 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+
+import 'receipt_text_utils.dart';
 
 class ReceiptPdfResponse {
   final bool isSuccess;
@@ -24,6 +27,7 @@ class ReceiptPdfService {
     80 * PdfPageFormat.mm,
     297 * PdfPageFormat.mm,
   );
+  Future<pw.Font?>? _unicodeFontFuture;
 
   String _formatQuantity(num value, {int maxDecimals = 3}) {
     final safeValue = value.toDouble().abs() < 0.000001
@@ -40,6 +44,29 @@ class ReceiptPdfService {
   String _formatPercent(num value) {
     final number = value.toDouble();
     return number.toStringAsFixed(number % 1 == 0 ? 0 : 2);
+  }
+
+  Future<pw.Font?> _loadUnicodeFont() {
+    return _unicodeFontFuture ??= _resolveUnicodeFont();
+  }
+
+  Future<pw.Font?> _resolveUnicodeFont() async {
+    for (final path in const [
+      r'C:\Windows\Fonts\Nirmala.ttf',
+      r'C:\Windows\Fonts\Iskoola.ttf',
+    ]) {
+      final file = File(path);
+      if (!await file.exists()) continue;
+
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) continue;
+
+      return pw.Font.ttf(
+        ByteData.view(bytes.buffer, bytes.offsetInBytes, bytes.lengthInBytes),
+      );
+    }
+
+    return null;
   }
 
   String _discountPercentLabel({
@@ -127,6 +154,20 @@ class ReceiptPdfService {
           loyaltyRedeemedValue.abs() > 0.000001 ||
           loyaltyPointsEarned != 0 ||
           loyaltyTotalPoints != null;
+      final unicodeFont =
+          ReceiptTextUtils.receiptContainsSinhala(
+            items: items,
+            extraText: [
+              storeName,
+              storeAddress,
+              storePhone,
+              cashierName,
+              cleanCustomerName,
+              footerNote ?? '',
+            ],
+          )
+          ? await _loadUnicodeFont()
+          : null;
 
       pdf.addPage(
         pw.MultiPage(
@@ -142,6 +183,9 @@ class ReceiptPdfService {
                   style: pw.TextStyle(
                     fontSize: 14,
                     fontWeight: pw.FontWeight.bold,
+                    fontFallback: unicodeFont == null
+                        ? const []
+                        : [unicodeFont],
                   ),
                 ),
                 if (storeAddress.trim().isNotEmpty) ...[
@@ -149,7 +193,12 @@ class ReceiptPdfService {
                   pw.Text(
                     storeAddress.trim(),
                     textAlign: pw.TextAlign.center,
-                    style: const pw.TextStyle(fontSize: 8),
+                    style: pw.TextStyle(
+                      fontSize: 8,
+                      fontFallback: unicodeFont == null
+                          ? const []
+                          : [unicodeFont],
+                    ),
                   ),
                 ],
                 if (storePhone.trim().isNotEmpty) ...[
@@ -157,7 +206,12 @@ class ReceiptPdfService {
                   pw.Text(
                     'Tel: ${storePhone.trim()}',
                     textAlign: pw.TextAlign.center,
-                    style: const pw.TextStyle(fontSize: 8),
+                    style: pw.TextStyle(
+                      fontSize: 8,
+                      fontFallback: unicodeFont == null
+                          ? const []
+                          : [unicodeFont],
+                    ),
                   ),
                 ],
                 pw.SizedBox(height: 6),
@@ -170,13 +224,25 @@ class ReceiptPdfService {
                   ),
                 ),
                 _receiptDivider(),
-                _receiptLabelValue('Date', dateStr),
-                _receiptLabelValue('Txn', '#$transactionId'),
-                _receiptLabelValue('Cashier', cashierName),
+                _receiptLabelValue('Date', dateStr, unicodeFont: unicodeFont),
+                _receiptLabelValue(
+                  'Txn',
+                  '#$transactionId',
+                  unicodeFont: unicodeFont,
+                ),
+                _receiptLabelValue(
+                  'Cashier',
+                  cashierName,
+                  unicodeFont: unicodeFont,
+                ),
                 if (hasCustomer)
-                  _receiptLabelValue('Customer', cleanCustomerName),
+                  _receiptLabelValue(
+                    'Customer',
+                    cleanCustomerName,
+                    unicodeFont: unicodeFont,
+                  ),
                 _receiptDivider(),
-                _receiptItemHeader(),
+                _receiptItemHeader(unicodeFont: unicodeFont),
                 _receiptThinDivider(),
                 pw.SizedBox(height: 3),
                 ...items.expand((item) {
@@ -209,26 +275,37 @@ class ReceiptPdfService {
 
                   return [
                     pw.SizedBox(height: 5),
-                    _receiptText(name, bold: true, fontSize: 8.4),
+                    _receiptText(
+                      name,
+                      bold: true,
+                      fontSize: 8.4,
+                      unicodeFont: unicodeFont,
+                    ),
                     pw.SizedBox(height: 2),
                     _receiptItemValueRow(
                       unitPrice: unitPriceText,
                       markedPrice: _formatMoney(markedPrice),
                       quantity: _formatQuantity(qty),
                       total: _formatMoney(lineTotal),
+                      unicodeFont: unicodeFont,
                     ),
                     pw.SizedBox(height: 3),
                   ];
                 }),
                 if (shouldShowSubtotal) ...[
                   _receiptDivider(),
-                  _receiptLabelValue('Subtotal', _formatMoney(subtotal)),
+                  _receiptLabelValue(
+                    'Subtotal',
+                    _formatMoney(subtotal),
+                    unicodeFont: unicodeFont,
+                  ),
                 ],
                 if (discountAmount > 0)
                   _receiptLabelValue(
                     'Discount (${_discountPercentLabel(discountAmount: discountAmount, baseAmount: subtotal, discountType: discountType, discountValue: discountValue)}%)',
                     '- ${_formatMoney(discountAmount)}',
                     valueColor: PdfColors.red700,
+                    unicodeFont: unicodeFont,
                   ),
                 _receiptDivider(char: '='),
                 _receiptLabelValue(
@@ -236,6 +313,7 @@ class ReceiptPdfService {
                   _formatMoney(total),
                   bold: true,
                   fontSize: 11,
+                  unicodeFont: unicodeFont,
                 ),
                 _receiptDivider(char: '='),
                 _receiptLabelValue(
@@ -245,34 +323,51 @@ class ReceiptPdfService {
                             ? 'CUSTOMER CREDIT REFUND'
                             : 'CUSTOMER CREDIT')
                       : paymentMethod.toUpperCase(),
+                  unicodeFont: unicodeFont,
                 ),
                 if (isCustomerCredit) ...[
                   if (creditPreviousBalance != null)
                     _receiptLabelValue(
                       'Prev. Balance',
                       _formatMoney(creditPreviousBalance),
+                      unicodeFont: unicodeFont,
                     ),
                   _receiptLabelValue(
                     isRefund ? 'This Refund' : 'This Bill',
                     _formatMoney(creditBillAmount ?? total),
+                    unicodeFont: unicodeFont,
                   ),
                   if (creditNewBalance != null)
                     _receiptLabelValue(
                       'New Balance',
                       _formatMoney(creditNewBalance),
+                      unicodeFont: unicodeFont,
                     ),
                   if (creditLimit != null && creditLimit > 0)
                     _receiptLabelValue(
                       'Credit Limit',
                       _formatMoney(creditLimit),
+                      unicodeFont: unicodeFont,
                     ),
                   if ((creditApprovedBy ?? '').trim().isNotEmpty)
-                    _receiptLabelValue('Approved By', creditApprovedBy!.trim()),
+                    _receiptLabelValue(
+                      'Approved By',
+                      creditApprovedBy!.trim(),
+                      unicodeFont: unicodeFont,
+                    ),
                 ],
                 if (!isRefund && !isCustomerCredit && amountTendered != null)
-                  _receiptLabelValue('Tendered', _formatMoney(amountTendered)),
+                  _receiptLabelValue(
+                    'Tendered',
+                    _formatMoney(amountTendered),
+                    unicodeFont: unicodeFont,
+                  ),
                 if (!isRefund && !isCustomerCredit && changeAmount != null)
-                  _receiptLabelValue('Change', _formatMoney(changeAmount)),
+                  _receiptLabelValue(
+                    'Change',
+                    _formatMoney(changeAmount),
+                    unicodeFont: unicodeFont,
+                  ),
                 if (hasLoyalty) ...[
                   pw.SizedBox(height: 4),
                   if (loyaltyPointsRedeemed != 0 ||
@@ -282,6 +377,7 @@ class ReceiptPdfService {
                       _formatMoney(loyaltyRedeemedValue.abs()),
                       fontSize: 7,
                       valueColor: PdfColors.grey700,
+                      unicodeFont: unicodeFont,
                     ),
                   if (loyaltyPointsEarned != 0)
                     _receiptLabelValue(
@@ -291,6 +387,7 @@ class ReceiptPdfService {
                       '${loyaltyPointsEarned.abs()} pts',
                       fontSize: 7,
                       valueColor: PdfColors.grey700,
+                      unicodeFont: unicodeFont,
                     ),
                   if (loyaltyTotalPoints != null)
                     _receiptLabelValue(
@@ -298,6 +395,7 @@ class ReceiptPdfService {
                       '${loyaltyTotalPoints.abs()} pts',
                       fontSize: 7,
                       valueColor: PdfColors.grey700,
+                      unicodeFont: unicodeFont,
                     ),
                 ],
                 if (!isRefund && totalSavings > 0.000001) ...[
@@ -315,7 +413,12 @@ class ReceiptPdfService {
                 pw.Text(
                   footerNote ?? 'Thank you for shopping with us!',
                   textAlign: pw.TextAlign.center,
-                  style: const pw.TextStyle(fontSize: 8),
+                  style: pw.TextStyle(
+                    fontSize: 8,
+                    fontFallback: unicodeFont == null
+                        ? const []
+                        : [unicodeFont],
+                  ),
                 ),
               ],
             ),
@@ -410,6 +513,7 @@ class ReceiptPdfService {
     bool alignRight = false,
     double fontSize = 8,
     PdfColor? color,
+    pw.Font? unicodeFont,
   }) {
     return pw.Text(
       value,
@@ -418,19 +522,42 @@ class ReceiptPdfService {
         fontSize: fontSize,
         fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
         color: color,
+        fontFallback: unicodeFont == null ? const [] : [unicodeFont],
       ),
     );
   }
 
-  pw.Widget _receiptItemHeader() {
+  pw.Widget _receiptItemHeader({pw.Font? unicodeFont}) {
     return pw.Padding(
       padding: const pw.EdgeInsets.only(top: 1, bottom: 2),
       child: pw.Row(
         children: [
-          _receiptItemCell('Unit price', flex: 30, bold: true),
-          _receiptItemCell('Mark price', flex: 27, bold: true),
-          _receiptItemCell('Qty', flex: 13, bold: true, alignRight: true),
-          _receiptItemCell('Total', flex: 30, bold: true, alignRight: true),
+          _receiptItemCell(
+            'Unit price',
+            flex: 30,
+            bold: true,
+            unicodeFont: unicodeFont,
+          ),
+          _receiptItemCell(
+            'Mark price',
+            flex: 27,
+            bold: true,
+            unicodeFont: unicodeFont,
+          ),
+          _receiptItemCell(
+            'Qty',
+            flex: 13,
+            bold: true,
+            alignRight: true,
+            unicodeFont: unicodeFont,
+          ),
+          _receiptItemCell(
+            'Total',
+            flex: 30,
+            bold: true,
+            alignRight: true,
+            unicodeFont: unicodeFont,
+          ),
         ],
       ),
     );
@@ -441,16 +568,28 @@ class ReceiptPdfService {
     required String markedPrice,
     required String quantity,
     required String total,
+    pw.Font? unicodeFont,
   }) {
     return pw.Padding(
       padding: const pw.EdgeInsets.only(top: 2),
       child: pw.Row(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          _receiptItemCell(unitPrice, flex: 30),
-          _receiptItemCell(markedPrice, flex: 27),
-          _receiptItemCell(quantity, flex: 13, alignRight: true),
-          _receiptItemCell(total, flex: 30, bold: true, alignRight: true),
+          _receiptItemCell(unitPrice, flex: 30, unicodeFont: unicodeFont),
+          _receiptItemCell(markedPrice, flex: 27, unicodeFont: unicodeFont),
+          _receiptItemCell(
+            quantity,
+            flex: 13,
+            alignRight: true,
+            unicodeFont: unicodeFont,
+          ),
+          _receiptItemCell(
+            total,
+            flex: 30,
+            bold: true,
+            alignRight: true,
+            unicodeFont: unicodeFont,
+          ),
         ],
       ),
     );
@@ -461,6 +600,7 @@ class ReceiptPdfService {
     required int flex,
     bool bold = false,
     bool alignRight = false,
+    pw.Font? unicodeFont,
   }) {
     return pw.Expanded(
       flex: flex,
@@ -471,6 +611,7 @@ class ReceiptPdfService {
           bold: bold,
           alignRight: alignRight,
           fontSize: bold ? 6.8 : 6.5,
+          unicodeFont: unicodeFont,
         ),
       ),
     );
@@ -482,6 +623,7 @@ class ReceiptPdfService {
     bool bold = false,
     double fontSize = 8,
     PdfColor? valueColor,
+    pw.Font? unicodeFont,
   }) {
     return pw.Padding(
       padding: const pw.EdgeInsets.only(bottom: 3),
@@ -489,7 +631,12 @@ class ReceiptPdfService {
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
           pw.Expanded(
-            child: _receiptText(label, bold: bold, fontSize: fontSize),
+            child: _receiptText(
+              label,
+              bold: bold,
+              fontSize: fontSize,
+              unicodeFont: unicodeFont,
+            ),
           ),
           pw.SizedBox(width: 8),
           pw.Expanded(
@@ -499,6 +646,7 @@ class ReceiptPdfService {
               alignRight: true,
               fontSize: fontSize,
               color: valueColor,
+              unicodeFont: unicodeFont,
             ),
           ),
         ],

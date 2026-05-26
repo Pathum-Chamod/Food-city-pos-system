@@ -11,6 +11,7 @@ import 'services/sync_service.dart';
 import 'providers/cart_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/app_theme_provider.dart';
+import 'providers/language_provider.dart';
 import 'navigation/pos_route_names.dart';
 import 'navigation/route_search_focus_registry.dart';
 import 'screens/cashier_summary_screen.dart';
@@ -45,12 +46,16 @@ void main() async {
   // Start the background sync worker (checks every 30 seconds)
   SyncService().startSyncWorker();
 
+  final languageProvider = LanguageProvider();
+  await languageProvider.load();
+
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => AppThemeProvider()),
+        ChangeNotifierProvider.value(value: languageProvider),
       ],
       child: const PosApp(),
     ),

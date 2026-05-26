@@ -2,16 +2,19 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../navigation/pos_route_names.dart';
 import '../navigation/route_search_focus_registry.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/customer_service.dart';
 import '../services/customer_credit_service.dart';
 import '../services/loyalty_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
+import '../services/receipt_text_utils.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 import 'refund_transaction_screen.dart';
@@ -31,6 +34,22 @@ class TransactionHistoryScreen extends StatefulWidget {
     return quantity
         .toStringAsFixed(maxDecimals)
         .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  static String _displaySnapshotProductName(
+    Map<String, dynamic> item,
+    AppLanguage language,
+  ) {
+    final sinhalaName = item['product_name_si']?.toString().trim() ?? '';
+    if (language == AppLanguage.sinhala && sinhalaName.isNotEmpty) {
+      return sinhalaName;
+    }
+
+    final englishName = item['product_name']?.toString().trim() ?? '';
+    if (englishName.isNotEmpty) return englishName;
+
+    final barcode = item['barcode']?.toString().trim() ?? '';
+    return barcode.isNotEmpty ? barcode : 'Unknown';
   }
 
   static Future<Map<String, dynamic>?> _getTransactionSummaryWithCustomer(
@@ -258,6 +277,7 @@ class TransactionHistoryScreen extends StatefulWidget {
     int saleId,
   ) async {
     final printer = ReceiptPrinterService.instance;
+    final language = context.read<LanguageProvider>().language;
 
     if (!printer.isConnected) {
       if (context.mounted) {
@@ -287,9 +307,6 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     final paymentMethod = (summary['payment_method'] ?? 'cash').toString();
     final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
-    final subtotal = ((summary['subtotal_amount'] as num?) ?? 0)
-        .toDouble()
-        .abs();
     final discountAmount = ((summary['discount_amount'] as num?) ?? 0)
         .toDouble()
         .abs();
@@ -347,8 +364,9 @@ class TransactionHistoryScreen extends StatefulWidget {
         ((summary['loyalty_earn_base_amount'] as num?) ?? 0).toDouble();
     final loyaltyNote = (summary['loyalty_note'] ?? '').toString().trim();
     final loyaltyTotalPoints = await _loyaltyTotalPointsForSummary(summary);
-
     final receiptItems = items.map((item) {
+      final englishName = (item['product_name'] ?? '').toString().trim();
+      final sinhalaName = (item['product_name_si'] ?? '').toString().trim();
       final finalLineTotal = ((item['line_total'] as num?) ?? 0)
           .toDouble()
           .abs();
@@ -374,7 +392,9 @@ class TransactionHistoryScreen extends StatefulWidget {
         item['customer_pricing_applied'],
       );
       return {
-        'name': (item['product_name'] ?? 'Item').toString(),
+        'name': _displaySnapshotProductName(item, language),
+        'englishName': englishName.isNotEmpty ? englishName : 'Item',
+        'sinhalaName': sinhalaName,
         'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
         'markedPrice':
@@ -408,6 +428,103 @@ class TransactionHistoryScreen extends StatefulWidget {
       0.0,
       (sum, item) => sum + (((item['lineTotal'] as num?) ?? 0).toDouble()),
     );
+
+    if (ReceiptTextUtils.receiptNeedsUnicodePath(
+      language: language,
+      items: receiptItems,
+    )) {
+      final imageResponse = await printer.printReceiptImage(
+        transactionId: saleId,
+        cashierName: cashierName,
+        paymentMethod: paymentMethod,
+        customerName: customerName,
+        items: receiptItems,
+        subtotal: receiptSubtotal,
+        discountAmount: receiptCartDiscountAmount,
+        discountType: discountType,
+        discountValue: discountValue,
+        total: total,
+        amountTendered: paymentMethod.toLowerCase() == 'cash'
+            ? amountTendered
+            : null,
+        changeAmount: paymentMethod.toLowerCase() == 'cash'
+            ? changeAmount
+            : null,
+        isRefund: isRefund,
+        isCreditSale: isCreditSale,
+        creditPreviousBalance: creditPreviousBalance,
+        creditBillAmount: creditBillAmount,
+        creditNewBalance: creditNewBalance,
+        creditLimit: creditLimit,
+        creditApprovedBy: creditApprovedBy,
+        loyaltyPointsEarned: loyaltyPointsEarned,
+        loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+        loyaltyTotalPoints: loyaltyTotalPoints,
+        loyaltyRedeemedValue: loyaltyRedeemedValue,
+        footerNote:
+            'Sinhala receipt printed as image. Direct ESC/POS text remains English-safe.',
+      );
+
+      if (imageResponse.isSuccess) {
+        if (!context.mounted) return true;
+
+        AppSnackBar.show(
+          context,
+          message: imageResponse.message,
+          backgroundColor: Colors.green,
+        );
+
+        return true;
+      }
+
+      final pdfResponse = await ReceiptPdfService.instance.saveReceiptPdf(
+        transactionId: saleId,
+        cashierName: cashierName,
+        paymentMethod: paymentMethod,
+        customerName: customerName,
+        customerPhone: customerPhone,
+        customerCode: customerCode,
+        items: receiptItems,
+        subtotal: receiptSubtotal,
+        discountAmount: receiptCartDiscountAmount,
+        discountType: discountType,
+        discountValue: discountValue,
+        total: total,
+        amountTendered: paymentMethod.toLowerCase() == 'cash'
+            ? amountTendered
+            : null,
+        changeAmount: paymentMethod.toLowerCase() == 'cash'
+            ? changeAmount
+            : null,
+        isRefund: isRefund,
+        isCreditSale: isCreditSale,
+        creditPreviousBalance: creditPreviousBalance,
+        creditBillAmount: creditBillAmount,
+        creditNewBalance: creditNewBalance,
+        creditLimit: creditLimit,
+        creditApprovedBy: creditApprovedBy,
+        loyaltyPointsEarned: loyaltyPointsEarned,
+        loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+        loyaltyTotalPoints: loyaltyTotalPoints,
+        loyaltyRedeemedValue: loyaltyRedeemedValue,
+        loyaltyEarnBaseAmount: loyaltyEarnBaseAmount,
+        loyaltyNote: loyaltyNote,
+        footerNote:
+            'Sinhala receipt saved as PDF. Direct ESC/POS text printing remains English-safe.',
+      );
+
+      if (!context.mounted) return pdfResponse.isSuccess;
+
+      AppSnackBar.show(
+        context,
+        message: pdfResponse.isSuccess
+            ? '${imageResponse.message} PDF fallback saved: ${pdfResponse.message}'
+            : '${imageResponse.message} PDF fallback failed: ${pdfResponse.message}',
+        backgroundColor: pdfResponse.isSuccess ? Colors.green : Colors.orange,
+      );
+
+      return pdfResponse.isSuccess;
+    }
 
     final response = await printer.printReceipt(
       transactionId: saleId,
@@ -456,6 +573,7 @@ class TransactionHistoryScreen extends StatefulWidget {
     BuildContext context,
     int saleId,
   ) async {
+    final language = context.read<LanguageProvider>().language;
     final summary = await _getTransactionSummaryWithCustomer(saleId);
     final items = await DatabaseHelper.instance.getTransactionItems(saleId);
 
@@ -472,9 +590,6 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     final paymentMethod = (summary['payment_method'] ?? 'cash').toString();
     final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
-    final subtotal = ((summary['subtotal_amount'] as num?) ?? 0)
-        .toDouble()
-        .abs();
     final discountAmount = ((summary['discount_amount'] as num?) ?? 0)
         .toDouble()
         .abs();
@@ -532,8 +647,9 @@ class TransactionHistoryScreen extends StatefulWidget {
         ((summary['loyalty_earn_base_amount'] as num?) ?? 0).toDouble();
     final loyaltyNote = (summary['loyalty_note'] ?? '').toString().trim();
     final loyaltyTotalPoints = await _loyaltyTotalPointsForSummary(summary);
-
     final receiptItems = items.map((item) {
+      final englishName = (item['product_name'] ?? '').toString().trim();
+      final sinhalaName = (item['product_name_si'] ?? '').toString().trim();
       final finalLineTotal = ((item['line_total'] as num?) ?? 0)
           .toDouble()
           .abs();
@@ -559,7 +675,9 @@ class TransactionHistoryScreen extends StatefulWidget {
         item['customer_pricing_applied'],
       );
       return {
-        'name': (item['product_name'] ?? 'Item').toString(),
+        'name': _displaySnapshotProductName(item, language),
+        'englishName': englishName.isNotEmpty ? englishName : 'Item',
+        'sinhalaName': sinhalaName,
         'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
         'markedPrice':
@@ -2341,6 +2459,7 @@ Future<String?> showTransactionReceiptDialog(
       loyaltyPointsRedeemed != 0 ||
       loyaltyRedeemedValue.abs() > 0.000001 ||
       loyaltyNote.isNotEmpty;
+  final language = context.read<LanguageProvider>().language;
 
   String formatPercent(num value) {
     final number = value.toDouble();
@@ -2382,7 +2501,10 @@ Future<String?> showTransactionReceiptDialog(
         ? TransactionHistoryScreen._customerPricingDetail(item)
         : '';
     return {
-      'name': (item['product_name'] ?? 'Unknown').toString(),
+      'name': TransactionHistoryScreen._displaySnapshotProductName(
+        item,
+        language,
+      ),
       'barcode': (item['barcode'] ?? '').toString(),
       'quantity': ((item['quantity'] as num?) ?? 0).toDouble(),
       'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),

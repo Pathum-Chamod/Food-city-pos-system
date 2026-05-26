@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
+import '../providers/language_provider.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 
@@ -205,15 +208,22 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
 
   String _money(num value) => 'Rs. ${value.toDouble().toStringAsFixed(2)}';
 
+  String _displayProductName(Product product) {
+    return ProductNameHelper.displayName(
+      product,
+      context.read<LanguageProvider>().language,
+    );
+  }
+
   List<Product> get _filteredProductSearchResults {
-    final query = _searchController.text.trim().toLowerCase();
+    final query = _searchController.text.trim();
+    final queryLower = query.toLowerCase();
     if (query.isEmpty) return const [];
     return widget.products
         .where(
           (product) =>
-              product.name.toLowerCase().contains(query) ||
-              product.barcode.toLowerCase().contains(query) ||
-              product.category.toLowerCase().contains(query),
+              ProductNameHelper.matchesProduct(product, query) ||
+              product.category.toLowerCase().contains(queryLower),
         )
         .take(20)
         .toList();
@@ -342,7 +352,7 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
                                 ),
                                 leading: const Icon(Icons.inventory_2_rounded),
                                 title: Text(
-                                  product.name,
+                                  _displayProductName(product),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -996,7 +1006,7 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
     return ListTile(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       leading: const Icon(Icons.inventory_2_rounded, color: _brand),
-      title: Text(product.name),
+      title: Text(_displayProductName(product)),
       subtitle: Text('${product.barcode} - ${product.category}'),
       trailing: TextButton(
         onPressed: () {
@@ -1224,7 +1234,7 @@ class _PricingSchemeRuleDialogState extends State<_PricingSchemeRuleDialog> {
           if (hasPreview) ...[
             const SizedBox(height: 6),
             Text(
-              'Preview on ${product.name}: ${_money(normalPrice)} -> ${_money(newPrice)}',
+              'Preview on ${_displayProductName(product)}: ${_money(normalPrice)} -> ${_money(newPrice)}',
               style: TextStyle(
                 color: textSecondary,
                 fontWeight: FontWeight.w700,

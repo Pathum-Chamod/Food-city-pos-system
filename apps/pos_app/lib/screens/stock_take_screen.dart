@@ -7,8 +7,10 @@ import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/permission_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 
 TextEditingController _selectedTextController(String text) {
@@ -845,7 +847,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   }
 
   List<Product> get _filteredProducts {
-    final query = _searchQuery.trim().toLowerCase();
+    final query = _searchQuery.trim();
+    final queryLower = query.toLowerCase();
 
     return _products.where((product) {
       final countedQty = _countedQuantities[product.barcode];
@@ -855,9 +858,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
       final matchesSearch =
           query.isEmpty ||
-          product.name.toLowerCase().contains(query) ||
-          product.barcode.toLowerCase().contains(query) ||
-          product.category.toLowerCase().contains(query);
+          ProductNameHelper.matchesProduct(product, query) ||
+          product.category.toLowerCase().contains(queryLower);
 
       if (!matchesSearch) return false;
 
@@ -872,6 +874,13 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
           return true;
       }
     }).toList();
+  }
+
+  String _displayProductName(Product product) {
+    return ProductNameHelper.displayName(
+      product,
+      context.read<LanguageProvider>().language,
+    );
   }
 
   int get _countedItems => _countedQuantities.length;
@@ -1085,7 +1094,10 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         _countedQuantities[product.barcode] = countedQty;
       });
     } else {
-      _showMessage('Could not save count for ${product.name}.', isError: true);
+      _showMessage(
+        'Could not save count for ${_displayProductName(product)}.',
+        isError: true,
+      );
     }
   }
 
@@ -1094,7 +1106,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
 
     final confirmed = await _showDecisionDialog(
       title: 'Clear Count?',
-      message: 'Remove the counted quantity for ${product.name}?',
+      message:
+          'Remove the counted quantity for ${_displayProductName(product)}?',
       confirmText: 'Clear',
       destructive: true,
       icon: Icons.clear_rounded,
@@ -1113,7 +1126,9 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
       setState(() {
         _countedQuantities.remove(product.barcode);
       });
-      _showMessage('Removed counted quantity for ${product.name}.');
+      _showMessage(
+        'Removed counted quantity for ${_displayProductName(product)}.',
+      );
     } else {
       _showMessage('Could not remove count.', isError: true);
     }
@@ -1148,7 +1163,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
     await _saveCount(matched, nextQty);
     if (!mounted) return;
     _barcodeController.clear();
-    _showMessage('Counted 1 x ${matched.name}');
+    _showMessage('Counted 1 x ${_displayProductName(matched)}');
   }
 
   Future<void> _setCountDialog(Product product) async {
@@ -1177,7 +1192,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
           final confirmed = await _showDecisionDialog(
             title: 'Save Count?',
             message:
-                'Set counted quantity for ${product.name} to ${_formatProductQuantity(product, qty)}?',
+                'Set counted quantity for ${_displayProductName(product)} to ${_formatProductQuantity(product, qty)}?',
             confirmText: 'Save',
             icon: Icons.done_rounded,
             tone: _brand,
@@ -1248,7 +1263,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  product.name,
+                                  _displayProductName(product),
                                   style: TextStyle(
                                     color: _textSecondary,
                                     fontSize: 13,
@@ -2147,7 +2162,7 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          product.name,
+                          _displayProductName(product),
                           style: TextStyle(
                             color: _textPrimary,
                             fontWeight: FontWeight.w800,

@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/inventory_history_item.dart';
 import '../models/stock_adjustment_request.dart';
 import '../models/supplier.dart';
+import '../utils/product_name_helper.dart';
 
 class AdminProvider with ChangeNotifier {
   AdminProvider() {
@@ -220,6 +221,9 @@ class AdminProvider with ChangeNotifier {
 
     normalized['quantity_type'] = product.quantityType.dbValue;
     normalized['unit_label'] = product.unitLabel;
+    normalized['product_name'] = normalized['product_name'] ?? product.name;
+    normalized['product_name_si'] =
+        normalized['product_name_si'] ?? product.nameSi;
     normalized['stock'] = normalized['stock'] ?? product.stock;
     return normalized;
   }
@@ -246,10 +250,11 @@ class AdminProvider with ChangeNotifier {
     if (!isStockAlert) return normalized;
 
     final stockText = _formatAlertQuantity(product, product.stock);
+    final productName = ProductNameHelper.primary(product);
     if (product.isOutOfStock) {
       normalized['type'] = 'out_of_stock';
       normalized['severity'] = 'critical';
-      normalized['title'] = '${product.name} is out of stock';
+      normalized['title'] = '$productName is out of stock';
       normalized['subtitle'] =
           'Barcode ${product.barcode} - stock ${_formatAlertQuantity(product, 0)}';
       return normalized;
@@ -257,8 +262,8 @@ class AdminProvider with ChangeNotifier {
 
     if (product.isLowStock) {
       final title = type == 'best_seller_low_stock'
-          ? 'Best seller low in stock: ${product.name}'
-          : '${product.name} is low in stock';
+          ? 'Best seller low in stock: $productName'
+          : '$productName is low in stock';
       normalized['type'] = type == 'best_seller_low_stock'
           ? 'best_seller_low_stock'
           : 'low_stock';
@@ -1693,10 +1698,11 @@ class AdminProvider with ChangeNotifier {
       ..sort((a, b) => a.stock.compareTo(b.stock));
 
     for (final product in outOfStock.take(5)) {
+      final productName = ProductNameHelper.primary(product);
       alerts.add({
         'type': 'out_of_stock',
         'severity': 'critical',
-        'title': '${product.name} is out of stock',
+        'title': '$productName is out of stock',
         'subtitle':
             'Barcode ${product.barcode} - stock ${_formatAlertQuantity(product, 0)}',
         'barcode': product.barcode,
@@ -1704,10 +1710,11 @@ class AdminProvider with ChangeNotifier {
     }
 
     for (final product in lowStock.take(5)) {
+      final productName = ProductNameHelper.primary(product);
       alerts.add({
         'type': 'low_stock',
         'severity': 'warning',
-        'title': '${product.name} is low in stock',
+        'title': '$productName is low in stock',
         'subtitle':
             'Barcode ${product.barcode} - stock ${_formatAlertQuantity(product, product.stock)} - min ${_formatAlertQuantity(product, product.minStockLevel.toDouble())}',
         'barcode': product.barcode,

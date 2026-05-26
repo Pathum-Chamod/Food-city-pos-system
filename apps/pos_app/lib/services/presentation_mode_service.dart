@@ -77,7 +77,8 @@ class PresentationModeService {
   static final PresentationModeService instance = PresentationModeService._();
 
   static const String _settingsTable = 'app_settings';
-  static const String _transactionIntervalKey = 'presentation_transaction_interval';
+  static const String _transactionIntervalKey =
+      'presentation_transaction_interval';
   static const String _presentationPinKey = 'presentation_login_pin';
   static const int _defaultInterval = 3;
   static const String _defaultPresentationPin = '9090';
@@ -122,15 +123,11 @@ class PresentationModeService {
 
   Future<void> _setSetting(String key, String value) async {
     final db = await _db;
-    await db.insert(
-      _settingsTable,
-      {
-        'key': key,
-        'value': value,
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert(_settingsTable, {
+      'key': key,
+      'value': value,
+      'updated_at': DateTime.now().toIso8601String(),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<int> getTransactionInterval() async {
@@ -192,7 +189,8 @@ class PresentationModeService {
     );
 
     if (duplicatePinRows.isNotEmpty) {
-      final name = (duplicatePinRows.first['name'] ?? 'another user').toString();
+      final name = (duplicatePinRows.first['name'] ?? 'another user')
+          .toString();
       throw Exception('PIN $pin is already used by $name. Choose another PIN.');
     }
 
@@ -249,9 +247,7 @@ class PresentationModeService {
       limit: null,
     );
 
-    final sorted = rows
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList()
+    final sorted = rows.map((row) => Map<String, dynamic>.from(row)).toList()
       ..sort(_compareTransactionRowsAscending);
 
     final visible = <PresentationVisibleTransaction>[];
@@ -281,7 +277,6 @@ class PresentationModeService {
 
     return visible.reversed.toList();
   }
-
 
   Future<int?> getDisplayIdForRealSaleId({
     required int realSaleId,
@@ -328,9 +323,12 @@ class PresentationModeService {
     for (final tx in visible) {
       final row = tx.row;
       final type = (row['transaction_type'] ?? 'sale').toString().toLowerCase();
-      final paymentMethod = (row['payment_method'] ?? '').toString().toLowerCase();
+      final paymentMethod = (row['payment_method'] ?? '')
+          .toString()
+          .toLowerCase();
       final total = (((row['total_amount'] as num?) ?? 0).toDouble()).abs();
-      final discount = (((row['discount_amount'] as num?) ?? 0).toDouble()).abs();
+      final discount = (((row['discount_amount'] as num?) ?? 0).toDouble())
+          .abs();
 
       if (type == 'refund') {
         refundCount += 1;
@@ -384,9 +382,7 @@ class PresentationModeService {
     final saleIds = visible
         .where(
           (tx) =>
-              (tx.row['transaction_type'] ?? 'sale')
-                  .toString()
-                  .toLowerCase() ==
+              (tx.row['transaction_type'] ?? 'sale').toString().toLowerCase() ==
               'sale',
         )
         .map((tx) => tx.realSaleId)
@@ -402,6 +398,7 @@ class PresentationModeService {
       SELECT
         si.barcode AS barcode,
         si.product_name AS product_name,
+        COALESCE(MAX(p.name_si), MAX(si.product_name_si)) AS product_name_si,
         COALESCE(MAX(p.quantity_type), 'unit') AS quantity_type,
         COALESCE(MAX(p.unit_label), 'pcs') AS unit_label,
         COALESCE(SUM(ABS(si.quantity)), 0) AS quantity_sold,
@@ -423,14 +420,11 @@ class PresentationModeService {
     if (saleIds.isEmpty) return 0.0;
     final db = await _db;
     final placeholders = List.filled(saleIds.length, '?').join(',');
-    final rows = await db.rawQuery(
-      '''
+    final rows = await db.rawQuery('''
       SELECT COALESCE(SUM(ABS(quantity)), 0) AS items_sold
       FROM sale_items
       WHERE sale_id IN ($placeholders)
-      ''',
-      saleIds,
-    );
+      ''', saleIds);
     return ((rows.first['items_sold'] as num?) ?? 0).toDouble();
   }
 

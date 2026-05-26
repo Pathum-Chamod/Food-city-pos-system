@@ -2,8 +2,11 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 
 enum InventoryHistoryFilter {
@@ -86,6 +89,13 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  String _displayMovementProductName(Map<String, dynamic> movement) {
+    return ProductNameHelper.displayNameFromMap(
+      movement,
+      context.read<LanguageProvider>().language,
+    );
   }
 
   void _focusSearchField() {
@@ -403,9 +413,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          (hydratedMovement['product_name'] ??
-                                  'Unknown product')
-                              .toString(),
+                          _displayMovementProductName(hydratedMovement),
                           style: TextStyle(
                             color: _textSecondary,
                             fontSize: 14,
@@ -481,10 +489,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return <MapEntry<String, String>>[
       MapEntry('Action', _movementTitle(actionType)),
       if (!hideProductRow)
-        MapEntry(
-          'Product',
-          (movement['product_name'] ?? 'Unknown product').toString(),
-        ),
+        MapEntry('Product', _displayMovementProductName(movement)),
       MapEntry('Barcode', (movement['barcode'] ?? '-').toString()),
       MapEntry('When', _formatDateTime(movement['created_at']?.toString())),
       if ((movement['performed_by'] ?? '').toString().trim().isNotEmpty)
@@ -733,8 +738,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   Widget _buildMovementRecord(Map<String, dynamic> movement) {
     final actionType = (movement['action_type'] ?? '').toString();
     final badge = _badgeColor(actionType);
-    final productName = (movement['product_name'] ?? 'Unknown product')
-        .toString();
+    final productName = _displayMovementProductName(movement);
     final barcode = (movement['barcode'] ?? '-').toString();
     final quantityChange = (movement['quantity_change'] as num?)?.toDouble();
     final oldPrice = movement['old_price'] as num?;
@@ -1023,8 +1027,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                     children: [
                       Expanded(
                         child: Text(
-                          (movement['product_name'] ?? 'Unknown product')
-                              .toString(),
+                          _displayMovementProductName(movement),
                           style: TextStyle(
                             color: _textPrimary,
                             fontWeight: FontWeight.w800,
@@ -1155,10 +1158,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return <MapEntry<String, String>>[
       MapEntry('Action', _movementTitle(actionType)),
       if (!hideProductRow)
-        MapEntry(
-          'Product',
-          (movement['product_name'] ?? 'Unknown product').toString(),
-        ),
+        MapEntry('Product', _displayMovementProductName(movement)),
       MapEntry('Barcode', (movement['barcode'] ?? '-').toString()),
       MapEntry('When', _formatDateTime(movement['created_at']?.toString())),
       if ((movement['performed_by'] ?? '').toString().trim().isNotEmpty)
@@ -1557,9 +1557,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                         ),
                                         _buildFilterChip(
                                           label: 'Adjustments',
-                                          filter:
-                                              InventoryHistoryFilter
-                                                  .adjustments,
+                                          filter: InventoryHistoryFilter
+                                              .adjustments,
                                         ),
                                         _buildFilterChip(
                                           label: 'Counts',
@@ -1576,9 +1575,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                         ),
                                         _buildFilterChip(
                                           label: 'Price Changes',
-                                          filter:
-                                              InventoryHistoryFilter
-                                                  .priceChanges,
+                                          filter: InventoryHistoryFilter
+                                              .priceChanges,
                                         ),
                                         _buildFilterChip(
                                           label: 'Min Stock',

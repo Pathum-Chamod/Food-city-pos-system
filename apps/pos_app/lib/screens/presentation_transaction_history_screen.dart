@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/presentation_mode_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 
 class PresentationTransactionHistoryScreen extends StatefulWidget {
@@ -375,6 +377,7 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
         final changeAmount = ((summary['change_amount'] as num?) ?? 0)
             .toDouble();
         final receiptItems = _buildReceiptItems(items, summary);
+        final language = dialogContext.read<LanguageProvider>().language;
         final discountPercentLabel = discountAmount > 0
             ? _discountPercentLabel(
                 discountAmount: discountAmount,
@@ -444,7 +447,11 @@ class PresentationTransactionHistoryScreen extends StatefulWidget {
         Widget itemCard(int index) {
           final item = items[index];
           final receiptItem = receiptItems[index];
-          final name = (item['product_name'] ?? 'Item').toString();
+          final name = ProductNameHelper.displayNameFromMap(
+            item,
+            language,
+            fallback: 'Item',
+          );
           final barcode = (item['barcode'] ?? '').toString().trim();
           final unitPrice = ((receiptItem['unitPrice'] as num?) ?? 0)
               .toDouble();

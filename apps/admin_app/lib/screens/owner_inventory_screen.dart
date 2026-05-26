@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/inventory_history_item.dart';
 import '../providers/admin_provider.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import 'inventory_history_screen.dart';
 
@@ -48,9 +49,7 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
 
     return products.where((product) {
       final matchesSearch =
-          query.isEmpty ||
-          product.name.toLowerCase().contains(query) ||
-          product.barcode.toLowerCase().contains(query);
+          query.isEmpty || ProductNameHelper.matches(product, query);
 
       final threshold = product.minStockLevel > 0 ? product.minStockLevel : 10;
       final matchesFilter = switch (_filter) {
@@ -148,7 +147,9 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
     final saleController = TextEditingController(
       text: (product.salePrice ?? 0).toStringAsFixed(2),
     );
-    final supplierInfo = await provider.fetchProductSupplierContact(product.barcode);
+    final supplierInfo = await provider.fetchProductSupplierContact(
+      product.barcode,
+    );
 
     await showModalBottomSheet<void>(
       context: context,
@@ -156,20 +157,28 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
       showDragHandle: true,
       backgroundColor: Colors.white,
       builder: (sheetContext) {
-        final threshold = product.minStockLevel > 0 ? product.minStockLevel : 10;
-        final supplierName = (supplierInfo['supplier_name'] ?? '').toString().trim();
-        final supplierPhone = (supplierInfo['supplier_phone'] ?? '').toString().trim();
-        final hasSupplierInfo = supplierName.isNotEmpty || supplierPhone.isNotEmpty;
+        final threshold = product.minStockLevel > 0
+            ? product.minStockLevel
+            : 10;
+        final supplierName = (supplierInfo['supplier_name'] ?? '')
+            .toString()
+            .trim();
+        final supplierPhone = (supplierInfo['supplier_phone'] ?? '')
+            .toString()
+            .trim();
+        final hasSupplierInfo =
+            supplierName.isNotEmpty || supplierPhone.isNotEmpty;
         final statusColor = product.stock <= 0
             ? const Color(0xFFD92D20)
             : product.stock <= threshold
-                ? const Color(0xFFF79009)
-                : const Color(0xFF147A5A);
+            ? const Color(0xFFF79009)
+            : const Color(0xFF147A5A);
         final statusText = product.stock <= 0
             ? 'Out of Stock'
             : product.stock <= threshold
-                ? 'Low Stock'
-                : 'In Stock';
+            ? 'Low Stock'
+            : 'In Stock';
+        final sinhalaName = ProductNameHelper.sinhala(product);
 
         return Padding(
           padding: EdgeInsets.only(
@@ -184,13 +193,23 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  product.name,
+                  ProductNameHelper.primary(product),
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
                     color: Color(0xFF172433),
                   ),
                 ),
+                if (sinhalaName != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    sinhalaName,
+                    style: const TextStyle(
+                      color: Color(0xFF475467),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 4),
                 Text(
                   'Barcode: ${product.barcode}',
@@ -220,7 +239,8 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
                       background: statusColor.withOpacity(0.12),
                     ),
                     _InfoChip(
-                      label: 'Stock ${_formatProductQuantity(product, product.stock)}',
+                      label:
+                          'Stock ${_formatProductQuantity(product, product.stock)}',
                       color: const Color(0xFF0F3D91),
                       background: const Color(0xFFE7F0FF),
                     ),
@@ -276,7 +296,8 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
                       return const _RecentActivityLoading();
                     }
 
-                    final history = snapshot.data ?? const <InventoryHistoryItem>[];
+                    final history =
+                        snapshot.data ?? const <InventoryHistoryItem>[];
                     if (history.isEmpty) {
                       return const _RecentActivityEmpty();
                     }
@@ -360,7 +381,8 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => InventoryHistoryScreen(product: product),
+                        builder: (_) =>
+                            InventoryHistoryScreen(product: product),
                       ),
                     );
                   },
@@ -561,14 +583,21 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
                         onTap: () => _callSupplier(context, supplierPhone),
                         borderRadius: BorderRadius.circular(12),
                         child: Ink(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                           decoration: BoxDecoration(
                             color: const Color(0xFFE7F0FF),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Row(
                             children: [
-                              const Icon(Icons.call_rounded, color: Color(0xFF0F3D91), size: 18),
+                              const Icon(
+                                Icons.call_rounded,
+                                color: Color(0xFF0F3D91),
+                                size: 18,
+                              ),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
@@ -631,13 +660,14 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
     return _showValueEditorSheet(
       context: context,
       title: title,
-      productName: product.name,
+      productName: ProductNameHelper.primary(product),
       controller: controller,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       fieldLabel: title,
       accentColor: _accentForPriceType(priceType),
       hintText: 'Enter ${title.toLowerCase()}',
-      helperText: 'This change updates the owner inventory view and POS-linked pricing.',
+      helperText:
+          'This change updates the owner inventory view and POS-linked pricing.',
       onSave: (rawValue) async {
         final value = double.tryParse(rawValue.trim());
         if (value == null || value <= 0) {
@@ -685,7 +715,7 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
     return _showValueEditorSheet(
       context: context,
       title: 'Minimum Stock',
-      productName: product.name,
+      productName: ProductNameHelper.primary(product),
       controller: controller,
       keyboardType: TextInputType.number,
       fieldLabel: 'Minimum stock level',
@@ -838,15 +868,22 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
                               fillColor: Colors.white,
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(16),
-                                borderSide: const BorderSide(color: Color(0xFFE3E9F3)),
+                                borderSide: const BorderSide(
+                                  color: Color(0xFFE3E9F3),
+                                ),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(16),
-                                borderSide: const BorderSide(color: Color(0xFFE3E9F3)),
+                                borderSide: const BorderSide(
+                                  color: Color(0xFFE3E9F3),
+                                ),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(16),
-                                borderSide: BorderSide(color: accentColor, width: 1.4),
+                                borderSide: BorderSide(
+                                  color: accentColor,
+                                  width: 1.4,
+                                ),
                               ),
                               contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 14,
@@ -871,7 +908,9 @@ class _OwnerInventoryScreenState extends State<OwnerInventoryScreen> {
                       children: [
                         Expanded(
                           child: OutlinedButton(
-                            onPressed: isSubmitting ? null : () => Navigator.pop(sheetContext),
+                            onPressed: isSubmitting
+                                ? null
+                                : () => Navigator.pop(sheetContext),
                             style: OutlinedButton.styleFrom(
                               minimumSize: const Size.fromHeight(52),
                               shape: RoundedRectangleBorder(
@@ -957,7 +996,11 @@ class _HeaderCard extends StatelessWidget {
             ),
             child: Padding(
               padding: EdgeInsets.all(14),
-              child: Icon(Icons.inventory_2_outlined, color: Colors.white, size: 28),
+              child: Icon(
+                Icons.inventory_2_outlined,
+                color: Colors.white,
+                size: 28,
+              ),
             ),
           ),
           SizedBox(width: 14),
@@ -992,10 +1035,7 @@ class _HeaderCard extends StatelessWidget {
 }
 
 class _FilterBar extends StatelessWidget {
-  const _FilterBar({
-    required this.value,
-    required this.onChanged,
-  });
+  const _FilterBar({required this.value, required this.onChanged});
 
   final String value;
   final ValueChanged<String> onChanged;
@@ -1101,6 +1141,8 @@ class _ProductCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final sinhalaName = ProductNameHelper.sinhala(product);
+
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: InkWell(
@@ -1128,13 +1170,25 @@ class _ProductCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          product.name,
+                          ProductNameHelper.primary(product),
                           style: const TextStyle(
                             fontWeight: FontWeight.w800,
                             fontSize: 15,
                             color: Color(0xFF172433),
                           ),
                         ),
+                        if (sinhalaName != null) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            sinhalaName,
+                            style: const TextStyle(
+                              color: Color(0xFF475467),
+                              fontWeight: FontWeight.w700,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                         const SizedBox(height: 4),
                         Text(
                           'Barcode: ${product.barcode}',
@@ -1147,10 +1201,7 @@ class _ProductCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  const Icon(
-                    Icons.chevron_right,
-                    color: Color(0xFF98A2B3),
-                  ),
+                  const Icon(Icons.chevron_right, color: Color(0xFF98A2B3)),
                 ],
               ),
               const SizedBox(height: 12),
@@ -1164,7 +1215,8 @@ class _ProductCard extends StatelessWidget {
                     background: _statusColor.withOpacity(0.12),
                   ),
                   _InfoChip(
-                    label: 'Stock ${_formatProductQuantity(product, product.stock)}',
+                    label:
+                        'Stock ${_formatProductQuantity(product, product.stock)}',
                     color: const Color(0xFF0F3D91),
                     background: const Color(0xFFE7F0FF),
                   ),
@@ -1181,8 +1233,14 @@ class _ProductCard extends StatelessWidget {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _PriceChip(label: 'Sell', value: formatCompactMoney(product.sellingPrice)),
-                  _PriceChip(label: 'Wholesale', value: formatCompactMoney(product.wholesalePrice)),
+                  _PriceChip(
+                    label: 'Sell',
+                    value: formatCompactMoney(product.sellingPrice),
+                  ),
+                  _PriceChip(
+                    label: 'Wholesale',
+                    value: formatCompactMoney(product.wholesalePrice),
+                  ),
                   _PriceChip(
                     label: 'Sale',
                     value: product.hasSalePrice
@@ -1262,10 +1320,7 @@ class _PriceChip extends StatelessWidget {
             ),
             TextSpan(
               text: value,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
             ),
           ],
         ),
@@ -1273,7 +1328,6 @@ class _PriceChip extends StatelessWidget {
     );
   }
 }
-
 
 class _PriceBox extends StatelessWidget {
   const _PriceBox({required this.label, required this.value});
@@ -1341,10 +1395,7 @@ class _ActionTile extends StatelessWidget {
         backgroundColor: color.withOpacity(0.12),
         child: Icon(icon, color: color),
       ),
-      title: Text(
-        title,
-        style: const TextStyle(fontWeight: FontWeight.w700),
-      ),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
       subtitle: Text(subtitle),
       trailing: const Icon(Icons.chevron_right),
     );
@@ -1398,10 +1449,7 @@ class _RecentActivityEmpty extends StatelessWidget {
       ),
       child: const Text(
         'No inventory activity found yet for this product.',
-        style: TextStyle(
-          color: Color(0xFF667085),
-          fontWeight: FontWeight.w600,
-        ),
+        style: TextStyle(color: Color(0xFF667085), fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -1420,11 +1468,7 @@ class _EmptyInventoryState extends StatelessWidget {
       ),
       child: const Column(
         children: [
-          Icon(
-            Icons.inventory_2_outlined,
-            size: 42,
-            color: Color(0xFF98A2B3),
-          ),
+          Icon(Icons.inventory_2_outlined, size: 42, color: Color(0xFF98A2B3)),
           SizedBox(height: 12),
           Text(
             'No products found',

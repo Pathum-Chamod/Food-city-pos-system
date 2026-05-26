@@ -9,8 +9,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:provider/provider.dart';
 
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 
 class SalesReportScreen extends StatefulWidget {
@@ -2602,7 +2605,11 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   }
 
   Widget _buildProductRow(Map<String, dynamic> row, int index) {
-    final productName = (row['product_name'] ?? 'Unknown Item').toString();
+    final productName = ProductNameHelper.displayNameFromMap(
+      row,
+      context.read<LanguageProvider>().language,
+      fallback: 'Unknown Item',
+    );
     final barcode = (row['barcode'] ?? '').toString();
     final netQty = ((row['net_quantity_sold'] as num?) ?? 0).toDouble();
     final refundedQty = ((row['refunded_quantity'] as num?) ?? 0).toDouble();
@@ -2729,7 +2736,11 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
   }
 
   Widget _buildSlowMoverRow(Map<String, dynamic> row, int index) {
-    final productName = (row['product_name'] ?? 'Unknown Item').toString();
+    final productName = ProductNameHelper.displayNameFromMap(
+      row,
+      context.read<LanguageProvider>().language,
+      fallback: 'Unknown Item',
+    );
     final barcode = (row['barcode'] ?? '').toString();
     final stock = ((row['stock'] as num?) ?? 0).toDouble();
     final quantitySold = ((row['quantity_sold'] as num?) ?? 0).toDouble();

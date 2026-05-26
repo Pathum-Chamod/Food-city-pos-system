@@ -14,8 +14,10 @@ import '../models/supplier_product_mapping.dart';
 import '../navigation/pos_route_names.dart';
 import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/permission_service.dart';
+import '../utils/product_name_helper.dart';
 import 'inventory_history_screen.dart';
 import 'stock_take_screen.dart';
 import 'supplier_receive_history_screen.dart';
@@ -1181,6 +1183,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         [
           'barcode',
           'name',
+          'name_si',
           'category',
           'cost_price',
           'selling_price',
@@ -1195,6 +1198,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         [
           '4790000000001',
           'Sample Product',
+          'නියැදි භාණ්ඩය',
           'General',
           '80.00',
           '100.00',
@@ -1269,6 +1273,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       final rowNumber = i + 1;
       final barcode = readValue(row, 'barcode');
       final name = readValue(row, 'name');
+      final nameSi = readValue(row, 'name_si');
       final category = readValue(row, 'category').isEmpty
           ? 'General'
           : readValue(row, 'category');
@@ -1386,6 +1391,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           data: {
             'barcode': barcode.trim(),
             'name': name.trim(),
+            'name_si': nameSi.trim().isEmpty ? null : nameSi.trim(),
             'category': category.trim(),
             'cost_price': costPrice ?? 0.0,
             'selling_price': sellingPrice ?? 0.0,
@@ -1630,14 +1636,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   List<Product> get _filteredProducts {
-    final query = _searchQuery.trim().toLowerCase();
+    final query = _searchQuery.trim();
+    final queryLower = query.toLowerCase();
 
     return _products.where((product) {
       final matchesSearch =
           query.isEmpty ||
-          product.name.toLowerCase().contains(query) ||
-          product.barcode.toLowerCase().contains(query) ||
-          product.category.toLowerCase().contains(query);
+          ProductNameHelper.matchesProduct(product, query) ||
+          product.category.toLowerCase().contains(queryLower);
 
       if (!matchesSearch) return false;
 
@@ -1656,6 +1662,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }).toList();
   }
 
+  String _displayProductName(Product product) {
+    return ProductNameHelper.displayName(
+      product,
+      context.read<LanguageProvider>().language,
+    );
+  }
+
   int get _lowStockCount =>
       _products.where((p) => p.isActive && p.isLowStock).length;
   int get _outOfStockCount =>
@@ -1671,7 +1684,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     String pickerSubtitle = 'Choose an inventory item to continue.';
     String hintTitle = 'Search active products';
     String hintMessage =
-        'Find an item quickly by product name, barcode, or category and continue in one tap.';
+        'Find an item quickly by barcode, English name, Sinhala name, or category and continue in one tap.';
 
     if (title.toLowerCase().contains('receive')) {
       pickerIcon = Icons.inventory_2_rounded;
@@ -1707,14 +1720,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
       bodyBuilder: (dialogContext, setPopupState) {
         return StatefulBuilder(
           builder: (context, setInnerState) {
-            final normalizedQuery = localQuery.trim().toLowerCase();
+            final normalizedQuery = localQuery.trim();
+            final normalizedQueryLower = normalizedQuery.toLowerCase();
             final visibleProducts =
                 _products.where((product) {
                   if (!product.isActive) return false;
                   if (normalizedQuery.isEmpty) return true;
-                  return product.name.toLowerCase().contains(normalizedQuery) ||
-                      product.barcode.toLowerCase().contains(normalizedQuery) ||
-                      product.category.toLowerCase().contains(normalizedQuery);
+                  return ProductNameHelper.matchesProduct(
+                        product,
+                        normalizedQuery,
+                      ) ||
+                      product.category.toLowerCase().contains(
+                        normalizedQueryLower,
+                      );
                 }).toList()..sort(
                   (a, b) =>
                       a.name.toLowerCase().compareTo(b.name.toLowerCase()),
@@ -1743,7 +1761,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     fontWeight: FontWeight.w600,
                   ),
                   decoration: InputDecoration(
-                    hintText: 'Search by name, barcode, or category',
+                    hintText:
+                        'Search by barcode, English, Sinhala, or category',
                     hintStyle: TextStyle(color: _textSecondary),
                     prefixIcon: Icon(Icons.search_rounded, color: _mutedIcon),
                     suffixIcon: localQuery.isEmpty
@@ -1854,7 +1873,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                               CrossAxisAlignment.start,
                                           children: [
                                             Text(
-                                              product.name,
+                                              _displayProductName(product),
                                               style: TextStyle(
                                                 color: _textPrimary,
                                                 fontWeight: FontWeight.w900,
@@ -2092,6 +2111,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final nameController = TextEditingController();
+    final nameSiController = TextEditingController();
     final barcodeController = TextEditingController();
     final categoryController = _selectedTextController('General');
     final costPriceController = TextEditingController();
@@ -2126,7 +2146,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
               TextField(
                 controller: nameController,
                 textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(labelText: 'Product name'),
+                decoration: const InputDecoration(
+                  labelText: 'English product name',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: nameSiController,
+                decoration: const InputDecoration(
+                  labelText: 'Sinhala name (optional)',
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -2300,6 +2329,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     child: ElevatedButton.icon(
                       onPressed: () async {
                         final name = nameController.text.trim();
+                        final nameSi = nameSiController.text.trim();
                         final barcode = barcodeController.text.trim();
                         final category = categoryController.text.trim();
 
@@ -2475,6 +2505,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             .createProductLocal(
                               barcode: barcode,
                               name: name,
+                              nameSi: nameSi.isEmpty ? null : nameSi,
                               category: category.isEmpty ? 'General' : category,
                               costPrice: costPrice,
                               sellingPrice: sellingPrice,
@@ -2507,6 +2538,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     _disposeControllersNextFrame([
       nameController,
+      nameSiController,
       barcodeController,
       categoryController,
       costPriceController,
@@ -2623,15 +2655,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openEditProductFlow(Product product) async {
+    final displayName = _displayProductName(product);
     final approval = await _requireManagerApproval(
-      actionLabel: 'edit ${product.name}',
+      actionLabel: 'edit $displayName',
       description:
-          'Approved product edit for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved product edit for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final nameController = TextEditingController(text: product.name);
+    final nameSiController = TextEditingController(text: product.nameSi ?? '');
     final categoryController = TextEditingController(text: product.category);
     final costPriceController = _selectedTextController(
       product.costPrice.toStringAsFixed(2),
@@ -2697,7 +2731,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
               TextField(
                 controller: nameController,
                 textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(labelText: 'Product name'),
+                decoration: const InputDecoration(
+                  labelText: 'English product name',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: nameSiController,
+                decoration: const InputDecoration(
+                  labelText: 'Sinhala name (optional)',
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -2851,6 +2894,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     child: ElevatedButton.icon(
                       onPressed: () async {
                         final name = nameController.text.trim();
+                        final nameSi = nameSiController.text.trim();
                         final category = categoryController.text.trim();
 
                         if (name.isEmpty) {
@@ -2990,6 +3034,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
                         final noChanges =
                             name == product.name &&
+                            nameSi == (product.nameSi ?? '') &&
                             normalizedCategory == product.category &&
                             quantityType == product.quantityType &&
                             normalizedUnitLabel == product.unitLabel &&
@@ -3029,7 +3074,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
                         final confirmed = await _confirmAction(
                           title: 'Confirm Product Update',
-                          message: 'Save changes for ${product.name}?',
+                          message: 'Save changes for $displayName?',
                           confirmText: 'Save Changes',
                         );
                         if (!confirmed) return;
@@ -3038,6 +3083,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             .updateProductDetailsLocal(
                               barcode: product.barcode,
                               name: name,
+                              nameSi: nameSi.isEmpty ? null : nameSi,
                               category: category.isEmpty ? 'General' : category,
                               costPrice: costPrice,
                               sellingPrice: sellingPrice,
@@ -3069,6 +3115,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     _disposeControllersNextFrame([
       nameController,
+      nameSiController,
       categoryController,
       costPriceController,
       sellingPriceController,
@@ -3088,17 +3135,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _deleteProduct(Product product) async {
+    final displayName = _displayProductName(product);
     final approval = await _requireManagerApproval(
-      actionLabel: 'delete ${product.name}',
+      actionLabel: 'delete $displayName',
       description:
-          'Approved product delete for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved product delete for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final confirmed = await _confirmAction(
       title: 'Delete Product',
-      message: 'Delete ${product.name} from inventory? This cannot be undone.',
+      message: 'Delete $displayName from inventory? This cannot be undone.',
       confirmText: 'Delete',
       isDestructive: true,
     );
@@ -3534,6 +3582,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         initialProduct ??
         await _pickProduct(title: 'Select a product to receive');
     if (product == null || !mounted) return;
+    final displayName = _displayProductName(product);
 
     final mappings = await DatabaseHelper.instance.getMappingsForProduct(
       product.barcode,
@@ -3565,9 +3614,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
 
     final approval = await _requireManagerApproval(
-      actionLabel: 'receive stock for ${product.name}',
+      actionLabel: 'receive stock for $displayName',
       description:
-          'Approved stock receive for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved stock receive for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
@@ -3604,7 +3653,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final saved = await _showInventoryPopup<bool>(
       icon: Icons.inventory_2_rounded,
       title: 'Receive Stock',
-      subtitle: '${product.name} • ${product.barcode}',
+      subtitle: '$displayName • ${product.barcode}',
       maxWidth: 760,
       bodyBuilder: (dialogContext, setPopupState) {
         final selectedSupplier = selectedSupplierId == null
@@ -3682,7 +3731,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final confirmed = await _confirmAction(
             title: 'Confirm Stock Receive',
             message:
-                'Receive ${_formatProductQuantity(product, qty)} of ${product.name} from ${supplier.name}${expiryDate == null ? '' : ' expiring on ${_formatDateOnly(expiryDate!)}'}? This will increase stock immediately.',
+                'Receive ${_formatProductQuantity(product, qty)} of $displayName from ${supplier.name}${expiryDate == null ? '' : ' expiring on ${_formatDateOnly(expiryDate!)}'}? This will increase stock immediately.',
             confirmText: 'Receive',
           );
           if (!confirmed) return;
@@ -4088,6 +4137,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _showSupplierInfoSheet(Product product) async {
+    final displayName = _displayProductName(product);
     final preferredMapping = await DatabaseHelper.instance
         .getPreferredSupplierMapping(product.barcode);
     final suppliers = await DatabaseHelper.instance.getSuppliers();
@@ -4111,7 +4161,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     await _showInventoryPopup<void>(
       icon: Icons.local_shipping_outlined,
       title: 'Supplier Info',
-      subtitle: '${product.name} • ${product.barcode}',
+      subtitle: '$displayName • ${product.barcode}',
       maxWidth: 720,
       maxHeightFactor: 0.72,
       bodyBuilder: (dialogContext, setPopupState) {
@@ -4288,6 +4338,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             SupplierProductMapping(
                               barcode: product.barcode,
                               productName: product.name,
+                              productNameSi: product.nameSi,
                               supplierId: supplier.id,
                               supplierName: supplier.name,
                               isPreferred: true,
@@ -4300,7 +4351,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             ),
                           );
                       if (!mounted) return;
-                      _showMessage('Supplier saved for ${product.name}.');
+                      _showMessage('Supplier saved for $displayName.');
                       await _loadData(showLoader: false);
                       if (!dialogContext.mounted) return;
                       Navigator.pop(dialogContext);
@@ -4378,7 +4429,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Select Supplier • ${product.name}',
+                        'Select Supplier • ${_displayProductName(product)}',
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w700,
@@ -4453,11 +4504,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
         initialProduct ??
         await _pickProduct(title: 'Select a product to adjust');
     if (product == null || !mounted) return;
+    final displayName = _displayProductName(product);
 
     final approval = await _requireManagerApproval(
-      actionLabel: 'adjust stock for ${product.name}',
+      actionLabel: 'adjust stock for $displayName',
       description:
-          'Approved stock adjustment for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved stock adjustment for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
@@ -4478,7 +4530,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       icon: Icons.tune_rounded,
       title: 'Stock Adjustment',
       subtitle:
-          '${product.name} • Current stock ${_formatProductQuantity(product, product.stock)}',
+          '$displayName • Current stock ${_formatProductQuantity(product, product.stock)}',
       maxWidth: 620,
       bodyBuilder: (dialogContext, setPopupState) {
         Future<void> submitAdjustment() async {
@@ -4549,7 +4601,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final confirmed = await _confirmAction(
             title: 'Confirm Stock Adjustment',
             message:
-                'This will $actionLabel for ${product.name}. Final stock will be ${_formatProductQuantity(product, resultingStock)}.',
+                'This will $actionLabel for $displayName. Final stock will be ${_formatProductQuantity(product, resultingStock)}.',
             confirmText: 'Apply',
           );
           if (!confirmed) return;
@@ -4728,10 +4780,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openMinStockDialog(Product product) async {
+    final displayName = _displayProductName(product);
     final approval = await _requireManagerApproval(
-      actionLabel: 'update minimum stock for ${product.name}',
+      actionLabel: 'update minimum stock for $displayName',
       description:
-          'Approved minimum stock update for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved minimum stock update for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
@@ -4743,7 +4796,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final changed = await _showInventoryPopup<bool>(
       icon: Icons.warning_amber_rounded,
       title: 'Update Minimum Stock',
-      subtitle: '${product.name} • ${product.barcode}',
+      subtitle: '$displayName • ${product.barcode}',
       maxWidth: 560,
       maxHeightFactor: 0.54,
       bodyBuilder: (dialogContext, setPopupState) {
@@ -4760,7 +4813,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final value = int.parse(controller.text.trim());
           final confirmed = await _confirmAction(
             title: 'Confirm Minimum Stock Update',
-            message: 'Set minimum stock for ${product.name} to $value?',
+            message: 'Set minimum stock for $displayName to $value?',
             confirmText: 'Save',
           );
           if (!confirmed) return;
@@ -4856,11 +4909,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
         initialProduct ??
         await _pickProduct(title: 'Select a product to change price');
     if (product == null || !mounted) return;
+    final displayName = _displayProductName(product);
 
     final approval = await _requireManagerApproval(
-      actionLabel: 'change prices for ${product.name}',
+      actionLabel: 'change prices for $displayName',
       description:
-          'Approved price change for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved price change for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
@@ -4877,7 +4931,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final saved = await _showInventoryPopup<bool>(
       icon: Icons.sell_rounded,
       title: 'Change Price',
-      subtitle: '${product.name} • ${product.barcode}',
+      subtitle: '$displayName • ${product.barcode}',
       maxWidth: 760,
       bodyBuilder: (dialogContext, setPopupState) {
         void setSelectedPriceText(String text) {
@@ -4940,8 +4994,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
             message:
                 priceType == 'selling' &&
                     (oldSelectedPrice - newPrice).abs() > 0.000001
-                ? 'Update ${product.name} SELLING price to Rs. ${newPrice.toStringAsFixed(2)}?\n\nThe old price Rs. ${oldSelectedPrice.toStringAsFixed(2)} will be saved as an allowed old label price for checkout.'
-                : 'Update ${product.name} ${priceType.toUpperCase()} price to Rs. ${newPrice.toStringAsFixed(2)}?',
+                ? 'Update $displayName SELLING price to Rs. ${newPrice.toStringAsFixed(2)}?\n\nThe old price Rs. ${oldSelectedPrice.toStringAsFixed(2)} will be saved as an allowed old label price for checkout.'
+                : 'Update $displayName ${priceType.toUpperCase()} price to Rs. ${newPrice.toStringAsFixed(2)}?',
             confirmText: 'Update',
           );
           if (!confirmed) return;
@@ -5252,7 +5306,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     await _showInventoryPopup<void>(
       icon: Icons.inventory_2_outlined,
-      title: product.name,
+      title: _displayProductName(product),
       subtitle:
           '${product.barcode} • ${product.category} • ${product.quantityType.label} (${product.unitLabel})',
       maxWidth: 980,
@@ -5702,7 +5756,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  (movement['product_name'] ?? 'Unknown product').toString(),
+                  ProductNameHelper.displayNameFromMap(
+                    movement,
+                    context.read<LanguageProvider>().language,
+                  ),
                   style: TextStyle(
                     color: _textPrimary,
                     fontWeight: FontWeight.w700,
@@ -6133,7 +6190,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                product.name,
+                                _displayProductName(product),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
@@ -6424,7 +6481,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     activeColor: _dangerColor,
                   ),
                 ),
-              cell(product.name, 26),
+              cell(_displayProductName(product), 26),
               cell(product.barcode, 16, color: _textSecondary),
               cell(product.category, 14, color: _textSecondary),
               cell(supplierName, 14, color: _textSecondary),
@@ -6634,7 +6691,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               style: TextStyle(color: _textPrimary),
                               decoration: InputDecoration(
                                 hintText:
-                                    'Search by name, barcode, or category',
+                                    'Search by barcode, English, Sinhala, or category',
                                 hintStyle: TextStyle(color: _textSecondary),
                                 prefixIcon: Icon(
                                   Icons.search_rounded,

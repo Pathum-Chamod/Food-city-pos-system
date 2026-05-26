@@ -4,6 +4,7 @@ import 'package:shared/shared.dart';
 
 import '../models/inventory_history_item.dart';
 import '../providers/admin_provider.dart';
+import '../utils/product_name_helper.dart';
 
 class InventoryHistoryScreen extends StatefulWidget {
   final Product product;
@@ -184,6 +185,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   Widget build(BuildContext context) {
     final product = widget.product;
     final filteredHistory = _filteredHistory;
+    final sinhalaName = ProductNameHelper.sinhala(product);
 
     return Scaffold(
       appBar: AppBar(
@@ -212,12 +214,22 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  product.name,
+                  ProductNameHelper.primary(product),
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+                if (sinhalaName != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    sinhalaName,
+                    style: TextStyle(
+                      color: Colors.grey[700],
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 6),
                 Text(
                   'Barcode: ${product.barcode}',

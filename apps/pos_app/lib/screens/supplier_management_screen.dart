@@ -9,8 +9,10 @@ import '../models/stock_receipt_record.dart';
 import '../navigation/pos_route_names.dart';
 import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/supplier_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import 'supplier_receive_history_screen.dart';
 
@@ -618,12 +620,12 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
         final ui = SupplierModulePalette.of(dialogContext);
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            final query = searchController.text.trim().toLowerCase();
+            final query = searchController.text.trim();
+            final queryLower = query.toLowerCase();
             final visibleProducts = products.where((product) {
               if (query.isEmpty) return true;
-              return product.name.toLowerCase().contains(query) ||
-                  product.barcode.toLowerCase().contains(query) ||
-                  product.category.toLowerCase().contains(query);
+              return ProductNameHelper.matchesProduct(product, query) ||
+                  product.category.toLowerCase().contains(queryLower);
             }).toList();
 
             return Dialog(
@@ -712,7 +714,8 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                       TextField(
                         controller: searchController,
                         decoration: _fieldDecoration(
-                          hintText: 'Search by name, barcode, or category',
+                          hintText:
+                              'Search by barcode, English, Sinhala, or category',
                           icon: Icons.search_rounded,
                           palette: ui,
                         ),
@@ -752,7 +755,12 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                                 CrossAxisAlignment.start,
                                             children: [
                                               Text(
-                                                product.name,
+                                                ProductNameHelper.displayName(
+                                                  product,
+                                                  context
+                                                      .read<LanguageProvider>()
+                                                      .language,
+                                                ),
                                                 style: TextStyle(
                                                   fontWeight: FontWeight.w800,
                                                   fontSize: 15,
@@ -1000,8 +1008,13 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                             CrossAxisAlignment.start,
                                         children: [
                                           Text(
-                                            (row['product_name'] ?? 'Product')
-                                                .toString(),
+                                            ProductNameHelper.displayNameFromMap(
+                                              row,
+                                              context
+                                                  .read<LanguageProvider>()
+                                                  .language,
+                                              fallback: 'Product',
+                                            ),
                                             style: TextStyle(
                                               fontWeight: FontWeight.w800,
                                               fontSize: 15,

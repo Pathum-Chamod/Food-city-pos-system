@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/admin_provider.dart';
+import '../utils/product_name_helper.dart';
 
 class OwnerSalesScreen extends StatefulWidget {
   const OwnerSalesScreen({super.key});
@@ -24,16 +25,18 @@ class _OwnerSalesScreenState extends State<OwnerSalesScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AdminProvider>().fetchOwnerSalesReport(range: _selectedRange);
+      context.read<AdminProvider>().fetchOwnerSalesReport(
+        range: _selectedRange,
+      );
     });
   }
 
   Future<void> _refresh() async {
     await context.read<AdminProvider>().fetchOwnerSalesReport(
-          range: _selectedRange,
-          specificDate: _specificDate,
-          dateRange: _customRange,
-        );
+      range: _selectedRange,
+      specificDate: _specificDate,
+      dateRange: _customRange,
+    );
   }
 
   Future<void> _pickSpecificDate() async {
@@ -104,11 +107,15 @@ class _OwnerSalesScreenState extends State<OwnerSalesScreen> {
     if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
       return quantity.round().toString();
     }
-    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatQuantityWithUnit(Map<String, dynamic> data, num value) {
-    final quantityType = (data['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final quantityType = (data['quantity_type'] ?? 'unit')
+        .toString()
+        .toLowerCase();
     final unitLabel = (data['unit_label'] ?? '').toString().trim();
     final formattedQuantity = _formatQuantity(value);
     if (quantityType == 'weight') {
@@ -204,8 +211,9 @@ class _OwnerSalesScreenState extends State<OwnerSalesScreen> {
     final cashiers = provider.ownerSalesCashiers;
     final topProducts = provider.ownerSalesTopProducts;
     final slowMovers = provider.ownerSalesSlowMovers;
-    final window =
-        Map<String, dynamic>.from((report['window'] as Map?) ?? <String, dynamic>{});
+    final window = Map<String, dynamic>.from(
+      (report['window'] as Map?) ?? <String, dynamic>{},
+    );
     final windowDetails = _resolveWindow(window);
     final snapshot = _SalesSnapshot.fromSummary(summary);
     final isInitialLoading = provider.isOwnerSalesLoading && report.isEmpty;
@@ -317,7 +325,8 @@ class _SalesSnapshot {
     final legacyUntypedPaymentSales =
         (summary['legacy_untyped_payment_sales'] as num?)?.toDouble() ?? 0.0;
     return _SalesSnapshot(
-      netSales: (summary['net_after_refunds'] as num?)?.toDouble() ??
+      netSales:
+          (summary['net_after_refunds'] as num?)?.toDouble() ??
           (summary['net_sales'] as num?)?.toDouble() ??
           0.0,
       grossSales: (summary['gross_sales'] as num?)?.toDouble() ?? 0.0,
@@ -334,7 +343,7 @@ class _SalesSnapshot {
           (summary['loyalty_redeemed_total'] as num?)?.toDouble() ?? 0.0,
       paymentDataComplete:
           (summary['payment_data_complete'] as bool?) ??
-              (legacyUntypedPaymentSales <= 0),
+          (legacyUntypedPaymentSales <= 0),
       legacyUntypedPaymentSales: legacyUntypedPaymentSales,
       itemsSold: (summary['items_sold'] as num?)?.toInt() ?? 0,
     );
@@ -484,8 +493,9 @@ class _SalesReportContent extends StatelessWidget {
                   icon: showHourlyView
                       ? Icons.schedule_rounded
                       : Icons.bar_chart_rounded,
-                  title:
-                      showHourlyView ? 'No hourly sales yet' : 'No sales in this period',
+                  title: showHourlyView
+                      ? 'No hourly sales yet'
+                      : 'No sales in this period',
                   subtitle: showHourlyView
                       ? 'Hourly sales will appear once this day has synced transaction timing.'
                       : 'Choose another range or wait for POS sales to sync.',
@@ -527,14 +537,17 @@ class _SalesReportContent extends StatelessWidget {
                   children: cashiers
                       .map(
                         (cashier) => _CashierTile(
-                          name: (cashier['cashier_name'] ?? 'Unknown').toString(),
+                          name: (cashier['cashier_name'] ?? 'Unknown')
+                              .toString(),
                           transactions:
-                              (cashier['transaction_count'] as num?)?.toInt() ?? 0,
+                              (cashier['transaction_count'] as num?)?.toInt() ??
+                              0,
                           refundCount:
                               (cashier['refund_count'] as num?)?.toInt() ?? 0,
                           totalSales: cashierSales(cashier),
                           averageSale:
-                              (cashier['average_sale'] as num?)?.toDouble() ?? 0.0,
+                              (cashier['average_sale'] as num?)?.toDouble() ??
+                              0.0,
                           formatMoney: formatMoney,
                         ),
                       )
@@ -1117,10 +1130,7 @@ class _SectionCard extends StatelessWidget {
 }
 
 class _StatusPill extends StatelessWidget {
-  const _StatusPill({
-    required this.label,
-    required this.tone,
-  });
+  const _StatusPill({required this.label, required this.tone});
 
   final String label;
   final Color tone;
@@ -1146,9 +1156,7 @@ class _StatusPill extends StatelessWidget {
 }
 
 class _CountBadge extends StatelessWidget {
-  const _CountBadge({
-    required this.label,
-  });
+  const _CountBadge({required this.label});
 
   final String label;
 
@@ -1328,8 +1336,9 @@ class _OwnerTrendChart extends StatelessWidget {
       0,
       (max, point) => math.max(max, _valueFor(point)),
     );
-    final withSales =
-        activePoints.where((point) => _valueFor(point) > 0).toList(growable: false);
+    final withSales = activePoints
+        .where((point) => _valueFor(point) > 0)
+        .toList(growable: false);
     final safeMax = maxValue <= 0 ? 1.0 : maxValue;
     final ticks = <double>[safeMax, safeMax * 0.66, safeMax * 0.33, 0];
     final peakPoint = withSales.isEmpty
@@ -1339,24 +1348,27 @@ class _OwnerTrendChart extends StatelessWidget {
     final averageActiveHour = activeHours == 0
         ? 0.0
         : withSales.fold<double>(0.0, (sum, point) => sum + _valueFor(point)) /
-            activeHours;
+              activeHours;
 
     final insightTiles = [
       _TrendInsightData(
-        icon: isHourlyView ? Icons.schedule_rounded : Icons.calendar_today_rounded,
+        icon: isHourlyView
+            ? Icons.schedule_rounded
+            : Icons.calendar_today_rounded,
         label: isHourlyView ? 'Peak hour' : 'Peak day',
         value: peakPoint == null
             ? '--'
             : isHourlyView
-                ? _formatHourLong(_hourFor(peakPoint))
-                : _formatDailyLabel(peakPoint),
+            ? _formatHourLong(_hourFor(peakPoint))
+            : _formatDailyLabel(peakPoint),
         tone: _SalesPalette.primary,
       ),
       _TrendInsightData(
         icon: Icons.bolt_rounded,
         label: 'Peak sales',
-        value:
-            peakPoint == null ? '--' : formatCompactMoney(_valueFor(peakPoint)),
+        value: peakPoint == null
+            ? '--'
+            : formatCompactMoney(_valueFor(peakPoint)),
         tone: _SalesPalette.success,
       ),
       _TrendInsightData(
@@ -1399,7 +1411,9 @@ class _OwnerTrendChart extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      isHourlyView ? 'Active hours only' : 'Swipe for full range',
+                      isHourlyView
+                          ? 'Active hours only'
+                          : 'Swipe for full range',
                       textAlign: TextAlign.right,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -1480,9 +1494,7 @@ class _TrendInsightData {
 }
 
 class _TrendInsightWrap extends StatelessWidget {
-  const _TrendInsightWrap({
-    required this.items,
-  });
+  const _TrendInsightWrap({required this.items});
 
   final List<_TrendInsightData> items;
 
@@ -1494,7 +1506,7 @@ class _TrendInsightWrap extends StatelessWidget {
         const spacing = 10.0;
         final tileWidth =
             (constraints.maxWidth - (spacing * (crossAxisCount - 1))) /
-                crossAxisCount;
+            crossAxisCount;
 
         return Wrap(
           spacing: spacing,
@@ -1594,8 +1606,8 @@ class _TrendChartPlot extends StatelessWidget {
         final slotWidth = isHourlyView
             ? 26.0
             : compactWidth
-                ? math.max(availableWidth / visibleDailyBars, 30.0)
-                : math.max(availableWidth / visibleDailyBars, 34.0);
+            ? math.max(availableWidth / visibleDailyBars, 30.0)
+            : math.max(availableWidth / visibleDailyBars, 34.0);
         final barWidth = isHourlyView
             ? 14.0
             : math.max(10.0, math.min(16.0, slotWidth * 0.4));
@@ -1636,7 +1648,9 @@ class _TrendChartPlot extends StatelessWidget {
                                     final pointLabel = isHourlyView
                                         ? formatHourLong(hourFor(point))
                                         : formatDailyLabel(point);
-                                    final pointValue = formatMoney(valueFor(point));
+                                    final pointValue = formatMoney(
+                                      valueFor(point),
+                                    );
                                     return Tooltip(
                                       richMessage: TextSpan(
                                         children: [
@@ -1661,8 +1675,9 @@ class _TrendChartPlot extends StatelessWidget {
                                         ],
                                       ),
                                       triggerMode: TooltipTriggerMode.longPress,
-                                      waitDuration:
-                                          const Duration(milliseconds: 160),
+                                      waitDuration: const Duration(
+                                        milliseconds: 160,
+                                      ),
                                       showDuration: const Duration(seconds: 3),
                                       preferBelow: false,
                                       verticalOffset: 20,
@@ -1684,8 +1699,9 @@ class _TrendChartPlot extends StatelessWidget {
                                         ),
                                         borderRadius: BorderRadius.circular(14),
                                         border: Border.all(
-                                          color: const Color(0xFF5D7FD3)
-                                              .withOpacity(0.45),
+                                          color: const Color(
+                                            0xFF5D7FD3,
+                                          ).withOpacity(0.45),
                                         ),
                                         boxShadow: const [
                                           BoxShadow(
@@ -1718,8 +1734,9 @@ class _TrendChartPlot extends StatelessWidget {
                                                       Color(0xFFC9D5E6),
                                                     ],
                                             ),
-                                            borderRadius:
-                                                BorderRadius.circular(999),
+                                            borderRadius: BorderRadius.circular(
+                                              999,
+                                            ),
                                             boxShadow: valueFor(point) > 0
                                                 ? const [
                                                     BoxShadow(
@@ -1753,11 +1770,11 @@ class _TrendChartPlot extends StatelessWidget {
                           child: Text(
                             isHourlyView
                                 ? (shouldShowHourlyLabel(index, points.length)
-                                    ? formatHourShort(hourFor(points[index]))
-                                    : '')
+                                      ? formatHourShort(hourFor(points[index]))
+                                      : '')
                                 : (shouldShowDailyLabel(index, points.length)
-                                    ? formatDailyLabel(points[index])
-                                    : ''),
+                                      ? formatDailyLabel(points[index])
+                                      : ''),
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               fontSize: 10,
@@ -1809,16 +1826,18 @@ class _PaymentReductionCard extends StatelessWidget {
         hasCashPayments && !hasCardPayments && !hasCreditPayments;
     final cashPct = paymentTotal > 0 ? (cashSales / paymentTotal) * 100.0 : 0.0;
     final cardPct = paymentTotal > 0 ? (cardSales / paymentTotal) * 100.0 : 0.0;
-    final creditPct =
-        paymentTotal > 0 ? (creditSales / paymentTotal) * 100.0 : 0.0;
+    final creditPct = paymentTotal > 0
+        ? (creditSales / paymentTotal) * 100.0
+        : 0.0;
     final refundPct = grossSales > 0 ? (refunds / grossSales) * 100.0 : 0.0;
-    final discountPct =
-        grossSales > 0 ? (discounts / grossSales) * 100.0 : 0.0;
-    final loyaltyPct =
-        grossSales > 0 ? (loyaltyRedeemed / grossSales) * 100.0 : 0.0;
+    final discountPct = grossSales > 0 ? (discounts / grossSales) * 100.0 : 0.0;
+    final loyaltyPct = grossSales > 0
+        ? (loyaltyRedeemed / grossSales) * 100.0
+        : 0.0;
     final totalReductions = discounts + loyaltyRedeemed + refunds;
-    final reductionPct =
-        grossSales > 0 ? (totalReductions / grossSales) * 100.0 : 0.0;
+    final reductionPct = grossSales > 0
+        ? (totalReductions / grossSales) * 100.0
+        : 0.0;
     final hasReductions =
         refunds > 0.009 || discounts > 0.009 || loyaltyRedeemed > 0.009;
 
@@ -1957,8 +1976,8 @@ class _PaymentReductionCard extends StatelessWidget {
                     value:
                         '${formatMoney(refunds)} - ${refundPct.toStringAsFixed(1)}%',
                     color: _SalesPalette.danger,
-                      background: const Color(0xFFFEE4E2),
-                    ),
+                    background: const Color(0xFFFEE4E2),
+                  ),
                 if (refunds > 0 && (discounts > 0 || loyaltyRedeemed > 0))
                   const SizedBox(height: 8),
                 if (discounts > 0)
@@ -2144,10 +2163,7 @@ class _PaymentLegendTile extends StatelessWidget {
               ),
               child: Text(
                 '${percent!.toStringAsFixed(1)}%',
-                style: TextStyle(
-                  color: color,
-                  fontWeight: FontWeight.w900,
-                ),
+                style: TextStyle(color: color, fontWeight: FontWeight.w900),
               ),
             ),
         ],
@@ -2220,9 +2236,7 @@ class _PaymentHealthData {
 }
 
 class _PaymentHealthStats extends StatelessWidget {
-  const _PaymentHealthStats({
-    required this.rows,
-  });
+  const _PaymentHealthStats({required this.rows});
 
   final List<_PaymentHealthData> rows;
 
@@ -2236,7 +2250,7 @@ class _PaymentHealthStats extends StatelessWidget {
         const spacing = 10.0;
         final tileWidth =
             (constraints.maxWidth - (spacing * (crossAxisCount - 1))) /
-                crossAxisCount;
+            crossAxisCount;
 
         return Wrap(
           spacing: spacing,
@@ -2407,18 +2421,13 @@ class _CashierTile extends StatelessWidget {
               const spacing = 10.0;
               final tileWidth =
                   (constraints.maxWidth - (spacing * (crossAxisCount - 1))) /
-                      crossAxisCount;
+                  crossAxisCount;
 
               return Wrap(
                 spacing: spacing,
                 runSpacing: spacing,
                 children: tiles
-                    .map(
-                      (tile) => SizedBox(
-                        width: tileWidth,
-                        child: tile,
-                      ),
-                    )
+                    .map((tile) => SizedBox(width: tileWidth, child: tile))
                     .toList(growable: false),
               );
             },
@@ -2467,10 +2476,7 @@ class _CashierMetaTile extends StatelessWidget {
             value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: valueColor,
-              fontWeight: FontWeight.w800,
-            ),
+            style: TextStyle(color: valueColor, fontWeight: FontWeight.w800),
           ),
         ],
       ),
@@ -2494,11 +2500,15 @@ class _TopProductTile extends StatelessWidget {
     if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
       return quantity.round().toString();
     }
-    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatQuantityWithUnit(Map<String, dynamic> data, num value) {
-    final quantityType = (data['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final quantityType = (data['quantity_type'] ?? 'unit')
+        .toString()
+        .toLowerCase();
     final unitLabel = (data['unit_label'] ?? '').toString().trim();
     final formattedQuantity = _formatQuantity(value);
     if (quantityType == 'weight') {
@@ -2512,17 +2522,19 @@ class _TopProductTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final sales =
         ((row['net_sales_after_refunds'] ?? row['net_sales']) as num?)
-                ?.toDouble() ??
-            0.0;
+            ?.toDouble() ??
+        0.0;
     final soldQty =
-        ((row['sold_quantity'] ?? row['quantity_sold']) as num?)?.toDouble() ?? 0.0;
+        ((row['sold_quantity'] ?? row['quantity_sold']) as num?)?.toDouble() ??
+        0.0;
     final refundedQty = (row['refunded_quantity'] as num?)?.toDouble() ?? 0.0;
     final profit =
         ((row['estimated_profit'] ?? row['gross_profit']) as num?)
-                ?.toDouble() ??
-            0.0;
+            ?.toDouble() ??
+        0.0;
     final margin = (row['margin_percent'] as num?)?.toDouble() ?? 0.0;
-    final productName = (row['product_name'] ?? 'Unknown').toString();
+    final productName = ProductNameHelper.fromRow(row);
+    final sinhalaName = ProductNameHelper.sinhalaFromRow(row);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -2556,14 +2568,30 @@ class _TopProductTile extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  productName,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFF172433),
-                    fontSize: 15,
-                    height: 1.25,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      productName,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: Color(0xFF172433),
+                        fontSize: 15,
+                        height: 1.25,
+                      ),
+                    ),
+                    if (sinhalaName != null) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        sinhalaName,
+                        style: const TextStyle(
+                          color: Color(0xFF667085),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
               const SizedBox(width: 12),
@@ -2606,7 +2634,8 @@ class _TopProductTile extends StatelessWidget {
               ),
               if (refundedQty > 0)
                 _TagPill(
-                  label: 'Refunded ${_formatQuantityWithUnit(row, refundedQty)}',
+                  label:
+                      'Refunded ${_formatQuantityWithUnit(row, refundedQty)}',
                   color: _SalesPalette.danger,
                   background: const Color(0xFFFEE4E2),
                 ),
@@ -2648,11 +2677,15 @@ class _SlowMoverTile extends StatelessWidget {
     if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
       return quantity.round().toString();
     }
-    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatQuantityWithUnit(Map<String, dynamic> data, num value) {
-    final quantityType = (data['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final quantityType = (data['quantity_type'] ?? 'unit')
+        .toString()
+        .toLowerCase();
     final unitLabel = (data['unit_label'] ?? '').toString().trim();
     final formattedQuantity = _formatQuantity(value);
     if (quantityType == 'weight') {
@@ -2667,7 +2700,8 @@ class _SlowMoverTile extends StatelessWidget {
     final sold = (row['quantity_sold'] as num?)?.toDouble() ?? 0.0;
     final stock = (row['stock'] as num?)?.toDouble() ?? 0.0;
     final stockValue = (row['stock_value'] as num?)?.toDouble() ?? 0.0;
-    final productName = (row['product_name'] ?? 'Unknown').toString();
+    final productName = ProductNameHelper.fromRow(row);
+    final sinhalaName = ProductNameHelper.sinhalaFromRow(row);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -2713,6 +2747,17 @@ class _SlowMoverTile extends StatelessWidget {
                         height: 1.25,
                       ),
                     ),
+                    if (sinhalaName != null) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        sinhalaName,
+                        style: const TextStyle(
+                          color: Color(0xFF667085),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -2861,10 +2906,7 @@ class _EmptyBlock extends StatelessWidget {
 }
 
 class _DonutPainter extends CustomPainter {
-  const _DonutPainter({
-    required this.values,
-    required this.colors,
-  });
+  const _DonutPainter({required this.values, required this.colors});
 
   final List<double> values;
   final List<Color> colors;
@@ -2882,13 +2924,7 @@ class _DonutPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..color = const Color(0xFFE7ECF3);
 
-    canvas.drawArc(
-      arcRect,
-      -math.pi / 2,
-      math.pi * 2,
-      false,
-      basePaint,
-    );
+    canvas.drawArc(arcRect, -math.pi / 2, math.pi * 2, false, basePaint);
 
     if (total <= 0) return;
 
@@ -2904,13 +2940,7 @@ class _DonutPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round
         ..color = colors[i % colors.length];
 
-      canvas.drawArc(
-        arcRect,
-        startAngle,
-        sweep,
-        false,
-        paint,
-      );
+      canvas.drawArc(arcRect, startAngle, sweep, false, paint);
       startAngle += sweep + gap;
     }
   }

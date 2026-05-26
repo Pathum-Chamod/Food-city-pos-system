@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../models/pos_supplier.dart';
 import '../models/stock_receipt_record.dart';
+import '../providers/language_provider.dart';
 import '../services/supplier_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 
 class SupplierReceiveHistoryScreen extends StatefulWidget {
@@ -38,6 +41,15 @@ class _SupplierReceiveHistoryScreenState
     _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  String _displayReceiptProductName(StockReceiptRecord receipt) {
+    return ProductNameHelper.displayNameFromParts(
+      englishName: receipt.productName,
+      sinhalaName: receipt.productNameSi,
+      barcode: receipt.barcode,
+      language: context.read<LanguageProvider>().language,
+    );
   }
 
   void _focusSearchField() {
@@ -169,6 +181,7 @@ class _SupplierReceiveHistoryScreenState
           .replaceAll(' ', '');
       final haystack = <String>[
         receipt.productName.toLowerCase(),
+        receipt.productNameSi ?? '',
         receipt.barcode.toLowerCase(),
         receipt.supplierName.toLowerCase(),
         receipt.cashierName.toLowerCase(),
@@ -681,7 +694,7 @@ class _SupplierReceiveHistoryScreenState
             children: [
               Expanded(
                 child: Text(
-                  receipt.productName,
+                  _displayReceiptProductName(receipt),
                   style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.w800,

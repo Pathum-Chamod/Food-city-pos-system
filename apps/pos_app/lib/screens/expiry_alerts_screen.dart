@@ -8,7 +8,9 @@ import '../models/expiry_batch.dart';
 import '../navigation/pos_route_names.dart';
 import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 
@@ -205,6 +207,15 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
     return user?.name.trim().isNotEmpty == true ? user!.name : 'Manager';
   }
 
+  String _displayBatchProductName(ExpiryBatch batch) {
+    return ProductNameHelper.displayNameFromParts(
+      englishName: batch.productName,
+      sinhalaName: batch.productNameSi,
+      barcode: batch.barcode,
+      language: context.read<LanguageProvider>().language,
+    );
+  }
+
   String _formatQuantity(num value, String unitLabel) {
     final safe = value.toDouble().abs() < 0.000001 ? 0.0 : value.toDouble();
     final text = safe.toStringAsFixed(3).replaceFirst(RegExp(r'\.?0+$'), '');
@@ -358,7 +369,7 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                batch.productName,
+                                _displayBatchProductName(batch),
                                 style: TextStyle(
                                   color: _textSecondary,
                                   fontWeight: FontWeight.w700,
@@ -719,7 +730,7 @@ class _ExpiryAlertsScreenState extends State<ExpiryAlertsScreen> {
                         children: [
                           Expanded(
                             child: Text(
-                              batch.productName,
+                              _displayBatchProductName(batch),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(

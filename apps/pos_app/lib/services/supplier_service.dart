@@ -51,16 +51,12 @@ class SupplierService {
             for (final supplier in backendSuppliers) {
               if (!localIds.contains(supplier.id)) {
                 await DatabaseHelper.instance.database.then(
-                  (db) => db.insert(
-                    'suppliers',
-                    {
-                      'id': supplier.id,
-                      'name': supplier.name,
-                      'phone': supplier.phone,
-                      'updated_at': supplier.updatedAt,
-                    },
-                    conflictAlgorithm: ConflictAlgorithm.ignore,
-                  ),
+                  (db) => db.insert('suppliers', {
+                    'id': supplier.id,
+                    'name': supplier.name,
+                    'phone': supplier.phone,
+                    'updated_at': supplier.updatedAt,
+                  }, conflictAlgorithm: ConflictAlgorithm.ignore),
                 );
               }
             }
@@ -175,6 +171,7 @@ class SupplierService {
       SupplierProductMapping(
         barcode: product.barcode,
         productName: product.name,
+        productNameSi: product.nameSi,
         supplierId: supplier.id,
         supplierName: supplier.name,
         isPreferred: isPreferred,
@@ -199,20 +196,21 @@ class SupplierService {
 
     if (trimmed.isNotEmpty) {
       whereClauses.add(
-        '(LOWER(m.product_name) LIKE ? OR LOWER(m.barcode) LIKE ? OR LOWER(COALESCE(p.category, "")) LIKE ?)',
+        '(LOWER(m.product_name) LIKE ? OR COALESCE(p.name_si, m.product_name_si, "") LIKE ? OR LOWER(m.barcode) LIKE ? OR LOWER(COALESCE(p.category, "")) LIKE ?)',
       );
       whereArgs
         ..add('%$trimmed%')
+        ..add('%${search.trim()}%')
         ..add('%$trimmed%')
         ..add('%$trimmed%');
     }
 
-    final rows = await db.rawQuery(
-      '''
+    final rows = await db.rawQuery('''
       SELECT
         m.id,
         m.barcode,
         m.product_name,
+        COALESCE(p.name_si, m.product_name_si) AS product_name_si,
         m.is_preferred,
         m.default_unit_cost,
         m.updated_at,
@@ -224,9 +222,7 @@ class SupplierService {
       LEFT JOIN products p ON p.barcode = m.barcode
       WHERE ${whereClauses.join(' AND ')}
       ORDER BY m.is_preferred DESC, m.product_name COLLATE NOCASE ASC
-      ''',
-      whereArgs,
-    );
+      ''', whereArgs);
 
     return rows.map((row) => Map<String, dynamic>.from(row)).toList();
   }
@@ -236,42 +232,48 @@ class SupplierService {
     String search = '',
   }) async {
     final products = await DatabaseHelper.instance.getProducts();
-    final mappings = await getSupplierProductMappings(supplierId: supplierId, limit: 2000);
+    final mappings = await getSupplierProductMappings(
+      supplierId: supplierId,
+      limit: 2000,
+    );
     final mappedByBarcode = {
       for (final mapping in mappings) mapping.barcode: mapping,
     };
     final trimmed = search.trim().toLowerCase();
 
-    return products.where((product) {
-      if (trimmed.isEmpty) return true;
-      return product.name.toLowerCase().contains(trimmed) ||
-          product.barcode.toLowerCase().contains(trimmed) ||
-          product.category.toLowerCase().contains(trimmed);
-    }).map((product) {
-      final mapping = mappedByBarcode[product.barcode];
-      return {
-        'barcode': product.barcode,
-        'product_name': product.name,
-        'category': product.category,
-        'stock': product.stock,
-        'cost_price': product.costPrice,
-        'mapping_id': mapping?.id,
-        'is_assigned': mapping != null,
-        'is_preferred': mapping?.isPreferred ?? false,
-        'default_unit_cost': mapping?.defaultUnitCost ?? 0.0,
-      };
-    }).toList();
+    return products
+        .where((product) {
+          if (trimmed.isEmpty) return true;
+          return product.name.toLowerCase().contains(trimmed) ||
+              (product.nameSi ?? '').contains(search.trim()) ||
+              product.barcode.toLowerCase().contains(trimmed) ||
+              product.category.toLowerCase().contains(trimmed);
+        })
+        .map((product) {
+          final mapping = mappedByBarcode[product.barcode];
+          return {
+            'barcode': product.barcode,
+            'product_name': product.name,
+            'product_name_si': product.nameSi,
+            'category': product.category,
+            'stock': product.stock,
+            'cost_price': product.costPrice,
+            'mapping_id': mapping?.id,
+            'is_assigned': mapping != null,
+            'is_preferred': mapping?.isPreferred ?? false,
+            'default_unit_cost': mapping?.defaultUnitCost ?? 0.0,
+          };
+        })
+        .toList();
   }
 
   Future<Map<int, int>> getLinkedProductCountsBySupplier() async {
     final db = await DatabaseHelper.instance.database;
-    final rows = await db.rawQuery(
-      '''
+    final rows = await db.rawQuery('''
       SELECT supplier_id, COUNT(*) AS linked_count
       FROM supplier_product_mappings
       GROUP BY supplier_id
-      ''',
-    );
+      ''');
 
     return {
       for (final row in rows)
@@ -296,9 +298,13 @@ class SupplierService {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'barcode': product.barcode,
+          'product_name': product.name,
+          'product_name_si': product.nameSi,
           'quantity': quantity,
           'supplier_id': supplier.id,
+          'supplier_name': supplier.name,
           'cost': cost,
+          'reason': safeNote,
         }),
       );
 
@@ -309,6 +315,7 @@ class SupplierService {
             backendReceiptId: (result['receipt_id'] as num?)?.toInt(),
             barcode: product.barcode,
             productName: product.name,
+            productNameSi: product.nameSi,
             quantity: quantity,
             supplierId: supplier.id,
             supplierName: supplier.name,

@@ -4,6 +4,7 @@ import 'package:shared/shared.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/admin_provider.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import 'inventory_history_screen.dart';
 
@@ -206,9 +207,19 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    product.name,
+                    ProductNameHelper.primary(product),
                     style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
+                  if (ProductNameHelper.sinhala(product) != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      ProductNameHelper.sinhala(product)!,
+                      style: const TextStyle(
+                        color: Color(0xFF667085),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 6),
                   Text(
                     'Current stock: ${product.stock}',

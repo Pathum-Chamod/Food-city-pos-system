@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/loyalty_service.dart';
 import '../services/permission_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/permission_guard.dart';
 
@@ -263,6 +265,10 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
     Product product, {
     LoyaltyExclusion? exclusion,
   }) async {
+    final displayName = ProductNameHelper.displayName(
+      product,
+      context.read<LanguageProvider>().language,
+    );
     var excludeEarning = exclusion?.excludeEarning ?? true;
     var excludeRedemption = exclusion?.excludeRedemption ?? false;
     var isActive = exclusion?.isActive ?? true;
@@ -271,7 +277,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: Text(exclusion == null ? 'Exclude Product' : product.name),
+          title: Text(exclusion == null ? 'Exclude Product' : displayName),
           content: SizedBox(
             width: 420,
             child: Column(
@@ -279,7 +285,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  product.name,
+                  displayName,
                   style: const TextStyle(fontWeight: FontWeight.w900),
                 ),
                 const SizedBox(height: 4),
@@ -343,7 +349,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
         isActive: isActive,
       );
       await _logLoyaltyUpdate(
-        'Loyalty product rule updated for "${product.name}"',
+        'Loyalty product rule updated for "$displayName"',
       );
       _productSearchController.clear();
       await _load();
@@ -455,16 +461,16 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
   }
 
   List<Product> get _productSearchResults {
-    final query = _productSearchController.text.trim().toLowerCase();
+    final query = _productSearchController.text.trim();
+    final queryLower = query.toLowerCase();
     if (query.isEmpty) return const [];
     final excluded = _excludedProducts.map((item) => item.value).toSet();
     return _products
         .where(
           (product) =>
               !excluded.contains(product.barcode) &&
-              (product.name.toLowerCase().contains(query) ||
-                  product.barcode.toLowerCase().contains(query) ||
-                  product.category.toLowerCase().contains(query)),
+              (ProductNameHelper.matchesProduct(product, query) ||
+                  product.category.toLowerCase().contains(queryLower)),
         )
         .take(8)
         .toList();
@@ -983,7 +989,10 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
                           child: const Icon(Icons.inventory_2_outlined),
                         ),
                         title: Text(
-                          product.name,
+                          ProductNameHelper.displayName(
+                            product,
+                            context.read<LanguageProvider>().language,
+                          ),
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
                         subtitle: Text(
@@ -1165,8 +1174,14 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
                   dividerColor: Colors.transparent,
                   tabs: const [
                     Tab(icon: Icon(Icons.tune_rounded), text: 'Settings'),
-                    Tab(icon: Icon(Icons.category_outlined), text: 'Categories'),
-                    Tab(icon: Icon(Icons.inventory_2_outlined), text: 'Products'),
+                    Tab(
+                      icon: Icon(Icons.category_outlined),
+                      text: 'Categories',
+                    ),
+                    Tab(
+                      icon: Icon(Icons.inventory_2_outlined),
+                      text: 'Products',
+                    ),
                   ],
                 ),
               ),

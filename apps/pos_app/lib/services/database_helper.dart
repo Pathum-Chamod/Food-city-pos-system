@@ -65,7 +65,7 @@ class DatabaseHelper {
     return databaseFactory.openDatabase(
       stablePath,
       options: OpenDatabaseOptions(
-        version: 31,
+        version: 34,
         onConfigure: (db) async {
           await db.execute('PRAGMA foreign_keys = ON');
         },
@@ -230,6 +230,7 @@ class DatabaseHelper {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
+        product_name_si TEXT,
         supplier_id INTEGER NOT NULL,
         supplier_name TEXT NOT NULL,
         is_preferred INTEGER NOT NULL DEFAULT 1,
@@ -252,6 +253,7 @@ class DatabaseHelper {
         purchase_order_receipt_id INTEGER,
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
+        product_name_si TEXT,
         quantity INTEGER NOT NULL,
         supplier_id INTEGER NOT NULL,
         supplier_name TEXT NOT NULL,
@@ -280,6 +282,7 @@ class DatabaseHelper {
         receipt_id INTEGER,
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
+        product_name_si TEXT,
         batch_number TEXT NOT NULL DEFAULT '',
         supplier_id INTEGER,
         supplier_name TEXT NOT NULL DEFAULT '',
@@ -323,6 +326,7 @@ class DatabaseHelper {
         expiry_batch_id INTEGER NOT NULL,
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
+        product_name_si TEXT,
         batch_number TEXT NOT NULL DEFAULT '',
         expiry_date TEXT NOT NULL,
         quantity REAL NOT NULL,
@@ -445,6 +449,7 @@ class DatabaseHelper {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         barcode TEXT UNIQUE NOT NULL,
         name TEXT NOT NULL,
+        name_si TEXT,
         category TEXT NOT NULL DEFAULT 'General',
         quantity_type TEXT NOT NULL DEFAULT 'unit',
         unit_label TEXT NOT NULL DEFAULT 'pcs',
@@ -498,6 +503,7 @@ class DatabaseHelper {
         sale_id INTEGER NOT NULL,
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
+        product_name_si TEXT,
         unit_price REAL NOT NULL,
         marked_price REAL NOT NULL DEFAULT 0,
         price_category_used TEXT NOT NULL DEFAULT 'selling',
@@ -537,6 +543,7 @@ class DatabaseHelper {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
+        product_name_si TEXT,
         action_type TEXT NOT NULL,
         quantity_change INTEGER,
         stock_before INTEGER,
@@ -575,6 +582,7 @@ class DatabaseHelper {
         session_id INTEGER NOT NULL,
         barcode TEXT NOT NULL,
         product_name TEXT NOT NULL,
+        product_name_si TEXT,
         system_stock INTEGER NOT NULL,
         counted_stock INTEGER NOT NULL,
         difference_qty INTEGER NOT NULL,
@@ -898,6 +906,7 @@ class DatabaseHelper {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           barcode TEXT NOT NULL,
           product_name TEXT NOT NULL,
+          product_name_si TEXT,
           supplier_id INTEGER NOT NULL,
           supplier_name TEXT NOT NULL,
           is_preferred INTEGER NOT NULL DEFAULT 1,
@@ -1406,6 +1415,53 @@ class DatabaseHelper {
 
     if (oldVersion < 31) {
       await _createActiveCartSnapshotsTable(db);
+    }
+
+    if (oldVersion < 32) {
+      await _addColumnIfMissing(db, 'products', 'name_si', 'TEXT');
+      await _addColumnIfMissing(db, 'sale_items', 'product_name_si', 'TEXT');
+      await _addColumnIfMissing(
+        db,
+        'sale_item_batches',
+        'product_name_si',
+        'TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        'expiry_batches',
+        'product_name_si',
+        'TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        'inventory_movements',
+        'product_name_si',
+        'TEXT',
+      );
+      await _addColumnIfMissing(
+        db,
+        'stock_take_items',
+        'product_name_si',
+        'TEXT',
+      );
+    }
+
+    if (oldVersion < 33) {
+      await _addColumnIfMissing(
+        db,
+        'stock_receipts',
+        'product_name_si',
+        'TEXT',
+      );
+    }
+
+    if (oldVersion < 34) {
+      await _addColumnIfMissing(
+        db,
+        'supplier_product_mappings',
+        'product_name_si',
+        'TEXT',
+      );
     }
   }
 
@@ -2236,6 +2292,7 @@ class DatabaseHelper {
     DatabaseExecutor executor, {
     required String barcode,
     required String productName,
+    String? productNameSi,
     required String actionType,
     num? quantityChange,
     num? stockBefore,
@@ -2254,6 +2311,7 @@ class DatabaseHelper {
     await executor.insert('inventory_movements', {
       'barcode': barcode,
       'product_name': productName,
+      'product_name_si': productNameSi,
       'action_type': actionType,
       'quantity_change': quantityChange,
       'stock_before': stockBefore,
@@ -2532,6 +2590,7 @@ class DatabaseHelper {
         batch.insert('products', {
           'barcode': product.barcode,
           'name': product.name,
+          'name_si': product.nameSi,
           'category': product.category,
           'quantity_type': product.quantityType.dbValue,
           'unit_label': product.unitLabel,
@@ -2766,6 +2825,7 @@ class DatabaseHelper {
             final row = Map<String, dynamic>.from(rawRow as Map);
             final barcode = row['barcode']?.toString().trim() ?? '';
             final name = row['name']?.toString().trim() ?? '';
+            final nameSi = row['name_si']?.toString().trim();
             if (barcode.isEmpty || name.isEmpty) continue;
 
             final sellingPrice = _roundMoney(
@@ -2789,6 +2849,7 @@ class DatabaseHelper {
             await txn.insert('products', {
               'barcode': barcode,
               'name': name,
+              'name_si': nameSi == null || nameSi.isEmpty ? null : nameSi,
               'category': (row['category'] ?? 'General').toString(),
               'price': sellingPrice,
               'cost_price': _roundMoney(_parseDouble(row['cost_price'])),
@@ -2816,6 +2877,7 @@ class DatabaseHelper {
           final data = Map<String, dynamic>.from(decodedData as Map);
           final barcode = data['barcode']?.toString().trim() ?? '';
           final name = data['name']?.toString().trim() ?? '';
+          final nameSi = data['name_si']?.toString().trim();
           if (barcode.isEmpty || name.isEmpty) continue;
 
           final now = DateTime.now().toIso8601String();
@@ -2839,6 +2901,7 @@ class DatabaseHelper {
           await txn.insert('products', {
             'barcode': barcode,
             'name': name,
+            'name_si': nameSi == null || nameSi.isEmpty ? null : nameSi,
             'category': (data['category'] ?? 'General').toString(),
             'price': sellingPrice,
             'cost_price': _roundMoney(_parseDouble(data['cost_price'])),
@@ -2940,6 +3003,7 @@ class DatabaseHelper {
           final barcode = productMap['barcode']?.toString() ?? '';
           final productName =
               productMap['name']?.toString() ?? 'Unknown product';
+          final productNameSi = productMap['name_si']?.toString().trim();
           final unitPrice = _resolveCartItemUnitPrice(item);
           final systemUnitPrice = _parseDouble(
             item['system_unit_price'],
@@ -3032,6 +3096,9 @@ class DatabaseHelper {
           preliminaryLineInputs.add({
             'barcode': barcode,
             'product_name': productName,
+            'product_name_si': productNameSi == null || productNameSi.isEmpty
+                ? null
+                : productNameSi,
             'unit_price': unitPrice,
             'system_unit_price': systemUnitPrice,
             'price_override_type': priceOverrideType,
@@ -3197,6 +3264,7 @@ class DatabaseHelper {
           final item = preliminaryLineInputs[i];
           final barcode = item['barcode'] as String;
           final productName = item['product_name'] as String;
+          final productNameSi = item['product_name_si']?.toString();
           final unitPrice = item['unit_price'] as double;
           final systemUnitPrice =
               (item['system_unit_price'] as num?)?.toDouble() ?? unitPrice;
@@ -3292,6 +3360,7 @@ class DatabaseHelper {
           saleItemInputs.add({
             'barcode': barcode,
             'product_name': productName,
+            'product_name_si': productNameSi,
             'unit_price': unitPrice,
             'system_unit_price': systemUnitPrice,
             'price_override_type': priceOverrideType,
@@ -3326,6 +3395,7 @@ class DatabaseHelper {
         for (final item in saleItemInputs) {
           final barcode = item['barcode'] as String;
           final productName = item['product_name'] as String;
+          final productNameSi = item['product_name_si']?.toString();
           final unitPrice = item['unit_price'] as double;
           final systemUnitPrice =
               (item['system_unit_price'] as num?)?.toDouble() ?? unitPrice;
@@ -3409,6 +3479,7 @@ class DatabaseHelper {
             'sale_id': saleId,
             'barcode': barcode,
             'product_name': productName,
+            'product_name_si': productNameSi,
             'unit_price': unitPrice,
             'system_unit_price': systemUnitPrice,
             'price_override_type': priceOverrideType,
@@ -3457,6 +3528,7 @@ class DatabaseHelper {
                 'expiry_batch_id': allocation['expiry_batch_id'],
                 'barcode': allocation['barcode'],
                 'product_name': allocation['product_name'],
+                'product_name_si': allocation['product_name_si'],
                 'batch_number': allocation['batch_number'],
                 'expiry_date': allocation['expiry_date'],
                 'quantity': allocation['quantity'],
@@ -3470,6 +3542,7 @@ class DatabaseHelper {
             txn,
             barcode: barcode,
             productName: productName,
+            productNameSi: productNameSi,
             actionType: isRefund ? 'refund' : 'sale',
             quantityChange: stockDelta,
             stockBefore: stockBefore,
@@ -3486,6 +3559,7 @@ class DatabaseHelper {
             .map((item) {
               final barcode = item['barcode'] as String;
               final productName = item['product_name'] as String;
+              final productNameSi = item['product_name_si']?.toString();
               final unitPrice = (item['unit_price'] as num).toDouble();
               final systemUnitPrice =
                   (item['system_unit_price'] as num?)?.toDouble() ?? unitPrice;
@@ -3535,6 +3609,7 @@ class DatabaseHelper {
                 'product': {
                   'barcode': barcode,
                   'name': productName,
+                  'name_si': productNameSi,
                   'price': unitPrice,
                   'selling_price': unitPrice,
                   'cost_price': costPriceSnapshot,
@@ -3703,6 +3778,7 @@ class DatabaseHelper {
 
           final productName =
               (refundableData['product_name'] ?? 'Unknown product').toString();
+          final productNameSi = refundableData['product_name_si']?.toString();
           final unitPrice = ((refundableData['refund_unit_price'] as num?) ?? 0)
               .toDouble();
           final originalPriceCategory =
@@ -3781,6 +3857,7 @@ class DatabaseHelper {
             'sale_id': refundSaleId,
             'barcode': barcode,
             'product_name': productName,
+            'product_name_si': productNameSi,
             'unit_price': unitPrice,
             'marked_price': unitPrice,
             'price_category_used': originalPriceCategory,
@@ -3819,6 +3896,7 @@ class DatabaseHelper {
             txn,
             barcode: barcode,
             productName: productName,
+            productNameSi: productNameSi,
             actionType: 'refund',
             quantityChange: quantity,
             stockBefore: stockBefore,
@@ -3835,6 +3913,7 @@ class DatabaseHelper {
             'product': {
               'barcode': barcode,
               'name': productName,
+              'name_si': productNameSi,
               'price': unitPrice,
               'cost_price': costPriceSnapshot,
             },
@@ -5317,6 +5396,7 @@ class DatabaseHelper {
         si.sale_id,
         si.barcode,
         si.product_name,
+        si.product_name_si,
         si.unit_price,
         si.system_unit_price,
         si.price_override_type,
@@ -5363,6 +5443,7 @@ class DatabaseHelper {
             'sale_id': row['sale_id'],
             'barcode': row['barcode'],
             'product_name': row['product_name'],
+            'product_name_si': row['product_name_si'],
             'unit_price': row['unit_price'],
             'system_unit_price': row['system_unit_price'],
             'price_override_type': row['price_override_type'],
@@ -5434,6 +5515,7 @@ class DatabaseHelper {
       SELECT
         si.barcode,
         si.product_name,
+        si.product_name_si,
         si.unit_price,
         si.price_category_used,
         si.cost_price_snapshot,
@@ -5463,6 +5545,7 @@ class DatabaseHelper {
       GROUP BY
         si.barcode,
         si.product_name,
+        si.product_name_si,
         si.unit_price,
         si.price_category_used,
         si.cost_price_snapshot,
@@ -5525,6 +5608,7 @@ class DatabaseHelper {
       return {
         'barcode': barcode,
         'product_name': row['product_name'],
+        'product_name_si': row['product_name_si'],
         'unit_price': row['unit_price'],
         'price_category_used': row['price_category_used'],
         'cost_price_snapshot': row['cost_price_snapshot'],
@@ -6036,6 +6120,7 @@ class DatabaseHelper {
       SELECT
         si.barcode,
         COALESCE(MAX(p.name), MAX(si.product_name)) AS product_name,
+        COALESCE(MAX(p.name_si), MAX(si.product_name_si)) AS product_name_si,
         CASE
           WHEN LOWER(COALESCE(MAX(p.quantity_type), '')) = 'weight' THEN 'weight'
           ELSE 'unit'
@@ -6090,6 +6175,7 @@ class DatabaseHelper {
           (row) => {
             'barcode': row['barcode'],
             'product_name': row['product_name'],
+            'product_name_si': row['product_name_si'],
             'quantity_type': row['quantity_type'],
             'unit_label': row['unit_label'],
             'quantity_sold': ((row['quantity_sold'] as num?) ?? 0).toDouble(),
@@ -6644,6 +6730,7 @@ class DatabaseHelper {
     String? purchaseOrderNumber,
     required String barcode,
     required String productName,
+    String? productNameSi,
     required num quantity,
     required int supplierId,
     required String supplierName,
@@ -6676,6 +6763,9 @@ class DatabaseHelper {
         'purchase_order_receipt_id': null,
         'barcode': barcode,
         'product_name': productName,
+        'product_name_si': productNameSi?.trim().isEmpty == true
+            ? null
+            : productNameSi?.trim(),
         'quantity': safeQuantity,
         'supplier_id': supplierId,
         'supplier_name': supplierName,
@@ -6700,6 +6790,9 @@ class DatabaseHelper {
           'receipt_id': receiptId,
           'barcode': barcode.trim(),
           'product_name': productName.trim(),
+          'product_name_si': productNameSi?.trim().isEmpty == true
+              ? null
+              : productNameSi?.trim(),
           'batch_number': resolvedBatchNumber,
           'supplier_id': supplierId,
           'supplier_name': supplierName.trim(),
@@ -6774,10 +6867,11 @@ class DatabaseHelper {
 
     if (trimmed.isNotEmpty) {
       whereClauses.add(
-        '(LOWER(product_name) LIKE ? OR LOWER(barcode) LIKE ? OR LOWER(supplier_name) LIKE ?)',
+        '(LOWER(product_name) LIKE ? OR COALESCE(product_name_si, "") LIKE ? OR LOWER(barcode) LIKE ? OR LOWER(supplier_name) LIKE ?)',
       );
       whereArgs
         ..add('%$trimmed%')
+        ..add('%${search.trim()}%')
         ..add('%$trimmed%')
         ..add('%$trimmed%');
     }
@@ -6980,10 +7074,11 @@ class DatabaseHelper {
 
     if (trimmed.isNotEmpty) {
       whereClauses.add(
-        '(LOWER(product_name) LIKE ? OR LOWER(barcode) LIKE ? OR LOWER(supplier_name) LIKE ? OR LOWER(COALESCE(batch_number, "")) LIKE ? OR COALESCE(expiry_date, "") LIKE ?)',
+        '(LOWER(product_name) LIKE ? OR COALESCE(product_name_si, "") LIKE ? OR LOWER(barcode) LIKE ? OR LOWER(supplier_name) LIKE ? OR LOWER(COALESCE(batch_number, "")) LIKE ? OR COALESCE(expiry_date, "") LIKE ?)',
       );
       whereArgs
         ..add('%$trimmed%')
+        ..add('%${search.trim()}%')
         ..add('%$trimmed%')
         ..add('%$trimmed%')
         ..add('%$trimmed%')
@@ -7055,10 +7150,11 @@ class DatabaseHelper {
     final trimmedSearch = searchQuery.trim();
     if (trimmedSearch.isNotEmpty) {
       clauses.add(
-        "(product_name LIKE ? OR barcode LIKE ? OR COALESCE(reason, '') LIKE ? OR COALESCE(supplier_name, '') LIKE ?)",
+        "(product_name LIKE ? OR COALESCE(product_name_si, '') LIKE ? OR barcode LIKE ? OR COALESCE(reason, '') LIKE ? OR COALESCE(supplier_name, '') LIKE ?)",
       );
       final pattern = '%$trimmedSearch%';
       args
+        ..add(pattern)
         ..add(pattern)
         ..add(pattern)
         ..add(pattern)
@@ -7225,7 +7321,7 @@ class DatabaseHelper {
         final now = DateTime.now().toIso8601String();
         final rows = await txn.query(
           'products',
-          columns: ['name', 'stock', 'cost_price'],
+          columns: ['name', 'name_si', 'stock', 'cost_price'],
           where: 'barcode = ?',
           whereArgs: [barcode.trim()],
           limit: 1,
@@ -7237,6 +7333,7 @@ class DatabaseHelper {
 
         final row = rows.first;
         final productName = (row['name'] ?? 'Unknown product').toString();
+        final productNameSi = row['name_si']?.toString();
         final stockBefore = _parseQuantity(row['stock']);
         final stockAfter = _roundQuantity(stockBefore + safeQuantity);
 
@@ -7261,6 +7358,7 @@ class DatabaseHelper {
           txn,
           barcode: barcode.trim(),
           productName: productName,
+          productNameSi: productNameSi,
           actionType: 'stock_receive',
           quantityChange: safeQuantity,
           stockBefore: stockBefore,
@@ -7276,6 +7374,8 @@ class DatabaseHelper {
 
         final syncData = jsonEncode({
           'barcode': barcode.trim(),
+          'product_name': productName,
+          'product_name_si': productNameSi,
           'quantity': safeQuantity,
           'unit_cost': unitCost,
           'reason': reason,
@@ -7332,7 +7432,7 @@ class DatabaseHelper {
         final now = DateTime.now().toIso8601String();
         final productRows = await txn.query(
           'products',
-          columns: ['name', 'stock', 'cost_price', 'track_expiry'],
+          columns: ['name', 'name_si', 'stock', 'cost_price', 'track_expiry'],
           where: 'barcode = ?',
           whereArgs: [trimmedBarcode],
           limit: 1,
@@ -7344,6 +7444,7 @@ class DatabaseHelper {
 
         final product = productRows.first;
         final productName = (product['name'] ?? 'Unknown product').toString();
+        final productNameSi = product['name_si']?.toString();
         final trackExpiry =
             ((product['track_expiry'] as num?)?.toInt() ?? 0) == 1;
 
@@ -7389,6 +7490,7 @@ class DatabaseHelper {
           'purchase_order_receipt_id': null,
           'barcode': trimmedBarcode,
           'product_name': productName,
+          'product_name_si': productNameSi,
           'quantity': safeQuantity,
           'supplier_id': supplierId,
           'supplier_name': trimmedSupplierName,
@@ -7414,6 +7516,7 @@ class DatabaseHelper {
             'receipt_id': receiptId,
             'barcode': trimmedBarcode,
             'product_name': productName,
+            'product_name_si': productNameSi,
             'batch_number': resolvedBatchNumber,
             'supplier_id': supplierId,
             'supplier_name': trimmedSupplierName,
@@ -7443,6 +7546,7 @@ class DatabaseHelper {
           txn,
           barcode: trimmedBarcode,
           productName: productName,
+          productNameSi: productNameSi,
           actionType: 'stock_receive',
           quantityChange: safeQuantity,
           stockBefore: stockBefore,
@@ -7457,6 +7561,7 @@ class DatabaseHelper {
         final syncData = jsonEncode({
           'barcode': trimmedBarcode,
           'product_name': productName,
+          'product_name_si': productNameSi,
           'quantity': safeQuantity,
           'unit_cost': unitCost,
           'resolved_cost': _roundMoney(resolvedCost),
@@ -7516,7 +7621,7 @@ class DatabaseHelper {
         final now = DateTime.now().toIso8601String();
         final rows = await txn.query(
           'products',
-          columns: ['name', 'stock', 'track_expiry'],
+          columns: ['name', 'name_si', 'stock', 'track_expiry'],
           where: 'barcode = ?',
           whereArgs: [barcode.trim()],
           limit: 1,
@@ -7528,6 +7633,7 @@ class DatabaseHelper {
 
         final row = rows.first;
         final productName = (row['name'] ?? 'Unknown product').toString();
+        final productNameSi = row['name_si']?.toString();
         final stockBefore = _parseQuantity(row['stock']);
         final trackExpiry = ((row['track_expiry'] as num?)?.toInt() ?? 0) == 1;
 
@@ -7595,6 +7701,7 @@ class DatabaseHelper {
           txn,
           barcode: barcode.trim(),
           productName: productName,
+          productNameSi: productNameSi,
           actionType: actionType,
           quantityChange: quantityChange,
           stockBefore: stockBefore,
@@ -7715,7 +7822,7 @@ class DatabaseHelper {
         final now = DateTime.now().toIso8601String();
         final rows = await txn.query(
           'products',
-          columns: ['name', 'min_stock_level'],
+          columns: ['name', 'name_si', 'min_stock_level'],
           where: 'barcode = ?',
           whereArgs: [barcode.trim()],
           limit: 1,
@@ -7727,6 +7834,7 @@ class DatabaseHelper {
 
         final row = rows.first;
         final productName = (row['name'] ?? 'Unknown product').toString();
+        final productNameSi = row['name_si']?.toString();
         final beforeLevel = _parseInt(row['min_stock_level']);
 
         await txn.update(
@@ -7740,6 +7848,7 @@ class DatabaseHelper {
           txn,
           barcode: barcode.trim(),
           productName: productName,
+          productNameSi: productNameSi,
           actionType: 'min_stock_change',
           quantityChange: minStockLevel - beforeLevel,
           stockBefore: beforeLevel,
@@ -7776,6 +7885,7 @@ class DatabaseHelper {
   Future<bool> createProductLocal({
     required String barcode,
     required String name,
+    String? nameSi,
     required String category,
     required double costPrice,
     required double sellingPrice,
@@ -7792,6 +7902,7 @@ class DatabaseHelper {
   }) async {
     final trimmedBarcode = barcode.trim();
     final trimmedName = name.trim();
+    final trimmedNameSi = nameSi?.trim();
     final trimmedCategory = category.trim().isEmpty
         ? 'General'
         : category.trim();
@@ -7844,6 +7955,9 @@ class DatabaseHelper {
         await txn.insert('products', {
           'barcode': trimmedBarcode,
           'name': trimmedName,
+          'name_si': trimmedNameSi == null || trimmedNameSi.isEmpty
+              ? null
+              : trimmedNameSi,
           'category': trimmedCategory,
           'quantity_type': resolvedQuantityType,
           'unit_label': resolvedUnitLabel,
@@ -7866,6 +7980,7 @@ class DatabaseHelper {
           txn,
           barcode: trimmedBarcode,
           productName: trimmedName,
+          productNameSi: trimmedNameSi,
           actionType: 'product_created',
           reason: 'Product added to inventory',
           performedBy: changedBy,
@@ -7877,6 +7992,7 @@ class DatabaseHelper {
             txn,
             barcode: trimmedBarcode,
             productName: trimmedName,
+            productNameSi: trimmedNameSi,
             actionType: 'stock_receive',
             quantityChange: openingStock,
             stockBefore: 0,
@@ -7890,6 +8006,9 @@ class DatabaseHelper {
         final syncData = jsonEncode({
           'barcode': trimmedBarcode,
           'name': trimmedName,
+          'name_si': trimmedNameSi == null || trimmedNameSi.isEmpty
+              ? null
+              : trimmedNameSi,
           'category': trimmedCategory,
           'quantity_type': resolvedQuantityType,
           'unit_label': resolvedUnitLabel,
@@ -7928,6 +8047,7 @@ class DatabaseHelper {
   Future<bool> updateProductDetailsLocal({
     required String barcode,
     required String name,
+    String? nameSi,
     required String category,
     required double costPrice,
     required double sellingPrice,
@@ -7943,6 +8063,7 @@ class DatabaseHelper {
   }) async {
     final trimmedBarcode = barcode.trim();
     final trimmedName = name.trim();
+    final trimmedNameSi = nameSi?.trim();
     final trimmedCategory = category.trim().isEmpty
         ? 'General'
         : category.trim();
@@ -7966,6 +8087,7 @@ class DatabaseHelper {
           'products',
           columns: [
             'name',
+            'name_si',
             'category',
             'quantity_type',
             'unit_label',
@@ -8005,6 +8127,7 @@ class DatabaseHelper {
         );
 
         final oldName = (row['name'] ?? '').toString();
+        final oldNameSi = row['name_si']?.toString().trim() ?? '';
         final oldCategory = (row['category'] ?? 'General').toString();
         final oldQuantityType = _normalizeProductQuantityType(
           row['quantity_type'],
@@ -8029,6 +8152,9 @@ class DatabaseHelper {
           'products',
           {
             'name': trimmedName,
+            'name_si': trimmedNameSi == null || trimmedNameSi.isEmpty
+                ? null
+                : trimmedNameSi,
             'category': trimmedCategory,
             'quantity_type': resolvedQuantityType,
             'unit_label': resolvedUnitLabel,
@@ -8050,6 +8176,7 @@ class DatabaseHelper {
 
         final changes = <String>[];
         if (oldName != trimmedName) changes.add('name');
+        if (oldNameSi != (trimmedNameSi ?? '')) changes.add('Sinhala name');
         if (oldCategory != trimmedCategory) changes.add('category');
         if (oldQuantityType != resolvedQuantityType ||
             oldUnitLabel != resolvedUnitLabel) {
@@ -8074,6 +8201,7 @@ class DatabaseHelper {
           txn,
           barcode: trimmedBarcode,
           productName: trimmedName,
+          productNameSi: trimmedNameSi,
           actionType: 'product_updated',
           stockBefore: currentStock,
           stockAfter: currentStock,
@@ -8087,6 +8215,9 @@ class DatabaseHelper {
         final syncData = jsonEncode({
           'barcode': trimmedBarcode,
           'name': trimmedName,
+          'name_si': trimmedNameSi == null || trimmedNameSi.isEmpty
+              ? null
+              : trimmedNameSi,
           'category': trimmedCategory,
           'quantity_type': resolvedQuantityType,
           'unit_label': resolvedUnitLabel,
@@ -8303,6 +8434,7 @@ class DatabaseHelper {
         for (final raw in rows) {
           final barcode = (raw['barcode'] ?? '').toString().trim();
           final name = (raw['name'] ?? '').toString().trim();
+          final nameSi = raw['name_si']?.toString().trim();
           final category =
               (raw['category'] ?? 'General').toString().trim().isEmpty
               ? 'General'
@@ -8356,6 +8488,7 @@ class DatabaseHelper {
             await txn.insert('products', {
               'barcode': barcode,
               'name': name,
+              'name_si': nameSi == null || nameSi.isEmpty ? null : nameSi,
               'category': category,
               'quantity_type': quantityType,
               'unit_label': unitLabel,
@@ -8377,6 +8510,7 @@ class DatabaseHelper {
               txn,
               barcode: barcode,
               productName: name,
+              productNameSi: nameSi,
               actionType: 'product_created',
               reason: 'Product created by bulk upload',
               performedBy: changedBy,
@@ -8388,6 +8522,7 @@ class DatabaseHelper {
                 txn,
                 barcode: barcode,
                 productName: name,
+                productNameSi: nameSi,
                 actionType: 'stock_receive',
                 quantityChange: stock,
                 stockBefore: 0,
@@ -8403,6 +8538,7 @@ class DatabaseHelper {
               'products',
               {
                 'name': name,
+                'name_si': nameSi == null || nameSi.isEmpty ? null : nameSi,
                 'category': category,
                 'quantity_type': quantityType,
                 'unit_label': unitLabel,
@@ -8427,6 +8563,7 @@ class DatabaseHelper {
               txn,
               barcode: barcode,
               productName: name,
+              productNameSi: nameSi,
               actionType: 'product_updated',
               quantityChange: stock - stockBefore,
               stockBefore: stockBefore,
@@ -8440,6 +8577,7 @@ class DatabaseHelper {
           syncRows.add({
             'barcode': barcode,
             'name': name,
+            'name_si': nameSi == null || nameSi.isEmpty ? null : nameSi,
             'category': category,
             'quantity_type': quantityType,
             'unit_label': unitLabel,
@@ -8501,10 +8639,11 @@ class DatabaseHelper {
 
     if (trimmed.isNotEmpty) {
       whereClauses.add(
-        '(LOWER(b.product_name) LIKE ? OR LOWER(b.barcode) LIKE ? OR LOWER(b.batch_number) LIKE ? OR LOWER(b.supplier_name) LIKE ?)',
+        '(LOWER(b.product_name) LIKE ? OR b.product_name_si LIKE ? OR LOWER(b.barcode) LIKE ? OR LOWER(b.batch_number) LIKE ? OR LOWER(b.supplier_name) LIKE ?)',
       );
       whereArgs
         ..add('%$trimmed%')
+        ..add('%${search.trim()}%')
         ..add('%$trimmed%')
         ..add('%$trimmed%')
         ..add('%$trimmed%');
@@ -8596,6 +8735,7 @@ class DatabaseHelper {
         b.id,
         b.barcode,
         b.product_name,
+        b.product_name_si,
         b.batch_number,
         b.expiry_date,
         b.remaining_quantity,
@@ -8636,6 +8776,7 @@ class DatabaseHelper {
         b.id,
         b.barcode,
         b.product_name,
+        b.product_name_si,
         b.batch_number,
         b.expiry_date,
         b.remaining_quantity,
@@ -8794,6 +8935,7 @@ class DatabaseHelper {
           txn,
           barcode: batch.barcode,
           productName: batch.productName,
+          productNameSi: batch.productNameSi,
           actionType: 'expiry_waste',
           quantityChange: -safeQuantity,
           stockBefore: stockBefore,
@@ -8815,6 +8957,7 @@ class DatabaseHelper {
           'type': 'STOCK_ADJUST',
           'data': jsonEncode({
             'barcode': batch.barcode,
+            'product_name_si': batch.productNameSi,
             'adjustment_type': 'decrease',
             'quantity': safeQuantity,
             'reason':
@@ -8877,6 +9020,7 @@ class DatabaseHelper {
         'receipt_id': row['receipt_id'],
         'barcode': (row['barcode'] ?? '').toString(),
         'product_name': (row['product_name'] ?? '').toString(),
+        'product_name_si': row['product_name_si']?.toString(),
         'batch_number': (row['batch_number'] ?? '').toString(),
         'supplier_id': row['supplier_id'],
         'supplier_name': (row['supplier_name'] ?? '').toString(),
@@ -8941,6 +9085,7 @@ class DatabaseHelper {
         'expiry_batch_id': batchId,
         'barcode': (row['barcode'] ?? barcode).toString(),
         'product_name': (row['product_name'] ?? '').toString(),
+        'product_name_si': row['product_name_si']?.toString(),
         'batch_number': (row['batch_number'] ?? '').toString(),
         'expiry_date': (row['expiry_date'] ?? '').toString(),
         'quantity': deductQuantity,
@@ -9154,6 +9299,7 @@ class DatabaseHelper {
           'session_id': sessionId,
           'barcode': product.barcode,
           'product_name': product.name,
+          'product_name_si': product.nameSi,
           'system_stock': product.stock,
           'counted_stock': safeCountedQty,
           'difference_qty': _roundQuantity(safeCountedQty - product.stock),
@@ -9618,6 +9764,7 @@ class DatabaseHelper {
       SELECT
         si.barcode,
         COALESCE(MAX(p.name), MAX(si.product_name)) AS product_name,
+        COALESCE(MAX(p.name_si), MAX(si.product_name_si)) AS product_name_si,
         CASE
           WHEN LOWER(COALESCE(MAX(p.quantity_type), '')) = 'weight' THEN 'weight'
           ELSE 'unit'
@@ -9691,6 +9838,7 @@ class DatabaseHelper {
       return {
         'barcode': row['barcode'],
         'product_name': row['product_name'],
+        'product_name_si': row['product_name_si'],
         'quantity_type': row['quantity_type'],
         'unit_label': row['unit_label'],
         'quantity_sold': quantitySold,
@@ -9721,6 +9869,7 @@ class DatabaseHelper {
       SELECT
         p.barcode,
         p.name AS product_name,
+        p.name_si AS product_name_si,
         p.category,
         p.quantity_type,
         p.unit_label,
@@ -9758,6 +9907,7 @@ class DatabaseHelper {
       GROUP BY
         p.barcode,
         p.name,
+        p.name_si,
         p.category,
         p.quantity_type,
         p.unit_label,
@@ -9785,6 +9935,7 @@ class DatabaseHelper {
       return {
         'barcode': row['barcode'],
         'product_name': row['product_name'],
+        'product_name_si': row['product_name_si'],
         'category': row['category'],
         'quantity_type': row['quantity_type'],
         'unit_label': row['unit_label'],
