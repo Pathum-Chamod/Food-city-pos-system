@@ -195,6 +195,19 @@ class _CustomerMonitorScreenState extends State<CustomerMonitorScreen>
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
+          indicatorColor: Colors.white,
+          indicatorWeight: 3,
+          dividerColor: Colors.white24,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white70,
+          labelStyle: const TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+          ),
+          unselectedLabelStyle: const TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+          ),
           tabs: const [
             Tab(text: 'Overview'),
             Tab(text: 'Customers'),
@@ -353,11 +366,31 @@ class _CustomerMonitorScreenState extends State<CustomerMonitorScreen>
                 .map(
                   (filter) => Padding(
                     padding: const EdgeInsets.only(right: 8),
-                    child: FilterChip(
-                      selected: _filter == filter.id,
-                      avatar: Icon(filter.icon, size: 18),
-                      label: Text(filter.label),
-                      onSelected: (_) => _setFilter(filter.id),
+                    child: Builder(
+                      builder: (context) {
+                        final selected = _filter == filter.id;
+                        return FilterChip(
+                          selected: selected,
+                          showCheckmark: false,
+                          avatar: Icon(
+                            filter.icon,
+                            size: 18,
+                            color: selected ? _brand : _muted,
+                          ),
+                          label: Text(filter.label),
+                          labelStyle: TextStyle(
+                            color: selected ? _brand : _text,
+                            fontWeight: FontWeight.w800,
+                          ),
+                          backgroundColor: Colors.white,
+                          selectedColor: const Color(0xFFE7F0FF),
+                          side: BorderSide(
+                            color: selected ? _brand : _border,
+                            width: selected ? 1.2 : 1,
+                          ),
+                          onSelected: (_) => _setFilter(filter.id),
+                        );
+                      },
                     ),
                   ),
                 )
