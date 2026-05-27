@@ -18,6 +18,7 @@ import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/permission_service.dart';
 import '../utils/product_name_helper.dart';
+import '../utils/sinhala_phonetic_input_formatter.dart';
 import 'inventory_history_screen.dart';
 import 'stock_take_screen.dart';
 import 'supplier_receive_history_screen.dart';
@@ -2153,6 +2154,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               const SizedBox(height: 12),
               TextField(
                 controller: nameSiController,
+                inputFormatters: [SinhalaPhoneticInputFormatter()],
                 decoration: const InputDecoration(
                   labelText: 'Sinhala name (optional)',
                 ),
@@ -2738,6 +2740,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               const SizedBox(height: 12),
               TextField(
                 controller: nameSiController,
+                inputFormatters: [SinhalaPhoneticInputFormatter()],
                 decoration: const InputDecoration(
                   labelText: 'Sinhala name (optional)',
                 ),
