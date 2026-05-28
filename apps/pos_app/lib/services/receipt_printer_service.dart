@@ -669,6 +669,11 @@ class ReceiptPrinterService {
     final totalSavings = markedItemsTotal > total.abs()
         ? markedItemsTotal - total.abs()
         : 0.0;
+    final hasLoyalty =
+        loyaltyPointsRedeemed != 0 ||
+        loyaltyRedeemedValue.abs() > 0.000001 ||
+        loyaltyPointsEarned != 0 ||
+        loyaltyTotalPoints != null;
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
@@ -1010,8 +1015,10 @@ class ReceiptPrinterService {
       }
     }
 
-    if (loyaltyPointsRedeemed != 0 || loyaltyRedeemedValue.abs() > 0.000001) {
+    if (hasLoyalty) {
       y += 12;
+    }
+    if (loyaltyPointsRedeemed != 0 || loyaltyRedeemedValue.abs() > 0.000001) {
       drawPair(
         'Loyalty redeemed',
         _imageMoney(loyaltyRedeemedValue.abs()),

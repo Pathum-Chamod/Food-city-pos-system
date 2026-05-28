@@ -414,7 +414,7 @@ class ReceiptPdfService {
                     unicodeFont: unicodeFont,
                   ),
                 if (hasLoyalty) ...[
-                  pw.SizedBox(height: 4),
+                  pw.SizedBox(height: 7),
                   if (loyaltyPointsRedeemed != 0 ||
                       loyaltyRedeemedValue.abs() > 0.000001)
                     _receiptLabelValue(
