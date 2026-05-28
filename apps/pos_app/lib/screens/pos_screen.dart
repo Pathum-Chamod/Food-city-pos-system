@@ -446,7 +446,7 @@ class _PosScreenState extends State<PosScreen> {
       _scrollCartToLatest(animated: false);
     });
   }
-
+//
   bool _handleHardwareKeyboardEvent(KeyEvent event) {
     if (event is! KeyDownEvent || !mounted) return false;
 
