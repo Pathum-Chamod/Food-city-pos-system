@@ -614,13 +614,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               : Icons.trending_up_rounded,
           color: summary.availableCredit < 0 ? _danger : _blue,
         ),
-        const SizedBox(height: 16),
-        OutlinedButton.icon(
-          onPressed: _openCustomerLedger,
-          icon: const Icon(Icons.list_alt_rounded),
-          label: const Text('View Ledger'),
-        ),
-        const Spacer(),
+        const SizedBox(height: 10),
         if ((summary.creditNote ?? '').trim().isNotEmpty) ...[
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -651,6 +645,13 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           ),
           const SizedBox(height: 10),
         ],
+        const Spacer(),
+        OutlinedButton.icon(
+          onPressed: _openCustomerLedger,
+          icon: const Icon(Icons.list_alt_rounded),
+          label: const Text('View Credit Ledger'),
+        ),
+        const SizedBox(height: 10),
         ElevatedButton.icon(
           onPressed: _receiveCustomerPayment,
           icon: const Icon(Icons.payments_rounded),

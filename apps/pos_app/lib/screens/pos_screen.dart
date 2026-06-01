@@ -446,6 +446,7 @@ class _PosScreenState extends State<PosScreen> {
       _scrollCartToLatest(animated: false);
     });
   }
+
 //
   bool _handleHardwareKeyboardEvent(KeyEvent event) {
     if (event is! KeyDownEvent || !mounted) return false;
@@ -6629,6 +6630,8 @@ class _PosScreenState extends State<PosScreen> {
             iconColor: _brandColor,
           ),
           const SizedBox(width: 10),
+          _buildLanguageToggle(),
+          const SizedBox(width: 10),
           _buildHeaderMenu(
             title: 'Quick Actions',
             icon: Icons.widgets_outlined,
@@ -6852,8 +6855,6 @@ class _PosScreenState extends State<PosScreen> {
                   ],
                 ),
                 const Spacer(),
-                _buildLanguageToggle(),
-                const SizedBox(width: 8),
                 _buildIconSurfaceButton(
                   tooltip: 'Refresh items',
                   icon: Icons.refresh_rounded,
