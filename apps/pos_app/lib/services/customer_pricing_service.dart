@@ -461,6 +461,18 @@ class CustomerPricingService {
     );
   }
 
+  Future<void> deleteCustomerRule({
+    required int id,
+  }) async {
+    if (id <= 0) throw Exception('Invalid customer rule.');
+    final db = await _db;
+    await db.delete(
+      customerPricingRulesTable,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<PricingSchemeRule?> _getBestActiveSchemeRule({
     required int schemeId,
     required Product product,

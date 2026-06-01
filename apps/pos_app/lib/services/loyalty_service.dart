@@ -252,15 +252,7 @@ class LoyaltyService {
         eligibleAmount /
         settings.safeEarnRateAmount *
         settings.safeEarnRatePoints;
-    switch (settings.normalizedRoundingMode) {
-      case 'ceil':
-        return rawPoints.ceil();
-      case 'round':
-        return rawPoints.round();
-      case 'floor':
-      default:
-        return rawPoints.floor();
-    }
+    return rawPoints.floor();
   }
 
   int maxRedeemablePoints({

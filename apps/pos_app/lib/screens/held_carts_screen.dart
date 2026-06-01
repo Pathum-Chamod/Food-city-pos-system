@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:ui';
 
@@ -6,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared/models/customer.dart';
 
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
 import '../services/database_helper.dart';
 import '../services/customer_service.dart';
 import '../widgets/app_snackbar.dart';
@@ -13,10 +14,7 @@ import '../widgets/app_snackbar.dart';
 class HeldCartsScreen extends StatefulWidget {
   final String cashierName;
 
-  const HeldCartsScreen({
-    super.key,
-    required this.cashierName,
-  });
+  const HeldCartsScreen({super.key, required this.cashierName});
 
   @override
   State<HeldCartsScreen> createState() => _HeldCartsScreenState();
@@ -49,6 +47,7 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
 
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
+  final ScrollController _pageScrollController = ScrollController();
   Timer? _heldSelectionHideTimer;
 
   bool _isLoading = true;
@@ -62,14 +61,22 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
   List<Map<String, dynamic>> _heldCarts = [];
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
-  Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
-  Color get _surface => _isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
-  Color get _surfaceSoft => _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
-  Color get _inputFill => _isDark ? const Color(0xFF0B1628) : const Color(0xFFF7F9FC);
-  Color get _border => _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
-  Color get _textPrimary => _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
-  Color get _textSecondary => _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
-  Color get _textMuted => _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
+  Color get _page =>
+      _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _surface =>
+      _isDark ? const Color(0xFF0F1C31) : const Color(0xFFFFFFFF);
+  Color get _surfaceSoft =>
+      _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get _inputFill =>
+      _isDark ? const Color(0xFF0B1628) : const Color(0xFFF7F9FC);
+  Color get _border =>
+      _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get _textPrimary =>
+      _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get _textSecondary =>
+      _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get _textMuted =>
+      _isDark ? const Color(0xFF7F92AC) : const Color(0xFF778BA4);
   Color get _brand => const Color(0xFF2AAA8A);
   Color get _brandSoft => _brand.withOpacity(_isDark ? 0.16 : 0.10);
   Color get _danger => const Color(0xFFFF6B7A);
@@ -80,15 +87,46 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleHardwareKeyboardEvent);
     _loadHeldCarts();
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.heldCarts,
+      _focusSearchField,
+    );
   }
 
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleHardwareKeyboardEvent);
     _heldSelectionHideTimer?.cancel();
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.heldCarts,
+      _focusSearchField,
+    );
+    _pageScrollController.dispose();
     _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _heldSelectionHideTimer?.cancel();
+      if (_selectedCartIndex != null || _isHeldSelectionVisible) {
+        setState(() {
+          _selectedCartIndex = null;
+          _isHeldSelectionVisible = false;
+        });
+      }
+      if (_pageScrollController.hasClients) {
+        await _pageScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
   }
 
   bool _handleHardwareKeyboardEvent(KeyEvent event) {
@@ -119,7 +157,8 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
 
       final now = DateTime.now();
       final wasAlreadySelected = _selectedCartIndex == index;
-      final isDoubleTap = _lastNumberShortcut == selectedNumber &&
+      final isDoubleTap =
+          _lastNumberShortcut == selectedNumber &&
           wasAlreadySelected &&
           _lastNumberShortcutAt != null &&
           now.difference(_lastNumberShortcutAt!) <= _heldCartDoubleTapWindow;
@@ -261,7 +300,6 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     );
   }
 
-
   Future<List<Map<String, dynamic>>> _attachCustomerSnapshots(
     List<Map<String, dynamic>> carts,
   ) async {
@@ -283,7 +321,9 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     return enriched;
   }
 
-  Future<Map<String, dynamic>?> _loadHeldCartCustomerSnapshot(int heldCartId) async {
+  Future<Map<String, dynamic>?> _loadHeldCartCustomerSnapshot(
+    int heldCartId,
+  ) async {
     if (heldCartId <= 0) return null;
 
     try {
@@ -331,7 +371,9 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     updated['selected_customer'] = customer.toMap();
     updated['customer_id'] = customer.id;
     updated['customer_name_snapshot'] = customer.displayName;
-    updated['customer_phone_snapshot'] = customer.hasPhone ? customer.phone : null;
+    updated['customer_phone_snapshot'] = customer.hasPhone
+        ? customer.phone
+        : null;
     updated['customer_code_snapshot'] = customer.displayCode;
     return updated;
   }
@@ -344,8 +386,9 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     });
 
     await CustomerService.instance.ensureCustomerStorage();
-    final carts =
-        await DatabaseHelper.instance.getHeldCartsForCashier(widget.cashierName);
+    final carts = await DatabaseHelper.instance.getHeldCartsForCashier(
+      widget.cashierName,
+    );
     final enrichedCarts = await _attachCustomerSnapshots(carts);
 
     if (!mounted) return;
@@ -381,15 +424,27 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
     final phoneQuery = CustomerService.instance.normalizePhone(query);
 
     return _heldCarts.where((cart) {
-      final cartName = (cart['cart_name'] ?? 'Held Cart').toString().toLowerCase();
-      final type = ((cart['is_refund_mode'] ?? false) == true ? 'refund' : 'sale');
+      final cartName = (cart['cart_name'] ?? 'Held Cart')
+          .toString()
+          .toLowerCase();
+      final type = ((cart['is_refund_mode'] ?? false) == true
+          ? 'refund'
+          : 'sale');
       final itemCount = _formatQuantity((cart['item_count'] as num?) ?? 0);
       final totalAmount = ((cart['total_amount'] as num?) ?? 0).toDouble();
       final totalText = totalAmount.toStringAsFixed(2);
-      final updatedAt = _formatDateTime((cart['updated_at'] ?? '').toString()).toLowerCase();
-      final customerName = (cart['customer_name_snapshot'] ?? '').toString().toLowerCase();
-      final customerPhone = (cart['customer_phone_snapshot'] ?? '').toString().toLowerCase();
-      final customerCode = (cart['customer_code_snapshot'] ?? '').toString().toLowerCase();
+      final updatedAt = _formatDateTime(
+        (cart['updated_at'] ?? '').toString(),
+      ).toLowerCase();
+      final customerName = (cart['customer_name_snapshot'] ?? '')
+          .toString()
+          .toLowerCase();
+      final customerPhone = (cart['customer_phone_snapshot'] ?? '')
+          .toString()
+          .toLowerCase();
+      final customerCode = (cart['customer_code_snapshot'] ?? '')
+          .toString()
+          .toLowerCase();
 
       return cartName.contains(query) ||
           type.contains(query) ||
@@ -418,12 +473,12 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
   }
 
   String _formatQuantity(num value, {int maxDecimals = 3}) {
-    final safeValue =
-        value.toDouble().abs() < _quantityEpsilon ? 0.0 : value.toDouble();
-    return safeValue.toStringAsFixed(maxDecimals).replaceFirst(
-      RegExp(r'\.?0+$'),
-      '',
-    );
+    final safeValue = value.toDouble().abs() < _quantityEpsilon
+        ? 0.0
+        : value.toDouble();
+    return safeValue
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   BoxDecoration _panelDecoration({Color? color}) {
@@ -528,10 +583,7 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
       return;
     }
 
-    Navigator.pop(
-      context,
-      _withRestoredCustomer(restored, customerSnapshot),
-    );
+    Navigator.pop(context, _withRestoredCustomer(restored, customerSnapshot));
   }
 
   Future<bool> _showDeleteDialog(String cartName) async {
@@ -556,7 +608,8 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
             autofocus: true,
             onKeyEvent: (node, event) {
               if (event is! KeyDownEvent) return KeyEventResult.ignored;
-              final isEnterKey = event.logicalKey == LogicalKeyboardKey.enter ||
+              final isEnterKey =
+                  event.logicalKey == LogicalKeyboardKey.enter ||
                   event.logicalKey == LogicalKeyboardKey.numpadEnter;
 
               if (isEnterKey) {
@@ -620,7 +673,8 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                                   const SizedBox(width: 14),
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Text(
                                           'Delete Held Bill',
@@ -672,9 +726,13 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                                       style: OutlinedButton.styleFrom(
                                         foregroundColor: _textPrimary,
                                         side: BorderSide(color: _border),
-                                        padding: const EdgeInsets.symmetric(vertical: 15),
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 15,
+                                        ),
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(16),
+                                          borderRadius: BorderRadius.circular(
+                                            16,
+                                          ),
                                         ),
                                       ),
                                       child: const Text('Cancel'),
@@ -688,9 +746,13 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                                         elevation: 0,
                                         backgroundColor: _danger,
                                         foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(vertical: 15),
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 15,
+                                        ),
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(16),
+                                          borderRadius: BorderRadius.circular(
+                                            16,
+                                          ),
                                         ),
                                       ),
                                       child: const Text('Delete Bill'),
@@ -710,7 +772,10 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
           );
         },
         transitionBuilder: (context, animation, secondaryAnimation, child) {
-          final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+          );
           return FadeTransition(
             opacity: curved,
             child: ScaleTransition(
@@ -836,7 +901,9 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
           duration: const Duration(milliseconds: 80),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: isSelected ? selectedColor.withOpacity(_isDark ? 0.16 : 0.08) : _surface,
+            color: isSelected
+                ? selectedColor.withOpacity(_isDark ? 0.16 : 0.08)
+                : _surface,
             borderRadius: BorderRadius.circular(22),
             border: Border.all(
               color: isSelected ? selectedColor : _border,
@@ -866,7 +933,9 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Icon(
-                      isRefundMode ? Icons.restart_alt_rounded : Icons.receipt_long_rounded,
+                      isRefundMode
+                          ? Icons.restart_alt_rounded
+                          : Icons.receipt_long_rounded,
                       color: modeColor,
                       size: 22,
                     ),
@@ -916,58 +985,6 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: modeSoft,
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: modeColor.withOpacity(0.22)),
-                          ),
-                          child: Text(
-                            isRefundMode ? 'Refund' : 'Sale',
-                            style: TextStyle(
-                              color: modeColor,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                        if (customer != null) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: _brandSoft,
-                              borderRadius: BorderRadius.circular(999),
-                              border: Border.all(color: _brand.withOpacity(0.22)),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.person_rounded,
-                                  size: 13,
-                                  color: _brand,
-                                ),
-                                const SizedBox(width: 5),
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(maxWidth: 150),
-                                  child: Text(
-                                    customer.displayName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: _brand,
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
                         const SizedBox(width: 8),
                         InkWell(
                           borderRadius: BorderRadius.circular(12),
@@ -1107,6 +1124,7 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
               onRefresh: _refresh,
               color: _brand,
               child: ListView(
+                controller: _pageScrollController,
                 padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
                 children: [
                   _buildHeader(),
@@ -1114,7 +1132,9 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                   if (_heldCarts.isEmpty)
                     _buildEmptyState(message: 'No held bills found.')
                   else if (_filteredCarts.isEmpty)
-                    _buildEmptyState(message: 'No held bills match your search.')
+                    _buildEmptyState(
+                      message: 'No held bills match your search.',
+                    )
                   else
                     ..._filteredCarts.asMap().entries.map(
                       (entry) => Padding(
@@ -1123,7 +1143,8 @@ class _HeldCartsScreenState extends State<HeldCartsScreen> {
                           entry.value,
                           shortcutNumber: entry.key < 9 ? entry.key + 1 : null,
                           isSelected:
-                              _isHeldSelectionVisible && _selectedCartIndex == entry.key,
+                              _isHeldSelectionVisible &&
+                              _selectedCartIndex == entry.key,
                         ),
                       ),
                     ),

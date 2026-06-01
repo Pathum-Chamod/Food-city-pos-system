@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../models/pos_supplier.dart';
 import '../models/stock_receipt_record.dart';
+import '../providers/language_provider.dart';
 import '../services/supplier_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 
 class SupplierReceiveHistoryScreen extends StatefulWidget {
@@ -19,6 +22,7 @@ class _SupplierReceiveHistoryScreenState
     extends State<SupplierReceiveHistoryScreen> {
   final SupplierService _supplierService = SupplierService();
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
 
   bool _isLoading = true;
   bool _isRefreshing = false;
@@ -29,12 +33,38 @@ class _SupplierReceiveHistoryScreenState
   void initState() {
     super.initState();
     _loadData();
+    _focusSearchField();
   }
 
   @override
   void dispose() {
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  String _displayReceiptProductName(StockReceiptRecord receipt) {
+    return ProductNameHelper.displayNameFromParts(
+      englishName: receipt.productName,
+      sinhalaName: receipt.productNameSi,
+      barcode: receipt.barcode,
+      language: context.read<LanguageProvider>().language,
+    );
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+      final context = _searchFocusNode.context;
+      if (context == null) return;
+      final position = Scrollable.maybeOf(context)?.position;
+      position?.animateTo(
+        position.minScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   SupplierHistoryPalette get _ui => SupplierHistoryPalette.of(context);
@@ -151,6 +181,7 @@ class _SupplierReceiveHistoryScreenState
           .replaceAll(' ', '');
       final haystack = <String>[
         receipt.productName.toLowerCase(),
+        receipt.productNameSi ?? '',
         receipt.barcode.toLowerCase(),
         receipt.supplierName.toLowerCase(),
         receipt.cashierName.toLowerCase(),
@@ -465,6 +496,8 @@ class _SupplierReceiveHistoryScreenState
               children: [
                 TextField(
                   controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  autofocus: true,
                   decoration: _fieldDecoration(
                     hintText:
                         'Search by product, supplier, barcode, cashier, note, or date',
@@ -521,6 +554,8 @@ class _SupplierReceiveHistoryScreenState
               Expanded(
                 child: TextField(
                   controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  autofocus: true,
                   decoration: _fieldDecoration(
                     hintText:
                         'Search by product, supplier, barcode, cashier, note, or date',
@@ -659,31 +694,11 @@ class _SupplierReceiveHistoryScreenState
             children: [
               Expanded(
                 child: Text(
-                  receipt.productName,
+                  _displayReceiptProductName(receipt),
                   style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.w800,
                     color: ui.textPrimary,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: ui.successSoft,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: ui.success.withOpacity(0.22)),
-                ),
-                child: Text(
-                  '+${_formatQuantity(receipt.quantity)}',
-                  style: TextStyle(
-                    color: ui.success,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 12,
                   ),
                 ),
               ),

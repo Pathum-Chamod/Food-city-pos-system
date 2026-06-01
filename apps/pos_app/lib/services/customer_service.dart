@@ -691,6 +691,75 @@ class CustomerService {
     );
   }
 
+  Future<void> deleteCustomer({
+    required int customerId,
+  }) async {
+    if (customerId <= 0) throw Exception('Invalid customer.');
+    final db = await _db;
+
+    final salesRows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM sales
+      WHERE customer_id = ?
+      ''',
+      [customerId],
+    );
+    final salesCount = ((salesRows.first['count'] as num?) ?? 0).toInt();
+    if (salesCount > 0) {
+      throw Exception(
+        'Cannot delete customer. Linked sales history exists.',
+      );
+    }
+
+    final creditLedgerRows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM customer_ledger
+      WHERE customer_id = ?
+      ''',
+      [customerId],
+    );
+    final creditLedgerCount =
+        ((creditLedgerRows.first['count'] as num?) ?? 0).toInt();
+    if (creditLedgerCount > 0) {
+      throw Exception(
+        'Cannot delete customer. Linked credit ledger entries exist.',
+      );
+    }
+
+    final loyaltyRows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM loyalty_ledger
+      WHERE customer_id = ?
+      ''',
+      [customerId],
+    );
+    final loyaltyCount = ((loyaltyRows.first['count'] as num?) ?? 0).toInt();
+    if (loyaltyCount > 0) {
+      throw Exception(
+        'Cannot delete customer. Linked loyalty history exists.',
+      );
+    }
+
+    await db.delete(
+      'customer_payments',
+      where: 'customer_id = ?',
+      whereArgs: [customerId],
+    );
+    await db.delete(
+      'held_carts',
+      where: 'customer_id = ?',
+      whereArgs: [customerId],
+    );
+    await db.delete(
+      customersTable,
+      where: 'id = ?',
+      whereArgs: [customerId],
+    );
+  }
+
   Future<void> attachCustomerToSale({
     required int saleId,
     Customer? customer,

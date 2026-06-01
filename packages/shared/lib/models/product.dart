@@ -83,6 +83,7 @@ class Product {
   final int? id;
   final String barcode;
   final String name;
+  final String? nameSi;
 
   final String category;
   final ProductQuantityType quantityType;
@@ -107,6 +108,7 @@ class Product {
     this.id,
     required this.barcode,
     required this.name,
+    this.nameSi,
     this.category = 'General',
     this.quantityType = ProductQuantityType.unit,
     String? unitLabel,
@@ -155,6 +157,7 @@ class Product {
     int? id,
     String? barcode,
     String? name,
+    String? nameSi,
     String? category,
     ProductQuantityType? quantityType,
     String? unitLabel,
@@ -175,6 +178,7 @@ class Product {
       id: id ?? this.id,
       barcode: barcode ?? this.barcode,
       name: name ?? this.name,
+      nameSi: nameSi ?? this.nameSi,
       category: category ?? this.category,
       quantityType: quantityType ?? this.quantityType,
       unitLabel: unitLabel ?? this.unitLabel,
@@ -198,6 +202,7 @@ class Product {
       'id': id,
       'barcode': barcode,
       'name': name,
+      'name_si': nameSi,
       'category': category,
       'quantity_type': quantityType.dbValue,
       'unit_label': unitLabel,
@@ -229,6 +234,7 @@ class Product {
       id: (map['id'] as num?)?.toInt(),
       barcode: (map['barcode'] ?? '').toString(),
       name: (map['name'] ?? '').toString(),
+      nameSi: map['name_si']?.toString(),
       category: (map['category'] ?? 'General').toString(),
       quantityType: ProductQuantityTypeX.fromDb(
         map['quantity_type']?.toString(),

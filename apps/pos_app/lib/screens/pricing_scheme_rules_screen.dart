@@ -25,7 +25,6 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
   List<Product> _products = [];
   List<String> _categories = [];
   bool _isLoading = true;
-  bool _includeInactive = true;
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _blue = Color(0xFF4B8DFF);
@@ -75,7 +74,7 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
       final results = await Future.wait([
         PricingSchemeService.instance.getRulesForScheme(
           widget.scheme.id ?? 0,
-          activeOnly: !_includeInactive,
+          activeOnly: false,
         ),
         DatabaseHelper.instance.getProducts(),
       ]);
@@ -131,6 +130,7 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
       context: context,
       products: _products,
       categories: _categories,
+      existingRules: _rules,
     );
     if (result == null) return;
 
@@ -155,7 +155,7 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
   }) async {
     try {
       await PricingSchemeService.instance.upsertPricingSchemeRule(
-        id: existingRule?.id,
+        id: existingRule?.id ?? result.overwriteRuleId,
         schemeId: widget.scheme.id ?? 0,
         applyTo: result.applyTo,
         category: result.category,
@@ -204,6 +204,45 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
             : 'Pricing rule reactivated.',
         color: rule.isActive ? _warning : _success,
       );
+      await _loadRules();
+    } catch (e) {
+      _showMessage(_cleanError(e), color: _danger);
+    }
+  }
+
+  Future<void> _deleteRule(PricingSchemeRule rule) async {
+    final id = rule.id ?? 0;
+    if (id <= 0) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Rule'),
+          content: const Text(
+            'Delete this pricing rule permanently?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(backgroundColor: _danger),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    try {
+      await PricingSchemeService.instance.deletePricingSchemeRule(id: id);
+      await _logPricingUpdate(
+        'Pricing rule deleted from "${widget.scheme.displayName}"',
+      );
+      _showMessage('Pricing rule deleted.', color: _success);
       await _loadRules();
     } catch (e) {
       _showMessage(_cleanError(e), color: _danger);
@@ -344,7 +383,7 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '${_ruleValue(rule)} - Priority ${rule.priority}',
+                    _ruleValue(rule),
                     style: TextStyle(
                       color: _textSecondary,
                       fontWeight: FontWeight.w700,
@@ -366,21 +405,53 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
               ),
             ),
             const SizedBox(width: 10),
-            IconButton(
-              tooltip: 'Edit',
-              onPressed: () => _editRule(rule),
-              icon: const Icon(Icons.edit_rounded),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: rule.isActive ? 'Deactivate' : 'Reactivate',
-              onPressed: () => _toggleActive(rule),
-              icon: Icon(
-                rule.isActive
-                    ? Icons.block_rounded
-                    : Icons.check_circle_rounded,
-                color: rule.isActive ? _danger : _brand,
-              ),
+            PopupMenuButton<String>(
+              tooltip: 'Actions',
+              icon: Icon(Icons.more_vert_rounded, color: _textSecondary),
+              onSelected: (value) {
+                switch (value) {
+                  case 'edit':
+                    _editRule(rule);
+                    break;
+                  case 'toggle':
+                    _toggleActive(rule);
+                    break;
+                  case 'delete':
+                    _deleteRule(rule);
+                    break;
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem<String>(
+                  value: 'edit',
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.edit_rounded),
+                    title: Text('Edit'),
+                  ),
+                ),
+                PopupMenuItem<String>(
+                  value: 'toggle',
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(
+                      rule.isActive
+                          ? Icons.block_rounded
+                          : Icons.check_circle_rounded,
+                      color: rule.isActive ? _danger : _brand,
+                    ),
+                    title: Text(rule.isActive ? 'Deactivate' : 'Reactivate'),
+                  ),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'delete',
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.delete_outline_rounded),
+                    title: Text('Delete'),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -431,11 +502,6 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
             icon: const Icon(Icons.refresh_rounded),
           ),
         ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addRule,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Add Rule'),
       ),
       body: SafeArea(
         child: Padding(
@@ -488,22 +554,10 @@ class _PricingSchemeRulesScreenState extends State<PricingSchemeRulesScreen> {
                         ),
                       ),
                     ),
-                    Text(
-                      'Show inactive',
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    Switch(
-                      value: _includeInactive,
-                      activeThumbColor: _brand,
-                      onChanged: (value) {
-                        setState(() {
-                          _includeInactive = value;
-                        });
-                        _loadRules();
-                      },
+                    ElevatedButton.icon(
+                      onPressed: _addRule,
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text('Add Rule'),
                     ),
                   ],
                 ),

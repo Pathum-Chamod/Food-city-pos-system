@@ -1,9 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/customer.dart';
 
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
 import '../services/customer_service.dart';
 import '../widgets/app_snackbar.dart';
@@ -25,12 +28,16 @@ class CustomerManagementScreen extends StatefulWidget {
 
 class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
   final TextEditingController _searchController = TextEditingController();
+  late final FocusNode _searchFocusNode;
+  final ScrollController _resultScrollController = ScrollController();
   Timer? _searchDebounce;
 
   List<Customer> _customers = [];
   bool _isLoading = true;
-  bool _includeInactive = false;
   String _query = '';
+  int? _selectedSearchResultIndex;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _warning = Color(0xFFFFB65C);
@@ -53,14 +60,117 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
   @override
   void initState() {
     super.initState();
+    _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
     _loadCustomers();
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.customerManagement,
+      _focusSearchField,
+    );
+    _focusSearchField();
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _searchSelectionTimer?.cancel();
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.customerManagement,
+      _focusSearchField,
+    );
+    _searchFocusNode.dispose();
+    _resultScrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _searchSelectionTimer?.cancel();
+      if (_selectedSearchResultIndex != null) {
+        setState(() => _selectedSearchResultIndex = null);
+      }
+      if (_resultScrollController.hasClients) {
+        await _resultScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _openSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    if (_customers.isEmpty) {
+      setState(() => _selectedSearchResultIndex = null);
+      return;
+    }
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, _customers.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(
+    int index, {
+    int scrollDirection = 0,
+    bool autoClear = true,
+  }) {
+    _searchSelectionTimer?.cancel();
+    setState(() => _selectedSearchResultIndex = index);
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    if (!autoClear) return;
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() => _selectedSearchResultIndex = null);
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  Future<void> _openSelectedSearchResult() async {
+    if (_customers.isEmpty) return;
+    final index = _customers.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, _customers.length - 1);
+    _showSearchSelection(index, autoClear: false);
+    await _openDetails(_customers[index]);
+    if (mounted) _showSearchSelection(index);
   }
 
   Future<void> _loadCustomers() async {
@@ -73,7 +183,7 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
     try {
       final rows = await CustomerService.instance.getCustomers(
         query: _query,
-        activeOnly: !_includeInactive,
+        activeOnly: false,
         limit: 300,
       );
 
@@ -181,6 +291,47 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
       await _loadCustomers();
     } catch (e) {
       _showMessage('Could not update customer status.', color: _danger);
+    }
+  }
+
+  Future<void> _deleteCustomer(Customer customer) async {
+    final customerId = customer.id ?? 0;
+    if (customerId <= 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Customer'),
+          content: Text(
+            'Delete ${customer.displayName}? This action is permanent and only works when no linked history exists.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(backgroundColor: _danger),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await CustomerService.instance.deleteCustomer(customerId: customerId);
+      _showMessage('Customer deleted.', color: _success);
+      await _loadCustomers();
+    } catch (e) {
+      _showMessage(
+        e.toString().replaceFirst('Exception: ', ''),
+        color: _danger,
+      );
     }
   }
 
@@ -330,13 +481,16 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
     );
   }
 
-  Widget _customerCard(Customer customer) {
+  Widget _customerCard(Customer customer, {bool isKeyboardSelected = false}) {
     return Container(
       decoration: BoxDecoration(
         color: _panel,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
-          color: customer.isActive ? _border : _danger.withValues(alpha: 0.35),
+          color: isKeyboardSelected
+              ? _brand
+              : (customer.isActive ? _border : _danger.withValues(alpha: 0.35)),
+          width: isKeyboardSelected ? 1.6 : 1,
         ),
       ),
       child: Material(
@@ -442,23 +596,56 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                IconButton(
-                  tooltip: 'Edit',
-                  onPressed: () => _editCustomer(customer),
-                  icon: const Icon(Icons.edit_rounded),
+                PopupMenuButton<String>(
+                  tooltip: 'Actions',
+                  icon: Icon(Icons.more_vert_rounded, color: _textSecondary),
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'edit':
+                        _editCustomer(customer);
+                        break;
+                      case 'toggle':
+                        _toggleActive(customer);
+                        break;
+                      case 'delete':
+                        _deleteCustomer(customer);
+                        break;
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem<String>(
+                      value: 'edit',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.edit_rounded),
+                        title: Text('Edit'),
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'toggle',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(
+                          customer.isActive
+                              ? Icons.person_off_rounded
+                              : Icons.person_add_alt_rounded,
+                          color: customer.isActive ? _danger : _brand,
+                        ),
+                        title: Text(
+                          customer.isActive ? 'Deactivate' : 'Reactivate',
+                        ),
+                      ),
+                    ),
+                    const PopupMenuItem<String>(
+                      value: 'delete',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.delete_outline_rounded),
+                        title: Text('Delete'),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                IconButton(
-                  tooltip: customer.isActive ? 'Deactivate' : 'Reactivate',
-                  onPressed: () => _toggleActive(customer),
-                  icon: Icon(
-                    customer.isActive
-                        ? Icons.person_off_rounded
-                        : Icons.person_add_alt_rounded,
-                    color: customer.isActive ? _danger : _brand,
-                  ),
-                ),
-                const SizedBox(width: 8),
                 Icon(Icons.chevron_right_rounded, color: _textSecondary),
               ],
             ),
@@ -517,11 +704,6 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addCustomer,
-        icon: const Icon(Icons.person_add_rounded),
-        label: const Text('Add Customer'),
-      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(22),
@@ -564,6 +746,8 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                     Expanded(
                       child: TextField(
                         controller: _searchController,
+                        focusNode: _searchFocusNode,
+                        autofocus: true,
                         decoration:
                             _inputDecoration(
                               label: 'Search customers',
@@ -577,6 +761,7 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                                         _searchController.clear();
                                         setState(() {
                                           _query = '';
+                                          _selectedSearchResultIndex = null;
                                         });
                                         _loadCustomers();
                                       },
@@ -584,40 +769,18 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                                     ),
                             ),
                         onChanged: (value) {
-                          setState(() {});
+                          setState(() {
+                            _selectedSearchResultIndex = null;
+                          });
                           _onSearchChanged(value);
                         },
                       ),
                     ),
                     const SizedBox(width: 14),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: _panelSoft,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: _border),
-                      ),
-                      child: Row(
-                        children: [
-                          Text(
-                            'Show inactive',
-                            style: TextStyle(
-                              color: _textPrimary,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          Switch(
-                            value: _includeInactive,
-                            activeThumbColor: _brand,
-                            onChanged: (value) {
-                              setState(() {
-                                _includeInactive = value;
-                              });
-                              _loadCustomers();
-                            },
-                          ),
-                        ],
-                      ),
+                    ElevatedButton.icon(
+                      onPressed: _addCustomer,
+                      icon: const Icon(Icons.person_add_rounded),
+                      label: const Text('Add Customer'),
                     ),
                   ],
                 ),
@@ -671,10 +834,21 @@ class _CustomerManagementScreenState extends State<CustomerManagementScreen> {
                         ),
                       )
                     : ListView.separated(
+                        controller: _resultScrollController,
                         itemCount: _customers.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
-                          return _customerCard(_customers[index]);
+                          return KeyedSubtree(
+                            key: _searchResultKeys.putIfAbsent(
+                              index,
+                              GlobalKey.new,
+                            ),
+                            child: _customerCard(
+                              _customers[index],
+                              isKeyboardSelected:
+                                  _selectedSearchResultIndex == index,
+                            ),
+                          );
                         },
                       ),
               ),

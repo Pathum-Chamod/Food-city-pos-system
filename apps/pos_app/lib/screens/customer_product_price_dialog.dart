@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
+import '../providers/language_provider.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 
@@ -184,15 +187,15 @@ class _CustomerProductPriceDialogState
     final textSecondary = isDark
         ? const Color(0xFF9DB0C8)
         : const Color(0xFF667A92);
-    final query = _searchController.text.trim().toLowerCase();
+    final query = _searchController.text.trim();
+    final queryLower = query.toLowerCase();
     final products = query.isEmpty
         ? widget.products.take(20).toList()
         : widget.products
               .where(
                 (product) =>
-                    product.name.toLowerCase().contains(query) ||
-                    product.barcode.toLowerCase().contains(query) ||
-                    product.category.toLowerCase().contains(query),
+                    ProductNameHelper.matchesProduct(product, query) ||
+                    product.category.toLowerCase().contains(queryLower),
               )
               .take(30)
               .toList();
@@ -535,7 +538,10 @@ class _CustomerProductPriceDialogState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      product.name,
+                      ProductNameHelper.displayName(
+                        product,
+                        context.read<LanguageProvider>().language,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

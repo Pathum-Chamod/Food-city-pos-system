@@ -4,6 +4,7 @@ import 'package:shared/shared.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../providers/admin_provider.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import 'inventory_history_screen.dart';
 
@@ -14,7 +15,7 @@ class OwnerAlertsScreen extends StatefulWidget {
   State<OwnerAlertsScreen> createState() => _OwnerAlertsScreenState();
 }
 
-enum _AlertFilter { all, urgent, stock, sales }
+enum _AlertFilter { all, urgent, stock, expiry, sales }
 
 class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
   _AlertFilter _selectedFilter = _AlertFilter.all;
@@ -31,7 +32,7 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
         .where((alert) => (alert['severity'] ?? '').toString() != 'critical')
         .toList();
     final stockAlerts = alerts.where(_isStockAlert).toList();
-    final salesAlerts = alerts.where(_isSalesAlert).toList();
+    final expiryAlerts = alerts.where(_isExpiryAlert).toList();
 
     final filteredAlerts = _applyFilter(alerts);
     final filteredUrgent = filteredAlerts
@@ -76,10 +77,10 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
                   color: const Color(0xFF2F6FE4),
                 ),
                 _SummaryCard(
-                  label: 'Sales Alerts',
-                  value: '${salesAlerts.length}',
-                  icon: Icons.trending_down_rounded,
-                  color: const Color(0xFF7A1CAC),
+                  label: 'Expiry Alerts',
+                  value: '${expiryAlerts.length}',
+                  icon: Icons.event_busy_outlined,
+                  color: const Color(0xFFB42318),
                 ),
               ],
             ),
@@ -99,21 +100,13 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
               if (filteredUrgent.isNotEmpty) ...[
                 const _SectionTitle('Urgent'),
                 const SizedBox(height: 10),
-                ...filteredUrgent.map(
-                  (alert) => _AlertCard(
-                    alert: alert,
-                  ),
-                ),
+                ...filteredUrgent.map((alert) => _AlertCard(alert: alert)),
                 const SizedBox(height: 16),
               ],
               if (filteredAttention.isNotEmpty) ...[
                 const _SectionTitle('Needs attention'),
                 const SizedBox(height: 10),
-                ...filteredAttention.map(
-                  (alert) => _AlertCard(
-                    alert: alert,
-                  ),
-                ),
+                ...filteredAttention.map((alert) => _AlertCard(alert: alert)),
               ],
             ],
           ],
@@ -126,10 +119,14 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
     switch (_selectedFilter) {
       case _AlertFilter.urgent:
         return alerts
-            .where((alert) => (alert['severity'] ?? '').toString() == 'critical')
+            .where(
+              (alert) => (alert['severity'] ?? '').toString() == 'critical',
+            )
             .toList();
       case _AlertFilter.stock:
         return alerts.where(_isStockAlert).toList();
+      case _AlertFilter.expiry:
+        return alerts.where(_isExpiryAlert).toList();
       case _AlertFilter.sales:
         return alerts.where(_isSalesAlert).toList();
       case _AlertFilter.all:
@@ -147,6 +144,11 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
   bool _isSalesAlert(Map<String, dynamic> alert) {
     final type = (alert['type'] ?? '').toString();
     return type == 'weak_sales';
+  }
+
+  bool _isExpiryAlert(Map<String, dynamic> alert) {
+    final type = (alert['type'] ?? '').toString();
+    return type == 'expiry_alert';
   }
 
   Product? _findProduct(AdminProvider provider, String barcode) {
@@ -205,9 +207,19 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    product.name,
+                    ProductNameHelper.primary(product),
                     style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
+                  if (ProductNameHelper.sinhala(product) != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      ProductNameHelper.sinhala(product)!,
+                      style: const TextStyle(
+                        color: Color(0xFF667085),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 6),
                   Text(
                     'Current stock: ${product.stock}',
@@ -230,7 +242,9 @@ class _OwnerAlertsScreenState extends State<OwnerAlertsScreen> {
               ),
               actions: [
                 TextButton(
-                  onPressed: isSaving ? null : () => Navigator.pop(dialogContext),
+                  onPressed: isSaving
+                      ? null
+                      : () => Navigator.pop(dialogContext),
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
@@ -412,10 +426,7 @@ class _SummaryCard extends StatelessWidget {
 }
 
 class _FilterBar extends StatelessWidget {
-  const _FilterBar({
-    required this.value,
-    required this.onChanged,
-  });
+  const _FilterBar({required this.value, required this.onChanged});
 
   final _AlertFilter value;
   final ValueChanged<_AlertFilter> onChanged;
@@ -442,6 +453,12 @@ class _FilterBar extends StatelessWidget {
             label: 'Stock',
             selected: value == _AlertFilter.stock,
             onTap: () => onChanged(_AlertFilter.stock),
+          ),
+          const SizedBox(width: 8),
+          _FilterChip(
+            label: 'Expiry',
+            selected: value == _AlertFilter.expiry,
+            onTap: () => onChanged(_AlertFilter.expiry),
           ),
           const SizedBox(width: 8),
           _FilterChip(
@@ -479,7 +496,9 @@ class _FilterChip extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(999),
             border: Border.all(
-              color: selected ? const Color(0xFF182B6B) : const Color(0xFFD6DEEB),
+              color: selected
+                  ? const Color(0xFF182B6B)
+                  : const Color(0xFFD6DEEB),
             ),
           ),
           child: Text(
@@ -514,9 +533,7 @@ class _SectionTitle extends StatelessWidget {
 }
 
 class _AlertCard extends StatelessWidget {
-  const _AlertCard({
-    required this.alert,
-  });
+  const _AlertCard({required this.alert});
 
   final Map<String, dynamic> alert;
 
@@ -550,6 +567,8 @@ class _AlertCard extends StatelessWidget {
         return Icons.inventory_2_outlined;
       case 'best_seller_low_stock':
         return Icons.local_fire_department_outlined;
+      case 'expiry_alert':
+        return Icons.event_busy_outlined;
       case 'weak_sales':
         return Icons.trending_down_rounded;
       default:
@@ -563,7 +582,8 @@ class _AlertCard extends StatelessWidget {
     final subtitle = (alert['subtitle'] ?? '').toString();
     final supplierName = (alert['supplier_name'] ?? '').toString().trim();
     final supplierPhone = (alert['supplier_phone'] ?? '').toString().trim();
-    final hasSupplierDetails = supplierName.isNotEmpty || supplierPhone.isNotEmpty;
+    final hasSupplierDetails =
+        supplierName.isNotEmpty || supplierPhone.isNotEmpty;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -643,15 +663,23 @@ class _AlertCard extends StatelessWidget {
                                   supplierName: supplierName,
                                   supplierPhone: supplierPhone,
                                 ),
-                                icon: const Icon(Icons.local_shipping_outlined, size: 18),
+                                icon: const Icon(
+                                  Icons.local_shipping_outlined,
+                                  size: 18,
+                                ),
                                 label: const Text('View Supplier Info'),
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: _accent,
-                                  side: BorderSide(color: _accent.withOpacity(0.25)),
+                                  side: BorderSide(
+                                    color: _accent.withOpacity(0.25),
+                                  ),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
                                   ),
-                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 10,
+                                  ),
                                 ),
                               ),
                             ),
@@ -780,14 +808,21 @@ class _AlertCard extends StatelessWidget {
                         onTap: () => _callSupplier(context, supplierPhone),
                         borderRadius: BorderRadius.circular(12),
                         child: Ink(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                           decoration: BoxDecoration(
                             color: _accent.withOpacity(0.10),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Row(
                             children: [
-                              Icon(Icons.call_rounded, color: _accent, size: 18),
+                              Icon(
+                                Icons.call_rounded,
+                                color: _accent,
+                                size: 18,
+                              ),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
@@ -841,11 +876,7 @@ class _EmptyAlertsState extends StatelessWidget {
       ),
       child: const Column(
         children: [
-          Icon(
-            Icons.check_circle_outline,
-            size: 42,
-            color: Color(0xFF12B76A),
-          ),
+          Icon(Icons.check_circle_outline, size: 42, color: Color(0xFF12B76A)),
           SizedBox(height: 12),
           Text(
             'No active alerts right now',

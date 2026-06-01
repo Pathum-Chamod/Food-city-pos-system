@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/admin_provider.dart';
+import '../utils/product_name_helper.dart';
 
 class OwnerDashboardScreen extends StatelessWidget {
   const OwnerDashboardScreen({super.key});
@@ -14,11 +15,15 @@ class OwnerDashboardScreen extends StatelessWidget {
     if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
       return quantity.round().toString();
     }
-    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatSoldQuantity(Map<String, dynamic> row, num value) {
-    final quantityType = (row['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final quantityType = (row['quantity_type'] ?? 'unit')
+        .toString()
+        .toLowerCase();
     final unitLabel = (row['unit_label'] ?? '').toString().trim();
     final formattedQuantity = _formatQuantity(value);
     if (quantityType == 'weight') {
@@ -54,14 +59,17 @@ class OwnerDashboardScreen extends StatelessWidget {
     final topProducts = provider.ownerTopProducts.take(3).toList();
 
     final todaySales =
-        (summary['today_sales'] as num?)?.toDouble() ?? provider.todayTotalSales;
+        (summary['today_sales'] as num?)?.toDouble() ??
+        provider.todayTotalSales;
     final transactions =
-        (summary['transaction_count'] as num?)?.toInt() ?? provider.transactionCount;
+        (summary['transaction_count'] as num?)?.toInt() ??
+        provider.transactionCount;
     final averageSale =
         (summary['average_sale'] as num?)?.toDouble() ?? provider.averageSale;
     final itemsSold = (summary['items_sold'] as num?)?.toInt() ?? 0;
 
-    final isEmpty = provider.isOwnerShellLoading &&
+    final isEmpty =
+        provider.isOwnerShellLoading &&
         summary.isEmpty &&
         provider.products.isEmpty;
 
@@ -81,7 +89,8 @@ class OwnerDashboardScreen extends StatelessWidget {
             else ...[
               _buildHeroCard(
                 title: 'Today’s Sales',
-                subtitle: 'Live owner snapshot • ${_formatToday(DateTime.now())}',
+                subtitle:
+                    'Live owner snapshot • ${_formatToday(DateTime.now())}',
                 value: _formatMoney(todaySales),
                 hint:
                     '$transactions transactions • ${itemsSold > 0 ? '$itemsSold items sold' : 'items sold will appear as data grows'}',
@@ -89,7 +98,9 @@ class OwnerDashboardScreen extends StatelessWidget {
               const SizedBox(height: 16),
               LayoutBuilder(
                 builder: (context, constraints) {
-                  final childAspectRatio = constraints.maxWidth < 380 ? 1.34 : 1.52;
+                  final childAspectRatio = constraints.maxWidth < 380
+                      ? 1.34
+                      : 1.52;
                   return GridView.count(
                     crossAxisCount: 2,
                     shrinkWrap: true,
@@ -155,7 +166,7 @@ class OwnerDashboardScreen extends StatelessWidget {
                         icon: Icons.check_circle_outline,
                         title: 'No urgent alerts right now',
                         subtitle:
-                            'Low-stock and weak-sales warnings will show here.',
+                            'Expiry, low-stock, and weak-sales warnings will show here.',
                       )
                     : Column(
                         children: topAlerts
@@ -437,10 +448,7 @@ class _SectionCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (trailing != null) ...[
-                  const SizedBox(width: 10),
-                  trailing!,
-                ],
+                if (trailing != null) ...[const SizedBox(width: 10), trailing!],
               ],
             ),
             const SizedBox(height: 14),
@@ -539,6 +547,23 @@ class _AlertPreviewTile extends StatelessWidget {
     }
   }
 
+  IconData get _icon {
+    switch ((alert['type'] ?? '').toString()) {
+      case 'expiry_alert':
+        return Icons.event_busy_outlined;
+      case 'out_of_stock':
+        return Icons.remove_shopping_cart_outlined;
+      case 'low_stock':
+        return Icons.inventory_2_outlined;
+      case 'best_seller_low_stock':
+        return Icons.local_fire_department_outlined;
+      case 'weak_sales':
+        return Icons.trending_down_rounded;
+      default:
+        return Icons.warning_amber_rounded;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -553,10 +578,7 @@ class _AlertPreviewTile extends StatelessWidget {
         children: [
           CircleAvatar(
             backgroundColor: _color.withOpacity(0.14),
-            child: Icon(
-              Icons.warning_amber_rounded,
-              color: _color,
-            ),
+            child: Icon(_icon, color: _color),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -588,10 +610,7 @@ class _AlertPreviewTile extends StatelessWidget {
 }
 
 class _ProductPreviewTile extends StatelessWidget {
-  const _ProductPreviewTile({
-    required this.product,
-    required this.formatMoney,
-  });
+  const _ProductPreviewTile({required this.product, required this.formatMoney});
 
   final Map<String, dynamic> product;
   final String Function(num value) formatMoney;
@@ -601,11 +620,15 @@ class _ProductPreviewTile extends StatelessWidget {
     if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
       return quantity.round().toString();
     }
-    return quantity.toStringAsFixed(maxDecimals).replaceFirst(RegExp(r'\.?0+$'), '');
+    return quantity
+        .toStringAsFixed(maxDecimals)
+        .replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatSoldQuantity(Map<String, dynamic> row, num value) {
-    final quantityType = (row['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final quantityType = (row['quantity_type'] ?? 'unit')
+        .toString()
+        .toLowerCase();
     final unitLabel = (row['unit_label'] ?? '').toString().trim();
     final formattedQuantity = _formatQuantity(value);
     if (quantityType == 'weight') {
@@ -617,7 +640,8 @@ class _ProductPreviewTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final productName = (product['product_name'] ?? 'Unknown item').toString();
+    final productName = ProductNameHelper.fromRow(product);
+    final sinhalaName = ProductNameHelper.sinhalaFromRow(product);
     final quantity = (product['quantity_sold'] as num?)?.toDouble() ?? 0.0;
     final totalSales = (product['total_sales'] as num?)?.toDouble() ?? 0.0;
 
@@ -633,19 +657,32 @@ class _ProductPreviewTile extends StatelessWidget {
         children: [
           const CircleAvatar(
             backgroundColor: Color(0xFFE7F0FF),
-            child: Icon(
-              Icons.shopping_bag_outlined,
-              color: Color(0xFF0F3D91),
-            ),
+            child: Icon(Icons.shopping_bag_outlined, color: Color(0xFF0F3D91)),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              productName,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF1E293B),
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  productName,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1E293B),
+                  ),
+                ),
+                if (sinhalaName != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    sinhalaName,
+                    style: const TextStyle(
+                      color: Color(0xFF667085),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
           const SizedBox(width: 8),
@@ -688,21 +725,13 @@ class _MiniTrendChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final maxValue = points.fold<double>(
-      0,
-      (max, point) {
-        final value = (point['total_sales'] as num?)?.toDouble() ?? 0.0;
-        return math.max(max, value);
-      },
-    );
+    final maxValue = points.fold<double>(0, (max, point) {
+      final value = (point['total_sales'] as num?)?.toDouble() ?? 0.0;
+      return math.max(max, value);
+    });
 
     final safeMax = maxValue <= 0 ? 1.0 : maxValue;
-    final tickValues = <double>[
-      safeMax,
-      safeMax * 0.66,
-      safeMax * 0.33,
-      0,
-    ];
+    final tickValues = <double>[safeMax, safeMax * 0.66, safeMax * 0.33, 0];
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
@@ -723,11 +752,7 @@ class _MiniTrendChart extends StatelessWidget {
             ),
             child: const Row(
               children: [
-                Icon(
-                  Icons.info_outline,
-                  size: 18,
-                  color: Color(0xFF2F6FE4),
-                ),
+                Icon(Icons.info_outline, size: 18, color: Color(0xFF2F6FE4)),
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -796,12 +821,12 @@ class _MiniTrendChart extends StatelessWidget {
                                       child: Align(
                                         alignment: Alignment.bottomCenter,
                                         child: FractionallySizedBox(
-                                          heightFactor: (((point['total_sales']
-                                                              as num?)
-                                                          ?.toDouble() ??
-                                                      0.0) /
-                                                  safeMax)
-                                              .clamp(0.0, 1.0),
+                                          heightFactor:
+                                              (((point['total_sales'] as num?)
+                                                              ?.toDouble() ??
+                                                          0.0) /
+                                                      safeMax)
+                                                  .clamp(0.0, 1.0),
                                           widthFactor: 0.58,
                                           alignment: Alignment.bottomCenter,
                                           child: Container(

@@ -1,11 +1,20 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/customer_service.dart';
 import '../services/customer_credit_service.dart';
 import '../services/loyalty_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
+import '../services/receipt_text_utils.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 import 'refund_transaction_screen.dart';
@@ -25,6 +34,22 @@ class TransactionHistoryScreen extends StatefulWidget {
     return quantity
         .toStringAsFixed(maxDecimals)
         .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  static String _displaySnapshotProductName(
+    Map<String, dynamic> item,
+    AppLanguage language,
+  ) {
+    final sinhalaName = item['product_name_si']?.toString().trim() ?? '';
+    if (language == AppLanguage.sinhala && sinhalaName.isNotEmpty) {
+      return sinhalaName;
+    }
+
+    final englishName = item['product_name']?.toString().trim() ?? '';
+    if (englishName.isNotEmpty) return englishName;
+
+    final barcode = item['barcode']?.toString().trim() ?? '';
+    return barcode.isNotEmpty ? barcode : 'Unknown';
   }
 
   static Future<Map<String, dynamic>?> _getTransactionSummaryWithCustomer(
@@ -139,6 +164,15 @@ class TransactionHistoryScreen extends StatefulWidget {
     return parts.join(' | ');
   }
 
+  static Future<int?> _loyaltyTotalPointsForSummary(
+    Map<String, dynamic> summary,
+  ) async {
+    final customerId = ((summary['customer_id'] as num?) ?? 0).toInt();
+    if (customerId <= 0) return null;
+    final customer = await CustomerService.instance.getCustomerById(customerId);
+    return customer?.loyaltyPointsBalance;
+  }
+
   static Future<void> showReceiptDialogForTransaction(
     BuildContext context,
     int saleId,
@@ -243,6 +277,7 @@ class TransactionHistoryScreen extends StatefulWidget {
     int saleId,
   ) async {
     final printer = ReceiptPrinterService.instance;
+    final language = context.read<LanguageProvider>().language;
 
     if (!printer.isConnected) {
       if (context.mounted) {
@@ -272,9 +307,6 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     final paymentMethod = (summary['payment_method'] ?? 'cash').toString();
     final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
-    final subtotal = ((summary['subtotal_amount'] as num?) ?? 0)
-        .toDouble()
-        .abs();
     final discountAmount = ((summary['discount_amount'] as num?) ?? 0)
         .toDouble()
         .abs();
@@ -331,8 +363,10 @@ class TransactionHistoryScreen extends StatefulWidget {
     final loyaltyEarnBaseAmount =
         ((summary['loyalty_earn_base_amount'] as num?) ?? 0).toDouble();
     final loyaltyNote = (summary['loyalty_note'] ?? '').toString().trim();
-
+    final loyaltyTotalPoints = await _loyaltyTotalPointsForSummary(summary);
     final receiptItems = items.map((item) {
+      final englishName = (item['product_name'] ?? '').toString().trim();
+      final sinhalaName = (item['product_name_si'] ?? '').toString().trim();
       final finalLineTotal = ((item['line_total'] as num?) ?? 0)
           .toDouble()
           .abs();
@@ -358,7 +392,9 @@ class TransactionHistoryScreen extends StatefulWidget {
         item['customer_pricing_applied'],
       );
       return {
-        'name': (item['product_name'] ?? 'Item').toString(),
+        'name': _displaySnapshotProductName(item, language),
+        'englishName': englishName.isNotEmpty ? englishName : 'Item',
+        'sinhalaName': sinhalaName,
         'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
         'markedPrice':
@@ -393,6 +429,103 @@ class TransactionHistoryScreen extends StatefulWidget {
       (sum, item) => sum + (((item['lineTotal'] as num?) ?? 0).toDouble()),
     );
 
+    if (ReceiptTextUtils.receiptNeedsUnicodePath(
+      language: language,
+      items: receiptItems,
+    )) {
+      final imageResponse = await printer.printReceiptImage(
+        transactionId: saleId,
+        cashierName: cashierName,
+        paymentMethod: paymentMethod,
+        customerName: customerName,
+        items: receiptItems,
+        subtotal: receiptSubtotal,
+        discountAmount: receiptCartDiscountAmount,
+        discountType: discountType,
+        discountValue: discountValue,
+        total: total,
+        amountTendered: paymentMethod.toLowerCase() == 'cash'
+            ? amountTendered
+            : null,
+        changeAmount: paymentMethod.toLowerCase() == 'cash'
+            ? changeAmount
+            : null,
+        isRefund: isRefund,
+        isCreditSale: isCreditSale,
+        creditPreviousBalance: creditPreviousBalance,
+        creditBillAmount: creditBillAmount,
+        creditNewBalance: creditNewBalance,
+        creditLimit: creditLimit,
+        creditApprovedBy: creditApprovedBy,
+        loyaltyPointsEarned: loyaltyPointsEarned,
+        loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+        loyaltyTotalPoints: loyaltyTotalPoints,
+        loyaltyRedeemedValue: loyaltyRedeemedValue,
+        footerNote:
+            'Sinhala receipt printed as image. Direct ESC/POS text remains English-safe.',
+      );
+
+      if (imageResponse.isSuccess) {
+        if (!context.mounted) return true;
+
+        AppSnackBar.show(
+          context,
+          message: imageResponse.message,
+          backgroundColor: Colors.green,
+        );
+
+        return true;
+      }
+
+      final pdfResponse = await ReceiptPdfService.instance.saveReceiptPdf(
+        transactionId: saleId,
+        cashierName: cashierName,
+        paymentMethod: paymentMethod,
+        customerName: customerName,
+        customerPhone: customerPhone,
+        customerCode: customerCode,
+        items: receiptItems,
+        subtotal: receiptSubtotal,
+        discountAmount: receiptCartDiscountAmount,
+        discountType: discountType,
+        discountValue: discountValue,
+        total: total,
+        amountTendered: paymentMethod.toLowerCase() == 'cash'
+            ? amountTendered
+            : null,
+        changeAmount: paymentMethod.toLowerCase() == 'cash'
+            ? changeAmount
+            : null,
+        isRefund: isRefund,
+        isCreditSale: isCreditSale,
+        creditPreviousBalance: creditPreviousBalance,
+        creditBillAmount: creditBillAmount,
+        creditNewBalance: creditNewBalance,
+        creditLimit: creditLimit,
+        creditApprovedBy: creditApprovedBy,
+        loyaltyPointsEarned: loyaltyPointsEarned,
+        loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+        loyaltyTotalPoints: loyaltyTotalPoints,
+        loyaltyRedeemedValue: loyaltyRedeemedValue,
+        loyaltyEarnBaseAmount: loyaltyEarnBaseAmount,
+        loyaltyNote: loyaltyNote,
+        footerNote:
+            'Sinhala receipt saved as PDF. Direct ESC/POS text printing remains English-safe.',
+      );
+
+      if (!context.mounted) return pdfResponse.isSuccess;
+
+      AppSnackBar.show(
+        context,
+        message: pdfResponse.isSuccess
+            ? '${imageResponse.message} PDF fallback saved: ${pdfResponse.message}'
+            : '${imageResponse.message} PDF fallback failed: ${pdfResponse.message}',
+        backgroundColor: pdfResponse.isSuccess ? Colors.green : Colors.orange,
+      );
+
+      return pdfResponse.isSuccess;
+    }
+
     final response = await printer.printReceipt(
       transactionId: saleId,
       cashierName: cashierName,
@@ -419,6 +552,7 @@ class TransactionHistoryScreen extends StatefulWidget {
       creditApprovedBy: creditApprovedBy,
       loyaltyPointsEarned: loyaltyPointsEarned,
       loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+      loyaltyTotalPoints: loyaltyTotalPoints,
       loyaltyRedeemedValue: loyaltyRedeemedValue,
       loyaltyEarnBaseAmount: loyaltyEarnBaseAmount,
       loyaltyNote: loyaltyNote,
@@ -439,6 +573,7 @@ class TransactionHistoryScreen extends StatefulWidget {
     BuildContext context,
     int saleId,
   ) async {
+    final language = context.read<LanguageProvider>().language;
     final summary = await _getTransactionSummaryWithCustomer(saleId);
     final items = await DatabaseHelper.instance.getTransactionItems(saleId);
 
@@ -455,9 +590,6 @@ class TransactionHistoryScreen extends StatefulWidget {
 
     final paymentMethod = (summary['payment_method'] ?? 'cash').toString();
     final cashierName = (summary['cashier_name'] ?? 'Unknown').toString();
-    final subtotal = ((summary['subtotal_amount'] as num?) ?? 0)
-        .toDouble()
-        .abs();
     final discountAmount = ((summary['discount_amount'] as num?) ?? 0)
         .toDouble()
         .abs();
@@ -514,8 +646,10 @@ class TransactionHistoryScreen extends StatefulWidget {
     final loyaltyEarnBaseAmount =
         ((summary['loyalty_earn_base_amount'] as num?) ?? 0).toDouble();
     final loyaltyNote = (summary['loyalty_note'] ?? '').toString().trim();
-
+    final loyaltyTotalPoints = await _loyaltyTotalPointsForSummary(summary);
     final receiptItems = items.map((item) {
+      final englishName = (item['product_name'] ?? '').toString().trim();
+      final sinhalaName = (item['product_name_si'] ?? '').toString().trim();
       final finalLineTotal = ((item['line_total'] as num?) ?? 0)
           .toDouble()
           .abs();
@@ -541,7 +675,9 @@ class TransactionHistoryScreen extends StatefulWidget {
         item['customer_pricing_applied'],
       );
       return {
-        'name': (item['product_name'] ?? 'Item').toString(),
+        'name': _displaySnapshotProductName(item, language),
+        'englishName': englishName.isNotEmpty ? englishName : 'Item',
+        'sinhalaName': sinhalaName,
         'qty': ((item['quantity'] as num?) ?? 0).toDouble(),
         'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
         'markedPrice':
@@ -602,6 +738,7 @@ class TransactionHistoryScreen extends StatefulWidget {
       creditApprovedBy: creditApprovedBy,
       loyaltyPointsEarned: loyaltyPointsEarned,
       loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+      loyaltyTotalPoints: loyaltyTotalPoints,
       loyaltyRedeemedValue: loyaltyRedeemedValue,
       loyaltyEarnBaseAmount: loyaltyEarnBaseAmount,
       loyaltyNote: loyaltyNote,
@@ -620,36 +757,248 @@ class TransactionHistoryScreen extends StatefulWidget {
 }
 
 class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
+  static const String _txViewPrefKey = 'tx_history_compact_table_view';
+  static const int _defaultTransactionFetchLimit = 200;
+  static const int _initialTransactionFetchLimit = 50;
+  static List<Map<String, dynamic>> _cachedTransactions =
+      <Map<String, dynamic>>[];
+  static bool _cachedHasMoreTransactions = true;
+  static Map<String, dynamic>? _cachedSummary;
+  static bool? _cachedCompactTableView;
   final TextEditingController _searchController = TextEditingController();
+  late final FocusNode _searchFocusNode;
+  final ScrollController _pageScrollController = ScrollController();
 
   bool _isLoading = true;
+  bool _isLoadingMore = false;
   bool _isRefreshing = false;
   String _filter = 'all';
   String _dateFilter = 'all';
   String _searchQuery = '';
   DateTime? _selectedDate;
+  bool _isCompactTableView = _cachedCompactTableView ?? false;
+  int? _selectedSearchResultIndex;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
   List<Map<String, dynamic>> _transactions = [];
+  int _loadedOffset = 0;
+  bool _hasMoreTransactions = true;
+  int? _summaryTransactionCount;
+  int? _summarySaleCount;
+  int? _summaryRefundCount;
+
+  bool get _isInitialHydration => _isLoading && _transactions.isEmpty;
 
   @override
   void initState() {
     super.initState();
+    _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
+    _pageScrollController.addListener(_handleInfiniteScroll);
+    if (_cachedTransactions.isNotEmpty) {
+      _transactions = List<Map<String, dynamic>>.from(_cachedTransactions);
+      _loadedOffset = _transactions.length;
+      _hasMoreTransactions = _cachedHasMoreTransactions;
+      _isLoading = false;
+    }
+    if (_cachedSummary != null) {
+      _summaryTransactionCount = (_cachedSummary!['transaction_count'] as num?)
+          ?.toInt();
+      _summarySaleCount = (_cachedSummary!['sale_count'] as num?)?.toInt();
+      _summaryRefundCount = (_cachedSummary!['refund_count'] as num?)?.toInt();
+    }
+    _restoreViewPreference();
     _loadTransactions();
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.transactionHistory,
+      _focusSearchField,
+    );
+    _focusSearchField();
+  }
+
+  Future<void> _restoreViewPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getBool(_txViewPrefKey);
+    if (!mounted || saved == null) return;
+    _cachedCompactTableView = saved;
+    setState(() {
+      _isCompactTableView = saved;
+    });
+  }
+
+  Future<void> _persistViewPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_txViewPrefKey, _isCompactTableView);
+    _cachedCompactTableView = _isCompactTableView;
+  }
+
+  Future<void> _toggleViewMode() async {
+    setState(() {
+      _isCompactTableView = !_isCompactTableView;
+    });
+    await _persistViewPreference();
   }
 
   @override
   void dispose() {
+    _searchSelectionTimer?.cancel();
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.transactionHistory,
+      _focusSearchField,
+    );
+    _pageScrollController.dispose();
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
+  void _handleInfiniteScroll() {
+    if (_searchQuery.trim().isNotEmpty) return;
+    if (_isLoading || _isLoadingMore || !_hasMoreTransactions) return;
+    if (!_pageScrollController.hasClients) return;
+
+    final position = _pageScrollController.position;
+    if (position.maxScrollExtent <= 0) return;
+    if (position.pixels >= (position.maxScrollExtent - 560)) {
+      unawaited(_loadMoreTransactions());
+    }
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _searchSelectionTimer?.cancel();
+      if (_selectedSearchResultIndex != null) {
+        setState(() {
+          _selectedSearchResultIndex = null;
+        });
+      }
+      if (_pageScrollController.hasClients) {
+        await _pageScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _openSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    final transactions = _visibleTransactions;
+    if (transactions.isEmpty) {
+      setState(() {
+        _selectedSearchResultIndex = null;
+      });
+      return;
+    }
+
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, transactions.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(
+    int index, {
+    int scrollDirection = 0,
+    bool autoClear = true,
+  }) {
+    _searchSelectionTimer?.cancel();
+    setState(() {
+      _selectedSearchResultIndex = index;
+    });
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    if (!autoClear) return;
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() {
+        _selectedSearchResultIndex = null;
+      });
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  Future<void> _openSelectedSearchResult() async {
+    final transactions = _visibleTransactions;
+    if (transactions.isEmpty) return;
+
+    final index = transactions.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, transactions.length - 1);
+    _showSearchSelection(index, autoClear: false);
+    await _openTransaction(transactions[index]);
+    if (mounted) _showSearchSelection(index);
+  }
+
+  Future<void> _openTransaction(Map<String, dynamic> tx) async {
+    final id = tx['id'];
+    if (id is! num) return;
+
+    await TransactionHistoryScreen.showReceiptDialogForTransaction(
+      context,
+      id.toInt(),
+    );
+    if (mounted) {
+      _loadTransactions();
+    }
+  }
+
   Future<void> _loadTransactions() async {
+    await _loadMoreTransactions(reset: true);
+  }
+
+  Future<void> _loadMoreTransactions({bool reset = false}) async {
     if (mounted) {
       setState(() {
-        _isLoading = true;
+        if (reset) {
+          _isLoading = _transactions.isEmpty;
+        } else {
+          _isLoadingMore = true;
+        }
       });
     }
 
-    final type = _filter == 'all' ? null : _filter;
+    final creditSaleOnly = _filter == 'credit_sale';
+    final type = _filter == 'all' || creditSaleOnly ? null : _filter;
     final selectedDay = _dateFilter == 'today'
         ? _normalizedDay(DateTime.now())
         : _dateFilter == 'specific'
@@ -670,36 +1019,58 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
             999,
           );
 
-    final transactions = await DatabaseHelper.instance.getRecentTransactions(
+    final offset = reset ? 0 : _loadedOffset;
+    final fetchLimit = reset && _transactions.isEmpty
+        ? _initialTransactionFetchLimit
+        : _defaultTransactionFetchLimit;
+    final transactionsFuture = DatabaseHelper.instance.getRecentTransactions(
       transactionType: type,
+      creditSaleOnly: creditSaleOnly,
       start: start,
       end: end,
-      limit: null,
+      limit: fetchLimit,
+      offset: offset,
     );
-
-    final enrichedTransactions = <Map<String, dynamic>>[];
-    for (final rawTransaction in transactions) {
-      final transaction = Map<String, dynamic>.from(rawTransaction);
-      final saleId =
-          (transaction['id'] as num?)?.toInt() ??
-          int.tryParse((transaction['id'] ?? '').toString()) ??
-          0;
-
-      if (saleId > 0) {
-        final customerSnapshot = await CustomerService.instance
-            .getSaleCustomerSnapshotMap(saleId);
-        transaction.addAll(customerSnapshot);
-      }
-
-      enrichedTransactions.add(transaction);
-    }
+    final summaryFuture = reset
+        ? DatabaseHelper.instance.getTransactionHistorySummary(
+            transactionType: type,
+            creditSaleOnly: creditSaleOnly,
+            start: start,
+            end: end,
+          )
+        : Future<Map<String, dynamic>?>.value(null);
+    final results = await Future.wait<dynamic>([
+      transactionsFuture,
+      summaryFuture,
+    ]);
+    final transactions = results[0] as List<Map<String, dynamic>>;
+    final summary = results[1] as Map<String, dynamic>?;
 
     if (!mounted) return;
 
     setState(() {
-      _transactions = enrichedTransactions;
+      if (reset) {
+        _transactions = transactions;
+      } else {
+        _transactions = [..._transactions, ...transactions];
+      }
+      _loadedOffset = (reset ? 0 : _loadedOffset) + transactions.length;
+      _hasMoreTransactions = transactions.length == fetchLimit;
+      if (summary != null) {
+        _summaryTransactionCount =
+            (summary['transaction_count'] as num?)?.toInt() ?? 0;
+        _summarySaleCount = (summary['sale_count'] as num?)?.toInt() ?? 0;
+        _summaryRefundCount = (summary['refund_count'] as num?)?.toInt() ?? 0;
+      }
       _isLoading = false;
+      _isLoadingMore = false;
     });
+
+    _cachedTransactions = List<Map<String, dynamic>>.from(_transactions);
+    _cachedHasMoreTransactions = _hasMoreTransactions;
+    if (summary != null) {
+      _cachedSummary = summary;
+    }
   }
 
   Future<void> _refresh() async {
@@ -710,7 +1081,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     });
 
     try {
-      await _loadTransactions();
+      await _loadMoreTransactions(reset: true);
     } finally {
       if (!mounted) return;
       setState(() {
@@ -824,7 +1195,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       _dateFilter = 'specific';
       _selectedDate = _normalizedDay(picked);
     });
-    await _loadTransactions();
+    await _loadMoreTransactions(reset: true);
   }
 
   Future<void> _selectToday() async {
@@ -834,7 +1205,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       _dateFilter = 'today';
       _selectedDate = null;
     });
-    await _loadTransactions();
+    await _loadMoreTransactions(reset: true);
   }
 
   Future<void> _clearDateFilter() async {
@@ -844,7 +1215,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
       _dateFilter = 'all';
       _selectedDate = null;
     });
-    await _loadTransactions();
+    await _loadMoreTransactions(reset: true);
   }
 
   String _formatDate(DateTime value) {
@@ -959,15 +1330,15 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
         creditStatus == 'refund_posted';
   }
 
-  String _customerSubtitle(Map<String, dynamic> tx) {
-    final parts = <String>[];
-    final code = (tx['customer_code_snapshot'] ?? '').toString().trim();
+  String _customerTagValue(Map<String, dynamic> tx) {
     final phone = (tx['customer_phone_snapshot'] ?? '').toString().trim();
+    if (phone.isNotEmpty) return phone;
 
-    if (code.isNotEmpty) parts.add(code);
-    if (phone.isNotEmpty) parts.add(phone);
+    final name = _customerName(tx);
+    if (name.isNotEmpty) return name;
 
-    return parts.isEmpty ? 'Registered customer' : parts.join(' • ');
+    final code = (tx['customer_code_snapshot'] ?? '').toString().trim();
+    return code.isNotEmpty ? code : 'Registered customer';
   }
 
   Color _typeColor(_TxPalette palette, String type) {
@@ -1083,7 +1454,6 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     required Color accent,
   }) {
     return Container(
-      width: 240,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: palette.surface,
@@ -1140,6 +1510,242 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     );
   }
 
+  Widget _buildTransactionTableHeader(_TxPalette palette) {
+    TextStyle headerStyle = TextStyle(
+      color: palette.textSecondary,
+      fontWeight: FontWeight.w800,
+      fontSize: 12,
+    );
+
+    Widget headerCell(String label, int flex, {TextAlign? align}) {
+      return Expanded(
+        flex: flex,
+        child: Text(label, style: headerStyle, textAlign: align),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: palette.surfaceAlt,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: palette.border),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 240,
+            child: Text('Transaction ID', style: headerStyle),
+          ),
+          SizedBox(
+            width: 132,
+            child: Text(
+              'Number Of Items',
+              style: headerStyle,
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const SizedBox(width: 72),
+          SizedBox(width: 150, child: Text('Sale Type', style: headerStyle)),
+          headerCell('Payment Type', 12),
+          headerCell('Customer', 14),
+          headerCell('Cashier', 12),
+          headerCell('Date and Time', 16),
+          headerCell('Discounts', 12, align: TextAlign.right),
+          headerCell('Total', 12, align: TextAlign.right),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTransactionTableRow(
+    _TxPalette palette,
+    Map<String, dynamic> tx, {
+    bool isKeyboardSelected = false,
+  }) {
+    final id = tx['id'];
+    final itemCount = ((tx['item_line_count'] as num?) ?? 0).toInt();
+    final type = (tx['transaction_type'] ?? 'sale').toString().toLowerCase();
+    final paymentType = _paymentLabel((tx['payment_method'] ?? '').toString());
+    final customerName = _customerName(tx).trim();
+    final cashier = (tx['cashier_name'] ?? 'Unknown').toString();
+    final createdAt = (tx['created_at'] ?? '').toString();
+    final discountAmount = _tableDiscountAmount(tx);
+    final total = ((tx['total_amount'] as num?) ?? 0).toDouble().abs();
+    final typeColor = _tableSaleTypeColor(palette, tx, type);
+    final saleTypeLabel = _tableSaleTypeLabel(tx, type);
+
+    Widget cell(
+      String value,
+      int flex, {
+      TextAlign? align,
+      Color? color,
+      FontWeight? weight,
+    }) {
+      return Expanded(
+        flex: flex,
+        child: Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: align,
+          style: TextStyle(
+            color: color ?? palette.textPrimary,
+            fontWeight: weight ?? FontWeight.w700,
+            fontSize: 13,
+          ),
+        ),
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openTransaction(tx),
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: palette.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isKeyboardSelected ? palette.brand : palette.border,
+              width: isKeyboardSelected ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 240,
+                child: Text(
+                  'Transaction #$id',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: palette.textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 132,
+                child: Text(
+                  itemCount.toString(),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: palette.textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 72),
+              SizedBox(
+                width: 150,
+                child: Text(
+                  saleTypeLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: typeColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              cell(paymentType, 12),
+              cell(customerName.isEmpty ? 'N/A' : customerName, 14),
+              cell(cashier, 12),
+              cell(_formatDateTime(createdAt), 16),
+              cell(
+                discountAmount > 0
+                    ? 'Rs. ${discountAmount.toStringAsFixed(2)}'
+                    : 'N/A',
+                12,
+                align: TextAlign.right,
+                color: discountAmount > 0
+                    ? palette.textPrimary
+                    : palette.textSecondary,
+              ),
+              cell(
+                'Rs. ${total.toStringAsFixed(2)}',
+                12,
+                align: TextAlign.right,
+                color: typeColor,
+                weight: FontWeight.w900,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _tableSaleTypeLabel(Map<String, dynamic> tx, String type) {
+    if (_isCreditSale(tx)) {
+      return type == 'refund' ? 'Credit Refund' : 'Credit Sale';
+    }
+    return _typeLabel(type);
+  }
+
+  Color _tableSaleTypeColor(
+    _TxPalette palette,
+    Map<String, dynamic> tx,
+    String type,
+  ) {
+    if (_isCreditSale(tx)) {
+      return const Color(0xFFFFB65C);
+    }
+    return _typeColor(palette, type);
+  }
+
+  double _tableDiscountAmount(Map<String, dynamic> tx) {
+    final subtotal = ((tx['subtotal_amount'] as num?) ?? 0).toDouble().abs();
+    final total = ((tx['total_amount'] as num?) ?? 0).toDouble().abs();
+    final billDiscount = ((tx['discount_amount'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+    final loyaltyRedeemed = ((tx['loyalty_redeemed_value'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+    final itemSavingsTotal = ((tx['item_savings_total'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+    final customerPricingSavings =
+        ((tx['customer_pricing_savings_total'] as num?) ?? 0).toDouble().abs();
+    final explicitItemDiscount =
+        ((tx['explicit_item_discount_total'] as num?) ?? 0).toDouble().abs();
+    final cartDiscount = ((tx['cart_discount_total'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+    final itemDiscountTotal = ((tx['item_discount_total'] as num?) ?? 0)
+        .toDouble()
+        .abs();
+
+    final effectiveFromTotals = (subtotal - total)
+        .clamp(0.0, double.infinity)
+        .toDouble();
+    if (effectiveFromTotals > 0) return effectiveFromTotals;
+
+    // Avoid summing overlapping discount fields; pick the strongest plausible
+    // source so a single discount is not counted multiple times.
+    final candidateA = billDiscount + loyaltyRedeemed;
+    final candidateB = itemSavingsTotal + loyaltyRedeemed;
+    final candidateC = itemDiscountTotal + loyaltyRedeemed;
+    final candidateD =
+        customerPricingSavings +
+        explicitItemDiscount +
+        cartDiscount +
+        loyaltyRedeemed;
+
+    var resolved = candidateA;
+    if (candidateB > resolved) resolved = candidateB;
+    if (candidateC > resolved) resolved = candidateC;
+    if (candidateD > resolved) resolved = candidateD;
+    return resolved;
+  }
+
   Widget _buildToolbarCard(_TxPalette palette) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1155,6 +1761,8 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
               Expanded(
                 child: TextField(
                   controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  autofocus: true,
                   decoration: InputDecoration(
                     hintText:
                         'Search transaction, customer, phone, cashier, payment, or type',
@@ -1169,6 +1777,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                               _searchController.clear();
                               setState(() {
                                 _searchQuery = '';
+                                _selectedSearchResultIndex = null;
                               });
                             },
                             icon: const Icon(Icons.close_rounded),
@@ -1177,26 +1786,9 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                   onChanged: (value) {
                     setState(() {
                       _searchQuery = value;
+                      _selectedSearchResultIndex = null;
                     });
                   },
-                ),
-              ),
-              const SizedBox(width: 12),
-              SizedBox(
-                height: 52,
-                child: ElevatedButton.icon(
-                  onPressed: _isRefreshing ? null : _refresh,
-                  icon: _isRefreshing
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.refresh_rounded, size: 18),
-                  label: const Text('Refresh'),
                 ),
               ),
             ],
@@ -1210,6 +1802,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                 children: [
                   _buildFilterChip(palette, 'all', 'All'),
                   _buildFilterChip(palette, 'sale', 'Sales'),
+                  _buildFilterChip(palette, 'credit_sale', 'Credit Sale'),
                   _buildFilterChip(palette, 'refund', 'Refunds'),
                 ],
               );
@@ -1326,7 +1919,11 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     );
   }
 
-  Widget _buildTransactionCard(_TxPalette palette, Map<String, dynamic> tx) {
+  Widget _buildTransactionCard(
+    _TxPalette palette,
+    Map<String, dynamic> tx, {
+    bool isKeyboardSelected = false,
+  }) {
     final type = (tx['transaction_type'] ?? 'sale').toString().toLowerCase();
     final color = _typeColor(palette, type);
     final total = ((tx['total_amount'] as num?) ?? 0).toDouble().abs();
@@ -1342,30 +1939,21 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
     final customerName = _customerName(tx);
     final hasCustomer = customerName.isNotEmpty;
     final isCreditSale = _isCreditSale(tx);
-    final creditPreviousBalance = ((tx['credit_previous_balance'] as num?) ?? 0)
-        .toDouble();
-    final creditNewBalance = ((tx['credit_new_balance'] as num?) ?? 0)
-        .toDouble();
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () async {
-          await TransactionHistoryScreen.showReceiptDialogForTransaction(
-            context,
-            id as int,
-          );
-          if (mounted) {
-            _loadTransactions();
-          }
-        },
+        onTap: () => _openTransaction(tx),
         borderRadius: BorderRadius.circular(22),
         child: Ink(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: palette.surface,
             borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: palette.border),
+            border: Border.all(
+              color: isKeyboardSelected ? palette.brand : palette.border,
+              width: isKeyboardSelected ? 1.6 : 1,
+            ),
             boxShadow: [
               BoxShadow(
                 color: palette.shadow,
@@ -1432,13 +2020,7 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                           _buildMiniInfoCard(
                             palette,
                             'Customer',
-                            '$customerName\n${_customerSubtitle(tx)}',
-                          ),
-                        if (isCreditSale)
-                          _buildMiniInfoCard(
-                            palette,
-                            'Credit Balance',
-                            'Rs. ${creditPreviousBalance.toStringAsFixed(2)} → Rs. ${creditNewBalance.toStringAsFixed(2)}',
+                            _customerTagValue(tx),
                           ),
                         if (type == 'sale' && discountAmount > 0)
                           _buildMiniInfoCard(
@@ -1558,6 +2140,38 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
               ],
             ),
           ),
+          Tooltip(
+            message: 'Refresh transactions',
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _isRefreshing ? null : _refresh,
+                borderRadius: BorderRadius.circular(14),
+                child: Ink(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: palette.soft,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: palette.border),
+                  ),
+                  child: _isRefreshing
+                      ? SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: palette.brand,
+                          ),
+                        )
+                      : Icon(
+                          Icons.refresh_rounded,
+                          size: 18,
+                          color: palette.brand,
+                        ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1567,6 +2181,18 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
   Widget build(BuildContext context) {
     final palette = _TxPalette.of(context);
     final visibleTransactions = _visibleTransactions;
+    final totalTransactionCount =
+        _summaryTransactionCount ??
+        (_cachedSummary?['transaction_count'] as num?)?.toInt();
+    final totalSaleCount =
+        _summarySaleCount ?? (_cachedSummary?['sale_count'] as num?)?.toInt();
+    final totalRefundCount =
+        _summaryRefundCount ??
+        (_cachedSummary?['refund_count'] as num?)?.toInt();
+    final transactionCountLabel = totalTransactionCount?.toString() ?? '...';
+    final summaryTransactionsValue = totalTransactionCount?.toString() ?? '--';
+    final summarySalesValue = totalSaleCount?.toString() ?? '--';
+    final summaryRefundsValue = totalRefundCount?.toString() ?? '--';
 
     return Scaffold(
       backgroundColor: palette.background,
@@ -1579,63 +2205,150 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
               end: Alignment.bottomRight,
             ),
           ),
-          child: _isLoading
-              ? Center(child: CircularProgressIndicator(color: palette.brand))
-              : ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    _buildHeader(palette),
-                    const SizedBox(height: 16),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        _buildSummaryCard(
+          child: ListView(
+            controller: _pageScrollController,
+            padding: const EdgeInsets.all(16),
+            children: [
+              _buildHeader(palette),
+              const SizedBox(height: 16),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  const gap = 12.0;
+                  final isWide = constraints.maxWidth >= 1080;
+                  final isMedium = constraints.maxWidth >= 640;
+                  final columns = isWide ? 3 : (isMedium ? 2 : 1);
+                  final cardWidth =
+                      (constraints.maxWidth - ((columns - 1) * gap)) / columns;
+                  return Wrap(
+                    spacing: gap,
+                    runSpacing: gap,
+                    children: [
+                      SizedBox(
+                        width: cardWidth,
+                        child: _buildSummaryCard(
                           palette: palette,
                           title: 'Transactions',
-                          value: _transactions.length.toString(),
+                          value: summaryTransactionsValue,
                           icon: Icons.receipt_long_outlined,
                           accent: palette.accentBlue,
                         ),
-                        _buildSummaryCard(
+                      ),
+                      SizedBox(
+                        width: cardWidth,
+                        child: _buildSummaryCard(
                           palette: palette,
                           title: 'Sales',
-                          value: _saleCount.toString(),
+                          value: summarySalesValue,
                           icon: Icons.point_of_sale_outlined,
                           accent: palette.success,
                         ),
-                        _buildSummaryCard(
+                      ),
+                      SizedBox(
+                        width: cardWidth,
+                        child: _buildSummaryCard(
                           palette: palette,
                           title: 'Refunds',
-                          value: _refundCount.toString(),
+                          value: summaryRefundsValue,
                           icon: Icons.undo_outlined,
                           accent: palette.danger,
                         ),
-                      ],
+                      ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              _buildToolbarCard(palette),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Text(
+                    'Transactions ($transactionCountLabel)',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      color: palette.textPrimary,
                     ),
-                    const SizedBox(height: 16),
-                    _buildToolbarCard(palette),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Transactions (${visibleTransactions.length})',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                        color: palette.textPrimary,
+                  ),
+                  const Spacer(),
+                  FilledButton.tonalIcon(
+                    onPressed: _toggleViewMode,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _isCompactTableView
+                          ? palette.brandSoft
+                          : palette.soft,
+                      foregroundColor: _isCompactTableView
+                          ? palette.brand
+                          : palette.textPrimary,
+                      side: BorderSide(
+                        color: _isCompactTableView
+                            ? palette.brand.withOpacity(0.35)
+                            : palette.border,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    if (visibleTransactions.isEmpty)
-                      _buildEmptyState(palette)
-                    else
-                      ...visibleTransactions.map(
-                        (tx) => Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: _buildTransactionCard(palette, tx),
+                    icon: Icon(
+                      _isCompactTableView
+                          ? Icons.view_agenda_rounded
+                          : Icons.table_rows_rounded,
+                      size: 18,
+                    ),
+                    label: Text(
+                      _isCompactTableView ? 'Cards View' : 'Table View',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (_isLoading && _transactions.isEmpty) ...[
+                const SizedBox(height: 220),
+              ] else if (visibleTransactions.isEmpty) ...[
+                _buildEmptyState(palette),
+              ] else if (_isCompactTableView) ...[
+                Column(
+                  children: [
+                    _buildTransactionTableHeader(palette),
+                    const SizedBox(height: 10),
+                    ...visibleTransactions.indexed.map(
+                      (entry) => Padding(
+                        key: _searchResultKeys.putIfAbsent(
+                          entry.$1,
+                          GlobalKey.new,
+                        ),
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _buildTransactionTableRow(
+                          palette,
+                          entry.$2,
+                          isKeyboardSelected:
+                              _selectedSearchResultIndex == entry.$1,
                         ),
                       ),
+                    ),
                   ],
                 ),
+              ] else ...[
+                ...visibleTransactions.indexed.map(
+                  (entry) => Padding(
+                    key: _searchResultKeys.putIfAbsent(entry.$1, GlobalKey.new),
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _buildTransactionCard(
+                      palette,
+                      entry.$2,
+                      isKeyboardSelected:
+                          _selectedSearchResultIndex == entry.$1,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
@@ -1708,6 +2421,15 @@ Future<String?> showTransactionReceiptDialog(
       .toString()
       .trim();
   final hasCustomer = customerName.isNotEmpty;
+  final customerDetailParts = <String>['Customer: $customerName'];
+  if (customerCode.isNotEmpty && customerCode != customerName) {
+    customerDetailParts.add(customerCode);
+  }
+  if (customerPhone.isNotEmpty &&
+      customerPhone != customerName &&
+      customerPhone != customerCode) {
+    customerDetailParts.add(customerPhone);
+  }
   final isCreditSale =
       TransactionHistoryScreen._readBool(summary['is_credit_sale']) ||
       paymentMethod.toLowerCase() == 'customer_credit';
@@ -1737,6 +2459,7 @@ Future<String?> showTransactionReceiptDialog(
       loyaltyPointsRedeemed != 0 ||
       loyaltyRedeemedValue.abs() > 0.000001 ||
       loyaltyNote.isNotEmpty;
+  final language = context.read<LanguageProvider>().language;
 
   String formatPercent(num value) {
     final number = value.toDouble();
@@ -1778,7 +2501,10 @@ Future<String?> showTransactionReceiptDialog(
         ? TransactionHistoryScreen._customerPricingDetail(item)
         : '';
     return {
-      'name': (item['product_name'] ?? 'Unknown').toString(),
+      'name': TransactionHistoryScreen._displaySnapshotProductName(
+        item,
+        language,
+      ),
       'barcode': (item['barcode'] ?? '').toString(),
       'quantity': ((item['quantity'] as num?) ?? 0).toDouble(),
       'unitPrice': ((item['unit_price'] as num?) ?? 0).toDouble(),
@@ -1978,11 +2704,6 @@ Future<String?> showTransactionReceiptDialog(
                                 Icons.person_outline_rounded,
                                 cashier,
                               ),
-                              if (hasCustomer)
-                                buildInfoChip(
-                                  Icons.badge_outlined,
-                                  customerName,
-                                ),
                               buildInfoChip(
                                 Icons.schedule_outlined,
                                 formatDateTime(createdAt),
@@ -2021,13 +2742,7 @@ Future<String?> showTransactionReceiptDialog(
                                   const SizedBox(width: 10),
                                   Expanded(
                                     child: Text(
-                                      [
-                                        'Customer: $customerName',
-                                        if (customerCode.isNotEmpty)
-                                          customerCode,
-                                        if (customerPhone.isNotEmpty)
-                                          customerPhone,
-                                      ].join(' • '),
+                                      customerDetailParts.join(' • '),
                                       style: TextStyle(
                                         color: palette.textPrimary,
                                         fontWeight: FontWeight.w800,

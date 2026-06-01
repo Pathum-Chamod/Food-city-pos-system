@@ -1,10 +1,16 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
+import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
+import 'package:image/image.dart' as img;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:usb_esc_printer_windows/usb_esc_printer_windows.dart'
     as usb_esc_printer_windows;
+
+import 'receipt_text_utils.dart';
 
 class ReceiptPrintResponse {
   final bool isSuccess;
@@ -20,6 +26,7 @@ class ReceiptPrinterService {
 
   static const String _savedPrinterNameKey = 'fc_receipt_printer_name';
   static const int _lineWidth = 48; // Good default for most 80mm printers
+  static const int _imageReceiptWidth = 576; // 80mm thermal width in dots.
 
   String? _printerName;
 
@@ -165,6 +172,7 @@ class ReceiptPrinterService {
     String? creditApprovedBy,
     int loyaltyPointsEarned = 0,
     int loyaltyPointsRedeemed = 0,
+    int? loyaltyTotalPoints,
     double loyaltyRedeemedValue = 0.0,
     double loyaltyEarnBaseAmount = 0.0,
     String? loyaltyNote,
@@ -189,24 +197,52 @@ class ReceiptPrinterService {
       );
     }
 
+    final unsafeText = ReceiptTextUtils.firstEscPosUnsafeText(
+      items: items,
+      extraText: [
+        storeName,
+        storeAddress,
+        storePhone,
+        cashierName,
+        customerName ?? '',
+        footerNote ?? '',
+      ],
+    );
+    if (unsafeText != null) {
+      return const ReceiptPrintResponse(
+        isSuccess: false,
+        message:
+            'This receipt contains Sinhala/Unicode text. Use PDF receipt output; direct ESC/POS text printing is English-safe only.',
+      );
+    }
+
     try {
       final bytes = <int>[];
       final shouldShowSubtotal =
           (subtotal - total).abs() > 0.000001 || discountAmount > 0;
       final customerNameText = (customerName ?? '').trim();
-      final customerPhoneText = (customerPhone ?? '').trim();
-      final customerCodeText = (customerCode ?? '').trim();
       final hasCustomer = customerNameText.isNotEmpty;
+      final markedItemsTotal = items.fold<double>(0, (sum, item) {
+        final qty = ((item['qty'] as num?) ?? 0).toDouble().abs();
+        final unitPrice = ((item['unitPrice'] as num?) ?? 0).toDouble().abs();
+        final markedPrice = ((item['markedPrice'] as num?) ?? unitPrice)
+            .toDouble()
+            .abs();
+        return sum + (markedPrice * qty);
+      });
+      final totalSavings = markedItemsTotal > total.abs()
+          ? markedItemsTotal - total.abs()
+          : 0.0;
       final paymentMethodLower = paymentMethod.toLowerCase();
       final isCustomerCredit =
           isCreditSale ||
           paymentMethodLower == 'customer_credit' ||
           paymentMethodLower == 'customer_credit_refund';
       final hasLoyalty =
-          loyaltyPointsEarned != 0 ||
           loyaltyPointsRedeemed != 0 ||
           loyaltyRedeemedValue.abs() > 0.000001 ||
-          (loyaltyNote ?? '').trim().isNotEmpty;
+          loyaltyPointsEarned != 0 ||
+          loyaltyTotalPoints != null;
 
       // Reset + basic formatting
       bytes.addAll(_escInit());
@@ -248,14 +284,6 @@ class ReceiptPrinterService {
       bytes.addAll(_text('${_labelValue('Cashier', cashierName)}\n'));
       if (hasCustomer) {
         bytes.addAll(_text('${_labelValue('Customer', customerNameText)}\n'));
-        if (customerCodeText.isNotEmpty) {
-          bytes.addAll(
-            _text('${_labelValue('Cus. Code', customerCodeText)}\n'),
-          );
-        }
-        if (customerPhoneText.isNotEmpty) {
-          bytes.addAll(_text('${_labelValue('Phone', customerPhoneText)}\n'));
-        }
       }
       bytes.addAll(_text('${_line('-')}\n'));
       bytes.addAll(_boldOn());
@@ -275,9 +303,6 @@ class ReceiptPrinterService {
             .toString();
         final itemDiscountValue = ((item['itemDiscountValue'] as num?) ?? 0)
             .toDouble();
-        final customerPricingDetail = (item['customerPricingDetail'] ?? '')
-            .toString()
-            .trim();
         final lineTotal = ((item['lineTotal'] as num?) ?? 0).toDouble();
 
         for (final line in _wrapText(name, 28)) {
@@ -299,12 +324,6 @@ class ReceiptPrinterService {
             '${_itemValueRow(unitPrice: unitPriceText, markedPrice: 'Rs.${markedPrice.toStringAsFixed(2)}', quantity: _formatQuantity(qty), total: 'Rs.${lineTotal.toStringAsFixed(2)}')}\n\n',
           ),
         );
-        if (customerPricingDetail.isNotEmpty) {
-          for (final line in _wrapText(customerPricingDetail, _lineWidth - 2)) {
-            bytes.addAll(_text(' $line\n'));
-          }
-          bytes.addAll(_feed(1));
-        }
       }
 
       if (shouldShowSubtotal) {
@@ -413,44 +432,39 @@ class ReceiptPrinterService {
       }
 
       if (hasLoyalty) {
-        bytes.addAll(_text('${_line('-')}\n'));
-        bytes.addAll(_boldOn());
-        bytes.addAll(_text('LOYALTY\n'));
-        bytes.addAll(_boldOff());
-        if (loyaltyPointsRedeemed != 0) {
+        bytes.addAll(_feed(1));
+        if (loyaltyPointsRedeemed != 0 ||
+            loyaltyRedeemedValue.abs() > 0.000001) {
           bytes.addAll(
             _text(
-              '${_labelValue('Redeemed', '${loyaltyPointsRedeemed.abs()} pts')}\n',
-            ),
-          );
-        }
-        if (loyaltyRedeemedValue.abs() > 0.000001) {
-          bytes.addAll(
-            _text(
-              '${_labelValue('Redeem Value', 'Rs.${loyaltyRedeemedValue.abs().toStringAsFixed(2)}')}\n',
+              '${_labelValue('Loyalty redeemed', 'Rs.${loyaltyRedeemedValue.abs().toStringAsFixed(2)}')}\n',
             ),
           );
         }
         if (loyaltyPointsEarned != 0) {
           bytes.addAll(
             _text(
-              '${_labelValue(isRefund ? 'Reversed' : 'Earned', '${loyaltyPointsEarned.abs()} pts')}\n',
+              '${_labelValue(isRefund ? 'Loyalty points reversed' : 'Loyalty points earned', '${loyaltyPointsEarned.abs()} pts')}\n',
             ),
           );
         }
-        if (loyaltyEarnBaseAmount.abs() > 0.000001 && !isRefund) {
+        if (loyaltyTotalPoints != null) {
           bytes.addAll(
             _text(
-              '${_labelValue('Earn Base', 'Rs.${loyaltyEarnBaseAmount.abs().toStringAsFixed(2)}')}\n',
+              '${_labelValue('Total Loyalty points', '${loyaltyTotalPoints.abs()} pts')}\n',
             ),
           );
         }
-        final note = (loyaltyNote ?? '').trim();
-        if (note.isNotEmpty) {
-          for (final line in _wrapText(note, _lineWidth - 2)) {
-            bytes.addAll(_text(' $line\n'));
-          }
-        }
+      }
+
+      if (!isRefund && totalSavings > 0.000001) {
+        bytes.addAll(_text('${_line('-')}\n'));
+        bytes.addAll(_alignCenter());
+        bytes.addAll(_boldOn());
+        bytes.addAll(
+          _text('You Save: Rs.${totalSavings.toStringAsFixed(2)}!\n'),
+        );
+        bytes.addAll(_boldOff());
       }
 
       bytes.addAll(_feed(1));
@@ -482,6 +496,614 @@ class ReceiptPrinterService {
       return ReceiptPrintResponse(isSuccess: false, message: 'Print error: $e');
     }
   }
+
+  Future<ReceiptPrintResponse> printReceiptImage({
+    required int transactionId,
+    required String cashierName,
+    required String paymentMethod,
+    String? customerName,
+    required List<Map<String, dynamic>> items,
+    required double subtotal,
+    required double discountAmount,
+    String discountType = 'none',
+    double discountValue = 0.0,
+    required double total,
+    double? amountTendered,
+    double? changeAmount,
+    String storeName = 'FOOD CITY',
+    String storeAddress = 'No. 1, Main Street',
+    String storePhone = '+94 11 000 0000',
+    bool isRefund = false,
+    bool isCreditSale = false,
+    double? creditPreviousBalance,
+    double? creditBillAmount,
+    double? creditNewBalance,
+    double? creditLimit,
+    String? creditApprovedBy,
+    int loyaltyPointsEarned = 0,
+    int loyaltyPointsRedeemed = 0,
+    int? loyaltyTotalPoints,
+    double loyaltyRedeemedValue = 0.0,
+    String? footerNote,
+  }) async {
+    if (!Platform.isWindows) {
+      return const ReceiptPrintResponse(
+        isSuccess: false,
+        message:
+            'Receipt image printing is only configured for Windows in this build.',
+      );
+    }
+
+    if (!isConnected || _printerName == null) {
+      return const ReceiptPrintResponse(
+        isSuccess: false,
+        message: 'Receipt printer is not selected.',
+      );
+    }
+
+    try {
+      final imageBytes = await renderReceiptImage(
+        transactionId: transactionId,
+        cashierName: cashierName,
+        paymentMethod: paymentMethod,
+        customerName: customerName,
+        items: items,
+        subtotal: subtotal,
+        discountAmount: discountAmount,
+        discountType: discountType,
+        discountValue: discountValue,
+        total: total,
+        amountTendered: amountTendered,
+        changeAmount: changeAmount,
+        storeName: storeName,
+        storeAddress: storeAddress,
+        storePhone: storePhone,
+        isRefund: isRefund,
+        isCreditSale: isCreditSale,
+        creditPreviousBalance: creditPreviousBalance,
+        creditBillAmount: creditBillAmount,
+        creditNewBalance: creditNewBalance,
+        creditLimit: creditLimit,
+        creditApprovedBy: creditApprovedBy,
+        loyaltyPointsEarned: loyaltyPointsEarned,
+        loyaltyPointsRedeemed: loyaltyPointsRedeemed,
+        loyaltyTotalPoints: loyaltyTotalPoints,
+        loyaltyRedeemedValue: loyaltyRedeemedValue,
+        footerNote: footerNote,
+      );
+      final decoded = img.decodePng(imageBytes);
+      if (decoded == null) {
+        return const ReceiptPrintResponse(
+          isSuccess: false,
+          message: 'Could not render receipt image for printing.',
+        );
+      }
+
+      final profile = await CapabilityProfile.load();
+      final generator = Generator(PaperSize.mm80, profile);
+      final bytes = <int>[
+        ...generator.reset(),
+        ...generator.imageRaster(
+          decoded,
+          align: PosAlign.center,
+          imageFn: PosImageFn.graphics,
+        ),
+        ...generator.feed(3),
+        ...generator.cut(),
+      ];
+      final result = await usb_esc_printer_windows.sendPrintRequest(
+        bytes,
+        _printerName!,
+      );
+
+      if (result.toString().toLowerCase().contains('success')) {
+        return ReceiptPrintResponse(
+          isSuccess: true,
+          message: 'Sinhala receipt image printed on $_printerName',
+        );
+      }
+
+      return ReceiptPrintResponse(
+        isSuccess: false,
+        message: 'Receipt image printer response: $result',
+      );
+    } catch (e) {
+      debugPrint('[Printer] Image print error: $e');
+      return ReceiptPrintResponse(
+        isSuccess: false,
+        message: 'Receipt image print error: $e',
+      );
+    }
+  }
+
+  Future<Uint8List> renderReceiptImage({
+    required int transactionId,
+    required String cashierName,
+    required String paymentMethod,
+    String? customerName,
+    required List<Map<String, dynamic>> items,
+    required double subtotal,
+    required double discountAmount,
+    required String discountType,
+    required double discountValue,
+    required double total,
+    double? amountTendered,
+    double? changeAmount,
+    required String storeName,
+    required String storeAddress,
+    required String storePhone,
+    required bool isRefund,
+    required bool isCreditSale,
+    double? creditPreviousBalance,
+    double? creditBillAmount,
+    double? creditNewBalance,
+    double? creditLimit,
+    String? creditApprovedBy,
+    required int loyaltyPointsEarned,
+    required int loyaltyPointsRedeemed,
+    int? loyaltyTotalPoints,
+    required double loyaltyRedeemedValue,
+    String? footerNote,
+  }) async {
+    final now = DateTime.now();
+    final dateStr =
+        '${now.day.toString().padLeft(2, '0')}/'
+        '${now.month.toString().padLeft(2, '0')}/'
+        '${now.year} '
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}:'
+        '${now.second.toString().padLeft(2, '0')}';
+    final paymentMethodLower = paymentMethod.toLowerCase();
+    final isCustomerCredit =
+        isCreditSale ||
+        paymentMethodLower == 'customer_credit' ||
+        paymentMethodLower == 'customer_credit_refund';
+    final markedItemsTotal = items.fold<double>(0, (sum, item) {
+      final qty = ((item['qty'] as num?) ?? 0).toDouble().abs();
+      final unitPrice = ((item['unitPrice'] as num?) ?? 0).toDouble().abs();
+      final markedPrice = ((item['markedPrice'] as num?) ?? unitPrice)
+          .toDouble()
+          .abs();
+      return sum + (markedPrice * qty);
+    });
+    final totalSavings = markedItemsTotal > total.abs()
+        ? markedItemsTotal - total.abs()
+        : 0.0;
+    final hasLoyalty =
+        loyaltyPointsRedeemed != 0 ||
+        loyaltyRedeemedValue.abs() > 0.000001 ||
+        loyaltyPointsEarned != 0 ||
+        loyaltyTotalPoints != null;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.drawColor(const ui.Color(0xFFFFFFFF), BlendMode.src);
+
+    var y = 20.0;
+    const horizontalPadding = 32.0;
+    final maxWidth = _imageReceiptWidth - (horizontalPadding * 2);
+    final contentRight = _imageReceiptWidth - horizontalPadding;
+
+    double drawText(
+      String text, {
+      double size = 18,
+      bool bold = false,
+      TextAlign align = TextAlign.left,
+      double before = 0,
+      double after = 4,
+      double? x,
+      double? width,
+      ui.Color color = const ui.Color(0xFF000000),
+    }) {
+      y += before;
+      final painter = _textPainter(
+        text,
+        size: size,
+        bold: bold,
+        align: align,
+        maxWidth: width ?? maxWidth,
+        color: color,
+      );
+      final paintX =
+          x ??
+          switch (align) {
+            TextAlign.center => (_imageReceiptWidth - painter.width) / 2,
+            TextAlign.right => contentRight - painter.width,
+            _ => horizontalPadding,
+          };
+      painter.paint(canvas, Offset(paintX, y));
+      y += painter.height + after;
+      return painter.height;
+    }
+
+    void drawDashedDivider({bool heavy = false}) {
+      y += heavy ? 8 : 9;
+      final paint = Paint()
+        ..color = const ui.Color(0xFF000000)
+        ..strokeWidth = heavy ? 3.0 : 1.6;
+      var x = horizontalPadding;
+      final dashWidth = heavy ? 11.0 : 7.0;
+      final gapWidth = heavy ? 4.0 : 5.0;
+      while (x < contentRight) {
+        final end = (x + dashWidth).clamp(horizontalPadding, contentRight);
+        canvas.drawLine(Offset(x, y), Offset(end.toDouble(), y), paint);
+        x += dashWidth + gapWidth;
+      }
+      y += heavy ? 14 : 12;
+    }
+
+    void drawThinDivider() {
+      y += 5;
+      final paint = Paint()
+        ..color = const ui.Color(0xFF9E9E9E)
+        ..strokeWidth = 1.0;
+      canvas.drawLine(
+        Offset(horizontalPadding, y),
+        Offset(contentRight, y),
+        paint,
+      );
+      y += 12;
+    }
+
+    void drawPair(
+      String label,
+      String value, {
+      bool bold = false,
+      double size = 21,
+      double? valueSize,
+      ui.Color labelColor = const ui.Color(0xFF000000),
+      ui.Color valueColor = const ui.Color(0xFF000000),
+      double after = 6,
+    }) {
+      final labelPainter = _textPainter(
+        label,
+        size: size,
+        bold: bold,
+        maxWidth: maxWidth * 0.46,
+        color: labelColor,
+      );
+      final valuePainter = _textPainter(
+        value,
+        size: valueSize ?? size,
+        bold: bold,
+        align: TextAlign.right,
+        maxWidth: maxWidth * 0.52,
+        color: valueColor,
+      );
+      labelPainter.paint(canvas, Offset(horizontalPadding, y));
+      valuePainter.paint(canvas, Offset(contentRight - valuePainter.width, y));
+      y +=
+          (labelPainter.height > valuePainter.height
+              ? labelPainter.height
+              : valuePainter.height) +
+          after;
+    }
+
+    void drawTableText(
+      String text, {
+      required double x,
+      required double width,
+      double size = 15,
+      bool bold = false,
+      TextAlign align = TextAlign.left,
+    }) {
+      final painter = _textPainter(
+        text,
+        size: size,
+        bold: bold,
+        align: align,
+        maxWidth: width,
+      );
+      final paintX = switch (align) {
+        TextAlign.right => x + width - painter.width,
+        TextAlign.center => x + (width - painter.width) / 2,
+        _ => x,
+      };
+      painter.paint(canvas, Offset(paintX, y));
+    }
+
+    double tableTextHeight(
+      String text, {
+      required double width,
+      double size = 15,
+      bool bold = false,
+      TextAlign align = TextAlign.left,
+    }) {
+      return _textPainter(
+        text,
+        size: size,
+        bold: bold,
+        align: align,
+        maxWidth: width,
+      ).height;
+    }
+
+    drawText(
+      storeName.toUpperCase(),
+      size: 40,
+      bold: true,
+      align: TextAlign.center,
+      after: 6,
+    );
+    if (storeAddress.trim().isNotEmpty) {
+      drawText(
+        storeAddress.trim(),
+        size: 21,
+        align: TextAlign.center,
+        after: 4,
+      );
+    }
+    if (storePhone.trim().isNotEmpty) {
+      drawText(
+        'Tel: ${storePhone.trim()}',
+        size: 20,
+        align: TextAlign.center,
+        after: 12,
+      );
+    }
+    drawText(
+      isRefund ? '*** REFUND RECEIPT ***' : 'SALES RECEIPT',
+      size: 27,
+      bold: true,
+      align: TextAlign.center,
+      after: 4,
+    );
+    drawDashedDivider();
+    drawPair('Date', dateStr, after: 7);
+    drawPair('Txn', '#$transactionId', after: 7);
+    drawPair('Cashier', cashierName, after: 7);
+    final customer = (customerName ?? '').trim();
+    if (customer.isNotEmpty) drawPair('Customer', customer, after: 7);
+    y += 9;
+    drawDashedDivider();
+
+    final col1X = horizontalPadding;
+    final col1W = maxWidth * 0.30;
+    final col2X = col1X + col1W;
+    final col2W = maxWidth * 0.27;
+    final col3X = col2X + col2W;
+    final col3W = maxWidth * 0.13;
+    final col4X = col3X + col3W;
+    final col4W = contentRight - col4X;
+
+    drawTableText('Unit price', x: col1X, width: col1W, size: 17, bold: true);
+    drawTableText('Mark price', x: col2X, width: col2W, size: 17, bold: true);
+    drawTableText(
+      'Qty',
+      x: col3X,
+      width: col3W,
+      size: 17,
+      bold: true,
+      align: TextAlign.right,
+    );
+    drawTableText(
+      'Total',
+      x: col4X,
+      width: col4W,
+      size: 17,
+      bold: true,
+      align: TextAlign.right,
+    );
+    y += 26;
+    drawThinDivider();
+    y += 20;
+
+    for (final item in items) {
+      final name = (item['name'] ?? 'Item').toString().trim();
+      final qty = ((item['qty'] as num?) ?? 0).toDouble();
+      final unitPrice = ((item['unitPrice'] as num?) ?? 0).toDouble();
+      final markedPrice = ((item['markedPrice'] as num?) ?? unitPrice)
+          .toDouble();
+      final baseLineTotal =
+          ((item['baseLineTotal'] as num?) ?? (unitPrice * qty)).toDouble();
+      final itemDiscountAmount = ((item['itemDiscountAmount'] as num?) ?? 0)
+          .toDouble();
+      final itemDiscountType = (item['itemDiscountType'] ?? 'none').toString();
+      final itemDiscountValue = ((item['itemDiscountValue'] as num?) ?? 0)
+          .toDouble();
+      final lineTotal = ((item['lineTotal'] as num?) ?? 0).toDouble();
+      final discountPercent = _discountPercentLabel(
+        discountAmount: itemDiscountAmount,
+        baseAmount: baseLineTotal,
+        discountType: itemDiscountType,
+        discountValue: itemDiscountValue,
+      );
+      final unitPriceText = itemDiscountAmount > 0
+          ? '${_imageMoney(unitPrice)} (-$discountPercent%)'
+          : _imageMoney(unitPrice);
+
+      drawText(name.isEmpty ? 'Item' : name, size: 22, bold: true, after: 8);
+      drawTableText(unitPriceText, x: col1X, width: col1W, size: 19);
+      drawTableText(_imageMoney(markedPrice), x: col2X, width: col2W, size: 19);
+      drawTableText(
+        _formatQuantity(qty),
+        x: col3X,
+        width: col3W,
+        size: 19,
+        align: TextAlign.right,
+      );
+      drawTableText(
+        _imageMoney(lineTotal),
+        x: col4X,
+        width: col4W,
+        size: 19,
+        bold: true,
+        align: TextAlign.right,
+      );
+      final rowHeight = [
+        tableTextHeight(unitPriceText, width: col1W, size: 19),
+        tableTextHeight(_imageMoney(markedPrice), width: col2W, size: 19),
+        tableTextHeight(
+          _formatQuantity(qty),
+          width: col3W,
+          size: 19,
+          align: TextAlign.right,
+        ),
+        tableTextHeight(
+          _imageMoney(lineTotal),
+          width: col4W,
+          size: 19,
+          bold: true,
+          align: TextAlign.right,
+        ),
+      ].reduce((a, b) => a > b ? a : b);
+      y += rowHeight + 23;
+    }
+
+    if ((subtotal - total).abs() > 0.000001 || discountAmount > 0) {
+      drawDashedDivider();
+      y += 5;
+      drawPair('Subtotal', _imageMoney(subtotal), after: 6);
+    }
+    if (discountAmount > 0) {
+      final percent = _discountPercentLabel(
+        discountAmount: discountAmount,
+        baseAmount: subtotal,
+        discountType: discountType,
+        discountValue: discountValue,
+      );
+      drawPair(
+        'Discount ($percent%)',
+        '- ${_imageMoney(discountAmount)}',
+        valueColor: const ui.Color(0xFFC62828),
+        after: 8,
+      );
+    }
+    drawDashedDivider(heavy: true);
+    y += 10;
+    drawPair(
+      isRefund ? 'REFUND TOTAL' : 'TOTAL',
+      _imageMoney(total),
+      bold: true,
+      size: 30,
+      valueSize: 31,
+      after: 14,
+    );
+    drawDashedDivider(heavy: true);
+    y += 10;
+    drawPair(
+      'Paid by',
+      isCustomerCredit
+          ? (isRefund ? 'CUSTOMER CREDIT REFUND' : 'CUSTOMER CREDIT')
+          : paymentMethod.toUpperCase(),
+    );
+
+    if (isCustomerCredit) {
+      if (creditPreviousBalance != null) {
+        drawPair('Prev. Balance', _imageMoney(creditPreviousBalance), after: 7);
+      }
+      drawPair(
+        isRefund ? 'This Refund' : 'This Bill',
+        _imageMoney(creditBillAmount ?? total),
+        after: 7,
+      );
+      if (creditNewBalance != null) {
+        drawPair('New Balance', _imageMoney(creditNewBalance), after: 7);
+      }
+      if (creditLimit != null && creditLimit > 0) {
+        drawPair('Credit Limit', _imageMoney(creditLimit), after: 7);
+      }
+      if ((creditApprovedBy ?? '').trim().isNotEmpty) {
+        drawPair('Approved By', creditApprovedBy!.trim(), after: 7);
+      }
+    } else if (!isRefund && paymentMethodLower == 'cash') {
+      if (amountTendered != null) {
+        drawPair('Tendered', _imageMoney(amountTendered), after: 7);
+      }
+      if (changeAmount != null) {
+        drawPair('Change', _imageMoney(changeAmount), after: 7);
+      }
+    }
+
+    if (hasLoyalty) {
+      y += 12;
+    }
+    if (loyaltyPointsRedeemed != 0 || loyaltyRedeemedValue.abs() > 0.000001) {
+      drawPair(
+        'Loyalty redeemed',
+        _imageMoney(loyaltyRedeemedValue.abs()),
+        size: 18,
+        valueColor: const ui.Color(0xFF777777),
+        after: 7,
+      );
+    }
+    if (loyaltyPointsEarned != 0) {
+      drawPair(
+        isRefund ? 'Loyalty points reversed' : 'Loyalty points earned',
+        '${loyaltyPointsEarned.abs()} pts',
+        size: 18,
+        valueColor: const ui.Color(0xFF777777),
+        after: 7,
+      );
+    }
+    if (loyaltyTotalPoints != null) {
+      drawPair(
+        'Total Loyalty points',
+        '${loyaltyTotalPoints.abs()} pts',
+        size: 18,
+        valueColor: const ui.Color(0xFF777777),
+        after: 8,
+      );
+    }
+
+    if (!isRefund && totalSavings > 0.000001) {
+      y += 8;
+      drawThinDivider();
+      drawText(
+        'You Save: ${_imageMoney(totalSavings)}!',
+        size: 24,
+        bold: true,
+        align: TextAlign.center,
+        before: 8,
+        after: 14,
+      );
+    }
+
+    drawText(
+      footerNote ?? 'Thank you for shopping with us!',
+      size: 22,
+      align: TextAlign.center,
+      before: !isRefund && totalSavings > 0.000001 ? 0 : 18,
+      after: 0,
+    );
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(_imageReceiptWidth, y.ceil() + 24);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    if (byteData == null || byteData.lengthInBytes == 0) {
+      throw Exception('Generated receipt image was empty.');
+    }
+    return byteData.buffer.asUint8List();
+  }
+
+  TextPainter _textPainter(
+    String text, {
+    required double size,
+    bool bold = false,
+    TextAlign align = TextAlign.left,
+    required double maxWidth,
+    ui.Color color = const ui.Color(0xFF000000),
+  }) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: size,
+          height: 1.16,
+          fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+        ),
+      ),
+      textAlign: align,
+      textDirection: ui.TextDirection.ltr,
+      locale: const ui.Locale('si', 'LK'),
+      maxLines: null,
+    )..layout(maxWidth: maxWidth);
+    return painter;
+  }
+
+  String _imageMoney(num value) => 'Rs. ${value.toDouble().toStringAsFixed(2)}';
 
   List<int> _escInit() => [27, 64];
   List<int> _alignLeft() => [27, 97, 0];
@@ -524,14 +1146,6 @@ class ReceiptPrinterService {
 
     final spaces = _lineWidth - safeLabel.length - safeValue.length;
     return '$safeLabel${' ' * spaces}$safeValue';
-  }
-
-  String _itemHeader() {
-    const col1 = 'QTY';
-    const col2 = 'UNIT';
-    const col3 = 'TOTAL';
-
-    return '${_padLeft(col1, 6)}${_padLeft(col2, 15)}${_padLeft(col3, 15)}';
   }
 
   String _itemValueHeader() {

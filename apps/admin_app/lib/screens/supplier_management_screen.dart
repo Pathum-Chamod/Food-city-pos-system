@@ -4,6 +4,7 @@ import 'package:shared/shared.dart';
 
 import '../models/supplier.dart';
 import '../providers/admin_provider.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 
 class SupplierManagementScreen extends StatefulWidget {
@@ -25,9 +26,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
 
     return products.where((product) {
       final matchesSearch =
-          query.isEmpty ||
-          product.name.toLowerCase().contains(query) ||
-          product.barcode.toLowerCase().contains(query);
+          query.isEmpty || ProductNameHelper.matches(product, query);
 
       final matchesFilter = switch (_filter) {
         'low_stock' => product.stock > 0 && product.stock <= 10,
@@ -36,13 +35,12 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
       };
 
       return matchesSearch && matchesFilter;
-    }).toList()
-      ..sort((a, b) {
-        if (a.stock == b.stock) {
-          return a.name.compareTo(b.name);
-        }
-        return a.stock.compareTo(b.stock);
-      });
+    }).toList()..sort((a, b) {
+      if (a.stock == b.stock) {
+        return a.name.compareTo(b.name);
+      }
+      return a.stock.compareTo(b.stock);
+    });
   }
 
   void _showReceiveStockDialog({String? initialBarcode}) {
@@ -85,7 +83,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                         .map(
                           (p) => DropdownMenuItem<String>(
                             value: p.barcode,
-                            child: Text(p.name),
+                            child: Text(ProductNameHelper.primary(p)),
                           ),
                         )
                         .toList(),
@@ -107,9 +105,20 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            selectedProduct.name,
+                            ProductNameHelper.primary(selectedProduct),
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
+                          if (ProductNameHelper.sinhala(selectedProduct) !=
+                              null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              ProductNameHelper.sinhala(selectedProduct)!,
+                              style: TextStyle(
+                                color: Colors.grey[700],
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 6),
                           Text('Barcode: ${selectedProduct.barcode}'),
                           const SizedBox(height: 6),
@@ -130,7 +139,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                   TextField(
                     controller: qtyController,
                     enabled: !isSubmitting,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     onChanged: (_) => setDialogState(() {}),
                     decoration: const InputDecoration(
                       labelText: 'Quantity Received',
@@ -278,11 +289,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: const [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 8,
-            offset: Offset(0, 2),
-          ),
+          BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, 2)),
         ],
       ),
       child: Row(
@@ -379,10 +386,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                       const CircleAvatar(
                         radius: 24,
                         backgroundColor: Colors.white24,
-                        child: Icon(
-                          Icons.local_shipping,
-                          color: Colors.white,
-                        ),
+                        child: Icon(Icons.local_shipping, color: Colors.white),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -518,124 +522,133 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                 ),
               )
             else
-              ...filteredProducts.map(
-                (product) {
-                  final isLowStock = product.stock > 0 && product.stock <= 10;
-                  final isOutOfStock = product.stock <= 0;
-                  final Color statusColor = isOutOfStock
-                      ? Colors.red
-                      : isLowStock
-                          ? Colors.orange
-                          : Colors.green;
-                  final String statusText = isOutOfStock
-                      ? 'Out of Stock'
-                      : isLowStock
-                          ? 'Low Stock'
-                          : 'In Stock';
+              ...filteredProducts.map((product) {
+                final isLowStock = product.stock > 0 && product.stock <= 10;
+                final isOutOfStock = product.stock <= 0;
+                final Color statusColor = isOutOfStock
+                    ? Colors.red
+                    : isLowStock
+                    ? Colors.orange
+                    : Colors.green;
+                final String statusText = isOutOfStock
+                    ? 'Out of Stock'
+                    : isLowStock
+                    ? 'Low Stock'
+                    : 'In Stock';
 
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              CircleAvatar(
-                                backgroundColor: Colors.blue[50],
-                                child: const Icon(
-                                  Icons.inventory_2_outlined,
-                                  color: Colors.blue,
-                                ),
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            CircleAvatar(
+                              backgroundColor: Colors.blue[50],
+                              child: const Icon(
+                                Icons.inventory_2_outlined,
+                                color: Colors.blue,
                               ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    ProductNameHelper.primary(product),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                  if (ProductNameHelper.sinhala(product) !=
+                                      null) ...[
+                                    const SizedBox(height: 3),
                                     Text(
-                                      product.name,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 16,
+                                      ProductNameHelper.sinhala(product)!,
+                                      style: TextStyle(
+                                        color: Colors.grey[700],
+                                        fontWeight: FontWeight.w700,
                                       ),
                                     ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      'Barcode: ${product.barcode}',
-                                      style: TextStyle(color: Colors.grey[700]),
-                                    ),
                                   ],
-                                ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Barcode: ${product.barcode}',
+                                    style: TextStyle(color: Colors.grey[700]),
+                                  ),
+                                ],
                               ),
-                              Text(
-                                'Rs. ${product.price.toStringAsFixed(2)}',
-                                style: const TextStyle(
-                                  color: Colors.green,
+                            ),
+                            Text(
+                              'Rs. ${product.price.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                color: Colors.green,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: statusColor.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                statusText,
+                                style: TextStyle(
+                                  color: statusColor,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: statusColor.withOpacity(0.12),
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Text(
-                                  statusText,
-                                  style: TextStyle(
-                                    color: statusColor,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[100],
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Text(
-                                  'Stock: ${product.stock}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: () => _showReceiveStockDialog(
-                                initialBarcode: product.barcode,
-                              ),
-                              icon: const Icon(Icons.add_box_outlined),
-                              label: const Text('Receive Stock for This Product'),
                             ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.grey[100],
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                'Stock: ${product.stock}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: () => _showReceiveStockDialog(
+                              initialBarcode: product.barcode,
+                            ),
+                            icon: const Icon(Icons.add_box_outlined),
+                            label: const Text('Receive Stock for This Product'),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  );
-                },
-              ),
+                  ),
+                );
+              }),
           ],
         ),
       ),

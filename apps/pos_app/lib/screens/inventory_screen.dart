@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -6,12 +7,19 @@ import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/product.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/pos_supplier.dart';
 import '../models/supplier_product_mapping.dart';
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/permission_service.dart';
+import '../services/supplier_service.dart';
+import '../utils/product_name_helper.dart';
+import '../utils/sinhala_phonetic_input_formatter.dart';
 import 'inventory_history_screen.dart';
 import 'stock_take_screen.dart';
 import 'supplier_receive_history_screen.dart';
@@ -54,17 +62,38 @@ class _BulkImportPreviewRow {
 }
 
 class _InventoryScreenState extends State<InventoryScreen> {
+  static const String _inventoryViewPrefKey = 'inventory_compact_table_view';
+  static const int _initialProductFetchLimit = 50;
+  static const int _defaultProductFetchLimit = 200;
+  static List<Product> _cachedProducts = <Product>[];
+  static bool _cachedHasMoreProducts = true;
+  static Map<String, dynamic>? _cachedInventorySummary;
+  static bool? _cachedCompactTableView;
   final TextEditingController _searchController = TextEditingController();
+  late final FocusNode _searchFocusNode;
+  final ScrollController _pageScrollController = ScrollController();
 
   List<Product> _products = [];
   List<Map<String, dynamic>> _recentMovements = [];
   bool _isLoading = true;
+  bool _isLoadingMoreProducts = false;
   bool _isRefreshing = false;
   String _searchQuery = '';
   InventoryFilter _selectedFilter = InventoryFilter.all;
   bool _isBulkDeleteMode = false;
+  bool _isCompactTableView = _cachedCompactTableView ?? false;
+  int? _selectedSearchResultIndex;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
   final Set<String> _selectedProductBarcodes = <String>{};
+  final Map<String, String> _supplierNameByBarcode = <String, String>{};
   String? _bulkDeletePerformedByLabel;
+  int _loadedProductOffset = 0;
+  bool _hasMoreProducts = true;
+  int? _summaryActiveProductCount;
+  int? _summaryLowStockCount;
+  int? _summaryOutOfStockCount;
+  double? _summaryStockValue;
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _screenBackground =>
@@ -442,41 +471,322 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   void initState() {
     super.initState();
+    _searchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
+    _pageScrollController.addListener(_handleInfiniteScroll);
+    if (_cachedProducts.isNotEmpty) {
+      _products = List<Product>.from(_cachedProducts);
+      _loadedProductOffset = _products.length;
+      _hasMoreProducts = _cachedHasMoreProducts;
+      _isLoading = false;
+    }
+    if (_cachedInventorySummary != null) {
+      _summaryActiveProductCount =
+          (_cachedInventorySummary!['active_product_count'] as num?)?.toInt();
+      _summaryLowStockCount =
+          (_cachedInventorySummary!['low_stock_count'] as num?)?.toInt();
+      _summaryOutOfStockCount =
+          (_cachedInventorySummary!['out_of_stock_count'] as num?)?.toInt();
+      _summaryStockValue =
+          ((_cachedInventorySummary!['stock_value'] as num?) ?? 0).toDouble();
+    }
+    _restoreViewPreference();
     _loadData(showLoader: true);
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.inventory,
+      _focusSearchField,
+    );
+    _focusSearchField();
+  }
+
+  Future<void> _restoreViewPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getBool(_inventoryViewPrefKey);
+    if (!mounted || saved == null) return;
+    _cachedCompactTableView = saved;
+    setState(() {
+      _isCompactTableView = saved;
+    });
+  }
+
+  Future<void> _persistViewPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_inventoryViewPrefKey, _isCompactTableView);
+    _cachedCompactTableView = _isCompactTableView;
+  }
+
+  Future<void> _toggleViewMode() async {
+    setState(() {
+      _isCompactTableView = !_isCompactTableView;
+    });
+    await _persistViewPreference();
   }
 
   @override
   void dispose() {
+    _searchSelectionTimer?.cancel();
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.inventory,
+      _focusSearchField,
+    );
+    _pageScrollController.dispose();
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _searchSelectionTimer?.cancel();
+      if (_selectedSearchResultIndex != null) {
+        setState(() {
+          _selectedSearchResultIndex = null;
+        });
+      }
+      if (_pageScrollController.hasClients) {
+        await _pageScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _openSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+
+    final isPlusKey =
+        event.logicalKey == LogicalKeyboardKey.numpadAdd ||
+        event.logicalKey == LogicalKeyboardKey.add ||
+        (event.logicalKey == LogicalKeyboardKey.equal &&
+            HardwareKeyboard.instance.isShiftPressed);
+    if (isPlusKey && _selectedSearchResultIndex != null) {
+      _openReceiveStockForSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    final products = _filteredProducts;
+    if (products.isEmpty) {
+      setState(() {
+        _selectedSearchResultIndex = null;
+      });
+      return;
+    }
+
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, products.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(
+    int index, {
+    int scrollDirection = 0,
+    bool autoClear = true,
+  }) {
+    _searchSelectionTimer?.cancel();
+    setState(() {
+      _selectedSearchResultIndex = index;
+    });
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    if (!autoClear) return;
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() {
+        _selectedSearchResultIndex = null;
+      });
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  Future<void> _openSelectedSearchResult() async {
+    final products = _filteredProducts;
+    if (products.isEmpty) return;
+
+    final index = products.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, products.length - 1);
+    final product = products[index];
+
+    if (_isBulkDeleteMode) {
+      _showSearchSelection(index);
+      _toggleProductSelection(product);
+    } else {
+      _showSearchSelection(index, autoClear: false);
+      await _openProductDetail(product);
+      if (mounted) _showSearchSelection(index);
+    }
+  }
+
+  Future<void> _openReceiveStockForSelectedSearchResult() async {
+    final products = _filteredProducts;
+    final selectedIndex = _selectedSearchResultIndex;
+    if (products.isEmpty || selectedIndex == null) return;
+
+    final index = selectedIndex.clamp(0, products.length - 1);
+    final product = products[index];
+    _showSearchSelection(index, autoClear: false);
+    await _openReceiveFlow(initialProduct: product);
+    if (mounted) _showSearchSelection(index);
   }
 
   Future<void> _loadData({bool showLoader = false}) async {
     if (showLoader && mounted) {
       setState(() {
-        _isLoading = true;
+        _isLoading = _products.isEmpty;
       });
     }
 
     try {
-      final products = await DatabaseHelper.instance.getProducts();
-      final movements = await DatabaseHelper.instance.getInventoryMovements(
+      final fetchLimit = _products.isEmpty
+          ? _initialProductFetchLimit
+          : _defaultProductFetchLimit;
+      final products = await DatabaseHelper.instance.getProducts(
+        limit: fetchLimit,
+        offset: 0,
+      );
+      final movementsFuture = DatabaseHelper.instance.getInventoryMovements(
         limit: 8,
       );
+      final mappingsFuture = DatabaseHelper.instance.getSupplierProductMappings(
+        limit: 5000,
+      );
+      final latestReceiptSuppliersFuture = DatabaseHelper.instance
+          .getLatestReceiptSuppliersByBarcode(limit: 5000);
+      final summaryFuture = DatabaseHelper.instance.getInventorySummaryTotals();
+
+      final results = await Future.wait<dynamic>([
+        movementsFuture,
+        mappingsFuture,
+        latestReceiptSuppliersFuture,
+        summaryFuture,
+      ]);
+      final movements = results[0] as List<Map<String, dynamic>>;
+      final mappings = results[1] as List<SupplierProductMapping>;
+      final latestReceiptSuppliers = results[2] as Map<String, String>;
+      final summary = results[3] as Map<String, dynamic>;
+
+      final supplierByBarcode = <String, String>{};
+      latestReceiptSuppliers.forEach((barcode, supplierName) {
+        final normalizedBarcode = barcode.trim();
+        final normalizedSupplier = supplierName.trim();
+        if (normalizedBarcode.isEmpty || normalizedSupplier.isEmpty) return;
+        supplierByBarcode[normalizedBarcode] = normalizedSupplier;
+      });
+      for (final mapping in mappings) {
+        final barcode = mapping.barcode.trim();
+        final supplierName = mapping.supplierName.trim();
+        if (barcode.isEmpty || supplierName.isEmpty) continue;
+        supplierByBarcode[barcode] = supplierName;
+      }
 
       if (!mounted) return;
 
       setState(() {
         _products = products;
+        _loadedProductOffset = products.length;
+        _hasMoreProducts = products.length == fetchLimit;
         _recentMovements = movements;
+        _supplierNameByBarcode
+          ..clear()
+          ..addAll(supplierByBarcode);
+        _summaryActiveProductCount =
+            (summary['active_product_count'] as num?)?.toInt() ?? 0;
+        _summaryLowStockCount =
+            (summary['low_stock_count'] as num?)?.toInt() ?? 0;
+        _summaryOutOfStockCount =
+            (summary['out_of_stock_count'] as num?)?.toInt() ?? 0;
+        _summaryStockValue = ((summary['stock_value'] as num?) ?? 0).toDouble();
         _isLoading = false;
+        _isLoadingMoreProducts = false;
       });
+      _cachedProducts = List<Product>.from(_products);
+      _cachedHasMoreProducts = _hasMoreProducts;
+      _cachedInventorySummary = summary;
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
+        _isLoadingMoreProducts = false;
       });
       _showMessage('Could not load inventory data.', isError: true);
+    }
+  }
+
+  void _handleInfiniteScroll() {
+    if (_searchQuery.trim().isNotEmpty) return;
+    if (_isLoading || _isLoadingMoreProducts || !_hasMoreProducts) return;
+    if (!_pageScrollController.hasClients) return;
+    final position = _pageScrollController.position;
+    if (position.maxScrollExtent <= 0) return;
+    if (position.pixels >= (position.maxScrollExtent - 560)) {
+      unawaited(_loadMoreProducts());
+    }
+  }
+
+  Future<void> _loadMoreProducts() async {
+    if (_isLoading || _isLoadingMoreProducts || !_hasMoreProducts) return;
+    setState(() {
+      _isLoadingMoreProducts = true;
+    });
+    try {
+      final products = await DatabaseHelper.instance.getProducts(
+        limit: _defaultProductFetchLimit,
+        offset: _loadedProductOffset,
+      );
+      if (!mounted) return;
+      setState(() {
+        _products = [..._products, ...products];
+        _loadedProductOffset += products.length;
+        _hasMoreProducts = products.length == _defaultProductFetchLimit;
+        _isLoadingMoreProducts = false;
+      });
+      _cachedProducts = List<Product>.from(_products);
+      _cachedHasMoreProducts = _hasMoreProducts;
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingMoreProducts = false;
+      });
     }
   }
 
@@ -875,6 +1185,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         [
           'barcode',
           'name',
+          'name_si',
           'category',
           'cost_price',
           'selling_price',
@@ -889,6 +1200,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         [
           '4790000000001',
           'Sample Product',
+          'නියැදි භාණ්ඩය',
           'General',
           '80.00',
           '100.00',
@@ -963,6 +1275,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       final rowNumber = i + 1;
       final barcode = readValue(row, 'barcode');
       final name = readValue(row, 'name');
+      final nameSi = readValue(row, 'name_si');
       final category = readValue(row, 'category').isEmpty
           ? 'General'
           : readValue(row, 'category');
@@ -1080,6 +1393,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           data: {
             'barcode': barcode.trim(),
             'name': name.trim(),
+            'name_si': nameSi.trim().isEmpty ? null : nameSi.trim(),
             'category': category.trim(),
             'cost_price': costPrice ?? 0.0,
             'selling_price': sellingPrice ?? 0.0,
@@ -1135,8 +1449,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Future<_InventoryApprovalResult?> _requireManagerApproval({
     required String actionLabel,
     required String description,
+    bool alwaysAskPin = false,
   }) async {
-    if (_currentUserIsManager) {
+    if (_currentUserIsManager && !alwaysAskPin) {
       return _InventoryApprovalResult(
         approverId: _currentUserId ?? 0,
         approverName: _currentUserName,
@@ -1324,14 +1639,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   List<Product> get _filteredProducts {
-    final query = _searchQuery.trim().toLowerCase();
+    final query = _searchQuery.trim();
+    final queryLower = query.toLowerCase();
 
     return _products.where((product) {
       final matchesSearch =
           query.isEmpty ||
-          product.name.toLowerCase().contains(query) ||
-          product.barcode.toLowerCase().contains(query) ||
-          product.category.toLowerCase().contains(query);
+          ProductNameHelper.matchesProduct(product, query) ||
+          product.category.toLowerCase().contains(queryLower);
 
       if (!matchesSearch) return false;
 
@@ -1350,6 +1665,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }).toList();
   }
 
+  String _displayProductName(Product product) {
+    return ProductNameHelper.displayName(
+      product,
+      context.read<LanguageProvider>().language,
+    );
+  }
+
   int get _lowStockCount =>
       _products.where((p) => p.isActive && p.isLowStock).length;
   int get _outOfStockCount =>
@@ -1365,7 +1687,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     String pickerSubtitle = 'Choose an inventory item to continue.';
     String hintTitle = 'Search active products';
     String hintMessage =
-        'Find an item quickly by product name, barcode, or category and continue in one tap.';
+        'Find an item quickly by barcode, English name, Sinhala name, or category and continue in one tap.';
 
     if (title.toLowerCase().contains('receive')) {
       pickerIcon = Icons.inventory_2_rounded;
@@ -1401,14 +1723,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
       bodyBuilder: (dialogContext, setPopupState) {
         return StatefulBuilder(
           builder: (context, setInnerState) {
-            final normalizedQuery = localQuery.trim().toLowerCase();
+            final normalizedQuery = localQuery.trim();
+            final normalizedQueryLower = normalizedQuery.toLowerCase();
             final visibleProducts =
                 _products.where((product) {
                   if (!product.isActive) return false;
                   if (normalizedQuery.isEmpty) return true;
-                  return product.name.toLowerCase().contains(normalizedQuery) ||
-                      product.barcode.toLowerCase().contains(normalizedQuery) ||
-                      product.category.toLowerCase().contains(normalizedQuery);
+                  return ProductNameHelper.matchesProduct(
+                        product,
+                        normalizedQuery,
+                      ) ||
+                      product.category.toLowerCase().contains(
+                        normalizedQueryLower,
+                      );
                 }).toList()..sort(
                   (a, b) =>
                       a.name.toLowerCase().compareTo(b.name.toLowerCase()),
@@ -1437,7 +1764,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     fontWeight: FontWeight.w600,
                   ),
                   decoration: InputDecoration(
-                    hintText: 'Search by name, barcode, or category',
+                    hintText:
+                        'Search by barcode, English, Sinhala, or category',
                     hintStyle: TextStyle(color: _textSecondary),
                     prefixIcon: Icon(Icons.search_rounded, color: _mutedIcon),
                     suffixIcon: localQuery.isEmpty
@@ -1548,7 +1876,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                               CrossAxisAlignment.start,
                                           children: [
                                             Text(
-                                              product.name,
+                                              _displayProductName(product),
                                               style: TextStyle(
                                                 color: _textPrimary,
                                                 fontWeight: FontWeight.w900,
@@ -1777,6 +2105,118 @@ class _InventoryScreenState extends State<InventoryScreen> {
     ); */
   }
 
+  Future<PosSupplier?> _showQuickAddSupplierPopup({
+    String initialName = '',
+  }) async {
+    final nameController = TextEditingController(text: initialName.trim());
+    final phoneController = TextEditingController();
+    bool isSubmitting = false;
+
+    final supplier = await _showInventoryPopup<PosSupplier>(
+      icon: Icons.local_shipping_outlined,
+      title: 'Add Supplier',
+      subtitle: 'Create a supplier and use it for this product.',
+      maxWidth: 520,
+      maxHeightFactor: 0.74,
+      bodyBuilder: (dialogContext, setPopupState) {
+        return SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildPopupHintCard(
+                icon: Icons.storefront_outlined,
+                title: 'New supplier',
+                message:
+                    'Add the supplier name and phone number, then select it for this product.',
+              ),
+              const SizedBox(height: 18),
+              TextField(
+                controller: nameController,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(labelText: 'Supplier name'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: phoneController,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Phone number (optional)',
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: isSubmitting
+                          ? null
+                          : () => Navigator.pop(dialogContext),
+                      child: const Text('Cancel'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: isSubmitting
+                          ? null
+                          : () async {
+                              final name = nameController.text.trim();
+                              final phone = phoneController.text.trim();
+
+                              if (name.isEmpty) {
+                                AppSnackBar.show(
+                                  dialogContext,
+                                  message: 'Enter a supplier name.',
+                                );
+                                return;
+                              }
+
+                              setPopupState(() {
+                                isSubmitting = true;
+                              });
+
+                              try {
+                                final created = await SupplierService()
+                                    .createSupplier(name: name, phone: phone);
+                                if (!dialogContext.mounted) return;
+                                Navigator.pop(dialogContext, created);
+                              } catch (_) {
+                                if (!dialogContext.mounted) return;
+                                AppSnackBar.show(
+                                  dialogContext,
+                                  message: 'Could not create supplier.',
+                                  backgroundColor: Colors.red.shade700,
+                                );
+                                setPopupState(() {
+                                  isSubmitting = false;
+                                });
+                              }
+                            },
+                      icon: isSubmitting
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.add_business_outlined),
+                      label: Text(isSubmitting ? 'Saving...' : 'Add Supplier'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    _disposeControllersNextFrame([nameController, phoneController]);
+    return supplier;
+  }
+
   Future<void> _openAddProductFlow() async {
     final approval = await _requireManagerApproval(
       actionLabel: 'add a new product',
@@ -1786,26 +2226,423 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final nameController = TextEditingController();
+    final nameSiController = TextEditingController();
     final barcodeController = TextEditingController();
     final categoryController = _selectedTextController('General');
     final costPriceController = TextEditingController();
     final sellingPriceController = TextEditingController();
     final wholesalePriceController = TextEditingController();
     final salePriceController = TextEditingController();
-    final openingStockController = _selectedTextController('0');
     final minStockController = _selectedTextController('0');
     final unitLabelController = _selectedTextController('pcs');
     final expiryAlertDaysController = _selectedTextController('30');
+    final supplierSearchController = TextEditingController();
+    final supplierSearchFocusNode = FocusNode();
+    final supplierSearchFieldKey = GlobalKey();
+    final supplierSearchLayerLink = LayerLink();
     bool saleEnabled = false;
     bool trackExpiry = false;
     ProductQuantityType quantityType = ProductQuantityType.unit;
+    final supplierService = SupplierService();
+    PosSupplier? selectedSupplier;
+    var supplierSearchResults = <PosSupplier>[];
+    var supplierSearchQuery = '';
+    var supplierSearchVersion = 0;
+    var supplierSearchSelectedIndex = 0;
+    bool isSupplierSearchLoading = false;
+    bool supplierRequiredError = false;
+    Timer? supplierSearchDebounce;
+    OverlayEntry? supplierSearchOverlay;
+
+    double supplierSearchOverlayWidth() {
+      final box =
+          supplierSearchFieldKey.currentContext?.findRenderObject()
+              as RenderBox?;
+      return box?.size.width ?? 280;
+    }
+
+    void hideSupplierSearchOverlay() {
+      supplierSearchOverlay?.remove();
+      supplierSearchOverlay = null;
+    }
+
+    void selectSearchedSupplier(
+      PosSupplier supplier,
+      StateSetter setPopupState,
+    ) {
+      setPopupState(() {
+        selectedSupplier = supplier;
+        supplierRequiredError = false;
+        supplierSearchResults = <PosSupplier>[];
+        supplierSearchQuery = supplier.name;
+        supplierSearchSelectedIndex = 0;
+        isSupplierSearchLoading = false;
+        supplierSearchController.value = TextEditingValue(
+          text: supplier.name,
+          selection: TextSelection.collapsed(offset: supplier.name.length),
+        );
+      });
+      hideSupplierSearchOverlay();
+    }
+
+    Future<void> openSupplierFormFromSearch(
+      BuildContext dialogContext,
+      StateSetter setPopupState,
+    ) async {
+      final query = supplierSearchQuery.trim();
+      if (query.isEmpty) return;
+      hideSupplierSearchOverlay();
+      final supplier = await _showQuickAddSupplierPopup(initialName: query);
+      if (supplier == null || !dialogContext.mounted) return;
+      selectSearchedSupplier(supplier, setPopupState);
+    }
+
+    int supplierSearchOptionCount() {
+      if (isSupplierSearchLoading || supplierSearchQuery.trim().isEmpty) {
+        return 0;
+      }
+      if (supplierSearchResults.isNotEmpty) return supplierSearchResults.length;
+      return 1;
+    }
+
+    KeyEventResult handleSupplierSearchKey(
+      FocusNode node,
+      KeyEvent event,
+      BuildContext dialogContext,
+      StateSetter setPopupState,
+    ) {
+      if (event is! KeyDownEvent) return KeyEventResult.ignored;
+      final optionCount = supplierSearchOptionCount();
+
+      if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        if (optionCount <= 0) return KeyEventResult.ignored;
+        setPopupState(() {
+          supplierSearchSelectedIndex =
+              (supplierSearchSelectedIndex + 1) % optionCount;
+        });
+        supplierSearchOverlay?.markNeedsBuild();
+        return KeyEventResult.handled;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+        if (optionCount <= 0) return KeyEventResult.ignored;
+        setPopupState(() {
+          supplierSearchSelectedIndex =
+              (supplierSearchSelectedIndex - 1 + optionCount) % optionCount;
+        });
+        supplierSearchOverlay?.markNeedsBuild();
+        return KeyEventResult.handled;
+      }
+
+      if (event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+        if (optionCount <= 0) return KeyEventResult.ignored;
+        if (supplierSearchResults.isNotEmpty) {
+          final index = supplierSearchSelectedIndex.clamp(
+            0,
+            supplierSearchResults.length - 1,
+          );
+          selectSearchedSupplier(supplierSearchResults[index], setPopupState);
+        } else {
+          unawaited(openSupplierFormFromSearch(dialogContext, setPopupState));
+        }
+        return KeyEventResult.handled;
+      }
+
+      return KeyEventResult.ignored;
+    }
+
+    Widget buildSupplierSearchOverlay(
+      BuildContext dialogContext,
+      StateSetter setPopupState,
+    ) {
+      final query = supplierSearchQuery.trim();
+      final width = supplierSearchOverlayWidth();
+      final showNoResults =
+          query.isNotEmpty &&
+          !isSupplierSearchLoading &&
+          supplierSearchResults.isEmpty;
+
+      return Positioned.fill(
+        child: IgnorePointer(
+          ignoring: false,
+          child: CompositedTransformFollower(
+            link: supplierSearchLayerLink,
+            showWhenUnlinked: false,
+            offset: Offset.zero,
+            targetAnchor: Alignment.bottomLeft,
+            followerAnchor: Alignment.topLeft,
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  width: width,
+                  constraints: const BoxConstraints(maxHeight: 220),
+                  decoration: BoxDecoration(
+                    color: _panelColor,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _borderColor),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(
+                          alpha: _isDark ? 0.34 : 0.12,
+                        ),
+                        blurRadius: 18,
+                        offset: const Offset(0, 10),
+                      ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: isSupplierSearchLoading
+                        ? Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: _brandColor,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  'Searching...',
+                                  style: TextStyle(
+                                    color: _textSecondary,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            shrinkWrap: true,
+                            children: [
+                              for (final entry
+                                  in supplierSearchResults.asMap().entries)
+                                InkWell(
+                                  onTap: () => selectSearchedSupplier(
+                                    entry.value,
+                                    setPopupState,
+                                  ),
+                                  child: Container(
+                                    color:
+                                        entry.key == supplierSearchSelectedIndex
+                                        ? _brandSoft
+                                        : Colors.transparent,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 9,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.local_shipping_outlined,
+                                          color: _brandColor,
+                                          size: 18,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                entry.value.name,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: _textPrimary,
+                                                  fontWeight: FontWeight.w900,
+                                                  fontSize: 12.5,
+                                                ),
+                                              ),
+                                              if (entry.value.phone
+                                                  .trim()
+                                                  .isNotEmpty) ...[
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  entry.value.phone.trim(),
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                    color: _textSecondary,
+                                                    fontWeight: FontWeight.w700,
+                                                    fontSize: 10.5,
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              if (showNoResults) ...[
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 9,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.search_off_rounded,
+                                        color: _textSecondary,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Text(
+                                          'No results found',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            color: _textPrimary,
+                                            fontWeight: FontWeight.w900,
+                                            fontSize: 12.5,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const Divider(height: 1),
+                                InkWell(
+                                  onTap: () => unawaited(
+                                    openSupplierFormFromSearch(
+                                      dialogContext,
+                                      setPopupState,
+                                    ),
+                                  ),
+                                  child: Container(
+                                    color: supplierSearchSelectedIndex == 0
+                                        ? _brandSoft
+                                        : Colors.transparent,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 10,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.add_business_outlined,
+                                          color: _brandColor,
+                                          size: 18,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            'Add New Supplier',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              color: _textPrimary,
+                                              fontWeight: FontWeight.w900,
+                                              fontSize: 12.5,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    void refreshSupplierSearchOverlay(
+      BuildContext dialogContext,
+      StateSetter setPopupState,
+    ) {
+      if (!supplierSearchFocusNode.hasFocus ||
+          supplierSearchQuery.trim().isEmpty) {
+        hideSupplierSearchOverlay();
+        return;
+      }
+
+      if (supplierSearchOverlay == null) {
+        supplierSearchOverlay = OverlayEntry(
+          builder: (_) =>
+              buildSupplierSearchOverlay(dialogContext, setPopupState),
+        );
+        Overlay.of(dialogContext).insert(supplierSearchOverlay!);
+      } else {
+        supplierSearchOverlay!.markNeedsBuild();
+      }
+    }
+
+    void scheduleSupplierSearch(
+      String rawQuery,
+      StateSetter setPopupState,
+      BuildContext dialogContext,
+    ) {
+      supplierSearchDebounce?.cancel();
+      final query = rawQuery.trim();
+      final version = ++supplierSearchVersion;
+
+      setPopupState(() {
+        selectedSupplier = null;
+        supplierRequiredError = false;
+        supplierSearchQuery = query;
+        supplierSearchResults = <PosSupplier>[];
+        supplierSearchSelectedIndex = 0;
+        isSupplierSearchLoading = query.isNotEmpty;
+      });
+
+      refreshSupplierSearchOverlay(dialogContext, setPopupState);
+
+      if (query.isEmpty) {
+        return;
+      }
+
+      supplierSearchDebounce = Timer(
+        const Duration(milliseconds: 500),
+        () async {
+          final results = await supplierService.getSuppliers(
+            refreshFromBackend: false,
+            search: query,
+          );
+          if (!dialogContext.mounted || version != supplierSearchVersion) {
+            return;
+          }
+          setPopupState(() {
+            supplierSearchResults = results.take(5).toList();
+            supplierSearchSelectedIndex = 0;
+            isSupplierSearchLoading = false;
+          });
+          refreshSupplierSearchOverlay(dialogContext, setPopupState);
+        },
+      );
+    }
 
     final saved = await _showInventoryPopup<bool>(
       icon: Icons.add_box_outlined,
       title: 'Add Product',
-      subtitle: 'Create a new inventory item with pricing and opening stock.',
+      subtitle:
+          'Create a new inventory item with pricing and supplier details.',
       maxWidth: 760,
       bodyBuilder: (dialogContext, setPopupState) {
+        supplierSearchFocusNode.onKeyEvent = (node, event) =>
+            handleSupplierSearchKey(node, event, dialogContext, setPopupState);
+
         return SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1814,13 +2651,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 icon: Icons.inventory_2_outlined,
                 title: 'New inventory item',
                 message:
-                    'Add the core identity, prices, and opening quantity in one step.',
+                    'Add the core identity, prices, and preferred supplier in one step.',
               ),
               const SizedBox(height: 18),
               TextField(
                 controller: nameController,
                 textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(labelText: 'Product name'),
+                decoration: const InputDecoration(
+                  labelText: 'English product name',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: nameSiController,
+                inputFormatters: [SinhalaPhoneticInputFormatter()],
+                decoration: const InputDecoration(
+                  labelText: 'Sinhala name (optional)',
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -1949,26 +2796,61 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 ),
               ),
               const SizedBox(height: 14),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: openingStockController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Opening stock',
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: _softDecoration(color: _panelSoft, radius: 18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CompositedTransformTarget(
+                      link: supplierSearchLayerLink,
+                      child: TextField(
+                        key: supplierSearchFieldKey,
+                        controller: supplierSearchController,
+                        focusNode: supplierSearchFocusNode,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: InputDecoration(
+                          labelText: 'Search supplier',
+                          errorText: supplierRequiredError
+                              ? 'Supplier is required'
+                              : null,
+                          prefixIcon: const Icon(Icons.search_rounded),
+                          suffixIcon: isSupplierSearchLoading
+                              ? const Padding(
+                                  padding: EdgeInsets.all(14),
+                                  child: SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                )
+                              : selectedSupplier == null
+                              ? null
+                              : const Icon(Icons.check_circle_rounded),
+                        ),
+                        onTap: () => refreshSupplierSearchOverlay(
+                          dialogContext,
+                          setPopupState,
+                        ),
+                        onChanged: (value) {
+                          scheduleSupplierSearch(
+                            value,
+                            setPopupState,
+                            dialogContext,
+                          );
+                        },
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: minStockController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Min stock'),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: minStockController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Min stock'),
               ),
               const SizedBox(height: 14),
               _buildExpiryTrackingCard(
@@ -1980,218 +2862,255 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   });
                 },
               ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(dialogContext),
-                      child: const Text('Cancel'),
+              const SizedBox(height: 24),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: const Text('Cancel'),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () async {
-                        final name = nameController.text.trim();
-                        final barcode = barcodeController.text.trim();
-                        final category = categoryController.text.trim();
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        onPressed: () async {
+                          final name = nameController.text.trim();
+                          final nameSi = nameSiController.text.trim();
+                          final barcode = barcodeController.text.trim();
+                          final category = categoryController.text.trim();
 
-                        if (name.isEmpty) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: 'Enter a product name.',
-                          );
-                          return;
-                        }
-                        if (barcode.isEmpty) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: 'Enter a barcode.',
-                          );
-                          return;
-                        }
-                        final barcodeExists = _products.any(
-                          (item) =>
-                              item.barcode.trim().toLowerCase() ==
-                              barcode.toLowerCase(),
-                        );
-                        if (barcodeExists) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message:
-                                'A product with this barcode already exists.',
-                          );
-                          return;
-                        }
-
-                        final costError = _validateNonNegativeMoney(
-                          costPriceController.text,
-                          label: 'cost price',
-                        );
-                        if (costError != null) {
-                          AppSnackBar.show(dialogContext, message: costError);
-                          return;
-                        }
-
-                        final sellingError = _validateNonNegativeMoney(
-                          sellingPriceController.text,
-                          label: 'selling price',
-                        );
-                        if (sellingError != null) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: sellingError,
-                          );
-                          return;
-                        }
-
-                        final openingStockError = _validatePositiveInt(
-                          openingStockController.text,
-                          label: 'opening stock',
-                          allowZero: true,
-                        );
-                        if (openingStockError != null) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: openingStockError,
-                          );
-                          return;
-                        }
-
-                        final minStockError = _validatePositiveInt(
-                          minStockController.text,
-                          label: 'minimum stock level',
-                          allowZero: true,
-                        );
-                        if (minStockError != null) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: minStockError,
-                          );
-                          return;
-                        }
-
-                        final expiryAlertError = _validatePositiveInt(
-                          expiryAlertDaysController.text,
-                          label: 'expiry alert days',
-                          allowZero: false,
-                        );
-                        if (trackExpiry && expiryAlertError != null) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: expiryAlertError,
-                          );
-                          return;
-                        }
-
-                        final rawWholesale = wholesalePriceController.text
-                            .trim();
-                        if (rawWholesale.isNotEmpty) {
-                          final wholesaleError = _validateNonNegativeMoney(
-                            rawWholesale,
-                            label: 'wholesale price',
-                          );
-                          if (wholesaleError != null) {
+                          if (name.isEmpty) {
                             AppSnackBar.show(
                               dialogContext,
-                              message: wholesaleError,
+                              message: 'Enter a product name.',
                             );
                             return;
                           }
-                        }
-
-                        final rawSale = salePriceController.text.trim();
-                        if (rawSale.isNotEmpty) {
-                          final saleError = _validateNonNegativeMoney(
-                            rawSale,
-                            label: 'sale price',
-                          );
-                          if (saleError != null) {
-                            AppSnackBar.show(dialogContext, message: saleError);
+                          if (barcode.isEmpty) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: 'Enter a barcode.',
+                            );
                             return;
                           }
-                        }
-
-                        final sellingPrice = double.parse(
-                          sellingPriceController.text.trim(),
-                        );
-                        if (sellingPrice <= 0) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: 'Selling price must be greater than 0.',
+                          final barcodeExists = _products.any(
+                            (item) =>
+                                item.barcode.trim().toLowerCase() ==
+                                barcode.toLowerCase(),
                           );
-                          return;
-                        }
+                          if (barcodeExists) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message:
+                                  'A product with this barcode already exists.',
+                            );
+                            return;
+                          }
 
-                        final costPrice = double.parse(
-                          costPriceController.text.trim(),
-                        );
-                        final wholesalePrice = rawWholesale.isEmpty
-                            ? sellingPrice
-                            : double.parse(rawWholesale);
-                        final salePrice = rawSale.isEmpty
-                            ? null
-                            : double.parse(rawSale);
-                        final openingStock = int.parse(
-                          openingStockController.text.trim(),
-                        );
-                        final minStock = int.parse(
-                          minStockController.text.trim(),
-                        );
-                        final expiryAlertDays = trackExpiry
-                            ? int.parse(expiryAlertDaysController.text.trim())
-                            : 30;
-                        final normalizedUnitLabel = _normalizeUnitLabelInput(
-                          unitLabelController.text,
-                          quantityType,
-                        );
+                          final costError = _validateNonNegativeMoney(
+                            costPriceController.text,
+                            label: 'cost price',
+                          );
+                          if (costError != null) {
+                            AppSnackBar.show(dialogContext, message: costError);
+                            return;
+                          }
 
-                        if (saleEnabled &&
-                            (salePrice == null || salePrice <= 0)) {
-                          AppSnackBar.show(
-                            dialogContext,
+                          final sellingError = _validateNonNegativeMoney(
+                            sellingPriceController.text,
+                            label: 'selling price',
+                          );
+                          if (sellingError != null) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: sellingError,
+                            );
+                            return;
+                          }
+
+                          if (selectedSupplier == null) {
+                            setPopupState(() {
+                              supplierRequiredError = true;
+                            });
+                            supplierSearchFocusNode.requestFocus();
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: 'Supplier is required.',
+                              backgroundColor: Colors.red.shade700,
+                            );
+                            return;
+                          }
+
+                          final minStockError = _validatePositiveInt(
+                            minStockController.text,
+                            label: 'minimum stock level',
+                            allowZero: true,
+                          );
+                          if (minStockError != null) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: minStockError,
+                            );
+                            return;
+                          }
+
+                          final expiryAlertError = _validatePositiveInt(
+                            expiryAlertDaysController.text,
+                            label: 'expiry alert days',
+                            allowZero: false,
+                          );
+                          if (trackExpiry && expiryAlertError != null) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: expiryAlertError,
+                            );
+                            return;
+                          }
+
+                          final rawWholesale = wholesalePriceController.text
+                              .trim();
+                          if (rawWholesale.isNotEmpty) {
+                            final wholesaleError = _validateNonNegativeMoney(
+                              rawWholesale,
+                              label: 'wholesale price',
+                            );
+                            if (wholesaleError != null) {
+                              AppSnackBar.show(
+                                dialogContext,
+                                message: wholesaleError,
+                              );
+                              return;
+                            }
+                          }
+
+                          final rawSale = salePriceController.text.trim();
+                          if (rawSale.isNotEmpty) {
+                            final saleError = _validateNonNegativeMoney(
+                              rawSale,
+                              label: 'sale price',
+                            );
+                            if (saleError != null) {
+                              AppSnackBar.show(
+                                dialogContext,
+                                message: saleError,
+                              );
+                              return;
+                            }
+                          }
+
+                          final sellingPrice = double.parse(
+                            sellingPriceController.text.trim(),
+                          );
+                          if (sellingPrice <= 0) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: 'Selling price must be greater than 0.',
+                            );
+                            return;
+                          }
+
+                          final costPrice = double.parse(
+                            costPriceController.text.trim(),
+                          );
+                          final wholesalePrice = rawWholesale.isEmpty
+                              ? sellingPrice
+                              : double.parse(rawWholesale);
+                          final salePrice = rawSale.isEmpty
+                              ? null
+                              : double.parse(rawSale);
+                          final minStock = int.parse(
+                            minStockController.text.trim(),
+                          );
+                          final expiryAlertDays = trackExpiry
+                              ? int.parse(expiryAlertDaysController.text.trim())
+                              : 30;
+                          final normalizedUnitLabel = _normalizeUnitLabelInput(
+                            unitLabelController.text,
+                            quantityType,
+                          );
+
+                          if (saleEnabled &&
+                              (salePrice == null || salePrice <= 0)) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message:
+                                  'Enter a valid sale price before activating sale mode.',
+                            );
+                            return;
+                          }
+
+                          final confirmed = await _confirmAction(
+                            title: 'Confirm Add Product',
                             message:
-                                'Enter a valid sale price before activating sale mode.',
+                                'Create $name as ${quantityType == ProductQuantityType.weight ? 'a weighted' : 'a unit'} item with ${selectedSupplier!.name} as the preferred supplier?',
+                            confirmText: 'Create',
                           );
-                          return;
-                        }
+                          if (!confirmed) return;
 
-                        final confirmed = await _confirmAction(
-                          title: 'Confirm Add Product',
-                          message:
-                              'Create $name as ${quantityType == ProductQuantityType.weight ? 'a weighted' : 'a unit'} item with opening stock of $openingStock $normalizedUnitLabel?',
-                          confirmText: 'Create',
-                        );
-                        if (!confirmed) return;
+                          final success = await DatabaseHelper.instance
+                              .createProductLocal(
+                                barcode: barcode,
+                                name: name,
+                                nameSi: nameSi.isEmpty ? null : nameSi,
+                                category: category.isEmpty
+                                    ? 'General'
+                                    : category,
+                                costPrice: costPrice,
+                                sellingPrice: sellingPrice,
+                                quantityType: quantityType,
+                                unitLabel: normalizedUnitLabel,
+                                wholesalePrice: wholesalePrice,
+                                salePrice: salePrice,
+                                saleEnabled: saleEnabled,
+                                openingStock: 0,
+                                minStockLevel: minStock,
+                                trackExpiry: trackExpiry,
+                                expiryAlertDays: expiryAlertDays,
+                                changedBy: changedBy,
+                              );
 
-                        final success = await DatabaseHelper.instance
-                            .createProductLocal(
-                              barcode: barcode,
-                              name: name,
-                              category: category.isEmpty ? 'General' : category,
-                              costPrice: costPrice,
-                              sellingPrice: sellingPrice,
-                              quantityType: quantityType,
-                              unitLabel: normalizedUnitLabel,
-                              wholesalePrice: wholesalePrice,
-                              salePrice: salePrice,
-                              saleEnabled: saleEnabled,
-                              openingStock: openingStock,
-                              minStockLevel: minStock,
-                              trackExpiry: trackExpiry,
-                              expiryAlertDays: expiryAlertDays,
-                              changedBy: changedBy,
-                            );
+                          if (success) {
+                            await DatabaseHelper.instance
+                                .upsertSupplierProductMapping(
+                                  SupplierProductMapping(
+                                    barcode: barcode,
+                                    productName: name,
+                                    productNameSi: nameSi.isEmpty
+                                        ? null
+                                        : nameSi,
+                                    supplierId: selectedSupplier!.id,
+                                    supplierName: selectedSupplier!.name,
+                                    isPreferred: true,
+                                    defaultUnitCost: costPrice,
+                                    minimumOrderQuantity: 1,
+                                    packSize: 1,
+                                    leadTimeDays: 0,
+                                    note: '',
+                                    updatedAt: DateTime.now().toIso8601String(),
+                                  ),
+                                );
+                          }
 
-                        if (!dialogContext.mounted) return;
-                        Navigator.pop(dialogContext, success);
-                      },
-                      icon: const Icon(Icons.add_box_outlined),
-                      label: const Text('Create Product'),
+                          if (!dialogContext.mounted) return;
+                          Navigator.pop(dialogContext, success);
+                        },
+                        icon: const Icon(Icons.add_box_outlined),
+                        label: const Text('Create Product'),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ],
           ),
@@ -2199,19 +3118,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
       },
     );
 
+    supplierSearchDebounce?.cancel();
+    hideSupplierSearchOverlay();
     _disposeControllersNextFrame([
       nameController,
+      nameSiController,
       barcodeController,
       categoryController,
       costPriceController,
       sellingPriceController,
       wholesalePriceController,
       salePriceController,
-      openingStockController,
       minStockController,
       unitLabelController,
       expiryAlertDaysController,
+      supplierSearchController,
     ]);
+    supplierSearchFocusNode.dispose();
 
     if (saved == true) {
       await _loadData(showLoader: false);
@@ -2317,15 +3240,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openEditProductFlow(Product product) async {
+    final displayName = _displayProductName(product);
     final approval = await _requireManagerApproval(
-      actionLabel: 'edit ${product.name}',
+      actionLabel: 'edit $displayName',
       description:
-          'Approved product edit for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved product edit for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final nameController = TextEditingController(text: product.name);
+    final nameSiController = TextEditingController(text: product.nameSi ?? '');
     final categoryController = TextEditingController(text: product.category);
     final costPriceController = _selectedTextController(
       product.costPrice.toStringAsFixed(2),
@@ -2391,7 +3316,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
               TextField(
                 controller: nameController,
                 textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(labelText: 'Product name'),
+                decoration: const InputDecoration(
+                  labelText: 'English product name',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: nameSiController,
+                inputFormatters: [SinhalaPhoneticInputFormatter()],
+                decoration: const InputDecoration(
+                  labelText: 'Sinhala name (optional)',
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -2531,229 +3466,252 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   });
                 },
               ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(dialogContext),
-                      child: const Text('Cancel'),
+              const SizedBox(height: 24),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: const Text('Cancel'),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () async {
-                        final name = nameController.text.trim();
-                        final category = categoryController.text.trim();
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        onPressed: () async {
+                          final name = nameController.text.trim();
+                          final nameSi = nameSiController.text.trim();
+                          final category = categoryController.text.trim();
 
-                        if (name.isEmpty) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: 'Enter a product name.',
-                          );
-                          return;
-                        }
-
-                        final costError = _validateNonNegativeMoney(
-                          costPriceController.text,
-                          label: 'cost price',
-                        );
-                        if (costError != null) {
-                          AppSnackBar.show(dialogContext, message: costError);
-                          return;
-                        }
-
-                        final sellingError = _validateNonNegativeMoney(
-                          sellingPriceController.text,
-                          label: 'selling price',
-                        );
-                        if (sellingError != null) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: sellingError,
-                          );
-                          return;
-                        }
-
-                        final minStockError = _validatePositiveInt(
-                          minStockController.text,
-                          label: 'minimum stock level',
-                          allowZero: true,
-                        );
-                        if (minStockError != null) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: minStockError,
-                          );
-                          return;
-                        }
-
-                        final expiryAlertError = _validatePositiveInt(
-                          expiryAlertDaysController.text,
-                          label: 'expiry alert days',
-                          allowZero: false,
-                        );
-                        if (trackExpiry && expiryAlertError != null) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: expiryAlertError,
-                          );
-                          return;
-                        }
-
-                        final rawWholesale = wholesalePriceController.text
-                            .trim();
-                        if (rawWholesale.isNotEmpty) {
-                          final wholesaleError = _validateNonNegativeMoney(
-                            rawWholesale,
-                            label: 'wholesale price',
-                          );
-                          if (wholesaleError != null) {
+                          if (name.isEmpty) {
                             AppSnackBar.show(
                               dialogContext,
-                              message: wholesaleError,
+                              message: 'Enter a product name.',
                             );
                             return;
                           }
-                        }
 
-                        final rawSale = salePriceController.text.trim();
-                        if (rawSale.isNotEmpty) {
-                          final saleError = _validateNonNegativeMoney(
-                            rawSale,
-                            label: 'sale price',
+                          final costError = _validateNonNegativeMoney(
+                            costPriceController.text,
+                            label: 'cost price',
                           );
-                          if (saleError != null) {
-                            AppSnackBar.show(dialogContext, message: saleError);
+                          if (costError != null) {
+                            AppSnackBar.show(dialogContext, message: costError);
                             return;
                           }
-                        }
 
-                        final sellingPrice = double.parse(
-                          sellingPriceController.text.trim(),
-                        );
-                        if (sellingPrice <= 0) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: 'Selling price must be greater than 0.',
+                          final sellingError = _validateNonNegativeMoney(
+                            sellingPriceController.text,
+                            label: 'selling price',
                           );
-                          return;
-                        }
-
-                        final costPrice = double.parse(
-                          costPriceController.text.trim(),
-                        );
-                        final wholesalePrice = rawWholesale.isEmpty
-                            ? sellingPrice
-                            : double.parse(rawWholesale);
-                        final salePrice = rawSale.isEmpty
-                            ? null
-                            : double.parse(rawSale);
-                        final minStock = int.parse(
-                          minStockController.text.trim(),
-                        );
-                        final expiryAlertDays = trackExpiry
-                            ? int.parse(expiryAlertDaysController.text.trim())
-                            : product.expiryAlertDays;
-                        final normalizedUnitLabel = _normalizeUnitLabelInput(
-                          unitLabelController.text,
-                          quantityType,
-                        );
-
-                        if (saleEnabled &&
-                            (salePrice == null || salePrice <= 0)) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message:
-                                'Enter a valid sale price before activating sale mode.',
-                          );
-                          return;
-                        }
-
-                        final normalizedCategory = category.isEmpty
-                            ? 'General'
-                            : category;
-                        final normalizedWholesale = double.parse(
-                          ((wholesalePrice <= 0 ? sellingPrice : wholesalePrice)
-                              .toStringAsFixed(2)),
-                        );
-                        final normalizedSalePrice = salePrice == null
-                            ? null
-                            : double.parse(salePrice.toStringAsFixed(2));
-
-                        final noChanges =
-                            name == product.name &&
-                            normalizedCategory == product.category &&
-                            quantityType == product.quantityType &&
-                            normalizedUnitLabel == product.unitLabel &&
-                            double.parse(costPrice.toStringAsFixed(2)) ==
-                                double.parse(
-                                  product.costPrice.toStringAsFixed(2),
-                                ) &&
-                            double.parse(sellingPrice.toStringAsFixed(2)) ==
-                                double.parse(
-                                  product.sellingPrice.toStringAsFixed(2),
-                                ) &&
-                            normalizedWholesale ==
-                                double.parse(
-                                  product.wholesalePrice.toStringAsFixed(2),
-                                ) &&
-                            ((normalizedSalePrice == null &&
-                                    product.salePrice == null) ||
-                                (normalizedSalePrice != null &&
-                                    product.salePrice != null &&
-                                    normalizedSalePrice ==
-                                        double.parse(
-                                          product.salePrice!.toStringAsFixed(2),
-                                        ))) &&
-                            saleEnabled == product.saleEnabled &&
-                            minStock == product.minStockLevel &&
-                            trackExpiry == product.trackExpiry &&
-                            expiryAlertDays == product.expiryAlertDays;
-
-                        if (noChanges) {
-                          AppSnackBar.show(
-                            dialogContext,
-                            message: 'No changes detected.',
-                          );
-                          Navigator.pop(dialogContext, null);
-                          return;
-                        }
-
-                        final confirmed = await _confirmAction(
-                          title: 'Confirm Product Update',
-                          message: 'Save changes for ${product.name}?',
-                          confirmText: 'Save Changes',
-                        );
-                        if (!confirmed) return;
-
-                        final success = await DatabaseHelper.instance
-                            .updateProductDetailsLocal(
-                              barcode: product.barcode,
-                              name: name,
-                              category: category.isEmpty ? 'General' : category,
-                              costPrice: costPrice,
-                              sellingPrice: sellingPrice,
-                              quantityType: quantityType,
-                              unitLabel: normalizedUnitLabel,
-                              wholesalePrice: wholesalePrice,
-                              salePrice: salePrice,
-                              saleEnabled: saleEnabled,
-                              minStockLevel: minStock,
-                              trackExpiry: trackExpiry,
-                              expiryAlertDays: expiryAlertDays,
-                              changedBy: changedBy,
+                          if (sellingError != null) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: sellingError,
                             );
+                            return;
+                          }
 
-                        if (!dialogContext.mounted) return;
-                        Navigator.pop(dialogContext, success);
-                      },
-                      icon: const Icon(Icons.edit_outlined),
-                      label: const Text('Save Product Changes'),
+                          final minStockError = _validatePositiveInt(
+                            minStockController.text,
+                            label: 'minimum stock level',
+                            allowZero: true,
+                          );
+                          if (minStockError != null) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: minStockError,
+                            );
+                            return;
+                          }
+
+                          final expiryAlertError = _validatePositiveInt(
+                            expiryAlertDaysController.text,
+                            label: 'expiry alert days',
+                            allowZero: false,
+                          );
+                          if (trackExpiry && expiryAlertError != null) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: expiryAlertError,
+                            );
+                            return;
+                          }
+
+                          final rawWholesale = wholesalePriceController.text
+                              .trim();
+                          if (rawWholesale.isNotEmpty) {
+                            final wholesaleError = _validateNonNegativeMoney(
+                              rawWholesale,
+                              label: 'wholesale price',
+                            );
+                            if (wholesaleError != null) {
+                              AppSnackBar.show(
+                                dialogContext,
+                                message: wholesaleError,
+                              );
+                              return;
+                            }
+                          }
+
+                          final rawSale = salePriceController.text.trim();
+                          if (rawSale.isNotEmpty) {
+                            final saleError = _validateNonNegativeMoney(
+                              rawSale,
+                              label: 'sale price',
+                            );
+                            if (saleError != null) {
+                              AppSnackBar.show(
+                                dialogContext,
+                                message: saleError,
+                              );
+                              return;
+                            }
+                          }
+
+                          final sellingPrice = double.parse(
+                            sellingPriceController.text.trim(),
+                          );
+                          if (sellingPrice <= 0) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: 'Selling price must be greater than 0.',
+                            );
+                            return;
+                          }
+
+                          final costPrice = double.parse(
+                            costPriceController.text.trim(),
+                          );
+                          final wholesalePrice = rawWholesale.isEmpty
+                              ? sellingPrice
+                              : double.parse(rawWholesale);
+                          final salePrice = rawSale.isEmpty
+                              ? null
+                              : double.parse(rawSale);
+                          final minStock = int.parse(
+                            minStockController.text.trim(),
+                          );
+                          final expiryAlertDays = trackExpiry
+                              ? int.parse(expiryAlertDaysController.text.trim())
+                              : product.expiryAlertDays;
+                          final normalizedUnitLabel = _normalizeUnitLabelInput(
+                            unitLabelController.text,
+                            quantityType,
+                          );
+
+                          if (saleEnabled &&
+                              (salePrice == null || salePrice <= 0)) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message:
+                                  'Enter a valid sale price before activating sale mode.',
+                            );
+                            return;
+                          }
+
+                          final normalizedCategory = category.isEmpty
+                              ? 'General'
+                              : category;
+                          final normalizedWholesale = double.parse(
+                            ((wholesalePrice <= 0
+                                    ? sellingPrice
+                                    : wholesalePrice)
+                                .toStringAsFixed(2)),
+                          );
+                          final normalizedSalePrice = salePrice == null
+                              ? null
+                              : double.parse(salePrice.toStringAsFixed(2));
+
+                          final noChanges =
+                              name == product.name &&
+                              nameSi == (product.nameSi ?? '') &&
+                              normalizedCategory == product.category &&
+                              quantityType == product.quantityType &&
+                              normalizedUnitLabel == product.unitLabel &&
+                              double.parse(costPrice.toStringAsFixed(2)) ==
+                                  double.parse(
+                                    product.costPrice.toStringAsFixed(2),
+                                  ) &&
+                              double.parse(sellingPrice.toStringAsFixed(2)) ==
+                                  double.parse(
+                                    product.sellingPrice.toStringAsFixed(2),
+                                  ) &&
+                              normalizedWholesale ==
+                                  double.parse(
+                                    product.wholesalePrice.toStringAsFixed(2),
+                                  ) &&
+                              ((normalizedSalePrice == null &&
+                                      product.salePrice == null) ||
+                                  (normalizedSalePrice != null &&
+                                      product.salePrice != null &&
+                                      normalizedSalePrice ==
+                                          double.parse(
+                                            product.salePrice!.toStringAsFixed(
+                                              2,
+                                            ),
+                                          ))) &&
+                              saleEnabled == product.saleEnabled &&
+                              minStock == product.minStockLevel &&
+                              trackExpiry == product.trackExpiry &&
+                              expiryAlertDays == product.expiryAlertDays;
+
+                          if (noChanges) {
+                            AppSnackBar.show(
+                              dialogContext,
+                              message: 'No changes detected.',
+                            );
+                            Navigator.pop(dialogContext, null);
+                            return;
+                          }
+
+                          final confirmed = await _confirmAction(
+                            title: 'Confirm Product Update',
+                            message: 'Save changes for $displayName?',
+                            confirmText: 'Save Changes',
+                          );
+                          if (!confirmed) return;
+
+                          final success = await DatabaseHelper.instance
+                              .updateProductDetailsLocal(
+                                barcode: product.barcode,
+                                name: name,
+                                nameSi: nameSi.isEmpty ? null : nameSi,
+                                category: category.isEmpty
+                                    ? 'General'
+                                    : category,
+                                costPrice: costPrice,
+                                sellingPrice: sellingPrice,
+                                quantityType: quantityType,
+                                unitLabel: normalizedUnitLabel,
+                                wholesalePrice: wholesalePrice,
+                                salePrice: salePrice,
+                                saleEnabled: saleEnabled,
+                                minStockLevel: minStock,
+                                trackExpiry: trackExpiry,
+                                expiryAlertDays: expiryAlertDays,
+                                changedBy: changedBy,
+                              );
+
+                          if (!dialogContext.mounted) return;
+                          Navigator.pop(dialogContext, success);
+                        },
+                        icon: const Icon(Icons.edit_outlined),
+                        label: const Text('Save Product Changes'),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ],
           ),
@@ -2763,6 +3721,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     _disposeControllersNextFrame([
       nameController,
+      nameSiController,
       categoryController,
       costPriceController,
       sellingPriceController,
@@ -2782,17 +3741,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _deleteProduct(Product product) async {
+    final displayName = _displayProductName(product);
     final approval = await _requireManagerApproval(
-      actionLabel: 'delete ${product.name}',
+      actionLabel: 'delete $displayName',
       description:
-          'Approved product delete for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved product delete for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
 
     final confirmed = await _confirmAction(
       title: 'Delete Product',
-      message: 'Delete ${product.name} from inventory? This cannot be undone.',
+      message: 'Delete $displayName from inventory? This cannot be undone.',
       confirmText: 'Delete',
       isDestructive: true,
     );
@@ -3228,6 +4188,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         initialProduct ??
         await _pickProduct(title: 'Select a product to receive');
     if (product == null || !mounted) return;
+    final displayName = _displayProductName(product);
 
     final mappings = await DatabaseHelper.instance.getMappingsForProduct(
       product.barcode,
@@ -3259,9 +4220,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
 
     final approval = await _requireManagerApproval(
-      actionLabel: 'receive stock for ${product.name}',
+      actionLabel: 'receive stock for $displayName',
       description:
-          'Approved stock receive for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved stock receive for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
@@ -3283,11 +4244,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
     int? selectedSupplierId = preferredMapping.supplierId;
     bool setAsPrimary = false;
     DateTime? expiryDate;
+    if (product.trackExpiry) {
+      final preferredSupplier = suppliers
+          .where((supplier) => supplier.id == selectedSupplierId)
+          .cast<PosSupplier?>()
+          .firstOrNull;
+      if (preferredSupplier != null) {
+        batchController.text = await DatabaseHelper.instance
+            .generateStockBatchNumber(supplierName: preferredSupplier.name);
+        if (!mounted) return;
+      }
+    }
 
     final saved = await _showInventoryPopup<bool>(
       icon: Icons.inventory_2_rounded,
       title: 'Receive Stock',
-      subtitle: '${product.name} • ${product.barcode}',
+      subtitle: '$displayName • ${product.barcode}',
       maxWidth: 760,
       bodyBuilder: (dialogContext, setPopupState) {
         final selectedSupplier = selectedSupplierId == null
@@ -3365,40 +4337,31 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final confirmed = await _confirmAction(
             title: 'Confirm Stock Receive',
             message:
-                'Receive ${_formatProductQuantity(product, qty)} of ${product.name} from ${supplier.name}${expiryDate == null ? '' : ' expiring on ${_formatDateOnly(expiryDate!)}'}? This will increase stock immediately.',
+                'Receive ${_formatProductQuantity(product, qty)} of $displayName from ${supplier.name}${expiryDate == null ? '' : ' expiring on ${_formatDateOnly(expiryDate!)}'}? This will increase stock immediately.',
             confirmText: 'Receive',
           );
           if (!confirmed) return;
 
-          final success = await DatabaseHelper.instance.receiveStockLocal(
-            product.barcode,
-            qty,
-            unitCost: unitCost,
-            performedBy: changedBy,
-            reason: noteController.text.trim(),
-            supplierId: supplier.id,
-            supplierName: supplier.name,
-          );
+          final success = await DatabaseHelper.instance
+              .receiveStockWithReceiptLocal(
+                barcode: product.barcode,
+                quantity: qty,
+                supplierId: supplier.id,
+                supplierName: supplier.name,
+                resolvedCost: resolvedCost,
+                unitCost: unitCost,
+                referenceNote: noteController.text.trim(),
+                batchNumber: batchController.text.trim(),
+                expiryDate: expiryDate,
+                performedBy: changedBy,
+                backendStatus: 'local',
+              );
 
           if (!success) {
             if (!dialogContext.mounted) return;
             Navigator.pop(dialogContext, false);
             return;
           }
-
-          await DatabaseHelper.instance.insertStockReceipt(
-            barcode: product.barcode,
-            productName: product.name,
-            quantity: qty,
-            supplierId: supplier.id,
-            supplierName: supplier.name,
-            cost: resolvedCost,
-            referenceNote: noteController.text.trim(),
-            batchNumber: batchController.text.trim(),
-            expiryDate: expiryDate,
-            cashierName: changedBy,
-            backendStatus: 'local',
-          );
 
           if (setAsPrimary) {
             await DatabaseHelper.instance.upsertSupplierProductMapping(
@@ -3477,6 +4440,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       ),
                     );
                   });
+                  if (product.trackExpiry) {
+                    final supplier = suppliers
+                        .where((item) => item.id == value)
+                        .cast<PosSupplier?>()
+                        .firstOrNull;
+                    if (supplier != null) {
+                      DatabaseHelper.instance
+                          .generateStockBatchNumber(supplierName: supplier.name)
+                          .then((batchNumber) {
+                            if (!dialogContext.mounted) return;
+                            setPopupState(() {
+                              batchController.text = batchNumber;
+                            });
+                          });
+                    }
+                  }
                 },
               ),
               const SizedBox(height: 8),
@@ -3628,9 +4607,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           Expanded(
                             child: TextField(
                               controller: batchController,
-                              textInputAction: TextInputAction.next,
+                              readOnly: true,
                               decoration: const InputDecoration(
-                                labelText: 'Batch number (optional)',
+                                labelText: 'Batch number',
                               ),
                             ),
                           ),
@@ -3764,6 +4743,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _showSupplierInfoSheet(Product product) async {
+    final displayName = _displayProductName(product);
     final preferredMapping = await DatabaseHelper.instance
         .getPreferredSupplierMapping(product.barcode);
     final suppliers = await DatabaseHelper.instance.getSuppliers();
@@ -3787,7 +4767,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     await _showInventoryPopup<void>(
       icon: Icons.local_shipping_outlined,
       title: 'Supplier Info',
-      subtitle: '${product.name} • ${product.barcode}',
+      subtitle: '$displayName • ${product.barcode}',
       maxWidth: 720,
       maxHeightFactor: 0.72,
       bodyBuilder: (dialogContext, setPopupState) {
@@ -3964,6 +4944,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             SupplierProductMapping(
                               barcode: product.barcode,
                               productName: product.name,
+                              productNameSi: product.nameSi,
                               supplierId: supplier.id,
                               supplierName: supplier.name,
                               isPreferred: true,
@@ -3976,7 +4957,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             ),
                           );
                       if (!mounted) return;
-                      _showMessage('Supplier saved for ${product.name}.');
+                      _showMessage('Supplier saved for $displayName.');
                       await _loadData(showLoader: false);
                       if (!dialogContext.mounted) return;
                       Navigator.pop(dialogContext);
@@ -4054,7 +5035,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Select Supplier • ${product.name}',
+                        'Select Supplier • ${_displayProductName(product)}',
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w700,
@@ -4129,14 +5110,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         initialProduct ??
         await _pickProduct(title: 'Select a product to adjust');
     if (product == null || !mounted) return;
-
-    final approval = await _requireManagerApproval(
-      actionLabel: 'adjust stock for ${product.name}',
-      description:
-          'Approved stock adjustment for ${product.name} (${product.barcode}) requested by $_currentUserName',
-    );
-    if (approval == null || !mounted) return;
-    final changedBy = _buildPerformedByLabel(approval.approverName);
+    final displayName = _displayProductName(product);
 
     final qtyController = TextEditingController();
     final reasonController = TextEditingController();
@@ -4154,10 +5128,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
       icon: Icons.tune_rounded,
       title: 'Stock Adjustment',
       subtitle:
-          '${product.name} • Current stock ${_formatProductQuantity(product, product.stock)}',
+          '$displayName • Current stock ${_formatProductQuantity(product, product.stock)}',
       maxWidth: 620,
       bodyBuilder: (dialogContext, setPopupState) {
         Future<void> submitAdjustment() async {
+          final reason = reasonController.text.trim();
           final qtyError = _validateQuantityInput(
             qtyController.text,
             label: adjustmentType == 'set'
@@ -4189,10 +5164,42 @@ class _InventoryScreenState extends State<InventoryScreen> {
               break;
           }
 
+          final isIncreasingStock =
+              adjustmentType == 'add' ||
+              (adjustmentType == 'set' && resultingStock > product.stock);
+
+          if (product.trackExpiry && adjustmentType == 'add') {
+            AppSnackBar.show(
+              dialogContext,
+              message:
+                  'This product tracks expiry. Please use Receive Stock to add stock with expiry date.',
+            );
+            return;
+          }
+
+          if (product.trackExpiry &&
+              adjustmentType == 'set' &&
+              resultingStock > product.stock) {
+            AppSnackBar.show(
+              dialogContext,
+              message:
+                  'Cannot increase expiry-tracked stock using Set Exact. Use Receive Stock instead.',
+            );
+            return;
+          }
+
           if (resultingStock < 0) {
             AppSnackBar.show(
               dialogContext,
               message: 'Resulting stock cannot be negative.',
+            );
+            return;
+          }
+
+          if (reason.isEmpty) {
+            AppSnackBar.show(
+              dialogContext,
+              message: 'Enter a reason before saving this adjustment.',
             );
             return;
           }
@@ -4205,17 +5212,29 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final confirmed = await _confirmAction(
             title: 'Confirm Stock Adjustment',
             message:
-                'This will $actionLabel for ${product.name}. Final stock will be ${_formatProductQuantity(product, resultingStock)}.',
+                'This will $actionLabel for $displayName. Final stock will be ${_formatProductQuantity(product, resultingStock)}.',
             confirmText: 'Apply',
           );
           if (!confirmed) return;
+
+          var changedBy = _currentUserName;
+          if (isIncreasingStock) {
+            final approval = await _requireManagerApproval(
+              actionLabel: '$actionLabel for $displayName',
+              description:
+                  'Approved stock adjustment for $displayName (${product.barcode}) requested by $_currentUserName',
+              alwaysAskPin: true,
+            );
+            if (approval == null || !dialogContext.mounted) return;
+            changedBy = _buildPerformedByLabel(approval.approverName);
+          }
 
           final success = await DatabaseHelper.instance.adjustStockLocal(
             product.barcode,
             adjustmentType: adjustmentType,
             quantity: qty,
             performedBy: changedBy,
-            reason: reasonController.text.trim(),
+            reason: reason,
           );
 
           if (!dialogContext.mounted) return;
@@ -4237,7 +5256,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
             resultingStock = previewQty;
             break;
         }
-
         return SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -4260,6 +5278,38 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   ),
                 ],
               ),
+              if (product.trackExpiry) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _warningColor.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _warningColor.withOpacity(0.35)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.info_outline_rounded,
+                        color: _warningColor,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'This item tracks expiry. Adding stock must be done through Receive Stock. Removing or setting lower stock will reduce the nearest expiry batches first.',
+                          style: TextStyle(
+                            color: _textSecondary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 initialValue: adjustmentType,
@@ -4312,7 +5362,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
               TextField(
                 controller: reasonController,
                 maxLines: 2,
-                decoration: const InputDecoration(labelText: 'Reason'),
+                decoration: const InputDecoration(
+                  labelText: 'Reason (required)',
+                  helperText: 'Required for Add, Remove, and Set Exact.',
+                ),
               ),
               const SizedBox(height: 18),
               Row(
@@ -4352,10 +5405,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _openMinStockDialog(Product product) async {
+    final displayName = _displayProductName(product);
     final approval = await _requireManagerApproval(
-      actionLabel: 'update minimum stock for ${product.name}',
+      actionLabel: 'update minimum stock for $displayName',
       description:
-          'Approved minimum stock update for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved minimum stock update for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
@@ -4367,7 +5421,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final changed = await _showInventoryPopup<bool>(
       icon: Icons.warning_amber_rounded,
       title: 'Update Minimum Stock',
-      subtitle: '${product.name} • ${product.barcode}',
+      subtitle: '$displayName • ${product.barcode}',
       maxWidth: 560,
       maxHeightFactor: 0.54,
       bodyBuilder: (dialogContext, setPopupState) {
@@ -4384,7 +5438,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final value = int.parse(controller.text.trim());
           final confirmed = await _confirmAction(
             title: 'Confirm Minimum Stock Update',
-            message: 'Set minimum stock for ${product.name} to $value?',
+            message: 'Set minimum stock for $displayName to $value?',
             confirmText: 'Save',
           );
           if (!confirmed) return;
@@ -4480,11 +5534,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
         initialProduct ??
         await _pickProduct(title: 'Select a product to change price');
     if (product == null || !mounted) return;
+    final displayName = _displayProductName(product);
 
     final approval = await _requireManagerApproval(
-      actionLabel: 'change prices for ${product.name}',
+      actionLabel: 'change prices for $displayName',
       description:
-          'Approved price change for ${product.name} (${product.barcode}) requested by $_currentUserName',
+          'Approved price change for $displayName (${product.barcode}) requested by $_currentUserName',
     );
     if (approval == null || !mounted) return;
     final changedBy = _buildPerformedByLabel(approval.approverName);
@@ -4501,7 +5556,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final saved = await _showInventoryPopup<bool>(
       icon: Icons.sell_rounded,
       title: 'Change Price',
-      subtitle: '${product.name} • ${product.barcode}',
+      subtitle: '$displayName • ${product.barcode}',
       maxWidth: 760,
       bodyBuilder: (dialogContext, setPopupState) {
         void setSelectedPriceText(String text) {
@@ -4564,8 +5619,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
             message:
                 priceType == 'selling' &&
                     (oldSelectedPrice - newPrice).abs() > 0.000001
-                ? 'Update ${product.name} SELLING price to Rs. ${newPrice.toStringAsFixed(2)}?\n\nThe old price Rs. ${oldSelectedPrice.toStringAsFixed(2)} will be saved as an allowed old label price for checkout.'
-                : 'Update ${product.name} ${priceType.toUpperCase()} price to Rs. ${newPrice.toStringAsFixed(2)}?',
+                ? 'Update $displayName SELLING price to Rs. ${newPrice.toStringAsFixed(2)}?\n\nThe old price Rs. ${oldSelectedPrice.toStringAsFixed(2)} will be saved as an allowed old label price for checkout.'
+                : 'Update $displayName ${priceType.toUpperCase()} price to Rs. ${newPrice.toStringAsFixed(2)}?',
             confirmText: 'Update',
           );
           if (!confirmed) return;
@@ -4876,7 +5931,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     await _showInventoryPopup<void>(
       icon: Icons.inventory_2_outlined,
-      title: product.name,
+      title: _displayProductName(product),
       subtitle:
           '${product.barcode} • ${product.category} • ${product.quantityType.label} (${product.unitLabel})',
       maxWidth: 980,
@@ -5326,7 +6381,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  (movement['product_name'] ?? 'Unknown product').toString(),
+                  ProductNameHelper.displayNameFromMap(
+                    movement,
+                    context.read<LanguageProvider>().language,
+                  ),
                   style: TextStyle(
                     color: _textPrimary,
                     fontWeight: FontWeight.w700,
@@ -5618,7 +6676,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
-  Widget _buildProductRow(Product product) {
+  Widget _buildProductRow(Product product, {bool isKeyboardSelected = false}) {
     final isSelectedForDelete = _selectedProductBarcodes.contains(
       product.barcode,
     );
@@ -5713,8 +6771,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
             color: _panelSoft,
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: isSelectedForDelete ? _dangerColor : _borderColor,
-              width: isSelectedForDelete ? 1.5 : 1,
+              color: isKeyboardSelected
+                  ? _brandColor
+                  : (isSelectedForDelete ? _dangerColor : _borderColor),
+              width: isKeyboardSelected || isSelectedForDelete ? 1.5 : 1,
             ),
           ),
           child: Row(
@@ -5755,7 +6815,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                product.name,
+                                _displayProductName(product),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
@@ -5911,9 +6971,258 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+  Widget _buildCompactTableHeader() {
+    TextStyle headerStyle = TextStyle(
+      color: _textSecondary,
+      fontWeight: FontWeight.w800,
+      fontSize: 12,
+    );
+
+    Widget headerCell(String label, int flex, {TextAlign? align}) {
+      return Expanded(
+        flex: flex,
+        child: Text(label, style: headerStyle, textAlign: align),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: _panelAlt,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _borderColor),
+      ),
+      child: Row(
+        children: [
+          headerCell('Name', 26),
+          headerCell('Barcode', 16),
+          headerCell('Category', 14),
+          headerCell('Supplier', 14),
+          headerCell('Stock', 12, align: TextAlign.right),
+          headerCell('Selling Price', 14, align: TextAlign.right),
+          headerCell('Cost Price', 14, align: TextAlign.right),
+          const SizedBox(width: 40),
+          SizedBox(
+            width: 224,
+            child: Text(
+              'Action Buttons',
+              style: headerStyle,
+              textAlign: TextAlign.right,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactProductRow(
+    Product product, {
+    bool isKeyboardSelected = false,
+  }) {
+    final isSelectedForDelete = _selectedProductBarcodes.contains(
+      product.barcode,
+    );
+    final statusColor = product.isOutOfStock
+        ? _dangerColor
+        : (product.isLowStock ? _warningColor : _brandColor);
+    final supplierName =
+        _supplierNameByBarcode[product.barcode]?.trim().isNotEmpty == true
+        ? _supplierNameByBarcode[product.barcode]!.trim()
+        : '-';
+
+    Widget cell(String value, int flex, {TextAlign? align, Color? color}) {
+      return Expanded(
+        flex: flex,
+        child: Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: align,
+          style: TextStyle(
+            color: color ?? _textPrimary,
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+          ),
+        ),
+      );
+    }
+
+    Widget rowAction({
+      required IconData icon,
+      required String tooltip,
+      required VoidCallback onTap,
+      required Color iconColor,
+    }) {
+      return Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: _panelAlt,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _borderColor),
+            ),
+            child: Icon(icon, size: 16, color: iconColor),
+          ),
+        ),
+      );
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          if (_isBulkDeleteMode) {
+            _toggleProductSelection(product);
+          } else {
+            _openProductDetail(product);
+          }
+        },
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: _panelSoft,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isKeyboardSelected
+                  ? _brandColor
+                  : (isSelectedForDelete ? _dangerColor : _borderColor),
+              width: isKeyboardSelected || isSelectedForDelete ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              if (_isBulkDeleteMode)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Checkbox(
+                    value: isSelectedForDelete,
+                    onChanged: (_) => _toggleProductSelection(product),
+                    activeColor: _dangerColor,
+                  ),
+                ),
+              cell(_displayProductName(product), 26),
+              cell(product.barcode, 16, color: _textSecondary),
+              cell(product.category, 14, color: _textSecondary),
+              cell(supplierName, 14, color: _textSecondary),
+              cell(
+                _formatProductQuantity(product, product.stock),
+                12,
+                align: TextAlign.right,
+                color: statusColor,
+              ),
+              cell(
+                _formatCurrency(product.sellingPrice),
+                14,
+                align: TextAlign.right,
+                color: _brandColor,
+              ),
+              cell(
+                _formatCurrency(product.costPrice),
+                14,
+                align: TextAlign.right,
+              ),
+              const SizedBox(width: 40),
+              SizedBox(
+                width: 224,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (!_isBulkDeleteMode) ...[
+                      rowAction(
+                        icon: Icons.inventory_2_rounded,
+                        tooltip: 'Receive stock',
+                        onTap: () => _openReceiveFlow(initialProduct: product),
+                        iconColor: _brandColor,
+                      ),
+                      const SizedBox(width: 10),
+                      rowAction(
+                        icon: Icons.tune_rounded,
+                        tooltip: 'Adjust stock',
+                        onTap: () => _openAdjustFlow(initialProduct: product),
+                        iconColor: _warningColor,
+                      ),
+                      const SizedBox(width: 10),
+                      rowAction(
+                        icon: Icons.sell_outlined,
+                        tooltip: 'Change price',
+                        onTap: () =>
+                            _openPriceChangeFlow(initialProduct: product),
+                        iconColor: const Color(0xFF8B5CF6),
+                      ),
+                      const SizedBox(width: 10),
+                      PopupMenuButton<String>(
+                        tooltip: 'More actions',
+                        onSelected: (value) =>
+                            _handleProductMenuAction(value, product),
+                        itemBuilder: (context) => const [
+                          PopupMenuItem<String>(
+                            value: 'edit',
+                            child: Text('Edit Item'),
+                          ),
+                          PopupMenuItem<String>(
+                            value: 'history',
+                            child: Text('View History'),
+                          ),
+                          PopupMenuDivider(),
+                          PopupMenuItem<String>(
+                            value: 'delete',
+                            child: Text(
+                              'Delete Item',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          ),
+                        ],
+                        child: Container(
+                          width: 34,
+                          height: 34,
+                          decoration: BoxDecoration(
+                            color: _panelAlt,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: _borderColor),
+                          ),
+                          child: Icon(
+                            Icons.more_horiz_rounded,
+                            size: 16,
+                            color: _textSecondary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final visibleProducts = _filteredProducts;
+    final activeCount =
+        _summaryActiveProductCount ??
+        (_cachedInventorySummary?['active_product_count'] as num?)?.toInt() ??
+        _activeProductCount;
+    final lowStockCount =
+        _summaryLowStockCount ??
+        (_cachedInventorySummary?['low_stock_count'] as num?)?.toInt() ??
+        _lowStockCount;
+    final outOfStockCount =
+        _summaryOutOfStockCount ??
+        (_cachedInventorySummary?['out_of_stock_count'] as num?)?.toInt() ??
+        _outOfStockCount;
+    final stockValue =
+        _summaryStockValue ??
+        ((_cachedInventorySummary?['stock_value'] as num?)?.toDouble()) ??
+        _stockValue;
 
     return Scaffold(
       backgroundColor: _screenBackground,
@@ -5931,51 +7240,64 @@ class _InventoryScreenState extends State<InventoryScreen> {
               ),
             ),
             child: ListView(
+              controller: _pageScrollController,
               padding: const EdgeInsets.all(16),
               children: [
                 _buildHeaderCard(),
                 const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    SizedBox(
-                      width: 250,
-                      child: _buildSummaryCard(
-                        title: 'Products',
-                        value: _activeProductCount.toString(),
-                        icon: Icons.inventory_2_outlined,
-                        accent: _accentBlue,
-                      ),
-                    ),
-                    SizedBox(
-                      width: 250,
-                      child: _buildSummaryCard(
-                        title: 'Low Stock',
-                        value: _lowStockCount.toString(),
-                        icon: Icons.warning_amber_rounded,
-                        accent: _warningColor,
-                      ),
-                    ),
-                    SizedBox(
-                      width: 250,
-                      child: _buildSummaryCard(
-                        title: 'Out of Stock',
-                        value: _outOfStockCount.toString(),
-                        icon: Icons.remove_shopping_cart_rounded,
-                        accent: _dangerColor,
-                      ),
-                    ),
-                    SizedBox(
-                      width: 250,
-                      child: _buildSummaryCard(
-                        title: 'Stock Value',
-                        value: 'Rs. ${_stockValue.toStringAsFixed(2)}',
-                        icon: Icons.payments_outlined,
-                        accent: _successColor,
-                      ),
-                    ),
-                  ],
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    const gap = 12.0;
+                    final isWide = constraints.maxWidth >= 1080;
+                    final isMedium = constraints.maxWidth >= 640;
+                    final columns = isWide ? 4 : (isMedium ? 2 : 1);
+                    final cardWidth =
+                        (constraints.maxWidth - ((columns - 1) * gap)) /
+                        columns;
+
+                    return Wrap(
+                      spacing: gap,
+                      runSpacing: gap,
+                      children: [
+                        SizedBox(
+                          width: cardWidth,
+                          child: _buildSummaryCard(
+                            title: 'Products',
+                            value: activeCount.toString(),
+                            icon: Icons.inventory_2_outlined,
+                            accent: _accentBlue,
+                          ),
+                        ),
+                        SizedBox(
+                          width: cardWidth,
+                          child: _buildSummaryCard(
+                            title: 'Low Stock',
+                            value: lowStockCount.toString(),
+                            icon: Icons.warning_amber_rounded,
+                            accent: _warningColor,
+                          ),
+                        ),
+                        SizedBox(
+                          width: cardWidth,
+                          child: _buildSummaryCard(
+                            title: 'Out of Stock',
+                            value: outOfStockCount.toString(),
+                            icon: Icons.remove_shopping_cart_rounded,
+                            accent: _dangerColor,
+                          ),
+                        ),
+                        SizedBox(
+                          width: cardWidth,
+                          child: _buildSummaryCard(
+                            title: 'Stock Value',
+                            value: 'Rs. ${stockValue.toStringAsFixed(2)}',
+                            icon: Icons.payments_outlined,
+                            accent: _successColor,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 16),
                 Container(
@@ -5989,10 +7311,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           Expanded(
                             child: TextField(
                               controller: _searchController,
+                              focusNode: _searchFocusNode,
+                              autofocus: true,
                               style: TextStyle(color: _textPrimary),
                               decoration: InputDecoration(
                                 hintText:
-                                    'Search by name, barcode, or category',
+                                    'Search by barcode, English, Sinhala, or category',
                                 hintStyle: TextStyle(color: _textSecondary),
                                 prefixIcon: Icon(
                                   Icons.search_rounded,
@@ -6033,6 +7357,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               onChanged: (value) {
                                 setState(() {
                                   _searchQuery = value;
+                                  _selectedSearchResultIndex = null;
                                 });
                               },
                             ),
@@ -6047,79 +7372,100 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         ],
                       ),
                       const SizedBox(height: 14),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          _buildFilterChip(
-                            label: 'All',
-                            filter: InventoryFilter.all,
-                          ),
-                          _buildFilterChip(
-                            label: 'In Stock',
-                            filter: InventoryFilter.inStock,
-                          ),
-                          _buildFilterChip(
-                            label: 'Low Stock',
-                            filter: InventoryFilter.lowStock,
-                          ),
-                          _buildFilterChip(
-                            label: 'Out of Stock',
-                            filter: InventoryFilter.outOfStock,
-                          ),
-                          _buildFilterChip(
-                            label: 'Inactive',
-                            filter: InventoryFilter.inactive,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          _buildQuickActionButton(
-                            title: 'Add Product',
-                            icon: Icons.add_box_outlined,
-                            onTap: () => _openAddProductFlow(),
-                          ),
-                          _buildQuickActionButton(
-                            title: 'Bulk Upload',
-                            icon: Icons.upload_file_outlined,
-                            onTap: () => _openBulkUploadFlow(),
-                          ),
-                          _buildQuickActionButton(
-                            title: _isBulkDeleteMode
-                                ? 'Exit Bulk Delete'
-                                : 'Bulk Delete',
-                            icon: _isBulkDeleteMode
-                                ? Icons.close_rounded
-                                : Icons.delete_outline_rounded,
-                            onTap: _isBulkDeleteMode
-                                ? _exitBulkDeleteMode
-                                : _enterBulkDeleteMode,
-                          ),
-                          _buildQuickActionButton(
-                            title: 'Receive Stock',
-                            icon: Icons.inventory_2_rounded,
-                            onTap: () => _openReceiveFlow(),
-                          ),
-                          _buildQuickActionButton(
-                            title: 'Adjust Stock',
-                            icon: Icons.tune_rounded,
-                            onTap: () => _openAdjustFlow(),
-                          ),
-                          _buildQuickActionButton(
-                            title: 'Change Price',
-                            icon: Icons.sell_outlined,
-                            onTap: () => _openPriceChangeFlow(),
-                          ),
-                          _buildQuickActionButton(
-                            title: 'Count Stock',
-                            icon: Icons.playlist_add_check_circle_outlined,
-                            onTap: () => _openStockTakeScreen(),
-                          ),
-                        ],
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact = constraints.maxWidth < 1240;
+                          final filters = Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _buildFilterChip(
+                                label: 'All',
+                                filter: InventoryFilter.all,
+                              ),
+                              _buildFilterChip(
+                                label: 'In Stock',
+                                filter: InventoryFilter.inStock,
+                              ),
+                              _buildFilterChip(
+                                label: 'Low Stock',
+                                filter: InventoryFilter.lowStock,
+                              ),
+                              _buildFilterChip(
+                                label: 'Out of Stock',
+                                filter: InventoryFilter.outOfStock,
+                              ),
+                            ],
+                          );
+                          final actions = Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            alignment: WrapAlignment.end,
+                            children: [
+                              _buildQuickActionButton(
+                                title: 'Add Product',
+                                icon: Icons.add_box_outlined,
+                                onTap: () => _openAddProductFlow(),
+                              ),
+                              _buildQuickActionButton(
+                                title: 'Bulk Upload',
+                                icon: Icons.upload_file_outlined,
+                                onTap: () => _openBulkUploadFlow(),
+                              ),
+                              _buildQuickActionButton(
+                                title: _isBulkDeleteMode
+                                    ? 'Exit Bulk Delete'
+                                    : 'Bulk Delete',
+                                icon: _isBulkDeleteMode
+                                    ? Icons.close_rounded
+                                    : Icons.delete_outline_rounded,
+                                onTap: _isBulkDeleteMode
+                                    ? _exitBulkDeleteMode
+                                    : _enterBulkDeleteMode,
+                              ),
+                              _buildQuickActionButton(
+                                title: 'Receive Stock',
+                                icon: Icons.inventory_2_rounded,
+                                onTap: () => _openReceiveFlow(),
+                              ),
+                              _buildQuickActionButton(
+                                title: 'Adjust Stock',
+                                icon: Icons.tune_rounded,
+                                onTap: () => _openAdjustFlow(),
+                              ),
+                              _buildQuickActionButton(
+                                title: 'Change Price',
+                                icon: Icons.sell_outlined,
+                                onTap: () => _openPriceChangeFlow(),
+                              ),
+                            ],
+                          );
+
+                          if (compact) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                filters,
+                                const SizedBox(height: 12),
+                                actions,
+                              ],
+                            );
+                          }
+
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: filters),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Align(
+                                  alignment: Alignment.topRight,
+                                  child: actions,
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                       if (_isBulkDeleteMode) ...[
                         const SizedBox(height: 14),
@@ -6194,11 +7540,39 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             ),
                           ),
                           const Spacer(),
-                          Text(
-                            '${visibleProducts.length} shown',
-                            style: TextStyle(
-                              color: _textSecondary,
-                              fontWeight: FontWeight.w700,
+                          FilledButton.tonalIcon(
+                            onPressed: _toggleViewMode,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _isCompactTableView
+                                  ? _brandSoft
+                                  : _panelAlt,
+                              foregroundColor: _isCompactTableView
+                                  ? _brandColor
+                                  : _textPrimary,
+                              side: BorderSide(
+                                color: _isCompactTableView
+                                    ? _brandColor.withOpacity(0.35)
+                                    : _borderColor,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 10,
+                              ),
+                            ),
+                            icon: Icon(
+                              _isCompactTableView
+                                  ? Icons.view_agenda_rounded
+                                  : Icons.table_rows_rounded,
+                              size: 18,
+                            ),
+                            label: Text(
+                              _isCompactTableView ? 'Cards View' : 'Table View',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ),
                         ],
@@ -6215,7 +7589,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         ),
                       ),
                       const SizedBox(height: 14),
-                      if (visibleProducts.isEmpty)
+                      if (_isLoading)
+                        const SizedBox(height: 240)
+                      else if (visibleProducts.isEmpty)
                         Container(
                           width: double.infinity,
                           padding: const EdgeInsets.all(28),
@@ -6242,12 +7618,69 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             ],
                           ),
                         )
+                      else if (_isCompactTableView)
+                        Column(
+                          children: [
+                            _buildCompactTableHeader(),
+                            const SizedBox(height: 10),
+                            ...visibleProducts.indexed.map(
+                              (entry) => Padding(
+                                key: _searchResultKeys.putIfAbsent(
+                                  entry.$1,
+                                  GlobalKey.new,
+                                ),
+                                padding: const EdgeInsets.only(bottom: 10),
+                                child: _buildCompactProductRow(
+                                  entry.$2,
+                                  isKeyboardSelected:
+                                      _selectedSearchResultIndex == entry.$1,
+                                ),
+                              ),
+                            ),
+                            if (_isLoadingMoreProducts)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    color: _brandColor,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        )
                       else
-                        ...visibleProducts.map(
-                          (product) => Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
-                            child: _buildProductRow(product),
-                          ),
+                        Column(
+                          children: [
+                            ...visibleProducts.indexed.map(
+                              (entry) => Padding(
+                                key: _searchResultKeys.putIfAbsent(
+                                  entry.$1,
+                                  GlobalKey.new,
+                                ),
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: _buildProductRow(
+                                  entry.$2,
+                                  isKeyboardSelected:
+                                      _selectedSearchResultIndex == entry.$1,
+                                ),
+                              ),
+                            ),
+                            if (_isLoadingMoreProducts)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.2,
+                                    color: _brandColor,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                     ],
                   ),
@@ -6277,7 +7710,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         ],
                       ),
                       const SizedBox(height: 10),
-                      if (_recentMovements.isEmpty)
+                      if (_isLoading)
+                        const SizedBox(height: 120)
+                      else if (_recentMovements.isEmpty)
                         Container(
                           width: double.infinity,
                           padding: const EdgeInsets.all(24),

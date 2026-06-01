@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/presentation_mode_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 
 class PresentationCashierSummaryScreen extends StatefulWidget {
@@ -56,14 +58,20 @@ class _PresentationCashierSummaryScreenState
     final now = DateTime.now();
 
     if (_selectedRange == PresentationSummaryRange.last7Days) {
-      final start = DateTime(now.year, now.month, now.day)
-          .subtract(const Duration(days: 6));
+      final start = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(const Duration(days: 6));
       return (start: start, end: now);
     }
 
     if (_selectedRange == PresentationSummaryRange.last30Days) {
-      final start = DateTime(now.year, now.month, now.day)
-          .subtract(const Duration(days: 29));
+      final start = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(const Duration(days: 29));
       return (start: start, end: now);
     }
 
@@ -107,11 +115,11 @@ class _PresentationCashierSummaryScreenState
 
       final topItems = await PresentationModeService.instance
           .getTopSellingItemsSummary(
-        start: range.start,
-        end: range.end,
-        presentationSessionStartedAt: sessionStartedAt,
-        limit: 6,
-      );
+            start: range.start,
+            end: range.end,
+            presentationSessionStartedAt: sessionStartedAt,
+            limit: 6,
+          );
 
       if (!mounted) return;
 
@@ -177,8 +185,9 @@ class _PresentationCashierSummaryScreenState
   }
 
   String _formatSoldQuantity(Map<String, dynamic> item, num quantity) {
-    final quantityType =
-        (item['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final quantityType = (item['quantity_type'] ?? 'unit')
+        .toString()
+        .toLowerCase();
     final unitLabel = (item['unit_label'] ?? '').toString().trim();
     final formattedQuantity = _formatQuantity(quantity);
     if (quantityType == 'weight') {
@@ -296,8 +305,9 @@ class _PresentationCashierSummaryScreenState
   }
 
   Widget _buildHeaderCard() {
-    final selectedDateLabel =
-        _selectedDate == null ? 'Pick date' : _formatDate(_selectedDate!);
+    final selectedDateLabel = _selectedDate == null
+        ? 'Pick date'
+        : _formatDate(_selectedDate!);
 
     return _buildShell(
       child: Column(
@@ -352,12 +362,16 @@ class _PresentationCashierSummaryScreenState
                 children: [
                   _buildRangeChip(PresentationSummaryRange.today, 'Today'),
                   _buildRangeChip(PresentationSummaryRange.last7Days, '7 Days'),
-                  _buildRangeChip(PresentationSummaryRange.last30Days, '30 Days'),
+                  _buildRangeChip(
+                    PresentationSummaryRange.last30Days,
+                    '30 Days',
+                  ),
                   ActionChip(
                     avatar: Icon(
                       Icons.calendar_month_rounded,
                       size: 18,
-                      color: _selectedRange ==
+                      color:
+                          _selectedRange ==
                               PresentationSummaryRange.specificDate
                           ? _brand
                           : _textSecondary,
@@ -366,13 +380,15 @@ class _PresentationCashierSummaryScreenState
                     onPressed: _pickSpecificDate,
                     backgroundColor: _surfaceSoft,
                     side: BorderSide(
-                      color: _selectedRange ==
+                      color:
+                          _selectedRange ==
                               PresentationSummaryRange.specificDate
                           ? _brand.withOpacity(0.35)
                           : _border,
                     ),
                     labelStyle: TextStyle(
-                      color: _selectedRange ==
+                      color:
+                          _selectedRange ==
                               PresentationSummaryRange.specificDate
                           ? _brand
                           : _textPrimary,
@@ -593,8 +609,8 @@ class _PresentationCashierSummaryScreenState
         final columns = constraints.maxWidth >= 1080
             ? 3
             : constraints.maxWidth >= 680
-                ? 2
-                : 1;
+            ? 2
+            : 1;
         const spacing = 12.0;
         final itemWidth = columns == 1
             ? constraints.maxWidth
@@ -655,7 +671,11 @@ class _PresentationCashierSummaryScreenState
   }
 
   Widget _buildTopSellingRow(Map<String, dynamic> item, int index) {
-    final productName = (item['product_name'] ?? 'Unknown').toString();
+    final productName = ProductNameHelper.displayNameFromMap(
+      item,
+      context.read<LanguageProvider>().language,
+      fallback: 'Unknown',
+    );
     final barcode = (item['barcode'] ?? '').toString();
     final qty = ((item['quantity_sold'] as num?) ?? 0).toDouble();
     final netSales = ((item['net_sales_amount'] as num?) ?? 0).toDouble();
@@ -798,8 +818,8 @@ class _PresentationCashierSummaryScreenState
             )
           else
             ..._topItems.asMap().entries.map(
-                  (entry) => _buildTopSellingRow(entry.value, entry.key),
-                ),
+              (entry) => _buildTopSellingRow(entry.value, entry.key),
+            ),
         ],
       ),
     );

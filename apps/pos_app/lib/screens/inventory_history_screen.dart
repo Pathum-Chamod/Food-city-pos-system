@@ -2,8 +2,11 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 
 enum InventoryHistoryFilter {
@@ -28,6 +31,7 @@ class InventoryHistoryScreen extends StatefulWidget {
 
 class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   static final Map<String, List<Map<String, dynamic>>> _historyCache = {};
 
   List<Map<String, dynamic>> _movements = [];
@@ -74,13 +78,39 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       _isLoading = false;
     }
     _loadHistory(showLoader: cached == null);
+    if (widget.initialBarcode == null) {
+      _focusSearchField();
+    }
   }
 
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  String _displayMovementProductName(Map<String, dynamic> movement) {
+    return ProductNameHelper.displayNameFromMap(
+      movement,
+      context.read<LanguageProvider>().language,
+    );
+  }
+
+  void _focusSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+      final context = _searchFocusNode.context;
+      if (context == null) return;
+      final position = Scrollable.maybeOf(context)?.position;
+      position?.animateTo(
+        position.minScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   List<String>? get _selectedActionTypes {
@@ -383,9 +413,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          (hydratedMovement['product_name'] ??
-                                  'Unknown product')
-                              .toString(),
+                          _displayMovementProductName(hydratedMovement),
                           style: TextStyle(
                             color: _textSecondary,
                             fontSize: 14,
@@ -461,10 +489,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return <MapEntry<String, String>>[
       MapEntry('Action', _movementTitle(actionType)),
       if (!hideProductRow)
-        MapEntry(
-          'Product',
-          (movement['product_name'] ?? 'Unknown product').toString(),
-        ),
+        MapEntry('Product', _displayMovementProductName(movement)),
       MapEntry('Barcode', (movement['barcode'] ?? '-').toString()),
       MapEntry('When', _formatDateTime(movement['created_at']?.toString())),
       if ((movement['performed_by'] ?? '').toString().trim().isNotEmpty)
@@ -710,6 +735,243 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     );
   }
 
+  Widget _buildMovementRecord(Map<String, dynamic> movement) {
+    final actionType = (movement['action_type'] ?? '').toString();
+    final badge = _badgeColor(actionType);
+    final productName = _displayMovementProductName(movement);
+    final barcode = (movement['barcode'] ?? '-').toString();
+    final quantityChange = (movement['quantity_change'] as num?)?.toDouble();
+    final oldPrice = movement['old_price'] as num?;
+    final newPrice = movement['new_price'] as num?;
+    final supplierName = (movement['supplier_name'] ?? '').toString().trim();
+    final performedBy = (movement['performed_by'] ?? '').toString().trim();
+    final reason = (movement['reason'] ?? '').toString().trim();
+    final batchNumber = (movement['batch_number'] ?? '').toString().trim();
+    final expiryDate = (movement['expiry_date'] ?? '').toString().trim();
+    final stockBefore = movement['stock_before'];
+    final stockAfter = movement['stock_after'];
+    final supplierCost = movement['supplier_cost'];
+
+    return InkWell(
+      onTap: () => _openMovementDetails(movement),
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    productName,
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      color: _textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _buildMovementInlineMeta(
+                  icon: Icons.qr_code_rounded,
+                  text: barcode,
+                  color: _textSecondary,
+                ),
+                _buildMovementMetaDivider(),
+                _buildMovementInlineMeta(
+                  icon: badge.$3,
+                  text: _movementTitle(actionType),
+                  color: badge.$1,
+                ),
+                _buildMovementMetaDivider(),
+                _buildMovementInlineMeta(
+                  icon: Icons.schedule_rounded,
+                  text: _formatDateTime(movement['created_at']?.toString()),
+                  color: _textSecondary,
+                ),
+                if (supplierName.isNotEmpty) ...[
+                  _buildMovementMetaDivider(),
+                  _buildMovementInlineMeta(
+                    icon: Icons.local_shipping_outlined,
+                    text: supplierName,
+                    color: _brand,
+                  ),
+                ],
+                if (batchNumber.isNotEmpty) ...[
+                  _buildMovementMetaDivider(),
+                  _buildMovementInlineMeta(
+                    icon: Icons.sell_outlined,
+                    text: 'Batch $batchNumber',
+                    color: const Color(0xFF4B8DFF),
+                  ),
+                ],
+                if (expiryDate.isNotEmpty) ...[
+                  _buildMovementMetaDivider(),
+                  _buildMovementInlineMeta(
+                    icon: Icons.event_available_outlined,
+                    text: 'Exp ${_formatDateOnly(expiryDate)}',
+                    color: const Color(0xFFFFB65C),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (quantityChange != null)
+                  _buildMovementInlineMeta(
+                    icon: quantityChange >= 0
+                        ? Icons.add_box_outlined
+                        : Icons.indeterminate_check_box_outlined,
+                    text: _movementQuantityText(
+                      movement,
+                      actionType,
+                      quantityChange,
+                    ),
+                    color: badge.$1,
+                  )
+                else if (oldPrice != null || newPrice != null)
+                  _buildMovementInlineMeta(
+                    icon: Icons.sell_outlined,
+                    text: _movementPriceText(movement),
+                    color: badge.$1,
+                  ),
+                if (stockBefore != null || stockAfter != null) ...[
+                  _buildMovementMetaDivider(),
+                  Text(
+                    'Stock ${_movementStockText(movement, stockBefore)} -> ${_movementStockText(movement, stockAfter)}',
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+                if (supplierCost != null) ...[
+                  _buildMovementMetaDivider(),
+                  Text(
+                    'Unit Rs. ${_asDouble(supplierCost).toStringAsFixed(2)}',
+                    style: TextStyle(
+                      color: _textSecondary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            if (performedBy.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Processed by $performedBy',
+                style: TextStyle(
+                  color: _muted,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+            if (reason.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _panelSoft,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: _border),
+                ),
+                child: Text(
+                  reason,
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontWeight: FontWeight.w600,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMovementInlineMeta({
+    required IconData icon,
+    required String text,
+    required Color color,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: color, size: 14),
+        const SizedBox(width: 6),
+        Text(
+          text,
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMovementMetaDivider() {
+    return Text(
+      '•',
+      style: TextStyle(
+        color: _muted,
+        fontWeight: FontWeight.w900,
+        fontSize: 13,
+      ),
+    );
+  }
+
+  String _movementQuantityText(
+    Map<String, dynamic> movement,
+    String actionType,
+    double quantityChange,
+  ) {
+    final sign = quantityChange > 0
+        ? '+'
+        : quantityChange < 0
+        ? '-'
+        : '';
+    final quantity =
+        '$sign${_formatMovementQuantity(movement, quantityChange.abs())}';
+    if (actionType.contains('receive')) return '$quantity received';
+    if (actionType == 'sale') return '$quantity sold';
+    if (actionType == 'refund') return '$quantity refunded';
+    if (actionType.contains('remove')) return '$quantity removed';
+    if (actionType.contains('add')) return '$quantity added';
+    return '$quantity changed';
+  }
+
+  String _movementPriceText(Map<String, dynamic> movement) {
+    return 'Rs. ${_asDouble(movement['old_price']).toStringAsFixed(2)} -> '
+        'Rs. ${_asDouble(movement['new_price']).toStringAsFixed(2)}';
+  }
+
+  String _movementStockText(Map<String, dynamic> movement, dynamic value) {
+    return value == null ? '-' : _formatMovementQuantity(movement, value);
+  }
+
+  // ignore: unused_element
   Widget _buildMovementTile(Map<String, dynamic> movement) {
     final actionType = (movement['action_type'] ?? '').toString();
     final quantityChange = (movement['quantity_change'] as num?)?.toDouble();
@@ -765,8 +1027,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                     children: [
                       Expanded(
                         child: Text(
-                          (movement['product_name'] ?? 'Unknown product')
-                              .toString(),
+                          _displayMovementProductName(movement),
                           style: TextStyle(
                             color: _textPrimary,
                             fontWeight: FontWeight.w800,
@@ -897,10 +1158,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return <MapEntry<String, String>>[
       MapEntry('Action', _movementTitle(actionType)),
       if (!hideProductRow)
-        MapEntry(
-          'Product',
-          (movement['product_name'] ?? 'Unknown product').toString(),
-        ),
+        MapEntry('Product', _displayMovementProductName(movement)),
       MapEntry('Barcode', (movement['barcode'] ?? '-').toString()),
       MapEntry('When', _formatDateTime(movement['created_at']?.toString())),
       if ((movement['performed_by'] ?? '').toString().trim().isNotEmpty)
@@ -922,8 +1180,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       if (stockBefore != null || stockAfter != null)
         MapEntry(
           'Stock',
-          '${stockBefore == null ? '-' : _formatQuantity(stockBefore)} -> '
-              '${stockAfter == null ? '-' : _formatQuantity(stockAfter)}',
+          '${stockBefore == null ? '-' : _formatMovementQuantity(movement, stockBefore)} -> '
+              '${stockAfter == null ? '-' : _formatMovementQuantity(movement, stockAfter)}',
         ),
       if (movement['old_price'] != null || movement['new_price'] != null)
         MapEntry(
@@ -952,8 +1210,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
       );
     } else if (stockBefore != null || stockAfter != null) {
       pieces.add(
-        '${stockBefore == null ? '-' : _formatQuantity(stockBefore)} -> '
-        '${stockAfter == null ? '-' : _formatQuantity(stockAfter)}',
+        '${stockBefore == null ? '-' : _formatMovementQuantity(movement, stockBefore)} -> '
+        '${stockAfter == null ? '-' : _formatMovementQuantity(movement, stockAfter)}',
       );
     }
 
@@ -985,7 +1243,7 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
 
     if (quantityChange != null) {
       final sign = quantityChange > 0 ? '+' : '';
-      return '$sign${_formatQuantity(quantityChange.abs())} - $baseTrailing';
+      return '$sign${_formatMovementQuantity(movement, quantityChange.abs())} - $baseTrailing';
     }
 
     if (newPrice != null) {
@@ -1009,6 +1267,20 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
     return quantity
         .toStringAsFixed(maxDecimals)
         .replaceFirst(RegExp(r'\.?0+$'), '');
+  }
+
+  String _formatMovementQuantity(Map<String, dynamic> movement, dynamic value) {
+    final quantity = _asDouble(value);
+    final safeQuantity = quantity.abs() < 0.000001 ? 0.0 : quantity;
+    final isWeighted =
+        (movement['quantity_type'] ?? '').toString().trim().toLowerCase() ==
+        'weight';
+    if (!isWeighted ||
+        (safeQuantity - safeQuantity.roundToDouble()).abs() < 0.000001) {
+      return safeQuantity.round().toString();
+    }
+
+    return safeQuantity.toStringAsFixed(6).replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
   String _formatDateTime(String? raw) {
@@ -1226,6 +1498,8 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                                   Expanded(
                                     child: TextField(
                                       controller: _searchController,
+                                      focusNode: _searchFocusNode,
+                                      autofocus: true,
                                       style: TextStyle(color: _textPrimary),
                                       decoration: InputDecoration(
                                         hintText:
@@ -1259,46 +1533,86 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                               ),
                               const SizedBox(height: 14),
                             ],
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                _buildFilterChip(
-                                  label: 'All',
-                                  filter: InventoryHistoryFilter.all,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Receives',
-                                  filter: InventoryHistoryFilter.receives,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Adjustments',
-                                  filter: InventoryHistoryFilter.adjustments,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Counts',
-                                  filter: InventoryHistoryFilter.counts,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Sales',
-                                  filter: InventoryHistoryFilter.sales,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Refunds',
-                                  filter: InventoryHistoryFilter.refunds,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Price Changes',
-                                  filter: InventoryHistoryFilter.priceChanges,
-                                ),
-                                _buildFilterChip(
-                                  label: 'Min Stock',
-                                  filter: InventoryHistoryFilter.minStock,
-                                ),
-                                _buildDateChip(),
-                                if (_selectedDate != null)
-                                  _buildClearDateChip(),
-                              ],
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                final compact = constraints.maxWidth < 980;
+                                return Wrap(
+                                  spacing: 12,
+                                  runSpacing: 8,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  alignment: WrapAlignment.start,
+                                  children: [
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: [
+                                        _buildFilterChip(
+                                          label: 'All',
+                                          filter: InventoryHistoryFilter.all,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Receives',
+                                          filter:
+                                              InventoryHistoryFilter.receives,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Adjustments',
+                                          filter: InventoryHistoryFilter
+                                              .adjustments,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Counts',
+                                          filter: InventoryHistoryFilter.counts,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Sales',
+                                          filter: InventoryHistoryFilter.sales,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Refunds',
+                                          filter:
+                                              InventoryHistoryFilter.refunds,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Price Changes',
+                                          filter: InventoryHistoryFilter
+                                              .priceChanges,
+                                        ),
+                                        _buildFilterChip(
+                                          label: 'Min Stock',
+                                          filter:
+                                              InventoryHistoryFilter.minStock,
+                                        ),
+                                      ],
+                                    ),
+                                    if (compact)
+                                      Wrap(
+                                        spacing: 8,
+                                        runSpacing: 8,
+                                        children: [
+                                          _buildDateChip(),
+                                          if (_selectedDate != null)
+                                            _buildClearDateChip(),
+                                        ],
+                                      )
+                                    else
+                                      SizedBox(
+                                        width: 220,
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.end,
+                                          children: [
+                                            _buildDateChip(),
+                                            if (_selectedDate != null) ...[
+                                              const SizedBox(width: 8),
+                                              _buildClearDateChip(),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                  ],
+                                );
+                              },
                             ),
                             const SizedBox(height: 14),
                             Container(
@@ -1338,70 +1652,86 @@ class _InventoryHistoryScreenState extends State<InventoryHistoryScreen> {
                       ),
                       const SizedBox(height: 16),
                       Container(
-                        padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
                           color: _panel,
-                          borderRadius: BorderRadius.circular(22),
+                          borderRadius: BorderRadius.circular(28),
                           border: Border.all(color: _border),
                         ),
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: [
-                                Text(
-                                  'History Records',
-                                  style: TextStyle(
-                                    color: _textPrimary,
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w900,
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                18,
+                                18,
+                                18,
+                                12,
+                              ),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    'History Records',
+                                    style: TextStyle(
+                                      color: _textPrimary,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w900,
+                                    ),
                                   ),
-                                ),
-                                const Spacer(),
-                                Text(
-                                  '${_movements.length} shown',
-                                  style: TextStyle(
-                                    color: _textSecondary,
-                                    fontWeight: FontWeight.w700,
+                                  const Spacer(),
+                                  Text(
+                                    '${_movements.length} shown',
+                                    style: TextStyle(
+                                      color: _textSecondary,
+                                      fontWeight: FontWeight.w800,
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                            const SizedBox(height: 14),
+                            Divider(height: 1, color: _border),
                             if (_movements.isEmpty)
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(28),
-                                decoration: BoxDecoration(
-                                  color: _panelSoft,
-                                  borderRadius: BorderRadius.circular(18),
-                                  border: Border.all(color: _border),
-                                ),
-                                child: Column(
-                                  children: [
-                                    Icon(
-                                      Icons.history_toggle_off_rounded,
-                                      color: _muted,
-                                      size: 36,
-                                    ),
-                                    const SizedBox(height: 10),
-                                    Text(
-                                      'No inventory history records match the current search or filter.',
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        color: _textSecondary,
-                                        fontWeight: FontWeight.w700,
+                              Padding(
+                                padding: const EdgeInsets.all(18),
+                                child: Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(28),
+                                  decoration: BoxDecoration(
+                                    color: _panelSoft,
+                                    borderRadius: BorderRadius.circular(18),
+                                    border: Border.all(color: _border),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Icon(
+                                        Icons.history_toggle_off_rounded,
+                                        color: _muted,
+                                        size: 36,
                                       ),
-                                    ),
-                                  ],
+                                      const SizedBox(height: 10),
+                                      Text(
+                                        'No inventory history records match the current search or filter.',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          color: _textSecondary,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               )
                             else
-                              ..._movements.map(
-                                (movement) => Padding(
-                                  padding: const EdgeInsets.only(bottom: 10),
-                                  child: _buildMovementTile(movement),
+                              ListView.separated(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                  vertical: 6,
                                 ),
+                                itemCount: _movements.length,
+                                separatorBuilder: (_, __) =>
+                                    Divider(height: 1, color: _border),
+                                itemBuilder: (context, index) =>
+                                    _buildMovementRecord(_movements[index]),
                               ),
                           ],
                         ),

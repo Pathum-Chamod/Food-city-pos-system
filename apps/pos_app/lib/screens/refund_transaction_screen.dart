@@ -4,8 +4,10 @@ import 'package:provider/provider.dart';
 
 import '../config/pos_feature_flags.dart';
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/sync_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/admin_dialogs.dart';
 import '../widgets/app_snackbar.dart';
 
@@ -107,6 +109,14 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     return _isWeightedItem(item) ? 'kg' : 'pcs';
   }
 
+  String _displayRefundProductName(Map<String, dynamic> item) {
+    return ProductNameHelper.displayNameFromMap(
+      item,
+      context.read<LanguageProvider>().language,
+      fallback: 'Item',
+    );
+  }
+
   String _formatQuantity(num value, {int maxDecimals = 3}) {
     final quantity = value.toDouble();
     if ((quantity - quantity.roundToDouble()).abs() < 0.000001) {
@@ -169,6 +179,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
           return {
             'barcode': barcode,
             'product_name': (item['product_name'] ?? 'Unknown').toString(),
+            'product_name_si': item['product_name_si'],
             'unit_price': ((item['unit_price'] as num?) ?? 0).toDouble(),
             'quantity': qty,
           };
@@ -215,7 +226,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text((item['product_name'] ?? 'Item').toString()),
+              Text(_displayRefundProductName(item)),
               const SizedBox(height: 8),
               Text('Available: ${_formatQuantity(refundableQty)} $unitLabel'),
               const SizedBox(height: 12),
@@ -803,7 +814,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     Map<String, dynamic> item,
   ) {
     final barcode = (item['barcode'] ?? '').toString();
-    final name = (item['product_name'] ?? 'Unknown').toString();
+    final name = _displayRefundProductName(item);
     final unitPrice = ((item['unit_price'] as num?) ?? 0).toDouble();
     final originalQty = ((item['original_quantity'] as num?) ?? 0).toDouble();
     final refundedQty = ((item['refunded_quantity'] as num?) ?? 0).toDouble();
@@ -814,6 +825,20 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
     final selectedQty = _selectedFor(barcode);
     final refundAmount = unitPrice * selectedQty;
     final hasSelection = selectedQty > 0;
+    final cardColor = hasSelection
+        ? palette.isDark
+              ? palette.brandSoftStrong
+              : const Color(0xFFF2FFFB)
+        : palette.surfaceAlt;
+    final shadowColor = Colors.black.withValues(
+      alpha: palette.isDark
+          ? hasSelection
+                ? 0.24
+                : 0.18
+          : hasSelection
+          ? 0.08
+          : 0.04,
+    );
 
     Widget statChip(String title, String value) {
       return Expanded(
@@ -854,7 +879,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
       duration: const Duration(milliseconds: 180),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: hasSelection ? palette.brandSoftStrong : palette.surfaceAlt,
+        color: cardColor,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: hasSelection
@@ -863,9 +888,9 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
         ),
         boxShadow: [
           BoxShadow(
-            color: palette.shadow.withOpacity(hasSelection ? 0.9 : 0.7),
-            blurRadius: hasSelection ? 18 : 12,
-            offset: const Offset(0, 8),
+            color: shadowColor,
+            blurRadius: hasSelection ? 16 : 10,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -1261,7 +1286,7 @@ class _RefundTransactionScreenState extends State<RefundTransactionScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              (item['product_name'] ?? 'Item').toString(),
+                              _displayRefundProductName(item),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(

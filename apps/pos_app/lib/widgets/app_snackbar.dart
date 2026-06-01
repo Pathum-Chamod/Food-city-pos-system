@@ -60,7 +60,9 @@ class AppSnackBar {
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(isDark ? 0.28 : 0.12),
+                            color: Colors.black.withOpacity(
+                              isDark ? 0.28 : 0.12,
+                            ),
                             blurRadius: 18,
                             offset: const Offset(0, 10),
                           ),
@@ -94,5 +96,12 @@ class AppSnackBar {
         _currentEntry = null;
       }
     });
+  }
+
+  static void dismiss() {
+    _dismissTimer?.cancel();
+    _dismissTimer = null;
+    _currentEntry?.remove();
+    _currentEntry = null;
   }
 }

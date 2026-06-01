@@ -11,8 +11,11 @@ import 'services/sync_service.dart';
 import 'providers/cart_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/app_theme_provider.dart';
+import 'providers/language_provider.dart';
 import 'navigation/pos_route_names.dart';
+import 'navigation/route_search_focus_registry.dart';
 import 'screens/cashier_summary_screen.dart';
+import 'screens/customer_management_screen.dart';
 import 'screens/expiry_alerts_screen.dart';
 import 'screens/held_carts_screen.dart';
 import 'screens/inventory_screen.dart';
@@ -43,12 +46,16 @@ void main() async {
   // Start the background sync worker (checks every 30 seconds)
   SyncService().startSyncWorker();
 
+  final languageProvider = LanguageProvider();
+  await languageProvider.load();
+
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => CartProvider()),
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => AppThemeProvider()),
+        ChangeNotifierProvider.value(value: languageProvider),
       ],
       child: const PosApp(),
     ),
@@ -204,6 +211,10 @@ class _PosAppState extends State<PosApp> {
       }
       if (!hasShift && key == LogicalKeyboardKey.keyU) {
         _runGlobalShortcut(_openUserManagement);
+        return true;
+      }
+      if (!hasShift && key == LogicalKeyboardKey.keyB) {
+        _runGlobalShortcut(_openCustomerManagement);
         return true;
       }
       if (hasShift && key == LogicalKeyboardKey.keyP) {
@@ -484,7 +495,11 @@ class _PosAppState extends State<PosApp> {
     required WidgetBuilder builder,
   }) async {
     final navigator = AppSnackBar.navigatorKey.currentState;
-    if (navigator == null || _currentRouteName == routeName) return;
+    if (navigator == null) return;
+    if (_currentRouteName == routeName) {
+      RouteSearchFocusRegistry.focus(routeName);
+      return;
+    }
 
     var foundRoute = false;
     navigator.popUntil((route) {
@@ -496,13 +511,21 @@ class _PosAppState extends State<PosApp> {
       return route.settings.name == PosRouteNames.pos || route.isFirst;
     });
 
-    if (foundRoute) return;
+    if (foundRoute) {
+      RouteSearchFocusRegistry.focus(routeName);
+      return;
+    }
 
     unawaited(
       navigator.push(
-        MaterialPageRoute<void>(
+        PageRouteBuilder<void>(
           settings: RouteSettings(name: routeName),
-          builder: builder,
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              builder(context),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+              child,
         ),
       ),
     );
@@ -691,6 +714,19 @@ class _PosAppState extends State<PosApp> {
     await showHardwareSetupDialog(context);
   }
 
+  Future<void> _openCustomerManagement() {
+    return _runProtectedManagerAction(
+      () {
+        return _pushOrRevealRoute(
+          routeName: PosRouteNames.customerManagement,
+          builder: (context) => const CustomerManagementScreen(),
+        );
+      },
+      permission: PosPermission.customersView,
+      title: 'Open Customer Management',
+    );
+  }
+
   Future<void> _showShortcutLegend() async {
     final context = AppSnackBar.navigatorKey.currentContext;
     if (context == null || _isShortcutLegendOpen) return;
@@ -835,14 +871,23 @@ class _PosAppState extends State<PosApp> {
             shortcutRow('F5', 'Open held carts'),
             shortcutRow('F6', 'Apply cart discount'),
             shortcutRow('F7', 'Focus product search'),
+            shortcutRow('Double F7', 'Open/close product search'),
+            shortcutRow('Double C', 'Focus customer search'),
+            shortcutRow('Double L', 'Focus loyalty field'),
+            shortcutRow(
+              'Double Backspace (Customer Search)',
+              'Clear and focus back to POS screen barcode',
+            ),
+            shortcutRow(
+              'Double Backspace (Loyalty)',
+              'Clear and focus back to POS screen barcode',
+            ),
             shortcutRow('Shift + Esc', 'Open logout confirmation'),
           ]);
           final heldBillsSection = section('Held Bills', [
             shortcutRow('1 - 9', 'Select visible held bill'),
             shortcutRow('Double 1 - 9', 'Resume selected held bill to cart'),
             shortcutRow('Up / Down', 'Move held bill selection'),
-            shortcutRow('Page Up', 'Select top held bill'),
-            shortcutRow('Page Down', 'Select bottom held bill'),
             shortcutRow('Enter', 'Resume selected held bill'),
             shortcutRow('Delete', 'Delete selected held bill'),
           ]);
@@ -856,6 +901,7 @@ class _PosAppState extends State<PosApp> {
             shortcutRow('Ctrl + H', 'Held carts'),
             shortcutRow('Ctrl + R', 'Sales report'),
             shortcutRow('Ctrl + U', 'User management'),
+            shortcutRow('Ctrl + B', 'Customer management'),
             shortcutRow('Ctrl + S', 'Cashier summary'),
             shortcutRow('Ctrl + Shift + P', 'Presentation settings'),
             shortcutRow('Ctrl + Shift + H', 'Hardware setup'),
@@ -869,18 +915,14 @@ class _PosAppState extends State<PosApp> {
           ]);
 
           final landscapeColumns = <List<Widget>>[
-            [posFlowSection, posActionsSection, heldBillsSection],
+            [posFlowSection, posActionsSection],
             [priceModesSection, modulesSection],
-            [cartActionsSection, popupRulesSection],
+            [cartActionsSection, popupRulesSection, heldBillsSection],
           ];
           final mediumColumns = <List<Widget>>[
-            [
-              posFlowSection,
-              posActionsSection,
-              heldBillsSection,
-              popupRulesSection,
-            ],
+            [posFlowSection, posActionsSection, popupRulesSection],
             [priceModesSection, cartActionsSection, modulesSection],
+            [heldBillsSection],
           ];
           final allSections = <Widget>[
             posFlowSection,
@@ -1287,6 +1329,9 @@ class _PosAppState extends State<PosApp> {
             },
             const SingleActivator(LogicalKeyboardKey.keyU, control: true): () {
               _runGlobalShortcutFromIntent(_openUserManagement);
+            },
+            const SingleActivator(LogicalKeyboardKey.keyB, control: true): () {
+              _runGlobalShortcutFromIntent(_openCustomerManagement);
             },
             const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
               _runGlobalShortcutFromIntent(_openCashierSummary);

@@ -6,6 +6,7 @@ class StockReceiptRecord {
   final int? backendReceiptId;
   final String barcode;
   final String productName;
+  final String? productNameSi;
   final double quantity;
   final int supplierId;
   final String supplierName;
@@ -28,6 +29,7 @@ class StockReceiptRecord {
     required this.backendReceiptId,
     required this.barcode,
     required this.productName,
+    required this.productNameSi,
     required this.quantity,
     required this.supplierId,
     required this.supplierName,
@@ -52,6 +54,7 @@ class StockReceiptRecord {
       backendReceiptId: (map['backend_receipt_id'] as num?)?.toInt(),
       barcode: (map['barcode'] ?? '').toString(),
       productName: (map['product_name'] ?? '').toString(),
+      productNameSi: map['product_name_si']?.toString(),
       quantity: ((map['quantity'] as num?) ?? 0).toDouble(),
       supplierId: (map['supplier_id'] as num?)?.toInt() ?? 0,
       supplierName: (map['supplier_name'] ?? '').toString(),
@@ -77,6 +80,7 @@ class StockReceiptRecord {
       'backend_receipt_id': backendReceiptId,
       'barcode': barcode,
       'product_name': productName,
+      'product_name_si': productNameSi,
       'quantity': quantity,
       'supplier_id': supplierId,
       'supplier_name': supplierName,

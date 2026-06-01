@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Local Mock API Server for Food City POS System
 Upgraded to support advanced product pricing + inventory sync.
@@ -15,6 +15,14 @@ import zipfile
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
+
+_json_dumps = json.dumps
+
+
+def json_dumps(data, *args, **kwargs):
+    kwargs.setdefault("ensure_ascii", False)
+    return _json_dumps(data, *args, **kwargs)
+
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(PROJECT_ROOT, "local_admin.db")
@@ -59,7 +67,7 @@ def _ensure_pos_db_path():
         shutil.copy2(LEGACY_POS_DB_PATH, STABLE_POS_DB_PATH)
         _copy_pos_sidecar_if_exists(f"{LEGACY_POS_DB_PATH}-wal", f"{STABLE_POS_DB_PATH}-wal")
         _copy_pos_sidecar_if_exists(f"{LEGACY_POS_DB_PATH}-shm", f"{STABLE_POS_DB_PATH}-shm")
-        print(f"✅ Migrated POS DB to stable path: {STABLE_POS_DB_PATH}")
+        print(f"âœ… Migrated POS DB to stable path: {STABLE_POS_DB_PATH}")
         return STABLE_POS_DB_PATH
 
     return STABLE_POS_DB_PATH
@@ -502,6 +510,7 @@ def create_sale_items_table(cursor):
             sale_id INTEGER NOT NULL,
             barcode TEXT NOT NULL,
             product_name TEXT NOT NULL,
+            product_name_si TEXT,
             unit_price REAL NOT NULL DEFAULT 0,
             marked_price REAL NOT NULL DEFAULT 0,
             price_category_used TEXT NOT NULL DEFAULT 'selling',
@@ -532,6 +541,7 @@ def create_sale_items_table(cursor):
         )
         """
     )
+    ensure_column(cursor, "sale_items", "product_name_si", "product_name_si TEXT")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_sale_items_barcode ON sale_items(barcode)")
 
@@ -2729,6 +2739,7 @@ def get_product_row(cursor, barcode):
             id,
             barcode,
             name,
+            name_si,
             COALESCE(category, 'General') AS category,
             CASE
                 WHEN LOWER(COALESCE(quantity_type, '')) = 'weight' THEN 'weight'
@@ -2750,6 +2761,8 @@ def get_product_row(cursor, barcode):
             COALESCE(sale_enabled, CASE WHEN sale_price IS NOT NULL THEN 1 ELSE 0 END) AS sale_enabled,
             COALESCE(stock, 0) AS stock,
             COALESCE(min_stock_level, 0) AS min_stock_level,
+            COALESCE(track_expiry, 0) AS track_expiry,
+            COALESCE(expiry_alert_days, 30) AS expiry_alert_days,
             COALESCE(is_active, 1) AS is_active,
             updated_at,
             last_price_updated_at
@@ -2760,6 +2773,17 @@ def get_product_row(cursor, barcode):
     ).fetchone()
 
 
+def row_value(row, key, default=None):
+    if row is None:
+        return default
+    try:
+        if key in row.keys():
+            return row[key]
+    except Exception:
+        pass
+    return default
+
+
 def ensure_pos_inventory_movements_table(cursor):
     cursor.execute(
         """
@@ -2767,6 +2791,7 @@ def ensure_pos_inventory_movements_table(cursor):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             barcode TEXT NOT NULL,
             product_name TEXT NOT NULL,
+            product_name_si TEXT,
             action_type TEXT NOT NULL,
             quantity_change INTEGER,
             stock_before INTEGER,
@@ -2782,6 +2807,7 @@ def ensure_pos_inventory_movements_table(cursor):
         )
         """
     )
+    ensure_column(cursor, "inventory_movements", "product_name_si", "product_name_si TEXT")
 
 
 def mirror_inventory_movement_to_pos(
@@ -2789,6 +2815,7 @@ def mirror_inventory_movement_to_pos(
     barcode,
     product_name,
     action_type,
+    product_name_si=None,
     quantity_change=None,
     stock_before=None,
     stock_after=None,
@@ -2816,12 +2843,22 @@ def mirror_inventory_movement_to_pos(
         ensure_pos_inventory_movements_table(cursor)
 
         resolved_product_name = str(product_name or "").strip()
+        resolved_product_name_si = str(product_name_si or "").strip() or None
         if not resolved_product_name:
             row = cursor.execute(
-                "SELECT name FROM products WHERE barcode = ? LIMIT 1",
+                "SELECT name, name_si FROM products WHERE barcode = ? LIMIT 1",
                 (barcode,),
             ).fetchone()
             resolved_product_name = str((row["name"] if row else "Unknown product") or "Unknown product")
+            resolved_product_name_si = resolved_product_name_si or (
+                str(row_value(row, "name_si", "") or "").strip() or None
+            )
+        elif not resolved_product_name_si:
+            row = cursor.execute(
+                "SELECT name_si FROM products WHERE barcode = ? LIMIT 1",
+                (barcode,),
+            ).fetchone()
+            resolved_product_name_si = str(row_value(row, "name_si", "") or "").strip() or None
 
         safe_reference_type = str(reference_type or "backend_history").strip() or "backend_history"
         mirror_created_at = created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2895,6 +2932,7 @@ def mirror_inventory_movement_to_pos(
             INSERT INTO inventory_movements (
                 barcode,
                 product_name,
+                product_name_si,
                 action_type,
                 quantity_change,
                 stock_before,
@@ -2908,11 +2946,12 @@ def mirror_inventory_movement_to_pos(
                 performed_by,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 barcode,
                 resolved_product_name,
+                resolved_product_name_si,
                 action_type,
                 quantity_change,
                 stock_before,
@@ -2929,7 +2968,7 @@ def mirror_inventory_movement_to_pos(
         )
         conn.commit()
     except Exception as e:
-        print(f"  ⚠️ POS inventory mirror warning: {e}")
+        print(f"  âš ï¸ POS inventory mirror warning: {e}")
     finally:
         if conn is not None:
             try:
@@ -2998,6 +3037,7 @@ def update_product_price(
         return False, "Invalid price"
 
     product_name = str(row["name"] or "Unknown product")
+    product_name_si = str(row_value(row, "name_si", "") or "").strip() or None
     old_price = parse_float(
         row["cost_price"] if normalized == "cost"
         else row["wholesale_price"] if normalized == "wholesale"
@@ -3068,6 +3108,7 @@ def update_product_price(
         barcode=barcode,
         product_name=product_name,
         action_type=f"price_change_{normalized}",
+        product_name_si=product_name_si,
         old_price=old_price,
         new_price=new_price,
         price_type=normalized,
@@ -3087,6 +3128,7 @@ def update_stock_receive(
     cost=0,
     supplier_id=0,
     supplier_name="",
+    product_name_si=None,
     reason="",
 ):
     row = get_product_row(cursor, barcode)
@@ -3099,6 +3141,10 @@ def update_stock_receive(
 
     cost = parse_float(cost, 0)
     product_name = str(row["name"] or "Unknown product")
+    product_name_si = (
+        str(product_name_si or row_value(row, "name_si", "") or "").strip()
+        or None
+    )
     stock_before = round_quantity(row["stock"])
     stock_after = round_quantity(stock_before + quantity)
 
@@ -3108,14 +3154,16 @@ def update_stock_receive(
         f"""
         INSERT INTO stock_receipts (
             barcode,
+            product_name,
+            product_name_si,
             quantity,
             supplier_id,
             cost,
             created_at
         )
-        VALUES (?, ?, ?, ?, {now_sql()})
+        VALUES (?, ?, ?, ?, ?, ?, {now_sql()})
         """,
-        (barcode, quantity, supplier_id, cost),
+        (barcode, product_name, product_name_si, quantity, supplier_id, cost),
     )
     receipt_id = cursor.lastrowid
 
@@ -3167,6 +3215,7 @@ def update_stock_receive(
         barcode=barcode,
         product_name=product_name,
         action_type="stock_receive",
+        product_name_si=product_name_si,
         quantity_change=quantity,
         stock_before=stock_before,
         stock_after=stock_after,
@@ -3186,6 +3235,7 @@ def update_stock_adjustment(cursor, barcode, adjustment_type, quantity, reason="
 
     current_stock = round_quantity(row["stock"])
     product_name = str(row["name"] or "Unknown product")
+    product_name_si = str(row_value(row, "name_si", "") or "").strip() or None
     normalized = str(adjustment_type or "").strip().lower()
     quantity = round_quantity(quantity)
 
@@ -3237,6 +3287,7 @@ def update_stock_adjustment(cursor, barcode, adjustment_type, quantity, reason="
         barcode=barcode,
         product_name=product_name,
         action_type=movement_type,
+        product_name_si=product_name_si,
         quantity_change=stock_delta,
         stock_before=current_stock,
         stock_after=resulting_stock,
@@ -3259,6 +3310,7 @@ def update_min_stock_level(cursor, barcode, min_stock_level, reason=""):
         return False, "Minimum stock level cannot be negative"
 
     product_name = str(row["name"] or "Unknown product")
+    product_name_si = str(row_value(row, "name_si", "") or "").strip() or None
 
     cursor.execute(
         f"""
@@ -3284,6 +3336,7 @@ def update_min_stock_level(cursor, barcode, min_stock_level, reason=""):
         barcode=barcode,
         product_name=product_name,
         action_type="min_stock_change",
+        product_name_si=product_name_si,
         reason=note,
         reference_id=history_entry["id"],
         reference_type="backend_history",
@@ -3299,6 +3352,7 @@ def create_or_update_product(
     cursor,
     barcode,
     name,
+    name_si=None,
     category="General",
     cost_price=0,
     selling_price=0,
@@ -3309,11 +3363,16 @@ def create_or_update_product(
     unit_label=None,
     opening_stock=0,
     min_stock_level=0,
+    track_expiry=False,
+    expiry_alert_days=30,
     reason="",
     mirror_to_pos=True,
 ):
     barcode = str(barcode or "").strip()
     name = str(name or "").strip()
+    name_si = str(name_si).strip() if name_si is not None else None
+    if name_si == "":
+        name_si = None
     category = str(category or "General").strip() or "General"
     quantity_type = normalize_quantity_type(quantity_type)
     unit_label = normalize_unit_label(quantity_type, unit_label)
@@ -3341,10 +3400,13 @@ def create_or_update_product(
 
     opening_stock = parse_int(opening_stock, 0)
     min_stock_level = parse_int(min_stock_level, 0)
+    expiry_alert_days = parse_int(expiry_alert_days, 30)
     if opening_stock < 0:
         return False, "Opening stock cannot be negative"
     if min_stock_level < 0:
         return False, "Minimum stock level cannot be negative"
+    if expiry_alert_days < 1:
+        return False, "Expiry alert days must be greater than 0"
 
     existing = get_product_row(cursor, barcode)
     if existing:
@@ -3353,6 +3415,7 @@ def create_or_update_product(
             f"""
             UPDATE products
             SET name = ?,
+                name_si = ?,
                 category = ?,
                 quantity_type = ?,
                 unit_label = ?,
@@ -3364,6 +3427,8 @@ def create_or_update_product(
                 sale_enabled = ?,
                 stock = ?,
                 min_stock_level = ?,
+                track_expiry = ?,
+                expiry_alert_days = ?,
                 is_active = 1,
                 updated_at = {now_sql()},
                 last_price_updated_at = {now_sql()}
@@ -3371,6 +3436,7 @@ def create_or_update_product(
             """,
             (
                 name,
+                name_si,
                 category,
                 quantity_type,
                 unit_label,
@@ -3382,6 +3448,8 @@ def create_or_update_product(
                 1 if normalize_bool(sale_enabled, False) else 0,
                 opening_stock,
                 min_stock_level,
+                1 if normalize_bool(track_expiry, False) else 0,
+                expiry_alert_days,
                 barcode,
             ),
         )
@@ -3391,6 +3459,7 @@ def create_or_update_product(
             INSERT INTO products (
                 barcode,
                 name,
+                name_si,
                 category,
                 quantity_type,
                 unit_label,
@@ -3402,15 +3471,18 @@ def create_or_update_product(
                 sale_enabled,
                 stock,
                 min_stock_level,
+                track_expiry,
+                expiry_alert_days,
                 is_active,
                 updated_at,
                 last_price_updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, {now_sql()}, {now_sql()})
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, {now_sql()}, {now_sql()})
             """,
             (
                 barcode,
                 name,
+                name_si,
                 category,
                 quantity_type,
                 unit_label,
@@ -3422,6 +3494,8 @@ def create_or_update_product(
                 1 if normalize_bool(sale_enabled, False) else 0,
                 opening_stock,
                 min_stock_level,
+                1 if normalize_bool(track_expiry, False) else 0,
+                expiry_alert_days,
             ),
         )
 
@@ -3443,6 +3517,7 @@ def create_or_update_product(
             barcode=barcode,
             product_name=name,
             action_type=movement_type,
+            product_name_si=name_si,
             stock_before=previous_stock if existing else None,
             stock_after=opening_stock if existing else opening_stock,
             reason=main_reason,
@@ -3467,6 +3542,7 @@ def create_or_update_product(
                 barcode=barcode,
                 product_name=name,
                 action_type="stock_receive",
+                product_name_si=name_si,
                 quantity_change=opening_stock,
                 stock_before=0,
                 stock_after=opening_stock,
@@ -3491,6 +3567,7 @@ def create_or_update_product(
                 barcode=barcode,
                 product_name=name,
                 action_type="stock_adjust_set",
+                product_name_si=name_si,
                 quantity_change=opening_stock - previous_stock,
                 stock_before=previous_stock,
                 stock_after=opening_stock,
@@ -3514,6 +3591,7 @@ def delete_product(cursor, barcode, reason="", mirror_to_pos=True):
         return False, "Product not found"
 
     product_name = str(row["name"] or "Unknown product")
+    product_name_si = str(row_value(row, "name_si", "") or "").strip() or None
     stock_before = parse_int(row["stock"], 0)
     cursor.execute("DELETE FROM products WHERE barcode = ?", (barcode,))
 
@@ -3533,6 +3611,7 @@ def delete_product(cursor, barcode, reason="", mirror_to_pos=True):
             barcode=barcode,
             product_name=product_name,
             action_type="product_deleted",
+            product_name_si=product_name_si,
             stock_before=stock_before,
             stock_after=0,
             reason=note,
@@ -3556,6 +3635,228 @@ def bulk_delete_products(cursor, barcodes, reason="", mirror_to_pos=True):
     return True, deleted
 
 
+def ensure_expiry_batches_table(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS expiry_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pos_batch_id INTEGER UNIQUE,
+            receipt_id INTEGER,
+            barcode TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            product_name_si TEXT,
+            batch_number TEXT,
+            supplier_id INTEGER,
+            supplier_name TEXT,
+            received_quantity REAL NOT NULL DEFAULT 0,
+            remaining_quantity REAL NOT NULL DEFAULT 0,
+            expiry_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            last_checked_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    ensure_column(cursor, "expiry_batches", "product_name_si", "product_name_si TEXT")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expiry_batches_barcode ON expiry_batches(barcode)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expiry_batches_expiry_date ON expiry_batches(expiry_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_expiry_batches_status ON expiry_batches(status)")
+
+
+def upsert_expiry_batch_from_sync(cursor, data):
+    ensure_expiry_batches_table(cursor)
+
+    barcode = str(data.get("barcode", "") or "").strip()
+    product_name = str(data.get("product_name", "") or "").strip()
+    product_name_si = str(data.get("product_name_si") or data.get("name_si") or "").strip() or None
+    expiry_date = str(data.get("expiry_date", "") or "").strip()
+    if not barcode or not expiry_date:
+        return None
+
+    supplier_id = parse_int(data.get("supplier_id"), 0) or None
+    supplier_name = str(data.get("supplier_name", "") or "").strip()
+    supplier_phone = str(data.get("supplier_phone", "") or "").strip()
+    if supplier_id is not None and (supplier_name or supplier_phone):
+        cursor.execute(
+            """
+            INSERT INTO suppliers (id, name, phone)
+            VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = CASE
+                    WHEN excluded.name != '' THEN excluded.name
+                    ELSE suppliers.name
+                END,
+                phone = CASE
+                    WHEN excluded.phone != '' THEN excluded.phone
+                    ELSE suppliers.phone
+                END
+            """,
+            (supplier_id, supplier_name, supplier_phone),
+        )
+
+    if not product_name or not product_name_si:
+        product = get_product_row(cursor, barcode)
+        if not product_name:
+            product_name = str(product["name"] if product else "Unknown product")
+        if not product_name_si and product and "name_si" in product.keys():
+            product_name_si = str(product["name_si"] or "").strip() or None
+
+    now = str(data.get("updated_at") or data.get("created_at") or datetime.now().astimezone().isoformat())
+    pos_batch_id = parse_int(data.get("pos_batch_id", data.get("expiry_batch_id", 0)), 0) or None
+    received_quantity = parse_float(data.get("received_quantity", data.get("quantity", 0)), 0.0)
+    remaining_quantity = parse_float(data.get("remaining_quantity", received_quantity), received_quantity)
+    status = str(data.get("status", "active") or "active").strip() or "active"
+
+    existing = None
+    if pos_batch_id is not None:
+        existing = cursor.execute(
+            "SELECT id FROM expiry_batches WHERE pos_batch_id = ? LIMIT 1",
+            (pos_batch_id,),
+        ).fetchone()
+
+    if existing:
+        cursor.execute(
+            f"""
+            UPDATE expiry_batches
+            SET receipt_id = COALESCE(?, receipt_id),
+                barcode = ?,
+                product_name = ?,
+                product_name_si = ?,
+                batch_number = ?,
+                supplier_id = ?,
+                supplier_name = ?,
+                received_quantity = ?,
+                remaining_quantity = ?,
+                expiry_date = ?,
+                status = ?,
+                last_checked_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                parse_int(data.get("receipt_id"), 0) or None,
+                barcode,
+                product_name,
+                product_name_si,
+                str(data.get("batch_number", "") or "").strip(),
+                supplier_id,
+                supplier_name,
+                received_quantity,
+                remaining_quantity,
+                expiry_date,
+                status,
+                str(data.get("last_checked_at", "") or "").strip(),
+                now,
+                existing["id"],
+            ),
+        )
+        return existing["id"]
+
+    cursor.execute(
+        """
+        INSERT INTO expiry_batches (
+            pos_batch_id,
+            receipt_id,
+            barcode,
+            product_name,
+            product_name_si,
+            batch_number,
+            supplier_id,
+            supplier_name,
+            received_quantity,
+            remaining_quantity,
+            expiry_date,
+            status,
+            last_checked_at,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            pos_batch_id,
+            parse_int(data.get("receipt_id"), 0) or None,
+            barcode,
+            product_name,
+            product_name_si,
+            str(data.get("batch_number", "") or "").strip(),
+            supplier_id,
+            supplier_name,
+            received_quantity,
+            remaining_quantity,
+            expiry_date,
+            status,
+            str(data.get("last_checked_at", "") or "").strip(),
+            str(data.get("created_at") or now),
+            now,
+        ),
+    )
+    return cursor.lastrowid
+
+
+def refresh_expiry_batches_from_pos(cursor):
+    if not os.path.exists(POS_DB_PATH):
+        return
+
+    ensure_expiry_batches_table(cursor)
+
+    conn = None
+    try:
+        conn = get_pos_db()
+        pos_cursor = conn.cursor()
+        rows = pos_cursor.execute(
+            """
+            SELECT
+                b.id,
+                b.receipt_id,
+                b.barcode,
+                b.product_name,
+                b.batch_number,
+                b.supplier_id,
+                b.supplier_name,
+                s.phone AS supplier_phone,
+                b.received_quantity,
+                b.remaining_quantity,
+                b.expiry_date,
+                b.status,
+                b.last_checked_at,
+                b.created_at,
+                b.updated_at
+            FROM expiry_batches b
+            LEFT JOIN suppliers s ON s.id = b.supplier_id
+            WHERE COALESCE(b.expiry_date, '') != ''
+            """
+        ).fetchall()
+
+        for row in rows:
+            upsert_expiry_batch_from_sync(
+                cursor,
+                {
+                    "pos_batch_id": row["id"],
+                    "receipt_id": row["receipt_id"],
+                    "barcode": row["barcode"],
+                    "product_name": row["product_name"],
+                    "batch_number": row["batch_number"],
+                    "supplier_id": row["supplier_id"],
+                    "supplier_name": row["supplier_name"],
+                    "supplier_phone": row["supplier_phone"],
+                    "received_quantity": row["received_quantity"],
+                    "remaining_quantity": row["remaining_quantity"],
+                    "expiry_date": row["expiry_date"],
+                    "status": row["status"],
+                    "last_checked_at": row["last_checked_at"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                },
+            )
+    except Exception as e:
+        print(f"  âš ï¸ Expiry backfill from POS skipped: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def fetch_products(cursor):
     rows = cursor.execute(
         """
@@ -3563,6 +3864,7 @@ def fetch_products(cursor):
             id,
             barcode,
             name,
+            name_si,
             COALESCE(category, 'General') AS category,
             CASE
                 WHEN LOWER(COALESCE(quantity_type, '')) = 'weight' THEN 'weight'
@@ -3584,6 +3886,8 @@ def fetch_products(cursor):
             COALESCE(sale_enabled, CASE WHEN sale_price IS NOT NULL THEN 1 ELSE 0 END) AS sale_enabled,
             COALESCE(stock, 0) AS stock,
             COALESCE(min_stock_level, 0) AS min_stock_level,
+            COALESCE(track_expiry, 0) AS track_expiry,
+            COALESCE(expiry_alert_days, 30) AS expiry_alert_days,
             COALESCE(is_active, 1) AS is_active,
             updated_at,
             last_price_updated_at
@@ -3646,6 +3950,37 @@ def _extract_item_discount_amount(item):
     return parse_float(item.get("item_discount_amount"), 0.0)
 
 
+def _extract_item_marked_gross(item):
+    quantity = max(_extract_item_quantity(item), 0)
+    product = item.get("product", {}) or {}
+    marked_candidates = [
+        parse_float(item.get("marked_price"), -1),
+        parse_float(item.get("customer_pricing_original_price"), -1),
+        parse_float(item.get("price_override_original_price"), -1),
+        parse_float(item.get("system_unit_price"), -1),
+        parse_float(product.get("selling_price", product.get("price")), -1),
+    ]
+    marked_price = max(marked_candidates)
+
+    base_line_total = _extract_item_base_line_total(item)
+    if marked_price >= 0 and quantity > 0:
+        marked_gross = abs(marked_price * quantity)
+        if base_line_total is not None:
+            return max(marked_gross, abs(base_line_total))
+        return marked_gross
+
+    if base_line_total is not None:
+        return abs(base_line_total)
+
+    return _extract_item_sales_amount(item)
+
+
+def _extract_item_markdown_amount(item):
+    marked_gross = _extract_item_marked_gross(item)
+    final_total = _extract_item_sales_amount(item)
+    return max(0.0, marked_gross - final_total)
+
+
 def _extract_item_cost_snapshot(item):
     for key in ["cost_price_snapshot", "unit_cost", "cost_price"]:
         if item.get(key) is not None:
@@ -3666,6 +4001,7 @@ def insert_sale_item_snapshots(cursor, sale_id, items, created_at):
         product = item.get("product", {}) or {}
         barcode = _extract_item_barcode(item)
         product_name = _extract_item_name(item)
+        product_name_si = _extract_item_name_si(item)
         quantity = max(_extract_item_quantity(item), 0)
         unit_price = parse_float(
             item.get("unit_price_used", item.get("unit_price", item.get("price"))),
@@ -3699,7 +4035,7 @@ def insert_sale_item_snapshots(cursor, sale_id, items, created_at):
         cursor.execute(
             """
             INSERT INTO sale_items (
-                sale_id, barcode, product_name, unit_price, marked_price,
+                sale_id, barcode, product_name, product_name_si, unit_price, marked_price,
                 price_category_used, system_unit_price, price_override_type,
                 price_override_reason, price_override_original_price,
                 price_override_difference, price_history_id,
@@ -3710,12 +4046,13 @@ def insert_sale_item_snapshots(cursor, sale_id, items, created_at):
                 customer_pricing_type, customer_pricing_rule_id,
                 customer_pricing_original_price, customer_pricing_final_price,
                 customer_pricing_discount_amount, customer_pricing_note, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sale_id,
                 barcode,
                 product_name,
+                product_name_si,
                 unit_price,
                 marked_price,
                 normalize_price_type(item.get("price_type_used") or item.get("price_category_used")),
@@ -3774,6 +4111,16 @@ def _extract_item_name(item):
     return str(product.get("name") or item.get("name") or "Unknown Item")
 
 
+def _extract_item_name_si(item):
+    product = item.get("product", {}) or {}
+    return str(
+        product.get("name_si")
+        or item.get("product_name_si")
+        or item.get("name_si")
+        or ""
+    ).strip() or None
+
+
 def _extract_item_barcode(item):
     product = item.get("product", {}) or {}
     return str(product.get("barcode") or item.get("barcode") or "")
@@ -3819,6 +4166,7 @@ def _build_owner_summary_from_rows(rows):
             quantity = max(_extract_item_quantity(item), 0)
             price = max(_extract_item_price(item), 0.0)
             name = _extract_item_name(item)
+            name_si = _extract_item_name_si(item)
             barcode = _extract_item_barcode(item)
             quantity_type = _extract_item_quantity_type(item)
             unit_label = _extract_item_unit_label(item)
@@ -3830,11 +4178,14 @@ def _build_owner_summary_from_rows(rows):
                 products[product_key] = {
                     "barcode": barcode,
                     "product_name": name,
+                    "product_name_si": name_si,
                     "quantity_type": quantity_type,
                     "unit_label": unit_label,
                     "quantity_sold": 0,
                     "total_sales": 0.0,
                 }
+            elif name_si and not products[product_key].get("product_name_si"):
+                products[product_key]["product_name_si"] = name_si
 
             products[product_key]["quantity_sold"] += quantity
             products[product_key]["total_sales"] += quantity * price
@@ -3913,6 +4264,7 @@ def _top_sellers_last_days(cursor, days=30, limit=10):
         for item in items:
             barcode = _extract_item_barcode(item)
             name = _extract_item_name(item)
+            name_si = _extract_item_name_si(item)
             quantity = max(_extract_item_quantity(item), 0)
             price = max(_extract_item_price(item), 0.0)
             key = barcode or name
@@ -3920,9 +4272,12 @@ def _top_sellers_last_days(cursor, days=30, limit=10):
                 by_product[key] = {
                     "barcode": barcode,
                     "product_name": name,
+                    "product_name_si": name_si,
                     "quantity_sold": 0,
                     "total_sales": 0.0,
                 }
+            elif name_si and not by_product[key].get("product_name_si"):
+                by_product[key]["product_name_si"] = name_si
             by_product[key]["quantity_sold"] += quantity
             by_product[key]["total_sales"] += quantity * price
 
@@ -3971,6 +4326,8 @@ def _build_owner_alerts(cursor):
                 "title": f"{product['name']} is out of stock",
                 "subtitle": f"Barcode {product['barcode']} - stock {stock_text(product, 0)}",
                 "barcode": product["barcode"],
+                "product_name": product["name"],
+                "product_name_si": product.get("name_si"),
                 **supplier_contact,
             }
         )
@@ -4003,6 +4360,8 @@ def _build_owner_alerts(cursor):
                     f"stock {stock_text(product, product.get('stock', 0))}"
                 ),
                 "barcode": product["barcode"],
+                "product_name": product["name"],
+                "product_name_si": product.get("name_si"),
                 **supplier_contact,
             }
         )
@@ -4022,6 +4381,123 @@ def _build_owner_alerts(cursor):
                 "title": f"{product['name']} is low in stock",
                 "subtitle": f"Barcode {product['barcode']} - stock {stock_text(product, product.get('stock', 0))}",
                 "barcode": product["barcode"],
+                "product_name": product["name"],
+                "product_name_si": product.get("name_si"),
+                **supplier_contact,
+            }
+        )
+
+    refresh_expiry_batches_from_pos(cursor)
+    ensure_expiry_batches_table(cursor)
+    expiry_rows = cursor.execute(
+        """
+        SELECT
+            b.id,
+            b.pos_batch_id,
+            b.barcode,
+            b.product_name,
+            b.product_name_si,
+            b.batch_number,
+            b.supplier_id,
+            b.supplier_name,
+            b.remaining_quantity,
+            b.expiry_date,
+            COALESCE(p.unit_label, 'pcs') AS unit_label,
+            COALESCE(p.quantity_type, 'unit') AS quantity_type,
+            COALESCE(p.expiry_alert_days, 30) AS alert_days
+        FROM expiry_batches b
+        LEFT JOIN products p ON p.barcode = b.barcode
+        WHERE b.status = 'active'
+          AND COALESCE(b.remaining_quantity, 0) > ?
+          AND date(b.expiry_date) <= date('now', 'localtime', '+7 days')
+        ORDER BY date(b.expiry_date) ASC, LOWER(b.product_name) ASC
+        LIMIT 20
+        """,
+        (quantity_epsilon,),
+    ).fetchall()
+
+    today = datetime.now().date()
+    for row in expiry_rows:
+        expiry_text = str(row["expiry_date"] or "").strip()
+        try:
+            expiry_date = datetime.strptime(expiry_text[:10], "%Y-%m-%d").date()
+        except Exception:
+            continue
+
+        days_left = (expiry_date - today).days
+        remaining_text = format_stock_with_unit(
+            row["quantity_type"],
+            row["unit_label"],
+            row["remaining_quantity"],
+        )
+        batch_number = str(row["batch_number"] or "").strip()
+        batch_suffix = f" - batch {batch_number}" if batch_number else ""
+
+        if days_left < 0:
+            severity = "critical"
+            title = f"Expired stock: {row['product_name']}"
+            timing = f"expired {abs(days_left)} day{'s' if abs(days_left) != 1 else ''} ago"
+            priority = 0
+        elif days_left == 0:
+            severity = "critical"
+            title = f"{row['product_name']} expires today"
+            timing = "expires today"
+            priority = 1
+        elif days_left == 1:
+            severity = "warning"
+            title = f"{row['product_name']} expires tomorrow"
+            timing = "expires tomorrow"
+            priority = 2
+        elif days_left <= 7:
+            severity = "warning"
+            title = f"{row['product_name']} expires in {days_left} day{'s' if days_left != 1 else ''}"
+            timing = f"expires on {expiry_text}"
+            priority = 4
+        else:
+            continue
+
+        supplier_contact = {
+            "supplier_id": parse_int(row["supplier_id"], 0),
+            "supplier_name": str(row["supplier_name"] or "").strip(),
+            "supplier_phone": "",
+        }
+        if not supplier_contact["supplier_name"]:
+            supplier_contact = _latest_supplier_contact_for_barcode(
+                cursor,
+                str(row["barcode"]),
+            )
+        elif supplier_contact["supplier_id"] > 0:
+            supplier_row = cursor.execute(
+                "SELECT phone FROM suppliers WHERE id = ? LIMIT 1",
+                (supplier_contact["supplier_id"],),
+            ).fetchone()
+            supplier_contact["supplier_phone"] = str(
+                supplier_row["phone"] if supplier_row else ""
+            ).strip()
+
+        alerts.append(
+            {
+                "type": "expiry_alert",
+                "severity": severity,
+                "title": title,
+                "subtitle": f"{remaining_text} {timing}{batch_suffix}",
+                "barcode": row["barcode"],
+                "product_name": row["product_name"],
+                "product_name_si": row["product_name_si"],
+                "expiry_batch_id": row["pos_batch_id"] or row["id"],
+                "expiry_date": expiry_text,
+                "days_left": days_left,
+                "expiry_bucket": (
+                    "expired"
+                    if days_left < 0
+                    else "today"
+                    if days_left == 0
+                    else "tomorrow"
+                    if days_left == 1
+                    else "week"
+                ),
+                "remaining_quantity": row["remaining_quantity"],
+                "priority": priority,
                 **supplier_contact,
             }
         )
@@ -4060,6 +4536,24 @@ def _build_owner_alerts(cursor):
             }
         )
 
+    severity_rank = {"critical": 0, "warning": 1}
+    type_rank = {
+        "expiry_alert": 0,
+        "out_of_stock": 2,
+        "best_seller_low_stock": 3,
+        "low_stock": 4,
+        "weak_sales": 5,
+    }
+    alerts.sort(
+        key=lambda alert: (
+            severity_rank.get(str(alert.get("severity") or ""), 2),
+            parse_int(
+                alert.get("priority"),
+                type_rank.get(str(alert.get("type") or ""), 9),
+            ),
+            str(alert.get("title") or "").lower(),
+        )
+    )
     return alerts
 
 
@@ -4254,6 +4748,9 @@ def _sales_rows_between_values(cursor, start_sql_value, end_sql_value):
             COALESCE(transaction_type, 'sale') AS transaction_type,
             COALESCE(items_count, 0) AS items_count,
             COALESCE(gross_profit, 0) AS gross_profit,
+            COALESCE(is_credit_sale, 0) AS is_credit_sale,
+            COALESCE(credit_bill_amount, 0) AS credit_bill_amount,
+            COALESCE(loyalty_redeemed_value, 0) AS loyalty_redeemed_value,
             cashier_name,
             items,
             created_at
@@ -4303,6 +4800,8 @@ def _build_owner_sales_report(cursor, params):
     refunds = 0.0
     cash_sales = 0.0
     card_sales = 0.0
+    credit_sales = 0.0
+    loyalty_redeemed_total = 0.0
     legacy_untyped_payment_sales = 0.0
     items_sold = 0
     sale_count = 0
@@ -4322,6 +4821,9 @@ def _build_owner_sales_report(cursor, params):
         subtotal_amount = abs(parse_float(row["subtotal_amount"], 0.0))
         discount_amount = abs(parse_float(row["discount_amount"], 0.0))
         payment_method = str(row["payment_method"] or "").strip().lower()
+        is_credit_sale = parse_int(row["is_credit_sale"], 0) == 1 or payment_method == "customer_credit"
+        credit_bill_amount = abs(parse_float(row["credit_bill_amount"], 0.0))
+        loyalty_redeemed_value = abs(parse_float(row["loyalty_redeemed_value"], 0.0))
         created_at = str(row["created_at"] or "")
         sale_day = created_at[:10]
         sale_hour = _extract_sale_hour(created_at)
@@ -4392,25 +4894,39 @@ def _build_owner_sales_report(cursor, params):
             cashier_bucket["refund_total"] += total_amount
         else:
             sale_count += 1
-            effective_subtotal = subtotal_amount if subtotal_amount > 0 else total_amount + discount_amount
+            item_discount_total = sum(_extract_item_markdown_amount(item) for item in items)
+            item_marked_total = sum(_extract_item_marked_gross(item) for item in items)
+            item_final_total = sum(_extract_item_sales_amount(item) for item in items)
+            if item_final_total > 0:
+                effective_discount = item_discount_total
+                effective_subtotal = item_marked_total
+            else:
+                effective_discount = max(0.0, discount_amount - loyalty_redeemed_value)
+                effective_subtotal = max(
+                    subtotal_amount + effective_discount,
+                    total_amount + loyalty_redeemed_value + effective_discount,
+                )
             gross_sales += effective_subtotal
-            discounts += discount_amount
+            discounts += effective_discount
             sales_net += total_amount
+            loyalty_redeemed_total += loyalty_redeemed_value
             day_bucket["sale_count"] += 1
             day_bucket["gross_sales"] += effective_subtotal
-            day_bucket["discounts"] += discount_amount
+            day_bucket["discounts"] += effective_discount
             day_bucket["net_sales"] += total_amount
             hour_bucket["sale_count"] += 1
             hour_bucket["transaction_count"] += 1
             hour_bucket["gross_sales"] += effective_subtotal
-            hour_bucket["discounts"] += discount_amount
+            hour_bucket["discounts"] += effective_discount
             hour_bucket["net_sales"] += total_amount
             cashier_bucket["sale_count"] += 1
             cashier_bucket["transaction_count"] += 1
             cashier_bucket["gross_sales"] += effective_subtotal
-            cashier_bucket["discounts"] += discount_amount
+            cashier_bucket["discounts"] += effective_discount
             cashier_bucket["net_sales"] += total_amount
-            if payment_method == "card":
+            if is_credit_sale:
+                credit_sales += credit_bill_amount if credit_bill_amount > 0 else total_amount
+            elif payment_method == "card":
                 card_sales += total_amount
             elif payment_method == "cash":
                 cash_sales += total_amount
@@ -4424,6 +4940,7 @@ def _build_owner_sales_report(cursor, params):
                 continue
             barcode = _extract_item_barcode(item)
             name = _extract_item_name(item)
+            name_si = _extract_item_name_si(item)
             quantity_type = _extract_item_quantity_type(item)
             unit_label = _extract_item_unit_label(item)
             unit_cost = _extract_item_cost_snapshot(item)
@@ -4435,6 +4952,7 @@ def _build_owner_sales_report(cursor, params):
                 {
                     "barcode": barcode,
                     "product_name": name,
+                    "product_name_si": name_si,
                     "quantity_type": quantity_type,
                     "unit_label": unit_label,
                     "quantity_sold": 0,
@@ -4447,6 +4965,8 @@ def _build_owner_sales_report(cursor, params):
                     "estimated_profit": 0.0,
                 },
             )
+            if name_si and not bucket.get("product_name_si"):
+                bucket["product_name_si"] = name_si
             if transaction_type == "refund":
                 amount = _extract_item_refund_amount(item)
                 cost_total = unit_cost * quantity
@@ -4572,6 +5092,7 @@ def _build_owner_sales_report(cursor, params):
         slow_movers.append({
             "barcode": product.get("barcode"),
             "product_name": product.get("name"),
+            "product_name_si": product.get("name_si"),
             "quantity_sold": qty,
             "stock": stock,
             "stock_value": round(stock * parse_float(product.get("cost_price"), 0.0), 2),
@@ -4596,6 +5117,8 @@ def _build_owner_sales_report(cursor, params):
             "refund_count": refund_count,
             "cash_sales": round(cash_sales, 2),
             "card_sales": round(card_sales, 2),
+            "credit_sales": round(credit_sales, 2),
+            "loyalty_redeemed_total": round(loyalty_redeemed_total, 2),
             "legacy_untyped_payment_sales": round(legacy_untyped_payment_sales, 2),
             "payment_data_complete": legacy_untyped_payment_sales <= 0.0,
             "sale_count": sale_count,
@@ -5347,11 +5870,11 @@ def create_server_backup(cursor, created_by="Local Server", notes="Manual local 
         with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             archive.writestr(
                 "backup_metadata.json",
-                json.dumps(metadata, indent=2, ensure_ascii=False),
+                json_dumps(metadata, indent=2, ensure_ascii=False),
             )
             archive.writestr(
                 "data_export.json",
-                json.dumps(export_data, indent=2, ensure_ascii=False),
+                json_dumps(export_data, indent=2, ensure_ascii=False),
             )
             archive.writestr(
                 "restore_instructions.txt",
@@ -5650,6 +6173,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             barcode TEXT UNIQUE,
             name TEXT,
+            name_si TEXT,
             price REAL,
             stock INTEGER,
             updated_at TEXT DEFAULT (datetime('now'))
@@ -5658,6 +6182,7 @@ def init_db():
     )
 
     ensure_column(c, "products", "category", "category TEXT DEFAULT 'General'")
+    ensure_column(c, "products", "name_si", "name_si TEXT")
     ensure_column(c, "products", "quantity_type", "quantity_type TEXT DEFAULT 'unit'")
     ensure_column(c, "products", "unit_label", "unit_label TEXT DEFAULT 'pcs'")
     ensure_column(c, "products", "cost_price", "cost_price REAL DEFAULT 0")
@@ -5666,6 +6191,8 @@ def init_db():
     ensure_column(c, "products", "sale_price", "sale_price REAL")
     ensure_column(c, "products", "sale_enabled", "sale_enabled INTEGER DEFAULT 0")
     ensure_column(c, "products", "min_stock_level", "min_stock_level INTEGER DEFAULT 0")
+    ensure_column(c, "products", "track_expiry", "track_expiry INTEGER DEFAULT 0")
+    ensure_column(c, "products", "expiry_alert_days", "expiry_alert_days INTEGER DEFAULT 30")
     ensure_column(c, "products", "is_active", "is_active INTEGER DEFAULT 1")
     ensure_column(c, "products", "last_price_updated_at", "last_price_updated_at TEXT")
 
@@ -5690,6 +6217,11 @@ def init_db():
             END,
             sale_enabled = COALESCE(sale_enabled, 0),
             min_stock_level = COALESCE(min_stock_level, 0),
+            track_expiry = COALESCE(track_expiry, 0),
+            expiry_alert_days = CASE
+                WHEN COALESCE(expiry_alert_days, 30) < 1 THEN 30
+                ELSE COALESCE(expiry_alert_days, 30)
+            END,
             is_active = COALESCE(is_active, 1),
             updated_at = COALESCE(updated_at, {now_sql()}),
             last_price_updated_at = COALESCE(last_price_updated_at, updated_at)
@@ -5723,6 +6255,7 @@ def init_db():
     create_pricing_schemes_tables(c)
     create_sale_items_table(c)
     create_loyalty_tables(c)
+    ensure_expiry_batches_table(c)
 
     c.execute(
         """
@@ -5739,6 +6272,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS stock_receipts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             barcode TEXT,
+            product_name TEXT,
+            product_name_si TEXT,
             quantity INTEGER,
             supplier_id INTEGER,
             cost REAL,
@@ -5746,6 +6281,8 @@ def init_db():
         )
         """
     )
+    ensure_column(c, "stock_receipts", "product_name", "product_name TEXT")
+    ensure_column(c, "stock_receipts", "product_name_si", "product_name_si TEXT")
 
     c.execute(
         """
@@ -5887,7 +6424,7 @@ def init_db():
                     item["min_stock_level"],
                 ),
             )
-        print("✅ Seeded 4 mock products")
+        print("âœ… Seeded 4 mock products")
 
     if c.execute("SELECT COUNT(*) FROM suppliers").fetchone()[0] == 0:
         suppliers = [
@@ -5899,7 +6436,7 @@ def init_db():
                 "INSERT INTO suppliers (name, phone) VALUES (?, ?)",
                 (name, phone),
             )
-        print("✅ Seeded 2 mock suppliers")
+        print("âœ… Seeded 2 mock suppliers")
 
 
     create_business_info_table(c)
@@ -5915,11 +6452,22 @@ def init_db():
 class APIHandler(BaseHTTPRequestHandler):
     def _set_headers(self, status=200):
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
+
+    def send_json(self, data, status=200):
+        body = json_dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_OPTIONS(self):
         self._set_headers()
@@ -5934,8 +6482,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
         if action == "get_products":
             result = fetch_products(c)
-            self._set_headers()
-            self.wfile.write(json.dumps(result).encode())
+            self.send_json(result)
 
         elif action == "get_sales":
             rows = c.execute(
@@ -5954,7 +6501,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
             self._set_headers()
             self.wfile.write(
-                json.dumps(
+                json_dumps(
                     {
                         "status": "success",
                         "grand_total": grand_total,
@@ -5968,7 +6515,7 @@ class APIHandler(BaseHTTPRequestHandler):
             info = get_business_info(c)
             self._set_headers()
             self.wfile.write(
-                json.dumps({
+                json_dumps({
                     "status": "success",
                     "business_info": info,
                 }).encode()
@@ -5981,7 +6528,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 summary = get_owner_user_summary(owner_cursor)
                 self._set_headers()
                 self.wfile.write(
-                    json.dumps({
+                    json_dumps({
                         "status": "success",
                         "summary": summary,
                     }).encode()
@@ -5996,7 +6543,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 users = get_owner_users(owner_cursor, params)
                 self._set_headers()
                 self.wfile.write(
-                    json.dumps({
+                    json_dumps({
                         "status": "success",
                         "users": users,
                     }).encode()
@@ -6011,7 +6558,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 logs = get_owner_activity_logs(owner_cursor, params)
                 self._set_headers()
                 self.wfile.write(
-                    json.dumps({
+                    json_dumps({
                         "status": "success",
                         "logs": logs,
                     }).encode()
@@ -6021,13 +6568,12 @@ class APIHandler(BaseHTTPRequestHandler):
 
         elif action == "export_data_backup":
             backup = build_data_backup(c)
-            self._set_headers()
-            self.wfile.write(json.dumps(backup).encode())
+            self.send_json(backup)
 
         elif action == "list_server_backups":
             self._set_headers()
             self.wfile.write(
-                json.dumps(
+                json_dumps(
                     {
                         "status": "success",
                         "backup_directory": _server_backup_directory(),
@@ -6042,7 +6588,7 @@ class APIHandler(BaseHTTPRequestHandler):
             validation = validate_server_backup(backup_path)
             self._set_headers(200 if validation.get("is_valid") else 400)
             self.wfile.write(
-                json.dumps(
+                json_dumps(
                     {
                         "status": "success" if validation.get("is_valid") else "error",
                         **validation,
@@ -6059,40 +6605,31 @@ class APIHandler(BaseHTTPRequestHandler):
             summary_data = _build_owner_summary_from_rows(today_rows)
             trend = _owner_trend(c, days=7)
 
-            self._set_headers()
-            self.wfile.write(
-                json.dumps(
-                    {
-                        "status": "success",
-                        "summary": summary_data["summary"],
-                        "trend": trend,
-                        "top_products": summary_data["top_products"],
-                    }
-                ).encode()
+            self.send_json(
+                {
+                    "status": "success",
+                    "summary": summary_data["summary"],
+                    "trend": trend,
+                    "top_products": summary_data["top_products"],
+                }
             )
 
         elif action == "get_owner_alerts":
             alerts = _build_owner_alerts(c)
-            self._set_headers()
-            self.wfile.write(
-                json.dumps(
-                    {
-                        "status": "success",
-                        "alerts": alerts,
-                    }
-                ).encode()
+            self.send_json(
+                {
+                    "status": "success",
+                    "alerts": alerts,
+                }
             )
 
         elif action == "get_owner_sales_report":
             report = _build_owner_sales_report(c, params)
-            self._set_headers()
-            self.wfile.write(
-                json.dumps(
-                    {
-                        "status": "success",
-                        **report,
-                    }
-                ).encode()
+            self.send_json(
+                {
+                    "status": "success",
+                    **report,
+                }
             )
 
         elif action == "get_customer_dashboard":
@@ -6100,7 +6637,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 dashboard = get_customer_dashboard(c)
                 self._set_headers()
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {
                             "status": "success",
                             "success": True,
@@ -6111,7 +6648,7 @@ class APIHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {
                             "status": "error",
                             "success": False,
@@ -6125,7 +6662,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 customers = get_customers_monitor(c, params)
                 self._set_headers()
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {
                             "status": "success",
                             "success": True,
@@ -6136,7 +6673,7 @@ class APIHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {
                             "status": "error",
                             "success": False,
@@ -6152,7 +6689,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 profile = get_customer_monitor_profile(c, customer_id)
                 self._set_headers()
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {
                             "status": "success",
                             "success": True,
@@ -6163,7 +6700,7 @@ class APIHandler(BaseHTTPRequestHandler):
             except ValueError as e:
                 self._set_headers(404)
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {
                             "status": "error",
                             "success": False,
@@ -6174,7 +6711,7 @@ class APIHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {
                             "status": "error",
                             "success": False,
@@ -6187,13 +6724,13 @@ class APIHandler(BaseHTTPRequestHandler):
             rows = c.execute("SELECT * FROM suppliers").fetchall()
             result = [dict(r) for r in rows]
             self._set_headers()
-            self.wfile.write(json.dumps(result).encode())
+            self.wfile.write(json_dumps(result).encode())
 
         elif action == "get_customers":
             result = fetch_customers(c, params)
             self._set_headers()
             self.wfile.write(
-                json.dumps({"status": "success", "customers": result}).encode()
+                json_dumps({"status": "success", "customers": result}).encode()
             )
 
         elif action == "get_customer_product_prices":
@@ -6208,7 +6745,7 @@ class APIHandler(BaseHTTPRequestHandler):
             result = [dict(row) for row in c.execute(query, args).fetchall()]
             self._set_headers()
             self.wfile.write(
-                json.dumps({"status": "success", "product_prices": result}).encode()
+                json_dumps({"status": "success", "product_prices": result}).encode()
             )
 
         elif action == "get_customer_categories":
@@ -6220,7 +6757,7 @@ class APIHandler(BaseHTTPRequestHandler):
             query += " ORDER BY COALESCE(is_active, 1) DESC, name COLLATE NOCASE ASC"
             result = [dict(row) for row in c.execute(query).fetchall()]
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "categories": result}).encode())
+            self.wfile.write(json_dumps({"status": "success", "categories": result}).encode())
 
         elif action == "get_pricing_schemes":
             create_pricing_schemes_tables(c)
@@ -6231,7 +6768,7 @@ class APIHandler(BaseHTTPRequestHandler):
             query += " ORDER BY COALESCE(is_active, 1) DESC, priority ASC, name COLLATE NOCASE ASC"
             result = [dict(row) for row in c.execute(query).fetchall()]
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "schemes": result}).encode())
+            self.wfile.write(json_dumps({"status": "success", "schemes": result}).encode())
 
         elif action == "get_pricing_scheme_rules":
             create_pricing_schemes_tables(c)
@@ -6250,14 +6787,14 @@ class APIHandler(BaseHTTPRequestHandler):
             query += " ORDER BY COALESCE(is_active, 1) DESC, priority ASC, updated_at DESC, id DESC"
             result = [dict(row) for row in c.execute(query, args).fetchall()]
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "rules": result}).encode())
+            self.wfile.write(json_dumps({"status": "success", "rules": result}).encode())
 
         elif action == "get_customer_summary":
             customer_id = params.get("customer_id", params.get("id", ["0"]))[0]
             summary = get_customer_summary(c, customer_id)
             self._set_headers()
             self.wfile.write(
-                json.dumps({"status": "success", "summary": summary}).encode()
+                json_dumps({"status": "success", "summary": summary}).encode()
             )
 
         elif action == "get_customer_purchase_history":
@@ -6266,7 +6803,7 @@ class APIHandler(BaseHTTPRequestHandler):
             history = get_customer_purchase_history(c, customer_id, limit=limit)
             self._set_headers()
             self.wfile.write(
-                json.dumps({"status": "success", "history": history}).encode()
+                json_dumps({"status": "success", "history": history}).encode()
             )
 
 
@@ -6276,7 +6813,7 @@ class APIHandler(BaseHTTPRequestHandler):
             ledger = get_customer_ledger_rows(c, customer_id, limit=limit)
             self._set_headers()
             self.wfile.write(
-                json.dumps({"status": "success", "ledger": ledger}).encode()
+                json_dumps({"status": "success", "ledger": ledger}).encode()
             )
 
         elif action == "get_customer_credit_summary":
@@ -6299,7 +6836,7 @@ class APIHandler(BaseHTTPRequestHandler):
             result = dict(row) if row else {"customer_id": customer_id, "current_credit_balance": balance}
             self._set_headers()
             self.wfile.write(
-                json.dumps({"status": "success", "summary": result}).encode()
+                json_dumps({"status": "success", "summary": result}).encode()
             )
 
         elif action == "get_credit_customers_report":
@@ -6308,7 +6845,7 @@ class APIHandler(BaseHTTPRequestHandler):
             rows = get_credit_customers_report_rows(c, include_zero=include_zero, limit=limit)
             self._set_headers()
             self.wfile.write(
-                json.dumps({"status": "success", "customers": rows}).encode()
+                json_dumps({"status": "success", "customers": rows}).encode()
             )
 
         elif action == "get_inventory_history":
@@ -6317,7 +6854,7 @@ class APIHandler(BaseHTTPRequestHandler):
             if not barcode:
                 self._set_headers(400)
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {"status": "error", "message": "barcode is required"}
                     ).encode()
                 )
@@ -6335,7 +6872,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 result = [dict(r) for r in rows]
                 self._set_headers()
                 self.wfile.write(
-                    json.dumps({"status": "success", "history": result}).encode()
+                    json_dumps({"status": "success", "history": result}).encode()
                 )
 
         elif action == "get_product_supplier_contact":
@@ -6344,7 +6881,7 @@ class APIHandler(BaseHTTPRequestHandler):
             if not barcode:
                 self._set_headers(400)
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {"status": "error", "message": "barcode is required"}
                     ).encode()
                 )
@@ -6352,13 +6889,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 contact = _latest_supplier_contact_for_barcode(c, barcode)
                 self._set_headers()
                 self.wfile.write(
-                    json.dumps({"status": "success", "contact": contact}).encode()
+                    json_dumps({"status": "success", "contact": contact}).encode()
                 )
 
         else:
             self._set_headers(404)
             self.wfile.write(
-                json.dumps({"status": "error", "message": "Unknown action"}).encode()
+                json_dumps({"status": "error", "message": "Unknown action"}).encode()
             )
 
         conn.close()
@@ -6380,10 +6917,10 @@ class APIHandler(BaseHTTPRequestHandler):
             ok, message, user = authenticate_owner_login(body.get('pin', ''))
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success", "user": user}).encode())
+                self.wfile.write(json_dumps({"status": "success", "user": user}).encode())
 
         elif action == "owner_logout":
             record_owner_logout(
@@ -6391,7 +6928,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 user_name=body.get('user_name', 'Owner'),
             )
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success"}).encode())
+            self.wfile.write(json_dumps({"status": "success"}).encode())
 
         elif action == "create_server_backup":
             result = create_server_backup(
@@ -6400,7 +6937,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 notes=body.get("notes", "Manual local server backup"),
             )
             self._set_headers(200 if result.get("status") == "success" else 400)
-            self.wfile.write(json.dumps(result).encode())
+            self.wfile.write(json_dumps(result).encode())
 
         elif action == "pos_sync":
             sync_type = str(body.get("type", "")).strip().upper()
@@ -6421,7 +6958,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     if not barcode:
                         self._set_headers(400)
                         self.wfile.write(
-                            json.dumps(
+                            json_dumps(
                                 {"status": "error", "message": "Missing product barcode"}
                             ).encode()
                         )
@@ -6431,7 +6968,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     if qty <= 0:
                         self._set_headers(400)
                         self.wfile.write(
-                            json.dumps(
+                            json_dumps(
                                 {"status": "error", "message": f"Invalid quantity for {barcode}"}
                             ).encode()
                         )
@@ -6446,7 +6983,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     if not row:
                         self._set_headers(404)
                         self.wfile.write(
-                            json.dumps(
+                            json_dumps(
                                 {"status": "error", "message": f"Product not found: {barcode}"}
                             ).encode()
                         )
@@ -6457,7 +6994,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     if transaction_type == "sale" and current_stock + 0.000001 < qty:
                         self._set_headers(400)
                         self.wfile.write(
-                            json.dumps(
+                            json_dumps(
                                 {
                                     "status": "error",
                                     "message": f"Insufficient backend stock for {barcode}. Available: {format_quantity(current_stock)}, requested: {format_quantity(qty)}",
@@ -6549,7 +7086,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         data.get("cashier", "Unknown"),
                         data.get("branch", ""),
                         data.get("vendor", ""),
-                        json.dumps(items),
+                        json_dumps(items),
                         created_at,
                         pos_sale_id,
                         customer_id,
@@ -6602,53 +7139,53 @@ class APIHandler(BaseHTTPRequestHandler):
 
                 conn.commit()
                 print(
-                    f"  ✅ {transaction_type.upper()} synced: Rs.{data.get('total_amount', 0)} by {data.get('cashier', 'Unknown')}"
+                    f"  âœ… {transaction_type.upper()} synced: Rs.{data.get('total_amount', 0)} by {data.get('cashier', 'Unknown')}"
                 )
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
 
             elif sync_type == "CUSTOMER_CREDIT_SETTINGS":
                 customer_id = handle_credit_settings_sync(c, data)
                 conn.commit()
-                print(f"  ✅ CUSTOMER_CREDIT_SETTINGS synced: customer #{customer_id}")
+                print(f"  âœ… CUSTOMER_CREDIT_SETTINGS synced: customer #{customer_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "CUSTOMER_PRICING_SETTINGS":
                 customer_id = handle_customer_pricing_settings_sync(c, data)
                 conn.commit()
                 print(f"  CUSTOMER_PRICING_SETTINGS synced: customer #{customer_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type in {"CUSTOMER_PRODUCT_PRICE_UPSERT", "CUSTOMER_PRODUCT_PRICE"}:
                 price_id = handle_customer_product_price_sync(c, data)
                 conn.commit()
                 print(f"  CUSTOMER_PRODUCT_PRICE synced: rule #{price_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type in {"CUSTOMER_CATEGORY_UPSERT", "CUSTOMER_CATEGORY"}:
                 category_id = handle_customer_category_sync(c, data)
                 conn.commit()
                 print(f"  CUSTOMER_CATEGORY synced: category #{category_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type in {"PRICING_SCHEME_UPSERT", "PRICING_SCHEME"}:
                 scheme_id = handle_pricing_scheme_sync(c, data)
                 conn.commit()
                 print(f"  PRICING_SCHEME synced: scheme #{scheme_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type in {"PRICING_SCHEME_RULE_UPSERT", "PRICING_SCHEME_RULE"}:
                 rule_id = handle_pricing_scheme_rule_sync(c, data)
                 conn.commit()
                 print(f"  PRICING_SCHEME_RULE synced: rule #{rule_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "CUSTOMER_PRICING_ASSIGNMENT":
                 try:
@@ -6656,13 +7193,13 @@ class APIHandler(BaseHTTPRequestHandler):
                     conn.commit()
                     print(f"  CUSTOMER_PRICING_ASSIGNMENT synced: customer #{customer_id}")
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
                 except Exception as exc:
                     conn.rollback()
                     print(f"  CUSTOMER_PRICING_ASSIGNMENT failed: {exc}")
                     self._set_headers(500)
                     self.wfile.write(
-                        json.dumps(
+                        json_dumps(
                             {
                                 "status": "error",
                                 "message": f"CUSTOMER_PRICING_ASSIGNMENT failed: {exc}",
@@ -6675,78 +7212,78 @@ class APIHandler(BaseHTTPRequestHandler):
                 conn.commit()
                 print(f"  CUSTOMER_LOYALTY_SETTINGS synced: customer #{customer_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "LOYALTY_SETTINGS":
                 settings_id = handle_loyalty_settings_sync(c, data)
                 conn.commit()
                 print(f"  LOYALTY_SETTINGS synced: settings #{settings_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "LOYALTY_EXCLUDED_CATEGORY":
                 exclusion_id = handle_loyalty_excluded_category_sync(c, data)
                 conn.commit()
                 print(f"  LOYALTY_EXCLUDED_CATEGORY synced: exclusion #{exclusion_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "LOYALTY_EXCLUDED_PRODUCT":
                 exclusion_id = handle_loyalty_excluded_product_sync(c, data)
                 conn.commit()
                 print(f"  LOYALTY_EXCLUDED_PRODUCT synced: exclusion #{exclusion_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "LOYALTY_SALE_UPDATE":
                 sale_id = handle_loyalty_sale_update_sync(c, data)
                 conn.commit()
                 print(f"  LOYALTY_SALE_UPDATE synced: sale #{sale_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "LOYALTY_LEDGER_ENTRY":
                 ledger_id = handle_loyalty_ledger_entry_sync(c, data)
                 conn.commit()
                 print(f"  LOYALTY_LEDGER_ENTRY synced: entry #{ledger_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "CREDIT_SALE_UPDATE":
                 ledger_id = handle_credit_sale_update_sync(c, data)
                 conn.commit()
-                print(f"  ✅ CREDIT_SALE_UPDATE synced: ledger #{ledger_id}")
+                print(f"  âœ… CREDIT_SALE_UPDATE synced: ledger #{ledger_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "CREDIT_REFUND_UPDATE":
                 ledger_id = handle_credit_refund_update_sync(c, data)
                 conn.commit()
-                print(f"  ✅ CREDIT_REFUND_UPDATE synced: ledger #{ledger_id}")
+                print(f"  âœ… CREDIT_REFUND_UPDATE synced: ledger #{ledger_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "CUSTOMER_PAYMENT":
                 payment_id = handle_customer_payment_sync(c, data)
                 conn.commit()
-                print(f"  ✅ CUSTOMER_PAYMENT synced: payment #{payment_id}")
+                print(f"  âœ… CUSTOMER_PAYMENT synced: payment #{payment_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "CUSTOMER_LEDGER_ADJUSTMENT":
                 customer_id = upsert_customer_from_sync(c, data)
                 ledger_id = insert_credit_ledger_entry(c, data, customer_id=customer_id)
                 conn.commit()
-                print(f"  ✅ CUSTOMER_LEDGER_ADJUSTMENT synced: ledger #{ledger_id}")
+                print(f"  âœ… CUSTOMER_LEDGER_ADJUSTMENT synced: ledger #{ledger_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "CUSTOMER_PAYMENT_VOID":
                 ledger_id = handle_customer_payment_void_sync(c, data)
                 conn.commit()
-                print(f"  ✅ CUSTOMER_PAYMENT_VOID synced: ledger #{ledger_id}")
+                print(f"  âœ… CUSTOMER_PAYMENT_VOID synced: ledger #{ledger_id}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "PRODUCT_CREATE":
                 barcode = str(data.get("barcode", "")).strip()
@@ -6755,6 +7292,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     c,
                     barcode=barcode,
                     name=name,
+                    name_si=data.get("name_si"),
                     category=data.get("category", "General"),
                     cost_price=data.get("cost_price", 0),
                     selling_price=data.get("selling_price", data.get("price", 0)),
@@ -6765,16 +7303,18 @@ class APIHandler(BaseHTTPRequestHandler):
                     unit_label=data.get("unit_label"),
                     opening_stock=data.get("opening_stock", data.get("stock", 0)),
                     min_stock_level=data.get("min_stock_level", 0),
+                    track_expiry=data.get("track_expiry", False),
+                    expiry_alert_days=data.get("expiry_alert_days", 30),
                     reason=str(data.get("reason", "")).strip(),
                 )
                 if not ok:
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     conn.commit()
-                    print(f"  ✅ PRODUCT_CREATE: {barcode} • {name}")
+                    print(f"  âœ… PRODUCT_CREATE: {barcode} â€¢ {name}")
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "BULK_PRODUCT_IMPORT":
                 rows = data.get("rows", [])
@@ -6786,6 +7326,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         c,
                         barcode=row.get("barcode", ""),
                         name=row.get("name", ""),
+                        name_si=row.get("name_si"),
                         category=row.get("category", "General"),
                         cost_price=row.get("cost_price", 0),
                         selling_price=row.get("selling_price", row.get("price", 0)),
@@ -6796,20 +7337,22 @@ class APIHandler(BaseHTTPRequestHandler):
                         unit_label=row.get("unit_label"),
                         opening_stock=row.get("opening_stock", row.get("stock", 0)),
                         min_stock_level=row.get("min_stock_level", 0),
+                        track_expiry=row.get("track_expiry", False),
+                        expiry_alert_days=row.get("expiry_alert_days", 30),
                         reason="Bulk product import",
                         mirror_to_pos=False,
                     )
                     if not ok:
                         self._set_headers(400)
-                        self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                        self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                         conn.close()
                         return
                     created_or_updated += 1
 
                 conn.commit()
-                print(f"  ✅ BULK_PRODUCT_IMPORT: {created_or_updated} rows")
+                print(f"  âœ… BULK_PRODUCT_IMPORT: {created_or_updated} rows")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success", "processed": created_or_updated}).encode())
+                self.wfile.write(json_dumps({"status": "success", "processed": created_or_updated}).encode())
 
             elif sync_type == "PRODUCT_UPDATE":
                 barcode = str(data.get("barcode", "")).strip()
@@ -6818,6 +7361,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     c,
                     barcode=barcode,
                     name=name,
+                    name_si=data.get("name_si"),
                     category=data.get("category", "General"),
                     cost_price=data.get("cost_price", 0),
                     selling_price=data.get("selling_price", data.get("price", 0)),
@@ -6828,17 +7372,19 @@ class APIHandler(BaseHTTPRequestHandler):
                     unit_label=data.get("unit_label"),
                     opening_stock=data.get("opening_stock", data.get("stock", 0)),
                     min_stock_level=data.get("min_stock_level", 0),
+                    track_expiry=data.get("track_expiry", False),
+                    expiry_alert_days=data.get("expiry_alert_days", 30),
                     reason=str(data.get("reason", "")).strip() or "Product updated",
                     mirror_to_pos=False,
                 )
                 if not ok:
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     conn.commit()
-                    print(f"  ✅ PRODUCT_UPDATE: {barcode} • {name}")
+                    print(f"  âœ… PRODUCT_UPDATE: {barcode} â€¢ {name}")
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "PRODUCT_DELETE":
                 barcode = str(data.get("barcode", "")).strip()
@@ -6850,12 +7396,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 if not ok:
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     conn.commit()
-                    print(f"  ✅ PRODUCT_DELETE: {barcode}")
+                    print(f"  âœ… PRODUCT_DELETE: {barcode}")
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type == "BULK_PRODUCT_DELETE":
                 ok, deleted_count = bulk_delete_products(
@@ -6865,9 +7411,9 @@ class APIHandler(BaseHTTPRequestHandler):
                     mirror_to_pos=False,
                 )
                 conn.commit()
-                print(f"  ✅ BULK_PRODUCT_DELETE: {deleted_count} products")
+                print(f"  âœ… BULK_PRODUCT_DELETE: {deleted_count} products")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success", "deleted": deleted_count}).encode())
+                self.wfile.write(json_dumps({"status": "success", "deleted": deleted_count}).encode())
 
             elif sync_type == "PRICE_UPDATE":
                 barcode = str(data.get("barcode", "")).strip()
@@ -6886,12 +7432,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 if not ok:
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     conn.commit()
-                    print(f"  ✅ PRICE_UPDATE: {barcode} [{price_type}] → Rs.{parse_float(new_price):.2f}")
+                    print(f"  âœ… PRICE_UPDATE: {barcode} [{price_type}] â†’ Rs.{parse_float(new_price):.2f}")
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
 
             elif sync_type in {"STOCK_RECEIVE", "INVENTORY_RECEIVE", "ADD_STOCK"}:
                 barcode = str(data.get("barcode", "")).strip()
@@ -6901,23 +7447,44 @@ class APIHandler(BaseHTTPRequestHandler):
                 supplier_name = str(data.get("supplier_name", "")).strip()
                 reason = str(data.get("reason", "")).strip()
 
-                ok, message, _ = update_stock_receive(
+                ok, message, receipt_id = update_stock_receive(
                     c,
                     barcode=barcode,
                     quantity=quantity,
                     cost=unit_cost,
                     supplier_id=supplier_id,
                     supplier_name=supplier_name,
+                    product_name_si=data.get("product_name_si") or data.get("name_si"),
                     reason=reason,
                 )
                 if not ok:
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
+                    if str(data.get("expiry_date", "") or "").strip():
+                        upsert_expiry_batch_from_sync(
+                            c,
+                            {
+                                **data,
+                                "pos_batch_id": data.get("expiry_batch_id"),
+                                "received_quantity": quantity,
+                                "remaining_quantity": data.get("remaining_quantity", quantity),
+                                "status": data.get("status", "active"),
+                            },
+                        )
                     conn.commit()
-                    print(f"  ✅ STOCK_RECEIVE: {barcode} +{parse_int(quantity)}")
+                    print(f"  âœ… STOCK_RECEIVE: {barcode} +{parse_int(quantity)}")
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(
+                        json_dumps({"status": "success", "receipt_id": receipt_id}).encode()
+                    )
+
+            elif sync_type in {"EXPIRY_BATCH_UPSERT", "EXPIRY_BATCH"}:
+                batch_id = upsert_expiry_batch_from_sync(c, data)
+                conn.commit()
+                print(f"  EXPIRY_BATCH_UPSERT: #{batch_id or 0}")
+                self._set_headers()
+                self.wfile.write(json_dumps({"status": "success", "batch_id": batch_id}).encode())
 
             elif sync_type in {"STOCK_ADJUST", "INVENTORY_ADJUST"}:
                 barcode = str(data.get("barcode", "")).strip()
@@ -6934,16 +7501,16 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 if not ok:
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     conn.commit()
                     stock_delta_value = stock_delta
                     stock_delta = int(stock_delta)
-                    print(f"  ✅ STOCK_ADJUST: {barcode} {adjustment_type} ({stock_delta:+d})")
+                    print(f"  âœ… STOCK_ADJUST: {barcode} {adjustment_type} ({stock_delta:+d})")
                     stock_delta = stock_delta_value
                     self._set_headers()
                     self.wfile.write(
-                        json.dumps(
+                        json_dumps(
                             {
                                 "status": "success",
                                 "resulting_stock": resulting_stock,
@@ -6965,17 +7532,17 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 if not ok:
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     conn.commit()
-                    print(f"  ✅ MIN_STOCK_UPDATE: {barcode} → {parse_int(min_stock_level)}")
+                    print(f"  âœ… MIN_STOCK_UPDATE: {barcode} â†’ {parse_int(min_stock_level)}")
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
 
             else:
                 self._set_headers(400)
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {"status": "error", "message": f"Unsupported sync type: {sync_type}"}
                     ).encode()
                 )
@@ -6984,11 +7551,11 @@ class APIHandler(BaseHTTPRequestHandler):
             ok, message = update_business_info(c, body)
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
         elif action == "create_owner_user":
             conns = _get_user_db_connections(include_backend=True)
@@ -7009,12 +7576,12 @@ class APIHandler(BaseHTTPRequestHandler):
                         except Exception:
                             pass
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     for _name, owner_conn, _path in conns:
                         owner_conn.commit()
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
             finally:
                 _close_user_db_connections(conns)
 
@@ -7037,12 +7604,12 @@ class APIHandler(BaseHTTPRequestHandler):
                         except Exception:
                             pass
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     for _name, owner_conn, _path in conns:
                         owner_conn.commit()
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
             finally:
                 _close_user_db_connections(conns)
 
@@ -7065,12 +7632,12 @@ class APIHandler(BaseHTTPRequestHandler):
                         except Exception:
                             pass
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     for _name, owner_conn, _path in conns:
                         owner_conn.commit()
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
             finally:
                 _close_user_db_connections(conns)
 
@@ -7093,12 +7660,12 @@ class APIHandler(BaseHTTPRequestHandler):
                         except Exception:
                             pass
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     for _name, owner_conn, _path in conns:
                         owner_conn.commit()
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
             finally:
                 _close_user_db_connections(conns)
 
@@ -7121,12 +7688,12 @@ class APIHandler(BaseHTTPRequestHandler):
                         except Exception:
                             pass
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                 else:
                     for _name, owner_conn, _path in conns:
                         owner_conn.commit()
                     self._set_headers()
-                    self.wfile.write(json.dumps({"status": "success"}).encode())
+                    self.wfile.write(json_dumps({"status": "success"}).encode())
             finally:
                 _close_user_db_connections(conns)
 
@@ -7135,145 +7702,146 @@ class APIHandler(BaseHTTPRequestHandler):
             ok, message, customer = create_customer(c, body)
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message, "customer": customer}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message, "customer": customer}).encode())
             else:
                 conn.commit()
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+                self.wfile.write(json_dumps({"status": "success", "customer": customer}).encode())
 
         elif action == "update_customer":
             ok, message, customer = update_customer(c, body)
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message, "customer": customer}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message, "customer": customer}).encode())
             else:
                 conn.commit()
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+                self.wfile.write(json_dumps({"status": "success", "customer": customer}).encode())
 
         elif action == "deactivate_customer":
             ok, message, customer = set_customer_active_status(c, body, False)
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+                self.wfile.write(json_dumps({"status": "success", "customer": customer}).encode())
 
         elif action == "reactivate_customer":
             ok, message, customer = set_customer_active_status(c, body, True)
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success", "customer": customer}).encode())
+                self.wfile.write(json_dumps({"status": "success", "customer": customer}).encode())
 
 
         elif action == "update_customer_credit_settings":
             customer_id = handle_credit_settings_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "customer_id": customer_id}).encode())
 
         elif action == "update_customer_pricing_settings":
             customer_id = handle_customer_pricing_settings_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "customer_id": customer_id}).encode())
 
         elif action == "upsert_customer_product_price":
             price_id = handle_customer_product_price_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "id": price_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "id": price_id}).encode())
 
         elif action == "upsert_customer_category":
             category_id = handle_customer_category_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "id": category_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "id": category_id}).encode())
 
         elif action == "upsert_pricing_scheme":
             scheme_id = handle_pricing_scheme_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "id": scheme_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "id": scheme_id}).encode())
 
         elif action == "upsert_pricing_scheme_rule":
             rule_id = handle_pricing_scheme_rule_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "id": rule_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "id": rule_id}).encode())
 
         elif action == "update_customer_pricing_assignment":
             customer_id = handle_customer_pricing_assignment_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "customer_id": customer_id}).encode())
 
         elif action == "update_customer_loyalty_settings":
             customer_id = handle_customer_loyalty_settings_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "customer_id": customer_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "customer_id": customer_id}).encode())
 
         elif action == "update_loyalty_settings":
             settings_id = handle_loyalty_settings_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "id": settings_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "id": settings_id}).encode())
 
         elif action == "upsert_loyalty_excluded_category":
             exclusion_id = handle_loyalty_excluded_category_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "id": exclusion_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "id": exclusion_id}).encode())
 
         elif action == "upsert_loyalty_excluded_product":
             exclusion_id = handle_loyalty_excluded_product_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "id": exclusion_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "id": exclusion_id}).encode())
 
         elif action == "update_loyalty_sale":
             sale_id = handle_loyalty_sale_update_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "sale_id": sale_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "sale_id": sale_id}).encode())
 
         elif action == "upsert_loyalty_ledger_entry":
             ledger_id = handle_loyalty_ledger_entry_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "ledger_id": ledger_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "ledger_id": ledger_id}).encode())
 
         elif action == "receive_customer_payment":
             payment_id = handle_customer_payment_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "payment_id": payment_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "payment_id": payment_id}).encode())
 
         elif action == "customer_ledger_adjustment":
             customer_id = upsert_customer_from_sync(c, body)
             ledger_id = insert_credit_ledger_entry(c, body, customer_id=customer_id)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "ledger_id": ledger_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "ledger_id": ledger_id}).encode())
 
         elif action == "void_customer_payment":
             ledger_id = handle_customer_payment_void_sync(c, body)
             conn.commit()
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "ledger_id": ledger_id}).encode())
+            self.wfile.write(json_dumps({"status": "success", "ledger_id": ledger_id}).encode())
 
         elif action == "add_product":
             ok, message = create_or_update_product(
                 c,
                 barcode=body.get("barcode", ""),
                 name=body.get("name", ""),
+                name_si=body.get("name_si"),
                 category=body.get("category", "General"),
                 cost_price=body.get("cost_price", 0),
                 selling_price=body.get("selling_price", body.get("price", 0)),
@@ -7289,12 +7857,12 @@ class APIHandler(BaseHTTPRequestHandler):
 
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
-                print(f"  ✅ Product added: {body.get('barcode', '')}")
+                print(f"  âœ… Product added: {body.get('barcode', '')}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
         elif action == "bulk_import_products":
             rows = body.get("rows", [])
@@ -7306,6 +7874,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     c,
                     barcode=row.get("barcode", ""),
                     name=row.get("name", ""),
+                    name_si=row.get("name_si"),
                     category=row.get("category", "General"),
                     cost_price=row.get("cost_price", 0),
                     selling_price=row.get("selling_price", row.get("price", 0)),
@@ -7320,21 +7889,22 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 if not ok:
                     self._set_headers(400)
-                    self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                    self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
                     conn.close()
                     return
                 processed += 1
 
             conn.commit()
-            print(f"  ✅ Bulk import: {processed} rows")
+            print(f"  âœ… Bulk import: {processed} rows")
             self._set_headers()
-            self.wfile.write(json.dumps({"status": "success", "processed": processed}).encode())
+            self.wfile.write(json_dumps({"status": "success", "processed": processed}).encode())
 
         elif action == "edit_product":
             ok, message = create_or_update_product(
                 c,
                 barcode=body.get("barcode", ""),
                 name=body.get("name", ""),
+                name_si=body.get("name_si"),
                 category=body.get("category", "General"),
                 cost_price=body.get("cost_price", 0),
                 selling_price=body.get("selling_price", body.get("price", 0)),
@@ -7350,12 +7920,12 @@ class APIHandler(BaseHTTPRequestHandler):
 
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
-                print(f"  ✅ Product updated: {body.get('barcode', '')}")
+                print(f"  âœ… Product updated: {body.get('barcode', '')}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
         elif action == "delete_product":
             ok, message = delete_product(
@@ -7365,11 +7935,11 @@ class APIHandler(BaseHTTPRequestHandler):
             )
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
         elif action == "update_price":
             barcode = str(body.get("barcode", "")).strip()
@@ -7388,12 +7958,12 @@ class APIHandler(BaseHTTPRequestHandler):
             )
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
-                print(f"  ✅ Price updated: {barcode} [{price_type}] → Rs.{parse_float(new_price):.2f}")
+                print(f"  âœ… Price updated: {barcode} [{price_type}] â†’ Rs.{parse_float(new_price):.2f}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
         elif action == "add_stock":
             barcode = str(body.get("barcode", "")).strip()
@@ -7403,23 +7973,26 @@ class APIHandler(BaseHTTPRequestHandler):
             cost = body.get("cost", 0)
             reason = str(body.get("reason", "")).strip()
 
-            ok, message, _ = update_stock_receive(
+            ok, message, receipt_id = update_stock_receive(
                 c,
                 barcode=barcode,
                 quantity=quantity,
                 cost=cost,
                 supplier_id=supplier_id,
                 supplier_name=supplier_name,
+                product_name_si=body.get("product_name_si") or body.get("name_si"),
                 reason=reason,
             )
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
-                print(f"  ✅ Stock added: {barcode} +{parse_int(quantity)} units")
+                print(f"  âœ… Stock added: {barcode} +{parse_int(quantity)} units")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(
+                    json_dumps({"status": "success", "receipt_id": receipt_id}).encode()
+                )
 
         elif action == "adjust_stock":
             barcode = str(body.get("barcode", "")).strip()
@@ -7436,16 +8009,16 @@ class APIHandler(BaseHTTPRequestHandler):
             )
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
                 stock_delta_value = stock_delta
                 stock_delta = int(stock_delta)
-                print(f"  ✅ Stock adjusted: {barcode} {adjustment_type} ({stock_delta:+d})")
+                print(f"  âœ… Stock adjusted: {barcode} {adjustment_type} ({stock_delta:+d})")
                 stock_delta = stock_delta_value
                 self._set_headers()
                 self.wfile.write(
-                    json.dumps(
+                    json_dumps(
                         {
                             "status": "success",
                             "resulting_stock": resulting_stock,
@@ -7467,23 +8040,23 @@ class APIHandler(BaseHTTPRequestHandler):
             )
             if not ok:
                 self._set_headers(400)
-                self.wfile.write(json.dumps({"status": "error", "message": message}).encode())
+                self.wfile.write(json_dumps({"status": "error", "message": message}).encode())
             else:
                 conn.commit()
-                print(f"  ✅ Min stock updated: {barcode} → {parse_int(min_stock_level)}")
+                print(f"  âœ… Min stock updated: {barcode} â†’ {parse_int(min_stock_level)}")
                 self._set_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode())
+                self.wfile.write(json_dumps({"status": "success"}).encode())
 
         else:
             self._set_headers(404)
             self.wfile.write(
-                json.dumps({"status": "error", "message": "Unknown action"}).encode()
+                json_dumps({"status": "error", "message": "Unknown action"}).encode()
             )
 
         conn.close()
 
     def log_message(self, format, *args):
-        print(f"  📡 {args[0]}")
+        print(f"  ðŸ“¡ {args[0]}")
 
 
 def main():
@@ -7493,50 +8066,50 @@ def main():
     server = HTTPServer(("0.0.0.0", port), APIHandler)
     print(
         f"""
-╔══════════════════════════════════════════════════════════╗
-║   🏪 Food City Local API Server                        ║
-║                                                          ║
-║   Running at: http://localhost:{port}                     ║
-║   API URL:    http://localhost:{port}/api/pos_sync.php    ║
-║                                                          ║
-║   Endpoints:                                             ║
-║     GET  ?action=get_products            → Product list  ║
-║     GET  ?action=get_sales               → Dashboard     ║
-║     GET  ?action=get_owner_dashboard     → Owner home    ║
-║     GET  ?action=export_data_backup    → JSON backup   ║
-║     GET  ?action=get_business_info       → Business info ║
-║     GET  ?action=get_owner_user_summary  → Users counts  ║
-║     GET  ?action=get_owner_users         → Users list    ║
-║     GET  ?action=get_owner_activity_logs → Activity logs ║
-║     POST ?action=owner_login           → Admin login   ║
-║     POST ?action=owner_logout          → Admin logout  ║
-║     POST ?action=update_business_info   → Save biz info ║
-║     POST ?action=create_owner_user      → Add user      ║
-║     POST ?action=update_owner_user      → Edit user     ║
-║     POST ?action=reset_owner_user_pin   → Reset PIN     ║
-║     POST ?action=set_owner_user_active_status → Status  ║
-║     POST ?action=set_owner_user_full_access  → Access   ║
-║     GET  ?action=get_owner_alerts        → Owner alerts  ║
-║     GET  ?action=get_owner_sales_report  → Sales report  ║
-║     GET  ?action=get_suppliers           → Suppliers     ║
-║     GET  ?action=get_customers           → Customers     ║
-║     GET  ?action=get_credit_customers_report → Credit     ║
-║     GET  ?action=get_inventory_history   → History       ║
-║     POST ?action=pos_sync                → POS sync      ║
-║     POST ?action=update_price            → Price update  ║
-║     POST ?action=add_stock               → Stock receive ║
-║     POST ?action=adjust_stock            → Adjustment    ║
-║     POST ?action=update_min_stock        → Min stock     ║
-║     POST ?action=bulk_import_products   → Bulk import   ║
-║                                                          ║
-║   Press Ctrl+C to stop                                   ║
-╚══════════════════════════════════════════════════════════╝
+â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+â•‘   ðŸª Food City Local API Server                        â•‘
+â•‘                                                          â•‘
+â•‘   Running at: http://localhost:{port}                     â•‘
+â•‘   API URL:    http://localhost:{port}/api/pos_sync.php    â•‘
+â•‘                                                          â•‘
+â•‘   Endpoints:                                             â•‘
+â•‘     GET  ?action=get_products            â†’ Product list  â•‘
+â•‘     GET  ?action=get_sales               â†’ Dashboard     â•‘
+â•‘     GET  ?action=get_owner_dashboard     â†’ Owner home    â•‘
+â•‘     GET  ?action=export_data_backup    â†’ JSON backup   â•‘
+â•‘     GET  ?action=get_business_info       â†’ Business info â•‘
+â•‘     GET  ?action=get_owner_user_summary  â†’ Users counts  â•‘
+â•‘     GET  ?action=get_owner_users         â†’ Users list    â•‘
+â•‘     GET  ?action=get_owner_activity_logs â†’ Activity logs â•‘
+â•‘     POST ?action=owner_login           â†’ Admin login   â•‘
+â•‘     POST ?action=owner_logout          â†’ Admin logout  â•‘
+â•‘     POST ?action=update_business_info   â†’ Save biz info â•‘
+â•‘     POST ?action=create_owner_user      â†’ Add user      â•‘
+â•‘     POST ?action=update_owner_user      â†’ Edit user     â•‘
+â•‘     POST ?action=reset_owner_user_pin   â†’ Reset PIN     â•‘
+â•‘     POST ?action=set_owner_user_active_status â†’ Status  â•‘
+â•‘     POST ?action=set_owner_user_full_access  â†’ Access   â•‘
+â•‘     GET  ?action=get_owner_alerts        â†’ Owner alerts  â•‘
+â•‘     GET  ?action=get_owner_sales_report  â†’ Sales report  â•‘
+â•‘     GET  ?action=get_suppliers           â†’ Suppliers     â•‘
+â•‘     GET  ?action=get_customers           â†’ Customers     â•‘
+â•‘     GET  ?action=get_credit_customers_report â†’ Credit     â•‘
+â•‘     GET  ?action=get_inventory_history   â†’ History       â•‘
+â•‘     POST ?action=pos_sync                â†’ POS sync      â•‘
+â•‘     POST ?action=update_price            â†’ Price update  â•‘
+â•‘     POST ?action=add_stock               â†’ Stock receive â•‘
+â•‘     POST ?action=adjust_stock            â†’ Adjustment    â•‘
+â•‘     POST ?action=update_min_stock        â†’ Min stock     â•‘
+â•‘     POST ?action=bulk_import_products   â†’ Bulk import   â•‘
+â•‘                                                          â•‘
+â•‘   Press Ctrl+C to stop                                   â•‘
+â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 """
     )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n🛑 Server stopped.")
+        print("\nðŸ›‘ Server stopped.")
         server.server_close()
 
 

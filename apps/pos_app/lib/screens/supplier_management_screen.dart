@@ -1,19 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../models/pos_supplier.dart';
 import '../models/stock_receipt_record.dart';
+import '../navigation/pos_route_names.dart';
+import '../navigation/route_search_focus_registry.dart';
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/supplier_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import 'supplier_receive_history_screen.dart';
 
 class SupplierManagementScreen extends StatefulWidget {
-  const SupplierManagementScreen({
-    super.key,
-    required this.cashierName,
-  });
+  const SupplierManagementScreen({super.key, required this.cashierName});
 
   final String cashierName;
 
@@ -26,9 +30,14 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
   final SupplierService _supplierService = SupplierService();
   final TextEditingController _supplierSearchController =
       TextEditingController();
+  late final FocusNode _supplierSearchFocusNode;
+  final ScrollController _supplierListScrollController = ScrollController();
 
   bool _isLoading = true;
   bool _isRefreshing = false;
+  int? _selectedSearchResultIndex;
+  Timer? _searchSelectionTimer;
+  final Map<int, GlobalKey> _searchResultKeys = <int, GlobalKey>{};
 
   List<PosSupplier> _suppliers = const [];
   List<StockReceiptRecord> _history = const [];
@@ -38,13 +47,150 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
   @override
   void initState() {
     super.initState();
+    _supplierSearchFocusNode = FocusNode(onKeyEvent: _handleSearchKeyEvent);
     _loadAll(refreshFromBackend: false);
+    RouteSearchFocusRegistry.register(
+      PosRouteNames.supplierManagement,
+      _focusSupplierSearchField,
+    );
+    _focusSupplierSearchField();
   }
 
   @override
   void dispose() {
+    _searchSelectionTimer?.cancel();
+    RouteSearchFocusRegistry.unregister(
+      PosRouteNames.supplierManagement,
+      _focusSupplierSearchField,
+    );
+    _supplierListScrollController.dispose();
+    _supplierSearchFocusNode.dispose();
     _supplierSearchController.dispose();
     super.dispose();
+  }
+
+  void _focusSupplierSearchField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _searchSelectionTimer?.cancel();
+      if (_selectedSearchResultIndex != null) {
+        setState(() {
+          _selectedSearchResultIndex = null;
+        });
+      }
+      if (_supplierListScrollController.hasClients) {
+        await _supplierListScrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      if (!mounted) return;
+      _supplierSearchFocusNode.requestFocus();
+    });
+  }
+
+  List<PosSupplier> get _visibleSuppliers {
+    final query = _supplierSearchController.text.trim().toLowerCase();
+    if (query.isEmpty) return _suppliers;
+
+    return _suppliers.where((supplier) {
+      return supplier.name.toLowerCase().contains(query) ||
+          supplier.phone.toLowerCase().contains(query) ||
+          supplier.id.toString().contains(query);
+    }).toList();
+  }
+
+  KeyEventResult _handleSearchKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      _moveSearchSelection(-1);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      _moveSearchSelection(1);
+      return KeyEventResult.handled;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      _openSelectedSearchResult();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
+  void _moveSearchSelection(int delta) {
+    final suppliers = _visibleSuppliers;
+    if (suppliers.isEmpty) {
+      setState(() {
+        _selectedSearchResultIndex = null;
+      });
+      return;
+    }
+
+    final current = _selectedSearchResultIndex ?? (delta > 0 ? -1 : 0);
+    final next = (current + delta).clamp(0, suppliers.length - 1);
+    _showSearchSelection(next, scrollDirection: delta);
+  }
+
+  void _showSearchSelection(
+    int index, {
+    int scrollDirection = 0,
+    bool autoClear = true,
+  }) {
+    _searchSelectionTimer?.cancel();
+    setState(() {
+      _selectedSearchResultIndex = index;
+    });
+    _scrollSearchSelectionIntoView(index, scrollDirection: scrollDirection);
+    if (!autoClear) return;
+    _searchSelectionTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() {
+        _selectedSearchResultIndex = null;
+      });
+    });
+  }
+
+  void _scrollSearchSelectionIntoView(
+    int index, {
+    required int scrollDirection,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _searchResultKeys[index]?.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignmentPolicy: scrollDirection < 0
+            ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
+            : ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+      );
+    });
+  }
+
+  Future<void> _openSelectedSearchResult() async {
+    final suppliers = _visibleSuppliers;
+    if (suppliers.isEmpty) return;
+
+    final index = suppliers.length == 1
+        ? 0
+        : (_selectedSearchResultIndex ?? 0).clamp(0, suppliers.length - 1);
+    final supplier = suppliers[index];
+
+    _showSearchSelection(index, autoClear: false);
+
+    if (_hasManagementAccess) {
+      await _showSupplierFormDialog(supplier: supplier);
+    } else {
+      await _openLinkedProductsSheet(supplier);
+    }
+    if (mounted) _showSearchSelection(index);
   }
 
   SupplierModulePalette get _ui => SupplierModulePalette.of(context);
@@ -64,8 +210,8 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
         refreshFromBackend: refreshFromBackend,
         search: _supplierSearchController.text.trim(),
       );
-      final linkedCounts =
-          await _supplierService.getLinkedProductCountsBySupplier();
+      final linkedCounts = await _supplierService
+          .getLinkedProductCountsBySupplier();
       final history = await _supplierService.getReceiveHistory();
       final historySummary = await _supplierService.getReceiveSummary();
 
@@ -82,10 +228,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
       setState(() {
         _isLoading = false;
       });
-      _showMessage(
-        e.toString().replaceFirst('Exception: ', ''),
-        isError: true,
-      );
+      _showMessage(e.toString().replaceFirst('Exception: ', ''), isError: true);
     }
   }
 
@@ -121,7 +264,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
     try {
       final date = DateTime.parse(raw).toLocal();
       String two(int value) => value.toString().padLeft(2, '0');
-      final hour = date.hour == 0 ? 12 : (date.hour > 12 ? date.hour - 12 : date.hour);
+      final hour = date.hour == 0
+          ? 12
+          : (date.hour > 12 ? date.hour - 12 : date.hour);
       final suffix = date.hour >= 12 ? 'PM' : 'AM';
       return '${two(date.day)}/${two(date.month)}/${date.year}  $hour:${two(date.minute)} $suffix';
     } catch (_) {
@@ -152,7 +297,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
     return InputDecoration(
       hintText: hintText,
       labelText: labelText,
-      prefixIcon: icon == null ? null : Icon(icon, size: 20, color: ui.textMuted),
+      prefixIcon: icon == null
+          ? null
+          : Icon(icon, size: 20, color: ui.textMuted),
       suffixIcon: suffixIcon,
       filled: true,
       fillColor: ui.inputFill,
@@ -191,7 +338,10 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
           builder: (context, setDialogState) {
             return Dialog(
               backgroundColor: Colors.transparent,
-              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 560),
                 child: Container(
@@ -201,7 +351,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                     border: Border.all(color: ui.border),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(ui.isDark ? 0.34 : 0.08),
+                        color: Colors.black.withOpacity(
+                          ui.isDark ? 0.34 : 0.08,
+                        ),
                         blurRadius: 36,
                         offset: const Offset(0, 22),
                       ),
@@ -271,7 +423,10 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                               onPressed: isSubmitting
                                   ? null
                                   : () => Navigator.of(dialogContext).pop(),
-                              icon: Icon(Icons.close_rounded, color: ui.textMuted),
+                              icon: Icon(
+                                Icons.close_rounded,
+                                color: ui.textMuted,
+                              ),
                             ),
                           ],
                         ),
@@ -328,7 +483,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: ui.textPrimary,
                                   side: BorderSide(color: ui.borderStrong),
-                                  padding: const EdgeInsets.symmetric(vertical: 15),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 15,
+                                  ),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                   ),
@@ -343,7 +500,8 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                     ? null
                                     : () async {
                                         final name = nameController.text.trim();
-                                        final phone = phoneController.text.trim();
+                                        final phone = phoneController.text
+                                            .trim();
                                         if (name.isEmpty) {
                                           _showMessage(
                                             'Supplier name is required.',
@@ -358,23 +516,27 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
 
                                         try {
                                           if (isEdit) {
-                                            await _supplierService.updateSupplier(
-                                              supplierId: supplier.id,
-                                              name: name,
-                                              phone: phone,
-                                            );
+                                            await _supplierService
+                                                .updateSupplier(
+                                                  supplierId: supplier.id,
+                                                  name: name,
+                                                  phone: phone,
+                                                );
                                           } else {
-                                            await _supplierService.createSupplier(
-                                              name: name,
-                                              phone: phone,
-                                            );
+                                            await _supplierService
+                                                .createSupplier(
+                                                  name: name,
+                                                  phone: phone,
+                                                );
                                           }
 
                                           if (dialogContext.mounted) {
                                             Navigator.of(dialogContext).pop();
                                           }
                                           if (!mounted) return;
-                                          await _loadAll(refreshFromBackend: false);
+                                          await _loadAll(
+                                            refreshFromBackend: false,
+                                          );
                                           _showMessage(
                                             isEdit
                                                 ? 'Supplier updated successfully.'
@@ -383,7 +545,10 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                         } catch (e) {
                                           if (mounted) {
                                             _showMessage(
-                                              e.toString().replaceFirst('Exception: ', ''),
+                                              e.toString().replaceFirst(
+                                                'Exception: ',
+                                                '',
+                                              ),
                                               isError: true,
                                             );
                                           }
@@ -398,7 +563,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: ui.brand,
                                   foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 15),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 15,
+                                  ),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(16),
                                   ),
@@ -413,7 +580,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                         ),
                                       )
                                     : Text(
-                                        isEdit ? 'Save Changes' : 'Create Supplier',
+                                        isEdit
+                                            ? 'Save Changes'
+                                            : 'Create Supplier',
                                       ),
                               ),
                             ),
@@ -451,19 +620,25 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
         final ui = SupplierModulePalette.of(dialogContext);
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            final query = searchController.text.trim().toLowerCase();
+            final query = searchController.text.trim();
+            final queryLower = query.toLowerCase();
             final visibleProducts = products.where((product) {
               if (query.isEmpty) return true;
-              return product.name.toLowerCase().contains(query) ||
-                  product.barcode.toLowerCase().contains(query) ||
-                  product.category.toLowerCase().contains(query);
+              return ProductNameHelper.matchesProduct(product, query) ||
+                  product.category.toLowerCase().contains(queryLower);
             }).toList();
 
             return Dialog(
               backgroundColor: Colors.transparent,
-              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 920, maxHeight: 760),
+                constraints: const BoxConstraints(
+                  maxWidth: 920,
+                  maxHeight: 760,
+                ),
                 child: Container(
                   decoration: BoxDecoration(
                     color: ui.surface,
@@ -471,7 +646,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                     border: Border.all(color: ui.border),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(ui.isDark ? 0.34 : 0.08),
+                        color: Colors.black.withOpacity(
+                          ui.isDark ? 0.34 : 0.08,
+                        ),
                         blurRadius: 36,
                         offset: const Offset(0, 22),
                       ),
@@ -537,7 +714,8 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                       TextField(
                         controller: searchController,
                         decoration: _fieldDecoration(
-                          hintText: 'Search by name, barcode, or category',
+                          hintText:
+                              'Search by barcode, English, Sinhala, or category',
                           icon: Icons.search_rounded,
                           palette: ui,
                         ),
@@ -557,22 +735,32 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                               )
                             : ListView.separated(
                                 itemCount: visibleProducts.length,
-                                separatorBuilder: (_, __) => Divider(height: 1, color: ui.border),
+                                separatorBuilder: (_, __) =>
+                                    Divider(height: 1, color: ui.border),
                                 itemBuilder: (context, index) {
                                   final product = visibleProducts[index];
-                                  final mapping = currentMappings[product.barcode];
+                                  final mapping =
+                                      currentMappings[product.barcode];
                                   final isAssigned = mapping != null;
 
                                   return Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 12,
+                                    ),
                                     child: Row(
                                       children: [
                                         Expanded(
                                           child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
                                             children: [
                                               Text(
-                                                product.name,
+                                                ProductNameHelper.displayName(
+                                                  product,
+                                                  context
+                                                      .read<LanguageProvider>()
+                                                      .language,
+                                                ),
                                                 style: TextStyle(
                                                   fontWeight: FontWeight.w800,
                                                   fontSize: 15,
@@ -583,13 +771,15 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                               Wrap(
                                                 spacing: 8,
                                                 runSpacing: 8,
-                                                crossAxisAlignment: WrapCrossAlignment.center,
+                                                crossAxisAlignment:
+                                                    WrapCrossAlignment.center,
                                                 children: [
                                                   Text(
                                                     product.barcode,
                                                     style: TextStyle(
                                                       color: ui.textSecondary,
-                                                      fontWeight: FontWeight.w700,
+                                                      fontWeight:
+                                                          FontWeight.w700,
                                                     ),
                                                   ),
                                                   _buildMetaDivider(ui),
@@ -597,7 +787,8 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                                     product.category,
                                                     style: TextStyle(
                                                       color: ui.textSecondary,
-                                                      fontWeight: FontWeight.w700,
+                                                      fontWeight:
+                                                          FontWeight.w700,
                                                     ),
                                                   ),
                                                   _buildMetaDivider(ui),
@@ -605,7 +796,8 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                                     'Stock ${product.stock}',
                                                     style: TextStyle(
                                                       color: ui.textSecondary,
-                                                      fontWeight: FontWeight.w700,
+                                                      fontWeight:
+                                                          FontWeight.w700,
                                                     ),
                                                   ),
                                                 ],
@@ -618,34 +810,48 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                           OutlinedButton.icon(
                                             onPressed: () async {
                                               if (mapping.id == null) return;
-                                              await _supplierService.deleteSupplierProductMapping(
-                                                mapping.id!,
+                                              await _supplierService
+                                                  .deleteSupplierProductMapping(
+                                                    mapping.id!,
+                                                  );
+                                              currentMappings.remove(
+                                                product.barcode,
                                               );
-                                              currentMappings.remove(product.barcode);
                                               setDialogState(() {});
                                             },
                                             style: OutlinedButton.styleFrom(
                                               foregroundColor: ui.warning,
-                                              side: BorderSide(color: ui.warning.withOpacity(0.35)),
+                                              side: BorderSide(
+                                                color: ui.warning.withOpacity(
+                                                  0.35,
+                                                ),
+                                              ),
                                             ),
-                                            icon: const Icon(Icons.link_off_rounded),
+                                            icon: const Icon(
+                                              Icons.link_off_rounded,
+                                            ),
                                             label: const Text('Assigned'),
                                           )
                                         else
                                           ElevatedButton.icon(
                                             onPressed: () async {
-                                              await _supplierService.assignProductToSupplier(
-                                                supplier: supplier,
-                                                product: product,
-                                                isPreferred: true,
-                                                defaultUnitCost: product.costPrice,
-                                              );
+                                              await _supplierService
+                                                  .assignProductToSupplier(
+                                                    supplier: supplier,
+                                                    product: product,
+                                                    isPreferred: true,
+                                                    defaultUnitCost:
+                                                        product.costPrice,
+                                                  );
                                               final refreshed =
-                                                  await _supplierService.getPreferredSupplierMapping(
-                                                product.barcode,
-                                              );
+                                                  await _supplierService
+                                                      .getPreferredSupplierMapping(
+                                                        product.barcode,
+                                                      );
                                               if (refreshed != null) {
-                                                currentMappings[product.barcode] = refreshed;
+                                                currentMappings[product
+                                                        .barcode] =
+                                                    refreshed;
                                               }
                                               setDialogState(() {});
                                             },
@@ -653,7 +859,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                               backgroundColor: ui.brand,
                                               foregroundColor: Colors.white,
                                             ),
-                                            icon: const Icon(Icons.link_rounded),
+                                            icon: const Icon(
+                                              Icons.link_rounded,
+                                            ),
                                             label: const Text('Assign'),
                                           ),
                                       ],
@@ -677,7 +885,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
   }
 
   Future<void> _openLinkedProductsSheet(PosSupplier supplier) async {
-    final rows = await _supplierService.getLinkedProductsForSupplier(supplier.id);
+    final rows = await _supplierService.getLinkedProductsForSupplier(
+      supplier.id,
+    );
     if (!mounted) return;
 
     await showDialog<void>(
@@ -686,7 +896,10 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
         final ui = SupplierModulePalette.of(dialogContext);
         return Dialog(
           backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 24,
+          ),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 860, maxHeight: 720),
             child: Container(
@@ -726,7 +939,10 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                           color: ui.purpleSoft,
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: Icon(Icons.inventory_2_outlined, color: ui.purple),
+                        child: Icon(
+                          Icons.inventory_2_outlined,
+                          color: ui.purple,
+                        ),
                       ),
                       const SizedBox(width: 14),
                       Expanded(
@@ -772,20 +988,33 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                           )
                         : ListView.separated(
                             itemCount: rows.length,
-                            separatorBuilder: (_, __) => Divider(height: 1, color: ui.border),
+                            separatorBuilder: (_, __) =>
+                                Divider(height: 1, color: ui.border),
                             itemBuilder: (context, index) {
                               final row = rows[index];
-                              final isPrimary = (((row['is_preferred'] as num?) ?? 0).toInt() == 1);
+                              final isPrimary =
+                                  (((row['is_preferred'] as num?) ?? 0)
+                                      .toInt() ==
+                                  1);
                               return Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
                                 child: Row(
                                   children: [
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Text(
-                                            (row['product_name'] ?? 'Product').toString(),
+                                            ProductNameHelper.displayNameFromMap(
+                                              row,
+                                              context
+                                                  .read<LanguageProvider>()
+                                                  .language,
+                                              fallback: 'Product',
+                                            ),
                                             style: TextStyle(
                                               fontWeight: FontWeight.w800,
                                               fontSize: 15,
@@ -796,10 +1025,12 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                           Wrap(
                                             spacing: 8,
                                             runSpacing: 8,
-                                            crossAxisAlignment: WrapCrossAlignment.center,
+                                            crossAxisAlignment:
+                                                WrapCrossAlignment.center,
                                             children: [
                                               Text(
-                                                (row['barcode'] ?? '').toString(),
+                                                (row['barcode'] ?? '')
+                                                    .toString(),
                                                 style: TextStyle(
                                                   color: ui.textSecondary,
                                                   fontWeight: FontWeight.w700,
@@ -807,7 +1038,8 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                                               ),
                                               _buildMetaDivider(ui),
                                               Text(
-                                                (row['category'] ?? '').toString(),
+                                                (row['category'] ?? '')
+                                                    .toString(),
                                                 style: TextStyle(
                                                   color: ui.textSecondary,
                                                   fontWeight: FontWeight.w700,
@@ -927,27 +1159,37 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                 ],
               );
 
-              final right = OutlinedButton.icon(
-                onPressed: _isRefreshing ? null : _refresh,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: ui.textPrimary,
-                  side: BorderSide(color: ui.borderStrong),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+              final right = Tooltip(
+                message: 'Refresh suppliers',
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _isRefreshing ? null : _refresh,
+                    borderRadius: BorderRadius.circular(14),
+                    child: Ink(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: ui.surfaceAlt,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: ui.border),
+                      ),
+                      child: _isRefreshing
+                          ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: ui.brand,
+                              ),
+                            )
+                          : Icon(
+                              Icons.refresh_rounded,
+                              size: 18,
+                              color: ui.brand,
+                            ),
+                    ),
                   ),
                 ),
-                icon: _isRefreshing
-                    ? SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: ui.brand,
-                        ),
-                      )
-                    : const Icon(Icons.refresh_rounded, size: 18),
-                label: const Text('Refresh'),
               );
 
               if (compact) {
@@ -959,7 +1201,11 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
 
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: [Expanded(child: left), const SizedBox(width: 16), right],
+                children: [
+                  Expanded(child: left),
+                  const SizedBox(width: 16),
+                  right,
+                ],
               );
             },
           ),
@@ -970,14 +1216,17 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
               final columns = constraints.maxWidth >= 1180
                   ? 4
                   : constraints.maxWidth >= 700
-                      ? 2
-                      : 1;
+                  ? 2
+                  : 1;
               final width = columns == 1
                   ? constraints.maxWidth
-                  : (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+                  : (constraints.maxWidth - (spacing * (columns - 1))) /
+                        columns;
 
-              final totalLinkedProducts =
-                  _linkedCounts.values.fold<int>(0, (sum, count) => sum + count);
+              final totalLinkedProducts = _linkedCounts.values.fold<int>(
+                0,
+                (sum, count) => sum + count,
+              );
 
               return Wrap(
                 spacing: spacing,
@@ -1007,7 +1256,10 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Receipts Logged',
-                      value: (((_historySummary['receipt_count'] as num?) ?? 0).toInt()).toString(),
+                      value:
+                          (((_historySummary['receipt_count'] as num?) ?? 0)
+                                  .toInt())
+                              .toString(),
                       subtitle: 'Supplier receive entries saved',
                       icon: Icons.receipt_long_outlined,
                       color: ui.success,
@@ -1017,7 +1269,9 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                     width: width,
                     child: _buildSummarySurface(
                       label: 'Supplier Spend',
-                      value: _formatCurrency(((_historySummary['total_cost'] as num?) ?? 0)),
+                      value: _formatCurrency(
+                        ((_historySummary['total_cost'] as num?) ?? 0),
+                      ),
                       subtitle: 'Recorded total receive cost',
                       icon: Icons.payments_outlined,
                       color: ui.warning,
@@ -1110,18 +1364,104 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 1120;
-          final searchWidth = compact ? constraints.maxWidth : constraints.maxWidth * 0.42;
           final buttonWidth = compact ? (constraints.maxWidth - 10) / 2 : null;
 
-          return Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: TextField(
+                    controller: _supplierSearchController,
+                    focusNode: _supplierSearchFocusNode,
+                    autofocus: true,
+                    decoration: _fieldDecoration(
+                      hintText: 'Search supplier by name, phone, or id',
+                      icon: Icons.search_rounded,
+                      suffixIcon: _supplierSearchController.text.isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () {
+                                _supplierSearchController.clear();
+                                setState(() {
+                                  _selectedSearchResultIndex = null;
+                                });
+                                _loadAll(refreshFromBackend: false);
+                              },
+                              icon: Icon(
+                                Icons.close_rounded,
+                                color: ui.textMuted,
+                              ),
+                            ),
+                    ),
+                    onChanged: (_) => setState(() {
+                      _selectedSearchResultIndex = null;
+                    }),
+                    onSubmitted: (_) => _loadAll(refreshFromBackend: false),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    SizedBox(
+                      width: buttonWidth,
+                      child: OutlinedButton.icon(
+                        onPressed: () => _openSupplierHistory(null),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: ui.textPrimary,
+                          side: BorderSide(color: ui.borderStrong),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 16,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        icon: const Icon(Icons.history_rounded, size: 18),
+                        label: const Text('Receive History'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: buttonWidth,
+                      child: ElevatedButton.icon(
+                        onPressed: _hasManagementAccess
+                            ? () => _showSupplierFormDialog()
+                            : () => _showMessage(
+                                'Only management users can add suppliers.',
+                                isError: true,
+                              ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: ui.brand,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 16,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                        icon: const Icon(Icons.add_business_outlined, size: 18),
+                        label: const Text('Add Supplier'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          }
+
+          return Row(
             children: [
-              SizedBox(
-                width: searchWidth,
+              Expanded(
                 child: TextField(
                   controller: _supplierSearchController,
+                  focusNode: _supplierSearchFocusNode,
+                  autofocus: true,
                   decoration: _fieldDecoration(
                     hintText: 'Search supplier by name, phone, or id',
                     icon: Icons.search_rounded,
@@ -1130,24 +1470,35 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                         : IconButton(
                             onPressed: () {
                               _supplierSearchController.clear();
-                              setState(() {});
+                              setState(() {
+                                _selectedSearchResultIndex = null;
+                              });
                               _loadAll(refreshFromBackend: false);
                             },
-                            icon: Icon(Icons.close_rounded, color: ui.textMuted),
+                            icon: Icon(
+                              Icons.close_rounded,
+                              color: ui.textMuted,
+                            ),
                           ),
                   ),
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (_) => setState(() {
+                    _selectedSearchResultIndex = null;
+                  }),
                   onSubmitted: (_) => _loadAll(refreshFromBackend: false),
                 ),
               ),
+              const SizedBox(width: 10),
               SizedBox(
-                width: compact ? buttonWidth : 190,
+                width: 190,
                 child: OutlinedButton.icon(
                   onPressed: () => _openSupplierHistory(null),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: ui.textPrimary,
                     side: BorderSide(color: ui.borderStrong),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 16,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -1156,19 +1507,23 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
                   label: const Text('Receive History'),
                 ),
               ),
+              const SizedBox(width: 10),
               SizedBox(
-                width: compact ? buttonWidth : 180,
+                width: 180,
                 child: ElevatedButton.icon(
                   onPressed: _hasManagementAccess
                       ? () => _showSupplierFormDialog()
                       : () => _showMessage(
-                            'Only management users can add suppliers.',
-                            isError: true,
-                          ),
+                          'Only management users can add suppliers.',
+                          isError: true,
+                        ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: ui.brand,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 16,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -1233,17 +1588,29 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
           ),
           Divider(height: 1, color: ui.border),
           Expanded(
-            child: _suppliers.isEmpty
+            child: _visibleSuppliers.isEmpty
                 ? _buildEmptyState(
                     icon: Icons.local_shipping_outlined,
                     title: 'No suppliers found',
-                    subtitle: 'Try another search or add a new supplier record.',
+                    subtitle:
+                        'Try another search or add a new supplier record.',
                   )
                 : ListView.separated(
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
-                    itemCount: _suppliers.length,
-                    separatorBuilder: (_, __) => Divider(height: 1, color: ui.border),
-                    itemBuilder: (context, index) => _buildSupplierRow(_suppliers[index]),
+                    controller: _supplierListScrollController,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 6,
+                    ),
+                    itemCount: _visibleSuppliers.length,
+                    separatorBuilder: (_, __) =>
+                        Divider(height: 1, color: ui.border),
+                    itemBuilder: (context, index) => KeyedSubtree(
+                      key: _searchResultKeys.putIfAbsent(index, GlobalKey.new),
+                      child: _buildSupplierRow(
+                        _visibleSuppliers[index],
+                        isKeyboardSelected: _selectedSearchResultIndex == index,
+                      ),
+                    ),
                   ),
           ),
         ],
@@ -1251,11 +1618,16 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
     );
   }
 
-  Widget _buildSupplierRow(PosSupplier supplier) {
+  Widget _buildSupplierRow(
+    PosSupplier supplier, {
+    bool isKeyboardSelected = false,
+  }) {
     final ui = _ui;
     final linkedCount = _linkedCounts[supplier.id] ?? 0;
     final lastReceipt = _lastReceiptForSupplier(supplier.id);
-    final phone = supplier.phone.trim().isEmpty ? 'Phone not available' : supplier.phone.trim();
+    final phone = supplier.phone.trim().isEmpty
+        ? 'Phone not available'
+        : supplier.phone.trim();
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1330,67 +1702,83 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
               onTap: _hasManagementAccess
                   ? () => _showSupplierFormDialog(supplier: supplier)
                   : () => _showMessage(
-                        'Only management users can edit suppliers.',
-                        isError: true,
-                      ),
+                      'Only management users can edit suppliers.',
+                      isError: true,
+                    ),
             ),
           ],
         );
 
+        Widget selectableRow(Widget child) {
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            decoration: BoxDecoration(
+              color: isKeyboardSelected ? ui.brandSoft : Colors.transparent,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: isKeyboardSelected ? ui.brand : Colors.transparent,
+                width: isKeyboardSelected ? 1.5 : 1,
+              ),
+            ),
+            child: child,
+          );
+        }
+
         if (compact) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 52,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        color: ui.brandSoft,
-                        borderRadius: BorderRadius.circular(18),
+          return selectableRow(
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          color: ui.brandSoft,
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: Icon(
+                          Icons.local_shipping_outlined,
+                          color: ui.brand,
+                        ),
                       ),
-                      child: Icon(
-                        Icons.local_shipping_outlined,
-                        color: ui.brand,
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(child: content),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                Align(alignment: Alignment.centerRight, child: actions),
-              ],
+                      const SizedBox(width: 14),
+                      Expanded(child: content),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Align(alignment: Alignment.centerRight, child: actions),
+                ],
+              ),
             ),
           );
         }
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: ui.brandSoft,
-                  borderRadius: BorderRadius.circular(18),
+        return selectableRow(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: ui.brandSoft,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Icon(Icons.local_shipping_outlined, color: ui.brand),
                 ),
-                child: Icon(
-                  Icons.local_shipping_outlined,
-                  color: ui.brand,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(child: content),
-              const SizedBox(width: 16),
-              actions,
-            ],
+                const SizedBox(width: 16),
+                Expanded(child: content),
+                const SizedBox(width: 16),
+                actions,
+              ],
+            ),
           ),
         );
       },
@@ -1549,9 +1937,7 @@ class _SupplierManagementScreenState extends State<SupplierManagementScreen> {
               const SizedBox(height: 16),
               Expanded(
                 child: _isLoading
-                    ? Center(
-                        child: CircularProgressIndicator(color: ui.brand),
-                      )
+                    ? Center(child: CircularProgressIndicator(color: ui.brand))
                     : _buildSupplierWorkspace(),
               ),
             ],

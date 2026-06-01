@@ -8,6 +8,7 @@ class InventoryHistoryItem {
   final String dateText;
   final IconData icon;
   final Color color;
+  final String unitLabel;
 
   const InventoryHistoryItem({
     required this.type,
@@ -17,5 +18,6 @@ class InventoryHistoryItem {
     required this.dateText,
     required this.icon,
     required this.color,
+    required this.unitLabel,
   });
 }

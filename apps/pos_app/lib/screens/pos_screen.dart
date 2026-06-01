@@ -4,8 +4,11 @@ import 'dart:ui';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared/models/customer.dart';
 import 'package:provider/provider.dart';
 import 'package:shared/models/customer_pricing_result.dart';
+import 'package:shared/models/loyalty_exclusion.dart';
+import 'package:shared/models/loyalty_settings.dart';
 import 'package:shared/models/product.dart';
 
 import '../config/pos_feature_flags.dart';
@@ -13,6 +16,7 @@ import '../navigation/pos_route_names.dart';
 import '../providers/auth_provider.dart';
 import '../providers/cart_provider.dart';
 import '../providers/app_theme_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/customer_service.dart';
 import '../services/customer_credit_service.dart';
@@ -21,6 +25,7 @@ import '../services/permission_service.dart';
 import '../services/receipt_pdf_service.dart';
 import '../services/receipt_printer_service.dart';
 import '../services/sync_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/admin_dialogs.dart';
 import '../widgets/premium_dialog.dart';
 import '../widgets/app_snackbar.dart';
@@ -28,6 +33,7 @@ import 'backup_restore_screen.dart';
 import 'cart_discount_dialog.dart';
 import 'cashier_summary_screen.dart';
 import 'checkout_payment_dialog.dart';
+import 'customer_form_dialog.dart';
 import 'customer_picker_dialog.dart';
 import 'customer_management_screen.dart';
 import 'expiry_alerts_screen.dart';
@@ -78,6 +84,45 @@ class _DecimalQuantityInputFormatter extends TextInputFormatter {
   }
 }
 
+class _ExpiryDialogChip extends StatelessWidget {
+  const _ExpiryDialogChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurface,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PosScreenState extends State<PosScreen> {
   static const double _quantityEpsilon = 0.000001;
   static const double _minSupportedWidth = 1180;
@@ -85,13 +130,22 @@ class _PosScreenState extends State<PosScreen> {
   static const double _catalogRailWidth = 410;
   static const double _checkoutRailWidth = 340;
   static const Duration _priceModeDoubleTapWindow = Duration(milliseconds: 650);
+  static const Duration _itemLookupShortcutWindow = Duration(milliseconds: 650);
   static const Duration _cartSelectionVisibleDuration = Duration(seconds: 2);
+  static const Duration _customerRemoveEscapeWindow = Duration(
+    milliseconds: 900,
+  );
+  static const Duration _loyaltyShortcutWindow = Duration(milliseconds: 520);
+  static const Duration _loyaltyBackspaceWindow = Duration(milliseconds: 650);
+  static const Duration _customerShortcutWindow = Duration(milliseconds: 520);
+  static const Duration _customerBackspaceWindow = Duration(milliseconds: 650);
   List<Product> _products = [];
   bool _isLoadingProducts = true;
   bool _isProcessingCheckout = false;
   bool _isPaymentDialogOpen = false;
   bool _isRefreshingProducts = false;
   bool _isLookupOpen = false;
+  bool _isLoyaltyRulesLoading = false;
   int _activeModalCount = 0;
   bool _showWelcomeOverlay = false;
   bool _renderWelcomeOverlay = false;
@@ -100,6 +154,9 @@ class _PosScreenState extends State<PosScreen> {
   Timer? _welcomeOverlayTimer;
   Timer? _welcomeOverlayCleanupTimer;
   Timer? _cartSelectionHideTimer;
+  Timer? _customerRemoveEscapeHintTimer;
+  Timer? _customerQuickSearchDebounce;
+  OverlayEntry? _customerQuickSearchOverlay;
   DateTime? _barcodeInputStartedAt;
   DateTime? _lastBarcodeInputAt;
   String _lastBarcodeInputValue = '';
@@ -107,8 +164,19 @@ class _PosScreenState extends State<PosScreen> {
   ProductPriceType? _lastPriceModeTapType;
   ProductPriceType? _lastPriceModePreviousType;
   DateTime? _lastPriceModeTapAt;
+  DateTime? _lastItemLookupShortcutAt;
+  DateTime? _lastCustomerRemoveEscapeAt;
+  DateTime? _lastLoyaltyShortcutAt;
+  DateTime? _lastLoyaltyBackspaceAt;
+  DateTime? _lastCustomerShortcutAt;
+  DateTime? _lastCustomerBackspaceAt;
   bool _isPriceModePromptOpen = false;
-  final Set<String> _expiryWarningShownBarcodes = <String>{};
+  bool _isRestoringActiveCartSnapshot = false;
+  bool _didAttemptActiveCartRestore = false;
+  bool _isActiveCartSaveRunning = false;
+  int _activeCartSaveVersion = 0;
+  int _activeCartSavedVersion = 0;
+  CartProvider? _activeCartAutosaveProvider;
 
   final ScrollController _cartScrollController = ScrollController();
   int _lastCartItemCount = 0;
@@ -117,12 +185,31 @@ class _PosScreenState extends State<PosScreen> {
 
   final TextEditingController _barcodeController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _customerQuickSearchController =
+      TextEditingController();
+  final TextEditingController _checkoutLoyaltyController =
+      TextEditingController();
+  final LayerLink _customerQuickSearchLayerLink = LayerLink();
+  final GlobalKey _customerQuickSearchFieldKey = GlobalKey();
   final FocusNode _barcodeFocusNode = FocusNode();
   final FocusNode _searchFocusNode = FocusNode();
+  final FocusNode _customerQuickSearchFocusNode = FocusNode();
+  final FocusNode _checkoutLoyaltyFocusNode = FocusNode();
   final FocusNode _keyboardListenerFocusNode = FocusNode();
 
   String _searchQuery = '';
   Map<String, dynamic>? _currentShiftSummary;
+  LoyaltySettings? _checkoutLoyaltySettings;
+  String? _checkoutLoyaltyUnavailableReason;
+  List<LoyaltyExclusion> _checkoutLoyaltyExcludedCategories = const [];
+  List<LoyaltyExclusion> _checkoutLoyaltyExcludedProducts = const [];
+  int _checkoutLoyaltyPointsToRedeem = 0;
+  List<Customer> _customerQuickSearchResults = const [];
+  String _customerQuickSearchQuery = '';
+  bool _isCustomerQuickSearchLoading = false;
+  bool _isCustomerQuickSearchEditing = false;
+  int _customerQuickSearchSelectedIndex = 0;
+  final Set<String> _weeklyExpiryWarningSessionKeys = <String>{};
 
   bool get _isDark => context.read<AppThemeProvider>().isDarkMode;
   Color get _screenBackground =>
@@ -161,11 +248,21 @@ class _PosScreenState extends State<PosScreen> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleHardwareKeyboardEvent);
+    _customerQuickSearchFocusNode.addListener(() {
+      if (_customerQuickSearchFocusNode.hasFocus) {
+        _isCustomerQuickSearchEditing = true;
+      } else {
+        _hideCustomerQuickSearchOverlay();
+      }
+    });
     _loadProducts(showLoader: true);
+    _loadCheckoutLoyaltyRules();
     _refreshProductsFromBackendAndReload(silentOnFailure: true);
     _startAutoRefresh();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _attachActiveCartAutosave();
+      await _restoreActiveCartSnapshotIfAny();
       await _restoreHardwareConnections();
       _focusBarcodeField();
       if (PosFeatureFlags.enableShiftManagement) {
@@ -179,20 +276,178 @@ class _PosScreenState extends State<PosScreen> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleHardwareKeyboardEvent);
+    _activeCartAutosaveProvider?.removeListener(_queueActiveCartSnapshotSave);
     _productRefreshTimer?.cancel();
     _barcodeScannerSubmitTimer?.cancel();
     _cartSelectionHideTimer?.cancel();
+    _customerRemoveEscapeHintTimer?.cancel();
+    _customerQuickSearchDebounce?.cancel();
+    _hideCustomerQuickSearchOverlay();
     _welcomeOverlayTimer?.cancel();
     _welcomeOverlayCleanupTimer?.cancel();
     _barcodeController.dispose();
     _searchController.dispose();
+    _customerQuickSearchController.dispose();
+    _checkoutLoyaltyController.dispose();
     _cartScrollController.dispose();
     _barcodeFocusNode.dispose();
     _searchFocusNode.dispose();
+    _customerQuickSearchFocusNode.dispose();
+    _checkoutLoyaltyFocusNode.dispose();
     _keyboardListenerFocusNode.dispose();
     super.dispose();
   }
 
+  String _currentCashierName() {
+    final auth = context.read<AuthProvider>();
+    if (auth.isPresentationLogin) return 'Cashier';
+    return auth.currentUser?.name ?? 'Unknown';
+  }
+
+  void _attachActiveCartAutosave() {
+    if (!mounted || _activeCartAutosaveProvider != null) return;
+    final cart = context.read<CartProvider>();
+    _activeCartAutosaveProvider = cart;
+    cart.addListener(_queueActiveCartSnapshotSave);
+  }
+
+  void _queueActiveCartSnapshotSave() {
+    if (_isRestoringActiveCartSnapshot) return;
+
+    _activeCartSaveVersion += 1;
+    if (!_isActiveCartSaveRunning) {
+      unawaited(_drainActiveCartSnapshotSaves());
+    }
+  }
+
+  Future<void> _drainActiveCartSnapshotSaves() async {
+    if (_isActiveCartSaveRunning) return;
+    _isActiveCartSaveRunning = true;
+
+    try {
+      while (mounted && _activeCartSavedVersion < _activeCartSaveVersion) {
+        final versionToSave = _activeCartSaveVersion;
+        await _persistActiveCartSnapshot();
+        _activeCartSavedVersion = versionToSave;
+      }
+    } finally {
+      _isActiveCartSaveRunning = false;
+      if (mounted && _activeCartSavedVersion < _activeCartSaveVersion) {
+        unawaited(_drainActiveCartSnapshotSaves());
+      }
+    }
+  }
+
+  Future<void> _persistActiveCartSnapshot() async {
+    final cart = context.read<CartProvider>();
+    final cashierName = _currentCashierName();
+
+    if (cart.items.isEmpty) {
+      await DatabaseHelper.instance.clearActiveCartSnapshot(
+        cashierName: cashierName,
+      );
+      return;
+    }
+
+    final loyaltyError = _checkoutLoyaltyRedemptionError(cart);
+    final loyaltyPointsToSave = loyaltyError == null
+        ? _checkoutLoyaltyPointsToRedeem
+        : 0;
+    final loyaltyValueToSave = loyaltyPointsToSave > 0
+        ? _checkoutLoyaltyRedeemedValue(cart)
+        : 0.0;
+
+    await DatabaseHelper.instance.saveActiveCartSnapshot(
+      cashierName: cashierName,
+      isRefundMode: cart.isRefundMode,
+      discountType: cart.discountType,
+      discountValue: cart.discountValue,
+      items: cart.getCartItemsAsMap(),
+      selectedPriceType: cart.selectedPriceType.dbValue,
+      selectedCustomer: cart.selectedCustomer,
+      loyaltyPointsRedeemed: loyaltyPointsToSave,
+      loyaltyRedeemedValue: loyaltyValueToSave,
+    );
+  }
+
+  Future<void> _restoreActiveCartSnapshotIfAny() async {
+    if (!mounted || _didAttemptActiveCartRestore) return;
+    _didAttemptActiveCartRestore = true;
+
+    final cart = context.read<CartProvider>();
+    if (cart.items.isNotEmpty) return;
+
+    final snapshot = await DatabaseHelper.instance.getActiveCartSnapshot(
+      cashierName: _currentCashierName(),
+    );
+    if (!mounted || snapshot == null) return;
+
+    final restoreError = (snapshot['resume_error'] ?? '').toString().trim();
+    if (restoreError.isNotEmpty) {
+      _showInfoMessage(restoreError, backgroundColor: _dangerColor);
+      return;
+    }
+
+    final restoredRawItems = snapshot['items'];
+    final restoredItems = restoredRawItems is List
+        ? restoredRawItems
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList()
+        : <Map<String, dynamic>>[];
+
+    final restoredSelectedPriceType =
+        (snapshot['selected_price_type'] ?? 'selling').toString();
+    final preparedItems = _prepareResumedCartItems(
+      restoredItems,
+      fallbackPriceType: restoredSelectedPriceType,
+    );
+
+    if (preparedItems.isEmpty) return;
+
+    final restoredCustomerSnapshot = CustomerService.instance
+        .customerFromHeldCartRow(snapshot);
+    Customer? restoredCustomer = restoredCustomerSnapshot;
+    final restoredCustomerId = restoredCustomerSnapshot?.id;
+    if (restoredCustomerId != null && restoredCustomerId > 0) {
+      restoredCustomer =
+          await CustomerService.instance.getCustomerById(restoredCustomerId) ??
+          restoredCustomerSnapshot;
+    }
+
+    _isRestoringActiveCartSnapshot = true;
+    try {
+      cart.loadHeldCart(
+        items: preparedItems,
+        isRefundMode: (snapshot['is_refund_mode'] ?? false) == true,
+        discountType: (snapshot['discount_type'] ?? 'none').toString(),
+        discountValue: ((snapshot['discount_value'] as num?) ?? 0).toDouble(),
+        selectedPriceType: restoredSelectedPriceType,
+        selectedCustomer: restoredCustomer,
+      );
+
+      final restoredLoyaltyPoints =
+          ((snapshot['loyalty_points_redeemed'] as num?) ?? 0).toInt();
+      if (restoredLoyaltyPoints > 0 && restoredCustomer != null) {
+        _setCheckoutLoyaltyPoints(restoredLoyaltyPoints);
+      } else {
+        _resetCheckoutLoyaltyRedemption(updateUi: false);
+      }
+    } finally {
+      _isRestoringActiveCartSnapshot = false;
+    }
+
+    _showInfoMessage(
+      'Recovered the last active cart after shutdown.',
+      backgroundColor: _successColor,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollCartToLatest(animated: false);
+    });
+  }
+
+//
   bool _handleHardwareKeyboardEvent(KeyEvent event) {
     if (event is! KeyDownEvent || !mounted) return false;
 
@@ -209,11 +464,6 @@ class _PosScreenState extends State<PosScreen> {
     if (_activeModalCount == 0 &&
         (keyboard.isControlPressed || keyboard.isMetaPressed) &&
         !keyboard.isAltPressed) {
-      if (event.logicalKey == LogicalKeyboardKey.keyB) {
-        unawaited(_openCustomerPicker(cart));
-        return true;
-      }
-
       if (event.logicalKey == LogicalKeyboardKey.keyD) {
         _clearSelectedItemDiscount(cart);
         return true;
@@ -270,7 +520,7 @@ class _PosScreenState extends State<PosScreen> {
       }
 
       if (event.logicalKey == LogicalKeyboardKey.f7) {
-        _toggleItemLookup();
+        _handleItemLookupShortcut();
         return true;
       }
 
@@ -302,7 +552,28 @@ class _PosScreenState extends State<PosScreen> {
           event.logicalKey == LogicalKeyboardKey.minus ||
           event.logicalKey == LogicalKeyboardKey.numpadSubtract;
       final canUseLetterCartShortcut =
-          !_searchFocusNode.hasFocus && _barcodeController.text.trim().isEmpty;
+          !_searchFocusNode.hasFocus &&
+          !_customerQuickSearchFocusNode.hasFocus &&
+          !_checkoutLoyaltyFocusNode.hasFocus &&
+          _barcodeController.text.trim().isEmpty;
+
+      if (_customerQuickSearchFocusNode.hasFocus) {
+        if (event.logicalKey == LogicalKeyboardKey.backspace) {
+          return _handleCustomerQuickSearchBackspace(cart);
+        }
+        if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+          _moveCustomerQuickSearchSelection(-1);
+          return true;
+        }
+        if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+          _moveCustomerQuickSearchSelection(1);
+          return true;
+        }
+        if (event.logicalKey != LogicalKeyboardKey.enter &&
+            event.logicalKey != LogicalKeyboardKey.numpadEnter) {
+          return false;
+        }
+      }
 
       if (isPlusKey && !_searchFocusNode.hasFocus) {
         unawaited(_increaseSelectedCartItem(cart));
@@ -339,6 +610,34 @@ class _PosScreenState extends State<PosScreen> {
         return true;
       }
 
+      if (canUseLetterCartShortcut &&
+          event.logicalKey == LogicalKeyboardKey.keyL) {
+        final now = DateTime.now();
+        final isSecondPress =
+            _lastLoyaltyShortcutAt != null &&
+            now.difference(_lastLoyaltyShortcutAt!) <= _loyaltyShortcutWindow;
+        _lastLoyaltyShortcutAt = now;
+        if (isSecondPress) {
+          _lastLoyaltyShortcutAt = null;
+          _focusCheckoutLoyaltyField(cart);
+        }
+        return true;
+      }
+
+      if (canUseLetterCartShortcut &&
+          event.logicalKey == LogicalKeyboardKey.keyC) {
+        final now = DateTime.now();
+        final isSecondPress =
+            _lastCustomerShortcutAt != null &&
+            now.difference(_lastCustomerShortcutAt!) <= _customerShortcutWindow;
+        _lastCustomerShortcutAt = now;
+        if (isSecondPress) {
+          _lastCustomerShortcutAt = null;
+          _focusCustomerQuickSearchField(cart);
+        }
+        return true;
+      }
+
       if (event.logicalKey == LogicalKeyboardKey.escape) {
         if (_searchFocusNode.hasFocus) {
           if (_searchController.text.isNotEmpty) {
@@ -357,6 +656,37 @@ class _PosScreenState extends State<PosScreen> {
           return true;
         }
 
+        if (cart.selectedCustomer != null) {
+          final now = DateTime.now();
+          final isSecondEscape =
+              _lastCustomerRemoveEscapeAt != null &&
+              now.difference(_lastCustomerRemoveEscapeAt!) <=
+                  _customerRemoveEscapeWindow;
+          _lastCustomerRemoveEscapeAt = now;
+          if (isSecondEscape) {
+            _lastCustomerRemoveEscapeAt = null;
+            _customerRemoveEscapeHintTimer?.cancel();
+            _customerRemoveEscapeHintTimer = null;
+            AppSnackBar.dismiss();
+            unawaited(_confirmRemoveSelectedCustomer(cart));
+          } else {
+            _customerRemoveEscapeHintTimer?.cancel();
+            final customerName = cart.selectedCustomer!.displayName;
+            _customerRemoveEscapeHintTimer = Timer(
+              const Duration(milliseconds: 220),
+              () {
+                if (!mounted) return;
+                _showInfoMessage(
+                  'Press Esc again to remove $customerName.',
+                  backgroundColor: _warningColor,
+                );
+              },
+            );
+            _focusBarcodeField();
+          }
+          return true;
+        }
+
         _focusBarcodeField();
         return true;
       }
@@ -365,9 +695,46 @@ class _PosScreenState extends State<PosScreen> {
     final isEnterKey =
         event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter;
+
+    if (_activeModalCount == 0 &&
+        _checkoutLoyaltyFocusNode.hasFocus &&
+        event.logicalKey == LogicalKeyboardKey.backspace) {
+      final now = DateTime.now();
+      final isSecondPress =
+          _lastLoyaltyBackspaceAt != null &&
+          now.difference(_lastLoyaltyBackspaceAt!) <= _loyaltyBackspaceWindow;
+      _lastLoyaltyBackspaceAt = now;
+      if (isSecondPress) {
+        _lastLoyaltyBackspaceAt = null;
+        _resetCheckoutLoyaltyRedemption();
+        _checkoutLoyaltyFocusNode.unfocus();
+        _focusBarcodeField(force: true);
+        return true;
+      }
+      return false;
+    }
+
+    if (isEnterKey &&
+        _activeModalCount == 0 &&
+        _checkoutLoyaltyFocusNode.hasFocus) {
+      _lastLoyaltyBackspaceAt = null;
+      _submitCheckoutLoyaltyField(cart);
+      return true;
+    }
+
+    if (isEnterKey &&
+        _activeModalCount == 0 &&
+        _customerQuickSearchFocusNode.hasFocus) {
+      _lastCustomerBackspaceAt = null;
+      unawaited(_submitCustomerQuickSearch(cart));
+      return true;
+    }
+
     if (isEnterKey &&
         _activeModalCount == 0 &&
         !_searchFocusNode.hasFocus &&
+        !_customerQuickSearchFocusNode.hasFocus &&
+        !_checkoutLoyaltyFocusNode.hasFocus &&
         _barcodeController.text.trim().isEmpty &&
         cart.items.isNotEmpty &&
         !_isProcessingCheckout &&
@@ -434,6 +801,9 @@ class _PosScreenState extends State<PosScreen> {
 
   Widget _buildWelcomeOverlay(AuthProvider auth) {
     final userName = _resolveWelcomeName(auth);
+    final welcomeTitle = auth.isPresentationLogin
+        ? 'Welcome'
+        : 'Welcome, $userName';
 
     return IgnorePointer(
       child: SafeArea(
@@ -515,7 +885,7 @@ class _PosScreenState extends State<PosScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Welcome, $userName',
+                                    welcomeTitle,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
@@ -615,20 +985,42 @@ class _PosScreenState extends State<PosScreen> {
     _isCartSelectionVisible = false;
   }
 
+  void _handleItemLookupShortcut() {
+    final now = DateTime.now();
+    final isSecondPress =
+        _lastItemLookupShortcutAt != null &&
+        now.difference(_lastItemLookupShortcutAt!) <= _itemLookupShortcutWindow;
+    _lastItemLookupShortcutAt = now;
+
+    if (isSecondPress) {
+      _lastItemLookupShortcutAt = null;
+      _toggleItemLookup();
+      return;
+    }
+
+    if (_isLookupOpen) {
+      _focusItemLookupSearch();
+    }
+  }
+
+  void _focusItemLookupSearch() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_isLookupOpen) return;
+      _searchFocusNode.requestFocus();
+      _searchController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _searchController.text.length,
+      );
+    });
+  }
+
   void _toggleItemLookup() {
     setState(() {
       _isLookupOpen = !_isLookupOpen;
     });
 
     if (_isLookupOpen) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !_isLookupOpen) return;
-        _searchFocusNode.requestFocus();
-        _searchController.selection = TextSelection(
-          baseOffset: 0,
-          extentOffset: _searchController.text.length,
-        );
-      });
+      _focusItemLookupSearch();
     } else {
       _focusBarcodeField();
     }
@@ -835,9 +1227,231 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  double _roundMoney(num value) {
+    return double.parse(value.toStringAsFixed(2));
+  }
+
+  Future<void> _loadCheckoutLoyaltyRules() async {
+    if (_isLoyaltyRulesLoading) return;
+    _isLoyaltyRulesLoading = true;
+
+    try {
+      final settings = await LoyaltyService.instance.getSettings();
+      final excludedCategories = await LoyaltyService.instance
+          .getExcludedCategories(activeOnly: true);
+      final excludedProducts = await LoyaltyService.instance
+          .getExcludedProducts(activeOnly: true);
+
+      if (!mounted) return;
+      setState(() {
+        _checkoutLoyaltySettings = settings;
+        _checkoutLoyaltyExcludedCategories = excludedCategories;
+        _checkoutLoyaltyExcludedProducts = excludedProducts;
+        _checkoutLoyaltyUnavailableReason = settings.isEnabled
+            ? null
+            : 'Loyalty is disabled in settings.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _checkoutLoyaltyUnavailableReason = 'Could not load loyalty details.';
+      });
+    } finally {
+      _isLoyaltyRulesLoading = false;
+    }
+  }
+
+  void _resetCheckoutLoyaltyRedemption({bool updateUi = true}) {
+    _checkoutLoyaltyPointsToRedeem = 0;
+    _checkoutLoyaltyController.clear();
+    _queueActiveCartSnapshotSave();
+    if (updateUi && mounted) setState(() {});
+  }
+
+  LoyaltySettings _effectiveCheckoutLoyaltySettings() {
+    return _checkoutLoyaltySettings ?? LoyaltySettings.defaults();
+  }
+
+  bool _canUseCheckoutLoyalty(CartProvider cart) {
+    final customer = cart.selectedCustomer;
+    final settings = _checkoutLoyaltySettings;
+    return !cart.isRefundMode &&
+        customer != null &&
+        (customer.id ?? 0) > 0 &&
+        settings != null &&
+        settings.isEnabled &&
+        customer.loyaltyEnabled &&
+        customer.loyaltyPointsBalance > 0 &&
+        cart.cartTotal > 0;
+  }
+
+  String _checkoutLoyaltyReason(CartProvider cart) {
+    final customer = cart.selectedCustomer;
+    if (cart.isRefundMode) return 'Loyalty is not available for refunds.';
+    if (customer == null || (customer.id ?? 0) <= 0) {
+      return 'Select a customer to redeem loyalty points.';
+    }
+    if (_checkoutLoyaltySettings == null) {
+      return _checkoutLoyaltyUnavailableReason ?? 'Loading loyalty details...';
+    }
+    if (!_checkoutLoyaltySettings!.isEnabled) {
+      return 'Loyalty is disabled in settings.';
+    }
+    if (!customer.loyaltyEnabled) {
+      return 'Loyalty is disabled for this customer.';
+    }
+    if (customer.loyaltyPointsBalance <= 0) {
+      return 'No loyalty points available.';
+    }
+    if (cart.cartTotal <= 0) return 'Add items to redeem loyalty points.';
+    return _checkoutLoyaltyUnavailableReason ?? 'Loyalty is available.';
+  }
+
+  double _checkoutLoyaltyRedeemableTotal(CartProvider cart) {
+    if (cart.items.isEmpty) return cart.cartTotal;
+
+    final excludedCategoryNames = _checkoutLoyaltyExcludedCategories
+        .where((item) => item.excludeRedemption && item.isActive)
+        .map((item) => item.value.trim().toLowerCase())
+        .toSet();
+    final excludedBarcodes = _checkoutLoyaltyExcludedProducts
+        .where((item) => item.excludeRedemption && item.isActive)
+        .map((item) => item.value.trim())
+        .toSet();
+
+    var itemTotal = 0.0;
+    var redeemableItemTotal = 0.0;
+    for (final item in cart.items) {
+      final barcode = item.product.barcode.trim();
+      final category = item.product.category.trim().toLowerCase();
+      final lineTotal = item.total.abs();
+      itemTotal += lineTotal;
+      if (!excludedBarcodes.contains(barcode) &&
+          !excludedCategoryNames.contains(category)) {
+        redeemableItemTotal += lineTotal;
+      }
+    }
+
+    if (itemTotal <= 0) return cart.cartTotal;
+    return _roundMoney(cart.cartTotal * (redeemableItemTotal / itemTotal));
+  }
+
+  int _maxCheckoutRedeemablePoints(CartProvider cart) {
+    if (!_canUseCheckoutLoyalty(cart)) return 0;
+    return LoyaltyService.instance.maxRedeemablePoints(
+      currentPointsBalance: cart.selectedCustomer!.loyaltyPointsBalance,
+      billTotal: _checkoutLoyaltyRedeemableTotal(cart),
+      settings: _effectiveCheckoutLoyaltySettings(),
+    );
+  }
+
+  String? _checkoutLoyaltyRedemptionError(
+    CartProvider cart, {
+    bool showMinimumError = true,
+  }) {
+    if (_checkoutLoyaltyPointsToRedeem <= 0) return null;
+    if (!_canUseCheckoutLoyalty(cart)) return _checkoutLoyaltyReason(cart);
+
+    final settings = _effectiveCheckoutLoyaltySettings();
+    final maxPoints = _maxCheckoutRedeemablePoints(cart);
+    if (maxPoints <= 0) return 'This bill does not meet the redemption rule.';
+    if (_checkoutLoyaltyPointsToRedeem < settings.safeMinimumRedeemPoints) {
+      if (!showMinimumError) return null;
+      return 'Minimum redemption is ${settings.safeMinimumRedeemPoints} points.';
+    }
+    if (_checkoutLoyaltyPointsToRedeem > maxPoints) {
+      return 'Maximum redemption for this bill is $maxPoints points.';
+    }
+    return null;
+  }
+
+  double _checkoutLoyaltyRedeemedValue(CartProvider cart) {
+    if (_checkoutLoyaltyRedemptionError(cart) != null) return 0.0;
+    if (_checkoutLoyaltyPointsToRedeem <= 0) return 0.0;
+    final rawValue =
+        _checkoutLoyaltyPointsToRedeem *
+        _effectiveCheckoutLoyaltySettings().safePointValueAmount;
+    return _roundMoney(rawValue > cart.cartTotal ? cart.cartTotal : rawValue);
+  }
+
+  double _checkoutPayableTotal(CartProvider cart) {
+    final payable = cart.cartTotal - _checkoutLoyaltyRedeemedValue(cart);
+    return _roundMoney(payable < 0 ? 0.0 : payable);
+  }
+
+  void _applyCheckoutLoyaltyText(String value) {
+    _checkoutLoyaltyPointsToRedeem = int.tryParse(value.trim()) ?? 0;
+    _queueActiveCartSnapshotSave();
+    setState(() {});
+  }
+
+  void _setCheckoutLoyaltyPoints(int points, {bool selectText = false}) {
+    final safePoints = points < 0 ? 0 : points;
+    _checkoutLoyaltyPointsToRedeem = safePoints;
+    final text = safePoints == 0 ? '' : safePoints.toString();
+    _checkoutLoyaltyController.value = TextEditingValue(
+      text: text,
+      selection: selectText
+          ? TextSelection(baseOffset: 0, extentOffset: text.length)
+          : TextSelection.collapsed(offset: text.length),
+    );
+    _queueActiveCartSnapshotSave();
+    if (mounted) setState(() {});
+  }
+
+  void _focusCheckoutLoyaltyField(CartProvider cart) {
+    if (!_canUseCheckoutLoyalty(cart)) {
+      _showInfoMessage(
+        _checkoutLoyaltyReason(cart),
+        backgroundColor: _warningColor,
+      );
+      _focusBarcodeField();
+      return;
+    }
+
+    Future.delayed(const Duration(milliseconds: 20), () {
+      if (!mounted || _activeModalCount > 0) return;
+      _checkoutLoyaltyFocusNode.requestFocus();
+      _checkoutLoyaltyController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _checkoutLoyaltyController.text.length,
+      );
+    });
+  }
+
+  void _focusCustomerQuickSearchField(CartProvider cart) {
+    _isCustomerQuickSearchEditing = true;
+    if (cart.selectedCustomer != null) {
+      _syncCustomerQuickSearchText(cart.selectedCustomer);
+    }
+
+    Future.delayed(const Duration(milliseconds: 20), () {
+      if (!mounted || _activeModalCount > 0) return;
+      _customerQuickSearchFocusNode.requestFocus();
+      _customerQuickSearchController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _customerQuickSearchController.text.length,
+      );
+    });
+  }
+
+  void _submitCheckoutLoyaltyField(CartProvider cart) {
+    final maxPoints = _maxCheckoutRedeemablePoints(cart);
+    final text = _checkoutLoyaltyController.text.trim();
+    if (text.isEmpty && maxPoints > 0) {
+      _setCheckoutLoyaltyPoints(maxPoints, selectText: true);
+    } else {
+      _applyCheckoutLoyaltyText(text);
+    }
+    _checkoutLoyaltyFocusNode.unfocus();
+    _focusBarcodeField();
+  }
+
   Future<void> _openCustomerPicker(CartProvider cart) async {
     if (_activeModalCount > 0) return;
 
+    _isCustomerQuickSearchEditing = false;
+    _customerQuickSearchFocusNode.unfocus();
     _activeModalCount += 1;
     try {
       final result = await showCustomerPickerDialog(
@@ -851,26 +1465,472 @@ class _PosScreenState extends State<PosScreen> {
 
       if (result.cleared || result.customer == null) {
         await cart.clearCustomer();
+        _resetCheckoutLoyaltyRedemption(updateUi: false);
+        _clearCustomerQuickSearch(updateUi: false);
         _showInfoMessage(
           'Using Walk-in Customer.',
           backgroundColor: _accentBlue,
         );
       } else {
         await cart.selectCustomer(result.customer!);
+        _resetCheckoutLoyaltyRedemption(updateUi: false);
+        _syncCustomerQuickSearchText(result.customer);
         _showInfoMessage(
           'Customer selected: ${result.customer!.displayName}',
           backgroundColor: _brandColor,
         );
       }
     } finally {
-      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+      _activeModalCount = (_activeModalCount - 1).clamp(0, 999999);
+      _isCustomerQuickSearchEditing = false;
       if (mounted) {
         _focusBarcodeField();
       }
     }
   }
 
+  Future<void> _confirmRemoveSelectedCustomer(CartProvider cart) async {
+    final customer = cart.selectedCustomer;
+    if (customer == null || _activeModalCount > 0) return;
+
+    final confirmed = await _showKeyboardConfirmDialog(
+      title: 'Remove Customer?',
+      message:
+          'Remove ${customer.displayName} from the current cart and continue as Walk-in Customer?',
+      confirmLabel: 'Remove',
+      icon: Icons.person_remove_alt_1_outlined,
+      confirmColor: _dangerColor,
+    );
+
+    if (!mounted || !confirmed) {
+      _focusBarcodeField();
+      return;
+    }
+
+    await cart.clearCustomer();
+    _resetCheckoutLoyaltyRedemption(updateUi: false);
+    _clearCustomerQuickSearch(updateUi: false);
+    _showInfoMessage(
+      'Customer removed. Using Walk-in Customer.',
+      backgroundColor: _accentBlue,
+    );
+    _focusBarcodeField();
+  }
+
+  bool get _customerQuickSearchLooksNumeric {
+    final query = _customerQuickSearchQuery.trim();
+    if (query.isEmpty) return false;
+    return RegExp(r'^[\d\s+\-()]+$').hasMatch(query);
+  }
+
+  void _syncCustomerQuickSearchText(Customer? customer) {
+    final text = customer == null ? '' : customer.displayName;
+    if (_customerQuickSearchController.text == text) return;
+    _customerQuickSearchController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  void _clearCustomerQuickSearch({bool updateUi = true}) {
+    _customerQuickSearchDebounce?.cancel();
+    _customerQuickSearchQuery = '';
+    _customerQuickSearchResults = const [];
+    _customerQuickSearchSelectedIndex = 0;
+    _isCustomerQuickSearchLoading = false;
+    _isCustomerQuickSearchEditing = false;
+    _customerQuickSearchController.clear();
+    _hideCustomerQuickSearchOverlay();
+    if (updateUi && mounted) setState(() {});
+  }
+
+  void _onCustomerQuickSearchChanged(CartProvider cart, String value) {
+    _isCustomerQuickSearchEditing = true;
+    final query = value.trim();
+    _customerQuickSearchQuery = query;
+    _customerQuickSearchSelectedIndex = 0;
+    _customerQuickSearchDebounce?.cancel();
+
+    if (query.isEmpty) {
+      if (cart.selectedCustomer != null) {
+        unawaited(cart.clearCustomer());
+        _resetCheckoutLoyaltyRedemption(updateUi: false);
+      }
+      _hideCustomerQuickSearchOverlay();
+      setState(() {
+        _customerQuickSearchResults = const [];
+        _isCustomerQuickSearchLoading = false;
+      });
+      return;
+    }
+
+    setState(() => _isCustomerQuickSearchLoading = true);
+    _refreshCustomerQuickSearchOverlay(cart);
+    _customerQuickSearchDebounce = Timer(
+      const Duration(milliseconds: 180),
+      () => unawaited(_loadCustomerQuickSearchResults(cart, query)),
+    );
+  }
+
+  Future<void> _loadCustomerQuickSearchResults(
+    CartProvider cart,
+    String query,
+  ) async {
+    try {
+      final results = await CustomerService.instance.getCustomers(
+        query: query,
+        activeOnly: true,
+        limit: 3,
+      );
+      if (!mounted || _customerQuickSearchQuery != query) return;
+      setState(() {
+        _customerQuickSearchResults = results;
+        _customerQuickSearchSelectedIndex = 0;
+        _isCustomerQuickSearchLoading = false;
+      });
+      _refreshCustomerQuickSearchOverlay(cart);
+    } catch (_) {
+      if (!mounted || _customerQuickSearchQuery != query) return;
+      setState(() {
+        _customerQuickSearchResults = const [];
+        _isCustomerQuickSearchLoading = false;
+      });
+      _refreshCustomerQuickSearchOverlay(cart);
+      _showInfoMessage(
+        'Could not search customers.',
+        backgroundColor: _dangerColor,
+      );
+    }
+  }
+
+  void _moveCustomerQuickSearchSelection(int delta) {
+    final optionCount = _customerQuickSearchResults.isNotEmpty
+        ? _customerQuickSearchResults.length
+        : (_customerQuickSearchQuery.isNotEmpty &&
+                  !_isCustomerQuickSearchLoading
+              ? 1
+              : 0);
+    if (optionCount <= 0) return;
+    setState(() {
+      _customerQuickSearchSelectedIndex =
+          (_customerQuickSearchSelectedIndex + delta).clamp(0, optionCount - 1);
+    });
+    _customerQuickSearchOverlay?.markNeedsBuild();
+  }
+
+  bool _handleCustomerQuickSearchBackspace(CartProvider cart) {
+    final now = DateTime.now();
+    final isSecondPress =
+        _lastCustomerBackspaceAt != null &&
+        now.difference(_lastCustomerBackspaceAt!) <= _customerBackspaceWindow;
+    _lastCustomerBackspaceAt = now;
+    if (!isSecondPress) return false;
+
+    _lastCustomerBackspaceAt = null;
+    if (cart.selectedCustomer != null) {
+      unawaited(cart.clearCustomer());
+      _resetCheckoutLoyaltyRedemption(updateUi: false);
+    }
+    _clearCustomerQuickSearch(updateUi: false);
+    if (mounted) setState(() {});
+    _customerQuickSearchFocusNode.unfocus();
+    _focusBarcodeField(force: true);
+    return true;
+  }
+
+  double get _customerQuickSearchOverlayWidth {
+    final box =
+        _customerQuickSearchFieldKey.currentContext?.findRenderObject()
+            as RenderBox?;
+    return box?.size.width ?? 240;
+  }
+
+  void _refreshCustomerQuickSearchOverlay(CartProvider cart) {
+    if (!mounted ||
+        !_customerQuickSearchFocusNode.hasFocus ||
+        _customerQuickSearchQuery.trim().isEmpty) {
+      _hideCustomerQuickSearchOverlay();
+      return;
+    }
+
+    if (_customerQuickSearchOverlay == null) {
+      _customerQuickSearchOverlay = OverlayEntry(
+        builder: (context) => _buildCustomerQuickSearchOverlay(cart),
+      );
+      Overlay.of(context).insert(_customerQuickSearchOverlay!);
+    } else {
+      _customerQuickSearchOverlay!.markNeedsBuild();
+    }
+  }
+
+  void _hideCustomerQuickSearchOverlay() {
+    _customerQuickSearchOverlay?.remove();
+    _customerQuickSearchOverlay = null;
+  }
+
+  Widget _buildCustomerQuickSearchOverlay(CartProvider cart) {
+    final query = _customerQuickSearchQuery.trim();
+    final width = _customerQuickSearchOverlayWidth;
+    final showAddNew =
+        query.isNotEmpty &&
+        !_isCustomerQuickSearchLoading &&
+        _customerQuickSearchResults.isEmpty;
+
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: false,
+        child: CompositedTransformFollower(
+          link: _customerQuickSearchLayerLink,
+          showWhenUnlinked: false,
+          offset: const Offset(0, 4),
+          targetAnchor: Alignment.bottomLeft,
+          followerAnchor: Alignment.topLeft,
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: width,
+                constraints: const BoxConstraints(maxHeight: 210),
+                decoration: BoxDecoration(
+                  color: _panelColor,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: _borderColor),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(_isDark ? 0.34 : 0.12),
+                      blurRadius: 18,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: _isCustomerQuickSearchLoading
+                      ? Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Row(
+                            children: [
+                              SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: _brandColor,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                'Searching...',
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          shrinkWrap: true,
+                          children: [
+                            for (
+                              var i = 0;
+                              i < _customerQuickSearchResults.length;
+                              i++
+                            )
+                              _buildCustomerQuickSearchOption(
+                                cart: cart,
+                                customer: _customerQuickSearchResults[i],
+                                selected:
+                                    i == _customerQuickSearchSelectedIndex,
+                              ),
+                            if (showAddNew)
+                              _buildCustomerQuickSearchAddNew(cart, query),
+                          ],
+                        ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCustomerQuickSearchOption({
+    required CartProvider cart,
+    required Customer customer,
+    required bool selected,
+  }) {
+    final subtitle = [
+      customer.customerCode,
+      customer.phone ?? '',
+    ].where((part) => part.trim().isNotEmpty).join(' - ');
+
+    return InkWell(
+      onTap: () => unawaited(_selectCustomerQuickSearchResult(cart, customer)),
+      child: Container(
+        color: selected ? _brandSoft : Colors.transparent,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        child: Row(
+          children: [
+            Icon(Icons.person_rounded, color: _brandColor, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    customer.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: _textPrimary,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12.5,
+                    ),
+                  ),
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 10.5,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCustomerQuickSearchAddNew(CartProvider cart, String query) {
+    return InkWell(
+      onTap: () => unawaited(_openCustomerFormWithQuickSearch(cart, query)),
+      child: Container(
+        color: _customerQuickSearchSelectedIndex == 0
+            ? _warningSoft
+            : Colors.transparent,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              Icons.person_add_alt_1_rounded,
+              color: _warningColor,
+              size: 18,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Add new "$query"',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: _textPrimary,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 12.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _selectCustomerQuickSearchResult(
+    CartProvider cart,
+    Customer customer,
+  ) async {
+    await cart.selectCustomer(customer);
+    _resetCheckoutLoyaltyRedemption(updateUi: false);
+    _customerQuickSearchQuery = '';
+    _customerQuickSearchResults = const [];
+    _customerQuickSearchSelectedIndex = 0;
+    _isCustomerQuickSearchEditing = false;
+    _hideCustomerQuickSearchOverlay();
+    _syncCustomerQuickSearchText(customer);
+    if (mounted) setState(() {});
+    _showInfoMessage(
+      'Customer selected: ${customer.displayName}',
+      backgroundColor: _brandColor,
+    );
+    _customerQuickSearchFocusNode.unfocus();
+    _focusBarcodeField(force: true);
+  }
+
+  Future<void> _submitCustomerQuickSearch(CartProvider cart) async {
+    final query = _customerQuickSearchQuery.trim();
+    if (query.isEmpty) {
+      _isCustomerQuickSearchEditing = false;
+      _customerQuickSearchFocusNode.unfocus();
+      _focusBarcodeField();
+      return;
+    }
+
+    if (_customerQuickSearchResults.isNotEmpty &&
+        _customerQuickSearchSelectedIndex <
+            _customerQuickSearchResults.length) {
+      await _selectCustomerQuickSearchResult(
+        cart,
+        _customerQuickSearchResults[_customerQuickSearchSelectedIndex],
+      );
+      return;
+    }
+
+    await _openCustomerFormWithQuickSearch(cart, query);
+  }
+
+  Future<void> _openCustomerFormWithQuickSearch(
+    CartProvider cart,
+    String query,
+  ) async {
+    if (_activeModalCount > 0) return;
+
+    final isNumber = _customerQuickSearchLooksNumeric;
+    _hideCustomerQuickSearchOverlay();
+    _activeModalCount += 1;
+    _isCustomerQuickSearchEditing = false;
+    try {
+      final created = await showCustomerFormDialog(
+        context: context,
+        actorUserId: context.read<AuthProvider>().currentUser?.id,
+        initialName: isNumber ? null : query,
+        initialPhone: isNumber ? query : null,
+      );
+      if (!mounted || created == null) return;
+      await cart.selectCustomer(created);
+      _resetCheckoutLoyaltyRedemption(updateUi: false);
+      _customerQuickSearchQuery = '';
+      _customerQuickSearchResults = const [];
+      _syncCustomerQuickSearchText(created);
+      setState(() {});
+      _showInfoMessage(
+        'Customer selected: ${created.displayName}',
+        backgroundColor: _brandColor,
+      );
+    } finally {
+      _activeModalCount = (_activeModalCount - 1).clamp(0, 999999);
+      _isCustomerQuickSearchEditing = false;
+      _customerQuickSearchFocusNode.unfocus();
+      if (mounted) _focusBarcodeField();
+    }
+  }
+
   Future<void> _openCustomerManagement() async {
+    _isCustomerQuickSearchEditing = false;
+    _customerQuickSearchFocusNode.unfocus();
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -887,7 +1947,12 @@ class _PosScreenState extends State<PosScreen> {
     final customer = cart.selectedCustomer;
     final hasCustomer = customer != null;
     final tone = hasCustomer ? _brandColor : _accentBlue;
-    final toneSoft = tone.withOpacity(_isDark ? 0.16 : 0.10);
+    final query = _customerQuickSearchQuery.trim();
+    final hasQuery = query.isNotEmpty;
+
+    if (!_customerQuickSearchFocusNode.hasFocus && !hasQuery) {
+      _syncCustomerQuickSearchText(customer);
+    }
 
     Widget miniIconButton({
       required IconData icon,
@@ -908,92 +1973,163 @@ class _PosScreenState extends State<PosScreen> {
       );
     }
 
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: _panelSoft,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _borderColor),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: toneSoft,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: tone.withOpacity(0.24)),
-            ),
-            child: Icon(
-              hasCustomer ? Icons.person_rounded : Icons.storefront_rounded,
-              color: tone,
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: InkWell(
-              borderRadius: BorderRadius.circular(14),
-              onTap: () => _openCustomerPicker(cart),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      hasCustomer ? customer!.displayName : 'Walk-in Customer',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 13,
+    return SizedBox(
+      height: 80,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: _panelSoft,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _borderColor),
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Icon(
+                  hasCustomer
+                      ? Icons.person_rounded
+                      : Icons.person_search_rounded,
+                  color: tone,
+                  size: 22,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: CompositedTransformTarget(
+                    link: _customerQuickSearchLayerLink,
+                    child: SizedBox(
+                      key: _customerQuickSearchFieldKey,
+                      height: 38,
+                      child: TextField(
+                        controller: _customerQuickSearchController,
+                        focusNode: _customerQuickSearchFocusNode,
+                        textInputAction: TextInputAction.done,
+                        onTap: () {
+                          _isCustomerQuickSearchEditing = true;
+                          _customerQuickSearchFocusNode.requestFocus();
+                          if (hasCustomer &&
+                              _customerQuickSearchController.text ==
+                                  customer.displayName) {
+                            _customerQuickSearchController
+                                .selection = TextSelection(
+                              baseOffset: 0,
+                              extentOffset:
+                                  _customerQuickSearchController.text.length,
+                            );
+                          }
+                          _refreshCustomerQuickSearchOverlay(cart);
+                        },
+                        onTapOutside: (_) {
+                          if (_customerQuickSearchQuery.trim().isEmpty) {
+                            _isCustomerQuickSearchEditing = false;
+                          }
+                        },
+                        onChanged: (value) =>
+                            _onCustomerQuickSearchChanged(cart, value),
+                        onSubmitted: (_) =>
+                            unawaited(_submitCustomerQuickSearch(cart)),
+                        style: TextStyle(
+                          color: _textPrimary,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 12.5,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: hasCustomer
+                              ? customer.displayName
+                              : 'Search customer name or phone',
+                          isDense: true,
+                          filled: true,
+                          fillColor: hasCustomer && !hasQuery
+                              ? _brandSoft
+                              : _inputFill,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          suffixIcon: _isCustomerQuickSearchLoading
+                              ? Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: tone,
+                                    ),
+                                  ),
+                                )
+                              : hasCustomer && !hasQuery
+                              ? Icon(
+                                  Icons.check_circle_rounded,
+                                  color: _brandColor,
+                                  size: 18,
+                                )
+                              : hasQuery && _customerQuickSearchResults.isEmpty
+                              ? Icon(
+                                  Icons.person_add_alt_1_rounded,
+                                  color: _warningColor,
+                                  size: 18,
+                                )
+                              : hasQuery &&
+                                    _customerQuickSearchResults.isNotEmpty
+                              ? Icon(
+                                  Icons.person_rounded,
+                                  color: tone,
+                                  size: 18,
+                                )
+                              : null,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(13),
+                            borderSide: BorderSide(color: _borderColor),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(13),
+                            borderSide: BorderSide(
+                              color: hasCustomer && !hasQuery
+                                  ? _brandColor.withOpacity(0.42)
+                                  : _borderColor,
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(13),
+                            borderSide: BorderSide(color: tone, width: 1.25),
+                          ),
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      hasCustomer
-                          ? cart.customerDisplaySubtitle
-                          : 'Ctrl + B to search / add customer',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _textSecondary,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                miniIconButton(
+                  icon: hasCustomer
+                      ? Icons.swap_horiz_rounded
+                      : Icons.person_search_rounded,
+                  onPressed: () => _openCustomerPicker(cart),
+                ),
+                miniIconButton(
+                  icon: Icons.manage_accounts_rounded,
+                  onPressed: _openCustomerManagement,
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                hasCustomer
+                    ? 'Press C twice to change, Esc twice to remove'
+                    : 'Press C twice to enter, Esc twice to remove',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: _textSecondary,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 6),
-          miniIconButton(
-            icon: hasCustomer
-                ? Icons.swap_horiz_rounded
-                : Icons.person_search_rounded,
-            onPressed: () => _openCustomerPicker(cart),
-          ),
-          if (hasCustomer)
-            miniIconButton(
-              icon: Icons.close_rounded,
-              color: _dangerColor,
-              onPressed: () async {
-                await cart.clearCustomer();
-                _showInfoMessage(
-                  'Customer removed. Using Walk-in Customer.',
-                  backgroundColor: _accentBlue,
-                );
-                _focusBarcodeField();
-              },
-            ),
-          miniIconButton(
-            icon: Icons.manage_accounts_rounded,
-            onPressed: _openCustomerManagement,
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1020,10 +2156,21 @@ class _PosScreenState extends State<PosScreen> {
     });
   }
 
-  void _focusBarcodeField() {
+  void _focusBarcodeField({bool force = false}) {
     if (!mounted || _activeModalCount > 0) return;
+    if (!force &&
+        (_isCustomerQuickSearchEditing ||
+            _customerQuickSearchFocusNode.hasFocus)) {
+      return;
+    }
     Future.delayed(const Duration(milliseconds: 50), () {
       if (!mounted || _activeModalCount > 0) return;
+      if (!force &&
+          (_isCustomerQuickSearchEditing ||
+              _customerQuickSearchFocusNode.hasFocus)) {
+        return;
+      }
+      if (_checkoutLoyaltyFocusNode.hasFocus) return;
       _barcodeFocusNode.requestFocus();
     });
   }
@@ -1053,6 +2200,23 @@ class _PosScreenState extends State<PosScreen> {
     final isModifierOnly =
         event.isAltPressed || event.isControlPressed || event.isMetaPressed;
     if (isModifierOnly) return;
+
+    if (_activeModalCount > 0 ||
+        _isCustomerQuickSearchEditing ||
+        _customerQuickSearchFocusNode.hasFocus ||
+        _checkoutLoyaltyFocusNode.hasFocus) {
+      return;
+    }
+
+    final isLetterShortcut =
+        event.logicalKey == LogicalKeyboardKey.keyC ||
+        event.logicalKey == LogicalKeyboardKey.keyL ||
+        event.logicalKey == LogicalKeyboardKey.keyQ ||
+        event.logicalKey == LogicalKeyboardKey.keyD ||
+        event.logicalKey == LogicalKeyboardKey.keyP;
+    if (isLetterShortcut && _barcodeController.text.trim().isEmpty) {
+      return;
+    }
 
     if (!_barcodeFocusNode.hasFocus && !_searchFocusNode.hasFocus) {
       _barcodeFocusNode.requestFocus();
@@ -1591,6 +2755,13 @@ class _PosScreenState extends State<PosScreen> {
     return '${_formatQuantity(quantity)} pcs';
   }
 
+  String _displayProductName(Product product) {
+    return ProductNameHelper.displayName(
+      product,
+      context.read<LanguageProvider>().language,
+    );
+  }
+
   CartItem? _selectedCartItem(CartProvider cart, {bool showMessage = true}) {
     if (cart.items.isEmpty) {
       if (showMessage) {
@@ -1676,7 +2847,7 @@ class _PosScreenState extends State<PosScreen> {
         maxQuantity != null &&
         maxQuantity <= _quantityEpsilon) {
       _showInfoMessage(
-        'No stock is available to increase ${item.product.name}.',
+        'No stock is available to increase ${_displayProductName(item.product)}.',
         backgroundColor: _dangerColor,
       );
       _focusBarcodeField();
@@ -1731,7 +2902,7 @@ class _PosScreenState extends State<PosScreen> {
     if (maxQuantity != null &&
         _quantityExceeds(item.quantity + 1.0, maxQuantity)) {
       _showInfoMessage(
-        'Cannot exceed available stock for ${item.product.name}.',
+        'Cannot exceed available stock for ${_displayProductName(item.product)}.',
         backgroundColor: _dangerColor,
       );
       _focusBarcodeField();
@@ -1909,7 +3080,8 @@ class _PosScreenState extends State<PosScreen> {
 
     final confirmed = await _showKeyboardConfirmDialog(
       title: 'Remove Selected Item?',
-      message: 'Remove ${item.product.name} from the current cart?',
+      message:
+          'Remove ${_displayProductName(item.product)} from the current cart?',
       confirmLabel: 'Remove',
       icon: Icons.delete_outline_rounded,
       confirmColor: _dangerColor,
@@ -2274,7 +3446,7 @@ class _PosScreenState extends State<PosScreen> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                '${item.product.name} • ${item.product.barcode}',
+                                '${_displayProductName(item.product)} • ${item.product.barcode}',
                                 style: TextStyle(
                                   color: _textSecondary,
                                   fontWeight: FontWeight.w700,
@@ -2426,6 +3598,7 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     cart.clearCart();
+    _resetCheckoutLoyaltyRedemption(updateUi: false);
     setState(() {
       _selectedCartIndex = null;
       _isCartSelectionVisible = false;
@@ -2852,14 +4025,13 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   List<Product> get _filteredProducts {
-    final query = _searchQuery.trim().toLowerCase();
+    final query = _searchQuery.trim();
 
     if (query.isEmpty) return _products;
 
-    return _products.where((product) {
-      return product.name.toLowerCase().contains(query) ||
-          product.barcode.toLowerCase().contains(query);
-    }).toList();
+    return _products
+        .where((product) => ProductNameHelper.matchesProduct(product, query))
+        .toList();
   }
 
   // ignore: unused_element
@@ -3014,7 +4186,7 @@ class _PosScreenState extends State<PosScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      product.name,
+                                      _displayProductName(product),
                                       style: TextStyle(
                                         color: _textSecondary,
                                         fontWeight: FontWeight.w700,
@@ -3117,8 +4289,8 @@ class _PosScreenState extends State<PosScreen> {
 
       return result == null ? null : _sanitizeQuantity(result);
     } finally {
+      _activeModalCount = (_activeModalCount - 1).clamp(0, 999999);
       Future<void>.delayed(const Duration(milliseconds: 300), () {
-        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
         controller.dispose();
       });
     }
@@ -3237,7 +4409,7 @@ class _PosScreenState extends State<PosScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      product.name,
+                                      _displayProductName(product),
                                       style: TextStyle(
                                         color: _textSecondary,
                                         fontWeight: FontWeight.w700,
@@ -3338,8 +4510,8 @@ class _PosScreenState extends State<PosScreen> {
 
       return result == null ? null : _sanitizeQuantity(result);
     } finally {
+      _activeModalCount = (_activeModalCount - 1).clamp(0, 999999);
       Future<void>.delayed(const Duration(milliseconds: 300), () {
-        _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
         controller.dispose();
       });
     }
@@ -3355,16 +4527,9 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     if (!cart.isRefundMode &&
-        !_expiryWarningShownBarcodes.contains(product.barcode) &&
-        await DatabaseHelper.instance.hasExpiredBatchForBarcode(
-          product.barcode,
-        )) {
-      _expiryWarningShownBarcodes.add(product.barcode);
-      _showInfoMessage(
-        '${product.name} has expired stock recorded. Check the shelf item before selling.',
-        backgroundColor: _warningColor,
-        duration: const Duration(seconds: 4),
-      );
+        !await _handleExpiryCartWarning(product.barcode)) {
+      _focusBarcodeField();
+      return;
     }
 
     final currentQtyInCart = _getQuantityInCart(cart, product.barcode);
@@ -3379,7 +4544,7 @@ class _PosScreenState extends State<PosScreen> {
           remainingStock != null &&
           remainingStock <= _quantityEpsilon) {
         _showInfoMessage(
-          'Cannot add more than available stock for ${product.name}.',
+          'Cannot add more than available stock for ${_displayProductName(product)}.',
           backgroundColor: _dangerColor,
         );
         return;
@@ -3415,7 +4580,7 @@ class _PosScreenState extends State<PosScreen> {
     if (!cart.isRefundMode &&
         _quantityExceeds(currentQtyInCart + quantityToAdd, product.stock)) {
       _showInfoMessage(
-        'Cannot add more than available stock for ${product.name}.',
+        'Cannot add more than available stock for ${_displayProductName(product)}.',
         backgroundColor: _dangerColor,
       );
       return;
@@ -3427,6 +4592,353 @@ class _PosScreenState extends State<PosScreen> {
       _scrollCartToLatest();
     });
     _focusBarcodeField();
+  }
+
+  Future<bool> _handleExpiryCartWarning(String barcode) async {
+    final warning = await DatabaseHelper.instance
+        .getExpiryCartWarningForBarcode(barcode);
+    if (warning == null) return true;
+
+    final warningType = (warning['warning_type'] ?? '').toString();
+    switch (warningType) {
+      case 'expired':
+        await _showExpiredBatchBlockDialog(warning);
+        return false;
+      case 'today':
+        return _showExpiresTodayConfirmDialog(warning);
+      case 'tomorrow':
+        _showTomorrowExpiryToast(warning);
+        return true;
+      case 'week':
+        _showWeeklyExpiryToastOncePerSession(warning);
+        return true;
+      default:
+        return true;
+    }
+  }
+
+  Future<void> _showExpiredBatchBlockDialog(
+    Map<String, dynamic> warning,
+  ) async {
+    final productName = ProductNameHelper.displayNameFromMap(
+      warning,
+      context.read<LanguageProvider>().language,
+      fallback: 'This product',
+    );
+    final expiryDate = (warning['expiry_date'] ?? '').toString();
+    final quantity = _sanitizeQuantity(
+      ((warning['remaining_quantity'] as num?) ?? 0).toDouble(),
+    );
+    final unitLabel = (warning['unit_label'] ?? 'pcs').toString();
+    final batchId = (warning['id'] as num?)?.toInt();
+
+    _activeModalCount += 1;
+    try {
+      final openAlerts = await showPremiumDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Check Expiry Alerts'),
+          content: Text(
+            '$productName has expired stock that must be checked before selling.\n\n'
+            'Expired batch: $expiryDate\n'
+            'Remaining: ${_formatQuantity(quantity)} $unitLabel',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Open Expiry Alerts'),
+            ),
+          ],
+        ),
+      );
+
+      if (openAlerts == true && mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.expiryAlerts),
+            builder: (context) => ExpiryAlertsScreen(pointBatchId: batchId),
+          ),
+        );
+      }
+    } finally {
+      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+    }
+  }
+
+  Future<bool> _showExpiresTodayConfirmDialog(
+    Map<String, dynamic> warning,
+  ) async {
+    final productName = ProductNameHelper.displayNameFromMap(
+      warning,
+      context.read<LanguageProvider>().language,
+      fallback: 'This product',
+    );
+    final expiryDate = (warning['expiry_date'] ?? '').toString();
+    final quantity = _sanitizeQuantity(
+      ((warning['remaining_quantity'] as num?) ?? 0).toDouble(),
+    );
+    final unitLabel = (warning['unit_label'] ?? 'pcs').toString();
+    final batchId = (warning['id'] as num?)?.toInt();
+
+    _activeModalCount += 1;
+    try {
+      final action = await showPremiumDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => Focus(
+          autofocus: true,
+          onKeyEvent: (node, event) {
+            if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+            if (event.logicalKey == LogicalKeyboardKey.escape) {
+              Navigator.of(dialogContext).pop('cancel');
+              return KeyEventResult.handled;
+            }
+
+            if (event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+              Navigator.of(dialogContext).pop('add');
+              return KeyEventResult.handled;
+            }
+
+            return KeyEventResult.ignored;
+          },
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 580),
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
+                decoration: _panelDecoration(color: _panelColor),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: _warningSoft,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Icon(
+                            Icons.warning_amber_rounded,
+                            color: _warningColor,
+                            size: 26,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Expiry Check Required',
+                                style: TextStyle(
+                                  color: _textPrimary,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                productName,
+                                style: TextStyle(
+                                  color: _textSecondary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: _softDecoration(
+                        color: _warningColor.withOpacity(_isDark ? 0.14 : 0.10),
+                        radius: BorderRadius.circular(18),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'This batch expires today. Check the shelf item and Expiry Alerts before selling.',
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              height: 1.35,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 8,
+                            children: [
+                              _ExpiryDialogChip(
+                                icon: Icons.event_rounded,
+                                label: expiryDate.isEmpty
+                                    ? 'Expires today'
+                                    : 'Expiry $expiryDate',
+                                color: _warningColor,
+                              ),
+                              _ExpiryDialogChip(
+                                icon: Icons.inventory_2_rounded,
+                                label:
+                                    'Remaining ${_formatQuantity(quantity)} $unitLabel',
+                                color: _accentBlue,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Keyboard: Esc cancels, Enter adds anyway after shelf check.',
+                      style: TextStyle(
+                        color: _textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop('cancel'),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop('alerts'),
+                            child: const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.notifications_active_rounded,
+                                    size: 18,
+                                  ),
+                                  SizedBox(width: 7),
+                                  Text('Open Alerts'),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              minimumSize: const Size(0, 44),
+                              backgroundColor: _brandColor,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop('add'),
+                            child: const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.check_rounded, size: 18),
+                                  SizedBox(width: 7),
+                                  Text('Add Anyway'),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      if (action == 'alerts' && mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            settings: const RouteSettings(name: PosRouteNames.expiryAlerts),
+            builder: (context) => ExpiryAlertsScreen(pointBatchId: batchId),
+          ),
+        );
+        return false;
+      }
+
+      return action == 'add';
+    } finally {
+      _activeModalCount = ((_activeModalCount - 1).clamp(0, 999999)) as int;
+    }
+  }
+
+  void _showTomorrowExpiryToast(Map<String, dynamic> warning) {
+    final productName = ProductNameHelper.displayNameFromMap(
+      warning,
+      context.read<LanguageProvider>().language,
+      fallback: 'This product',
+    );
+    _showInfoMessage(
+      '$productName expires tomorrow. Check Expiry Alerts.',
+      backgroundColor: _warningColor,
+      duration: const Duration(seconds: 4),
+    );
+  }
+
+  void _showWeeklyExpiryToastOncePerSession(Map<String, dynamic> warning) {
+    final batchId = (warning['id'] as num?)?.toInt() ?? 0;
+    final expiryDate = (warning['expiry_date'] ?? '').toString();
+    final productName = ProductNameHelper.displayNameFromMap(
+      warning,
+      context.read<LanguageProvider>().language,
+      fallback: 'This product',
+    );
+    final sessionKey = '$batchId|$expiryDate';
+    if (_weeklyExpiryWarningSessionKeys.contains(sessionKey)) return;
+
+    _weeklyExpiryWarningSessionKeys.add(sessionKey);
+    _showInfoMessage(
+      '$productName expires this week. Check Expiry Alerts.',
+      backgroundColor: _warningColor,
+      duration: const Duration(seconds: 4),
+    );
   }
 
   Future<void> _showReceiptForTransaction(int saleId) async {
@@ -3563,13 +5075,23 @@ class _PosScreenState extends State<PosScreen> {
     final subtotal = cart.subtotal;
     final discountAmount = cart.discountAmount;
     final displayTotal = cart.cartTotal;
+    final loyaltyError = _checkoutLoyaltyRedemptionError(cart);
+    if (loyaltyError != null) {
+      _showInfoMessage(loyaltyError, backgroundColor: _dangerColor);
+      _focusBarcodeField();
+      return;
+    }
+
+    final selectedLoyaltyPoints = _checkoutLoyaltyPointsToRedeem;
+    final selectedLoyaltyValue = _checkoutLoyaltyRedeemedValue(cart);
+    final payableTotal = _checkoutPayableTotal(cart);
     final itemsMap = cart.getCartItemsAsMap();
     String? paymentMethod;
     double? amountTendered;
     double? changeAmount;
     bool isCreditSale = false;
     String? creditApprovedBy;
-    double paidTotal = displayTotal;
+    double paidTotal = payableTotal;
     int loyaltyPointsRedeemed = 0;
     double loyaltyRedeemedValue = 0.0;
 
@@ -3580,9 +5102,11 @@ class _PosScreenState extends State<PosScreen> {
       try {
         paymentResult = await showCheckoutPaymentDialog(
           context,
-          totalAmount: displayTotal,
+          totalAmount: payableTotal,
+          originalTotal: displayTotal,
           selectedCustomer: cart.selectedCustomer,
-          cartItems: itemsMap,
+          loyaltyPointsRedeemed: selectedLoyaltyPoints,
+          loyaltyRedeemedValue: selectedLoyaltyValue,
         );
       } finally {
         _isPaymentDialogOpen = false;
@@ -3687,7 +5211,11 @@ class _PosScreenState extends State<PosScreen> {
         }
       }
 
+      await DatabaseHelper.instance.clearActiveCartSnapshot(
+        cashierName: cashierName,
+      );
       cart.clearCart();
+      _resetCheckoutLoyaltyRedemption(updateUi: false);
 
       await SyncService().syncNow();
       await _refreshProductsFromBackendAndReload(silentOnFailure: true);
@@ -4268,6 +5796,13 @@ class _PosScreenState extends State<PosScreen> {
                 ? cart.selectedCustomer!.displayName.trim()
                 : 'Held Cart')
           : cartName.trim();
+      final loyaltyError = _checkoutLoyaltyRedemptionError(cart);
+      final loyaltyPointsToHold = loyaltyError == null
+          ? _checkoutLoyaltyPointsToRedeem
+          : 0;
+      final loyaltyValueToHold = loyaltyPointsToHold > 0
+          ? _checkoutLoyaltyRedeemedValue(cart)
+          : 0.0;
 
       await DatabaseHelper.instance.saveHeldCart(
         cartName: resolvedCartName,
@@ -4278,9 +5813,15 @@ class _PosScreenState extends State<PosScreen> {
         items: cart.getCartItemsAsMap(),
         selectedPriceType: cart.selectedPriceType.dbValue,
         selectedCustomer: cart.selectedCustomer,
+        loyaltyPointsRedeemed: loyaltyPointsToHold,
+        loyaltyRedeemedValue: loyaltyValueToHold,
       );
 
+      await DatabaseHelper.instance.clearActiveCartSnapshot(
+        cashierName: cashierName,
+      );
       cart.clearCart();
+      _resetCheckoutLoyaltyRedemption(updateUi: false);
 
       if (!mounted) return;
 
@@ -4609,9 +6150,15 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    final restoredCustomer = CustomerService.instance.customerFromHeldCartRow(
-      restored,
-    );
+    final restoredCustomerSnapshot = CustomerService.instance
+        .customerFromHeldCartRow(restored);
+    Customer? restoredCustomer = restoredCustomerSnapshot;
+    final restoredCustomerId = restoredCustomerSnapshot?.id;
+    if (restoredCustomerId != null && restoredCustomerId > 0) {
+      restoredCustomer =
+          await CustomerService.instance.getCustomerById(restoredCustomerId) ??
+          restoredCustomerSnapshot;
+    }
 
     cart.loadHeldCart(
       items: preparedItems,
@@ -4621,6 +6168,13 @@ class _PosScreenState extends State<PosScreen> {
       selectedPriceType: restoredSelectedPriceType,
       selectedCustomer: restoredCustomer,
     );
+    final restoredLoyaltyPoints =
+        ((restored['loyalty_points_redeemed'] as num?) ?? 0).toInt();
+    if (restoredLoyaltyPoints > 0 && restoredCustomer != null) {
+      _setCheckoutLoyaltyPoints(restoredLoyaltyPoints);
+    } else {
+      _resetCheckoutLoyaltyRedemption(updateUi: false);
+    }
 
     _showInfoMessage('Held cart resumed.', backgroundColor: _successColor);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -5076,6 +6630,8 @@ class _PosScreenState extends State<PosScreen> {
             iconColor: _brandColor,
           ),
           const SizedBox(width: 10),
+          _buildLanguageToggle(),
+          const SizedBox(width: 10),
           _buildHeaderMenu(
             title: 'Quick Actions',
             icon: Icons.widgets_outlined,
@@ -5136,7 +6692,9 @@ class _PosScreenState extends State<PosScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          auth.currentUser?.name ?? 'Not Logged In',
+                          auth.isPresentationLogin
+                              ? 'Cashier'
+                              : (auth.currentUser?.name ?? 'Not Logged In'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -5170,6 +6728,7 @@ class _PosScreenState extends State<PosScreen> {
             onPressed: () {
               context.read<AuthProvider>().logout();
               context.read<CartProvider>().clearCart();
+              _resetCheckoutLoyaltyRedemption(updateUi: false);
 
               Navigator.pushReplacement(
                 context,
@@ -5232,6 +6791,37 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  Widget _buildLanguageToggle() {
+    final language = context.watch<LanguageProvider>().language;
+
+    return SizedBox(
+      height: 38,
+      child: SegmentedButton<AppLanguage>(
+        showSelectedIcon: false,
+        selected: {language},
+        style: ButtonStyle(
+          visualDensity: VisualDensity.compact,
+          padding: WidgetStateProperty.all(
+            const EdgeInsets.symmetric(horizontal: 10),
+          ),
+          textStyle: WidgetStateProperty.all(
+            const TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
+          ),
+        ),
+        segments: const [
+          ButtonSegment(value: AppLanguage.english, label: Text('EN')),
+          ButtonSegment(value: AppLanguage.sinhala, label: Text('සිං')),
+        ],
+        onSelectionChanged: (selected) {
+          if (selected.isEmpty) return;
+          final next = selected.first;
+          unawaited(context.read<LanguageProvider>().setLanguage(next));
+          _focusBarcodeField();
+        },
+      ),
+    );
+  }
+
   Widget _buildCatalogPanel(CartProvider cart) {
     return Container(
       decoration: _panelDecoration(color: _panelColor),
@@ -5265,6 +6855,17 @@ class _PosScreenState extends State<PosScreen> {
                   ],
                 ),
                 const Spacer(),
+                _buildIconSurfaceButton(
+                  tooltip: 'Refresh items',
+                  icon: Icons.refresh_rounded,
+                  onPressed: () => unawaited(
+                    _refreshProductsFromBackendAndReload(
+                      showSuccessMessage: true,
+                    ),
+                  ),
+                  iconColor: _accentBlue,
+                ),
+                const SizedBox(width: 8),
                 _buildIconSurfaceButton(
                   tooltip: 'Hide item lookup (F7)',
                   icon: Icons.keyboard_double_arrow_left_rounded,
@@ -5302,7 +6903,7 @@ class _PosScreenState extends State<PosScreen> {
               },
               decoration: InputDecoration(
                 labelText: 'Search products',
-                hintText: 'Search by product name or barcode',
+                hintText: 'Search by barcode, English, or Sinhala name',
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 14,
                   vertical: 14,
@@ -5468,6 +7069,10 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Widget _buildProductCard(Product product, CartProvider cart) {
+    final productName = ProductNameHelper.displayName(
+      product,
+      context.watch<LanguageProvider>().language,
+    );
     final isOutOfStock =
         _sanitizeQuantity(product.stock) <= _quantityEpsilon &&
         !cart.isRefundMode;
@@ -5492,7 +7097,7 @@ class _PosScreenState extends State<PosScreen> {
               await AdminDialogs.showEditPriceDialog(
                 context,
                 product.barcode,
-                product.name,
+                _displayProductName(product),
                 product.sellingPrice,
                 () async {
                   await _refreshProductsFromBackendAndReload(
@@ -5567,7 +7172,7 @@ class _PosScreenState extends State<PosScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      product.name,
+                      productName,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -5825,6 +7430,7 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _toggleSaleRefundModeFromHeader(CartProvider cart) async {
     if (cart.isRefundMode) {
       context.read<CartProvider>().toggleRefundMode(false);
+      _resetCheckoutLoyaltyRedemption(updateUi: false);
       _showInfoMessage('Switched to sale mode.', backgroundColor: _accentBlue);
       _focusBarcodeField();
       return;
@@ -5833,6 +7439,7 @@ class _PosScreenState extends State<PosScreen> {
     await _runProtectedManagerAction(
       () async {
         context.read<CartProvider>().toggleRefundMode(true);
+        _resetCheckoutLoyaltyRedemption(updateUi: false);
         if (!mounted) return;
         _showInfoMessage('Refund mode enabled.', backgroundColor: _dangerColor);
         _focusBarcodeField();
@@ -5958,6 +7565,10 @@ class _PosScreenState extends State<PosScreen> {
     required int index,
     required bool isSelected,
   }) {
+    final productName = ProductNameHelper.displayName(
+      item.product,
+      context.watch<LanguageProvider>().language,
+    );
     final currentStock = _getCurrentStock(
       item.product.barcode,
       fallback: item.product.stock,
@@ -6005,7 +7616,7 @@ class _PosScreenState extends State<PosScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    item.product.name,
+                    productName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -6017,6 +7628,17 @@ class _PosScreenState extends State<PosScreen> {
                   ),
                 ),
                 const SizedBox(width: 6),
+                if (customerPricingLabel.isNotEmpty) ...[
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 140),
+                    child: _buildCartTag(
+                      label: customerPricingLabel,
+                      color: customerPricingColor,
+                      icon: Icons.local_offer_rounded,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                ],
                 IconButton(
                   tooltip: item.discountAmount > 0
                       ? 'Edit item discount'
@@ -6081,36 +7703,16 @@ class _PosScreenState extends State<PosScreen> {
                 fontSize: 10.5,
               ),
             ),
-            if (customerPricingLabel.isNotEmpty) ...[
-              const SizedBox(height: 5),
-              Wrap(
-                spacing: 6,
-                runSpacing: 5,
-                children: [
-                  _buildCartTag(
-                    label: customerPricingLabel,
-                    color: customerPricingColor,
-                    icon: Icons.local_offer_rounded,
-                  ),
-                  if (item.hasPriceOverride)
-                    _buildCartTag(
-                      label: 'Override Applied',
-                      color: _warningColor,
-                      icon: Icons.admin_panel_settings_rounded,
-                    ),
-                ],
-              ),
-              if (!item.hasPriceOverride) ...[
-                const SizedBox(height: 4),
-                Text(
-                  _customerPricingSavingsText(item),
-                  style: TextStyle(
-                    color: customerPricingColor,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 9.8,
-                  ),
+            if (customerPricingLabel.isNotEmpty && !item.hasPriceOverride) ...[
+              const SizedBox(height: 4),
+              Text(
+                _customerPricingSavingsText(item),
+                style: TextStyle(
+                  color: customerPricingColor,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 9.8,
                 ),
-              ],
+              ),
             ],
             if (item.hasPriceOverride) ...[
               const SizedBox(height: 3),
@@ -6156,7 +7758,7 @@ class _PosScreenState extends State<PosScreen> {
                           maxQuantity != null &&
                           maxQuantity <= _quantityEpsilon) {
                         _showInfoMessage(
-                          'No stock is available to increase ${item.product.name}.',
+                          'No stock is available to increase ${_displayProductName(item.product)}.',
                           backgroundColor: _dangerColor,
                         );
                         return;
@@ -6212,7 +7814,7 @@ class _PosScreenState extends State<PosScreen> {
                           maxQuantity != null &&
                           maxQuantity <= _quantityEpsilon) {
                         _showInfoMessage(
-                          'No stock is available to increase ${item.product.name}.',
+                          'No stock is available to increase ${_displayProductName(item.product)}.',
                           backgroundColor: _dangerColor,
                         );
                         return;
@@ -6275,7 +7877,7 @@ class _PosScreenState extends State<PosScreen> {
                                     currentStock,
                                   )) {
                                 _showInfoMessage(
-                                  'Cannot exceed available stock for ${item.product.name}.',
+                                  'Cannot exceed available stock for ${_displayProductName(item.product)}.',
                                   backgroundColor: _dangerColor,
                                 );
                                 return;
@@ -6394,9 +7996,226 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  Widget _buildCheckoutLoyaltyPanel(CartProvider cart) {
+    final customer = cart.selectedCustomer;
+    final maxPoints = _maxCheckoutRedeemablePoints(cart);
+    final canUseLoyalty = _canUseCheckoutLoyalty(cart);
+    final canUseMax = canUseLoyalty && maxPoints > 0;
+    final redeemedValue = _checkoutLoyaltyRedeemedValue(cart);
+    final visibleError = _checkoutLoyaltyRedemptionError(cart);
+    final reason = _checkoutLoyaltyReason(cart);
+    final isActive = _checkoutLoyaltyPointsToRedeem > 0 && redeemedValue > 0;
+    final tone = isActive ? _brandColor : _accentBlue;
+    final title = 'Loyalty';
+    final subtitle = customer == null
+        ? 'Select customer to redeem points'
+        : canUseLoyalty
+        ? maxPoints > 0
+              ? '${customer.loyaltyPointsBalance} pts - Max $maxPoints'
+              : '${customer.loyaltyPointsBalance} pts available'
+        : reason;
+    final statusText =
+        visibleError ??
+        (isActive
+            ? 'Redeeming $_checkoutLoyaltyPointsToRedeem pts - Rs. ${redeemedValue.toStringAsFixed(2)}'
+            : 'Press L twice to edit, Enter to apply max');
+
+    return SizedBox(
+      height: 126,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        decoration: BoxDecoration(
+          color: isActive ? _brandSoft : _panelSoft,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: isActive
+                ? _brandColor.withValues(alpha: 0.30)
+                : _borderColor,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: tone.withValues(alpha: _isDark ? 0.16 : 0.11),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.card_giftcard_rounded,
+                    color: tone,
+                    size: 18,
+                  ),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _textPrimary,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: canUseLoyalty ? _textSecondary : _mutedIcon,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(
+                  width: 52,
+                  child: isActive
+                      ? TextButton(
+                          onPressed: () {
+                            _resetCheckoutLoyaltyRedemption();
+                            _focusBarcodeField();
+                          },
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            foregroundColor: _dangerColor,
+                            textStyle: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          child: const Text('Clear'),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 38,
+                    child: TextField(
+                      controller: _checkoutLoyaltyController,
+                      focusNode: _checkoutLoyaltyFocusNode,
+                      enabled: canUseLoyalty,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: canUseLoyalty ? 'Redeem pts' : 'Unavailable',
+                        errorText: visibleError,
+                        filled: true,
+                        fillColor: _inputFill,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(13),
+                          borderSide: BorderSide(color: _borderColor),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(13),
+                          borderSide: BorderSide(color: _borderColor),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(13),
+                          borderSide: BorderSide(
+                            color: _brandColor,
+                            width: 1.3,
+                          ),
+                        ),
+                        errorStyle: const TextStyle(height: 0.01, fontSize: 0),
+                      ),
+                      onChanged: _applyCheckoutLoyaltyText,
+                      onSubmitted: (_) => _submitCheckoutLoyaltyField(cart),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  height: 38,
+                  child: FilledButton.icon(
+                    onPressed: canUseMax
+                        ? () {
+                            _setCheckoutLoyaltyPoints(
+                              maxPoints,
+                              selectText: true,
+                            );
+                            _checkoutLoyaltyFocusNode.unfocus();
+                            _focusBarcodeField();
+                          }
+                        : null,
+                    icon: const Icon(Icons.auto_awesome_rounded, size: 14),
+                    label: const Text('Max'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _brandColor,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: _isDark
+                          ? Colors.white10
+                          : Colors.black12,
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      textStyle: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w900,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            SizedBox(
+              height: 14,
+              child: Text(
+                statusText,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: visibleError != null
+                      ? _dangerColor
+                      : isActive
+                      ? _brandColor
+                      : _textSecondary,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSummarySection(CartProvider cart) {
     final totalTone = cart.isRefundMode ? _dangerColor : _brandColor;
     final totalToneSoft = cart.isRefundMode ? _dangerSoft : _brandSoft;
+    final loyaltyValue = _checkoutLoyaltyRedeemedValue(cart);
+    final payableTotal = _checkoutPayableTotal(cart);
 
     return Container(
       padding: const EdgeInsets.all(10),
@@ -6419,6 +8238,13 @@ class _PosScreenState extends State<PosScreen> {
                 ? _dangerColor
                 : _textPrimary,
           ),
+          _buildSummaryLine(
+            label: 'Loyalty',
+            value: loyaltyValue > 0
+                ? '- Rs. ${loyaltyValue.toStringAsFixed(2)}'
+                : 'Rs. 0.00',
+            valueColor: loyaltyValue > 0 ? _brandColor : _textSecondary,
+          ),
           const SizedBox(height: 6),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
@@ -6430,7 +8256,11 @@ class _PosScreenState extends State<PosScreen> {
             child: Row(
               children: [
                 Text(
-                  cart.isRefundMode ? 'REFUND TOTAL' : 'TOTAL',
+                  cart.isRefundMode
+                      ? 'REFUND TOTAL'
+                      : loyaltyValue > 0
+                      ? 'PAYABLE'
+                      : 'TOTAL',
                   style: TextStyle(
                     color: _isDark ? const Color(0xFFF4F8FF) : _textPrimary,
                     fontWeight: FontWeight.w900,
@@ -6446,7 +8276,7 @@ class _PosScreenState extends State<PosScreen> {
                 ),
                 const Spacer(),
                 Text(
-                  'Rs. ${cart.cartTotal.toStringAsFixed(2)}',
+                  'Rs. ${payableTotal.toStringAsFixed(2)}',
                   style: TextStyle(
                     color: totalTone,
                     fontWeight: FontWeight.w900,
@@ -6534,10 +8364,7 @@ class _PosScreenState extends State<PosScreen> {
           OutlinedButton.icon(
             onPressed: cart.items.isEmpty
                 ? null
-                : () {
-                    context.read<CartProvider>().clearCart();
-                    _focusBarcodeField();
-                  },
+                : () => _confirmClearCart(cart),
             icon: const Icon(Icons.delete_sweep_rounded, size: 14),
             label: const Text('Clear Cart'),
             style: OutlinedButton.styleFrom(
@@ -6551,7 +8378,10 @@ class _PosScreenState extends State<PosScreen> {
           ),
           const SizedBox(height: 8),
           ElevatedButton.icon(
-            onPressed: cart.items.isEmpty || _isProcessingCheckout
+            onPressed:
+                cart.items.isEmpty ||
+                    _isProcessingCheckout ||
+                    _checkoutLoyaltyRedemptionError(cart) != null
                 ? null
                 : () => _handleCheckout(cart),
             icon: Icon(
@@ -6641,6 +8471,8 @@ class _PosScreenState extends State<PosScreen> {
             ),
             const SizedBox(height: 12),
             _buildCustomerMiniPanel(cart),
+            const SizedBox(height: 12),
+            _buildCheckoutLoyaltyPanel(cart),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),

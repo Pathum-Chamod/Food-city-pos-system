@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
+import '../utils/product_name_helper.dart';
 
 class CashierSummaryScreen extends StatefulWidget {
   final String cashierName;
 
-  const CashierSummaryScreen({
-    super.key,
-    required this.cashierName,
-  });
+  const CashierSummaryScreen({super.key, required this.cashierName});
 
   @override
   State<CashierSummaryScreen> createState() => _CashierSummaryScreenState();
@@ -33,12 +33,17 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
 
-  Color get _page => _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
+  Color get _page =>
+      _isDark ? const Color(0xFF07111F) : const Color(0xFFF4F7FB);
   Color get _surface => _isDark ? const Color(0xFF0F1C31) : Colors.white;
-  Color get _surfaceSoft => _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
-  Color get _border => _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
-  Color get _textPrimary => _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
-  Color get _textSecondary => _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
+  Color get _surfaceSoft =>
+      _isDark ? const Color(0xFF14243C) : const Color(0xFFF8FAFD);
+  Color get _border =>
+      _isDark ? const Color(0xFF23344D) : const Color(0xFFD9E3EE);
+  Color get _textPrimary =>
+      _isDark ? const Color(0xFFF4F8FF) : const Color(0xFF14263B);
+  Color get _textSecondary =>
+      _isDark ? const Color(0xFF9DB0C8) : const Color(0xFF667A92);
   Color get _shadow => Colors.black.withOpacity(_isDark ? 0.24 : 0.05);
 
   @override
@@ -51,14 +56,20 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
     final now = DateTime.now();
 
     if (_selectedRange == SummaryRange.last7Days) {
-      final start = DateTime(now.year, now.month, now.day)
-          .subtract(const Duration(days: 6));
+      final start = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(const Duration(days: 6));
       return (start: start, end: now);
     }
 
     if (_selectedRange == SummaryRange.last30Days) {
-      final start = DateTime(now.year, now.month, now.day)
-          .subtract(const Duration(days: 29));
+      final start = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(const Duration(days: 29));
       return (start: start, end: now);
     }
 
@@ -153,7 +164,9 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
   }
 
   String _formatSoldQuantity(Map<String, dynamic> item, num quantity) {
-    final quantityType = (item['quantity_type'] ?? 'unit').toString().toLowerCase();
+    final quantityType = (item['quantity_type'] ?? 'unit')
+        .toString()
+        .toLowerCase();
     final unitLabel = ((item['unit_label'] ?? '')).toString().trim();
     final formattedQuantity = _formatQuantity(quantity);
     if (quantityType == 'weight') {
@@ -165,7 +178,8 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
 
   String _formatCompactMoney(num value) {
     final amount = value.toDouble().abs();
-    if (amount >= 1000000) return 'Rs. ${(value / 1000000).toStringAsFixed(1)}M';
+    if (amount >= 1000000)
+      return 'Rs. ${(value / 1000000).toStringAsFixed(1)}M';
     if (amount >= 1000) return 'Rs. ${(value / 1000).toStringAsFixed(1)}K';
     return 'Rs. ${value.toStringAsFixed(0)}';
   }
@@ -385,7 +399,10 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
                 children: [
                   Expanded(flex: 5, child: identity),
                   const SizedBox(width: 18),
-                  Expanded(flex: 6, child: Align(alignment: Alignment.topRight, child: actions)),
+                  Expanded(
+                    flex: 6,
+                    child: Align(alignment: Alignment.topRight, child: actions),
+                  ),
                 ],
               );
             },
@@ -485,8 +502,12 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
                   spacing: 0,
                   runSpacing: 6,
                   children: _withMetaDividers([
-                    _buildMetaText('$transactions Transaction${transactions == 1 ? '' : 's'}'),
-                    _buildMetaText('$itemsSold Item${itemsSold == 1 ? '' : 's'} sold'),
+                    _buildMetaText(
+                      '$transactions Transaction${transactions == 1 ? '' : 's'}',
+                    ),
+                    _buildMetaText(
+                      '$itemsSold Item${itemsSold == 1 ? '' : 's'} sold',
+                    ),
                     _buildMetaText('Refunds ${_formatMoney(refunds)}'),
                   ]),
                 ),
@@ -565,8 +586,8 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
         final columns = constraints.maxWidth >= 1080
             ? 3
             : constraints.maxWidth >= 680
-                ? 2
-                : 1;
+            ? 2
+            : 1;
         const spacing = 12.0;
         final itemWidth = columns == 1
             ? constraints.maxWidth
@@ -618,7 +639,8 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
           spacing: spacing,
           runSpacing: spacing,
           children: [
-            for (final widget in items) SizedBox(width: itemWidth, child: widget),
+            for (final widget in items)
+              SizedBox(width: itemWidth, child: widget),
           ],
         );
       },
@@ -626,7 +648,11 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
   }
 
   Widget _buildTopSellingRow(Map<String, dynamic> item, int index) {
-    final productName = (item['product_name'] ?? 'Unknown').toString();
+    final productName = ProductNameHelper.displayNameFromMap(
+      item,
+      context.read<LanguageProvider>().language,
+      fallback: 'Unknown',
+    );
     final barcode = (item['barcode'] ?? '').toString();
     final qty = ((item['quantity_sold'] as num?) ?? 0).toDouble();
     final netSales = ((item['net_sales_amount'] as num?) ?? 0).toDouble();
@@ -769,8 +795,8 @@ class _CashierSummaryScreenState extends State<CashierSummaryScreen> {
             )
           else
             ..._topItems.asMap().entries.map(
-                  (entry) => _buildTopSellingRow(entry.value, entry.key),
-                ),
+              (entry) => _buildTopSellingRow(entry.value, entry.key),
+            ),
         ],
       ),
     );

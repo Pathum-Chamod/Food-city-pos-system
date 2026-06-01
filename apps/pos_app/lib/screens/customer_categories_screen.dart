@@ -23,7 +23,6 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
   List<PricingScheme> _schemes = [];
   Map<int, int> _customerCounts = {};
   bool _isLoading = true;
-  bool _includeInactive = true;
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _blue = Color(0xFF4B8DFF);
@@ -72,7 +71,7 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
     try {
       final service = PricingSchemeService.instance;
       final results = await Future.wait([
-        service.getCustomerCategories(activeOnly: !_includeInactive),
+        service.getCustomerCategories(activeOnly: false),
         service.getPricingSchemes(activeOnly: false),
         service.getCustomerCountsByCategory(),
       ]);
@@ -176,6 +175,46 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
             : 'Customer category reactivated.',
         color: category.isActive ? _warning : _success,
       );
+      await _loadCategories();
+    } catch (e) {
+      _showMessage(_cleanError(e), color: _danger);
+    }
+  }
+
+  Future<void> _deleteCategory(CustomerCategory category) async {
+    final id = category.id ?? 0;
+    if (id <= 0) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete Category'),
+          content: Text(
+            'Delete "${category.displayName}"? This action is permanent and only works when no customer is assigned to this category.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(backgroundColor: _danger),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) return;
+
+    try {
+      await PricingSchemeService.instance.deleteCustomerCategory(id: id);
+      await _logPricingUpdate(
+        'Customer pricing category "${category.displayName}" deleted',
+      );
+      _showMessage('Customer category deleted.', color: _success);
       await _loadCategories();
     } catch (e) {
       _showMessage(_cleanError(e), color: _danger);
@@ -330,21 +369,55 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
               ),
             ),
             const SizedBox(width: 10),
-            IconButton(
-              tooltip: 'Edit',
-              onPressed: () => _editCategory(category),
-              icon: const Icon(Icons.edit_rounded),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: category.isActive ? 'Deactivate' : 'Reactivate',
-              onPressed: () => _toggleActive(category),
-              icon: Icon(
-                category.isActive
-                    ? Icons.block_rounded
-                    : Icons.check_circle_rounded,
-                color: category.isActive ? _danger : _brand,
-              ),
+            PopupMenuButton<String>(
+              tooltip: 'Actions',
+              icon: Icon(Icons.more_vert_rounded, color: _textSecondary),
+              onSelected: (value) {
+                switch (value) {
+                  case 'edit':
+                    _editCategory(category);
+                    break;
+                  case 'toggle':
+                    _toggleActive(category);
+                    break;
+                  case 'delete':
+                    _deleteCategory(category);
+                    break;
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem<String>(
+                  value: 'edit',
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.edit_rounded),
+                    title: Text('Edit'),
+                  ),
+                ),
+                PopupMenuItem<String>(
+                  value: 'toggle',
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(
+                      category.isActive
+                          ? Icons.block_rounded
+                          : Icons.check_circle_rounded,
+                      color: category.isActive ? _danger : _brand,
+                    ),
+                    title: Text(
+                      category.isActive ? 'Deactivate' : 'Reactivate',
+                    ),
+                  ),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'delete',
+                  child: ListTile(
+                    dense: true,
+                    leading: Icon(Icons.delete_outline_rounded),
+                    title: Text('Delete'),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -402,11 +475,6 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _addCategory,
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Add Category'),
-      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(22),
@@ -458,22 +526,10 @@ class _CustomerCategoriesScreenState extends State<CustomerCategoriesScreen> {
                         ),
                       ),
                     ),
-                    Text(
-                      'Show inactive',
-                      style: TextStyle(
-                        color: _textPrimary,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    Switch(
-                      value: _includeInactive,
-                      activeThumbColor: _brand,
-                      onChanged: (value) {
-                        setState(() {
-                          _includeInactive = value;
-                        });
-                        _loadCategories();
-                      },
+                    ElevatedButton.icon(
+                      onPressed: _addCategory,
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text('Add Category'),
                     ),
                   ],
                 ),

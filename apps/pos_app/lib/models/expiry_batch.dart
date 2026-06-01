@@ -7,6 +7,7 @@ class ExpiryBatch {
     required this.receiptId,
     required this.barcode,
     required this.productName,
+    this.productNameSi,
     required this.batchNumber,
     required this.supplierId,
     required this.supplierName,
@@ -25,6 +26,7 @@ class ExpiryBatch {
   final int? receiptId;
   final String barcode;
   final String productName;
+  final String? productNameSi;
   final String batchNumber;
   final int? supplierId;
   final String supplierName;
@@ -45,6 +47,7 @@ class ExpiryBatch {
       receiptId: (map['receipt_id'] as num?)?.toInt(),
       barcode: (map['barcode'] ?? '').toString(),
       productName: (map['product_name'] ?? '').toString(),
+      productNameSi: map['product_name_si']?.toString(),
       batchNumber: (map['batch_number'] ?? '').toString(),
       supplierId: (map['supplier_id'] as num?)?.toInt(),
       supplierName: (map['supplier_name'] ?? '').toString(),

@@ -130,6 +130,34 @@ class PricingSchemeService {
     await _queueCustomerCategorySync(id);
   }
 
+  Future<void> deleteCustomerCategory({
+    required int id,
+  }) async {
+    if (id <= 0) throw Exception('Invalid customer category.');
+    final db = await _db;
+
+    final assignedRows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM ${CustomerService.customersTable}
+      WHERE customer_category_id = ?
+      ''',
+      [id],
+    );
+    final assignedCount = ((assignedRows.first['count'] as num?) ?? 0).toInt();
+    if (assignedCount > 0) {
+      throw Exception(
+        'Cannot delete category. $assignedCount customer(s) are assigned to it.',
+      );
+    }
+
+    await db.delete(
+      customerCategoriesTable,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<void> assignCustomerCategory({
     required int customerId,
     int? customerCategoryId,
@@ -322,6 +350,66 @@ class PricingSchemeService {
     await _queuePricingSchemeSync(id);
   }
 
+  Future<void> deletePricingScheme({
+    required int id,
+  }) async {
+    if (id <= 0) throw Exception('Invalid pricing scheme.');
+    final db = await _db;
+
+    final ruleRows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM $pricingSchemeRulesTable
+      WHERE scheme_id = ?
+      ''',
+      [id],
+    );
+    final ruleCount = ((ruleRows.first['count'] as num?) ?? 0).toInt();
+    if (ruleCount > 0) {
+      throw Exception(
+        'Cannot delete scheme. Remove $ruleCount linked rule(s) first.',
+      );
+    }
+
+    final categoryRows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM $customerCategoriesTable
+      WHERE default_pricing_scheme_id = ?
+      ''',
+      [id],
+    );
+    final categoryCount =
+        ((categoryRows.first['count'] as num?) ?? 0).toInt();
+    if (categoryCount > 0) {
+      throw Exception(
+        'Cannot delete scheme. It is used by $categoryCount category(ies).',
+      );
+    }
+
+    final customerRows = await db.rawQuery(
+      '''
+      SELECT COUNT(*) AS count
+      FROM ${CustomerService.customersTable}
+      WHERE pricing_scheme_id = ?
+      ''',
+      [id],
+    );
+    final customerCount =
+        ((customerRows.first['count'] as num?) ?? 0).toInt();
+    if (customerCount > 0) {
+      throw Exception(
+        'Cannot delete scheme. It is directly assigned to $customerCount customer(s).',
+      );
+    }
+
+    await db.delete(
+      pricingSchemesTable,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<int> duplicatePricingScheme({
     required int sourceSchemeId,
     String? newName,
@@ -474,6 +562,18 @@ class PricingSchemeService {
       whereArgs: [id],
     );
     await _queuePricingSchemeRuleSync(id);
+  }
+
+  Future<void> deletePricingSchemeRule({
+    required int id,
+  }) async {
+    if (id <= 0) throw Exception('Invalid pricing rule.');
+    final db = await _db;
+    await db.delete(
+      pricingSchemeRulesTable,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> _queueCustomerCategorySync(int id) async {

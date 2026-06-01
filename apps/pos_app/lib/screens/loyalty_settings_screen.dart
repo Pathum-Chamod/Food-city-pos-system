@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 import 'package:shared/shared.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/language_provider.dart';
 import '../services/database_helper.dart';
 import '../services/loyalty_service.dart';
 import '../services/permission_service.dart';
+import '../utils/product_name_helper.dart';
 import '../widgets/app_snackbar.dart';
 import '../widgets/permission_guard.dart';
 
@@ -27,6 +29,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
   final _maximumRedeemController = TextEditingController();
   final _categoryController = TextEditingController();
   final _productSearchController = TextEditingController();
+  final _productSearchFocusNode = FocusNode();
 
   LoyaltySettings? _settings;
   List<LoyaltyExclusion> _excludedCategories = const [];
@@ -79,6 +82,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(_handleTabChanged);
     _load();
   }
 
@@ -91,8 +95,17 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
     _minimumRedeemController.dispose();
     _maximumRedeemController.dispose();
     _categoryController.dispose();
+    _productSearchFocusNode.dispose();
     _productSearchController.dispose();
     super.dispose();
+  }
+
+  void _handleTabChanged() {
+    if (_tabController.indexIsChanging || _tabController.index != 2) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _tabController.index != 2) return;
+      _productSearchFocusNode.requestFocus();
+    });
   }
 
   Future<void> _load() async {
@@ -252,6 +265,10 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
     Product product, {
     LoyaltyExclusion? exclusion,
   }) async {
+    final displayName = ProductNameHelper.displayName(
+      product,
+      context.read<LanguageProvider>().language,
+    );
     var excludeEarning = exclusion?.excludeEarning ?? true;
     var excludeRedemption = exclusion?.excludeRedemption ?? false;
     var isActive = exclusion?.isActive ?? true;
@@ -260,7 +277,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: Text(exclusion == null ? 'Exclude Product' : product.name),
+          title: Text(exclusion == null ? 'Exclude Product' : displayName),
           content: SizedBox(
             width: 420,
             child: Column(
@@ -268,7 +285,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  product.name,
+                  displayName,
                   style: const TextStyle(fontWeight: FontWeight.w900),
                 ),
                 const SizedBox(height: 4),
@@ -332,7 +349,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
         isActive: isActive,
       );
       await _logLoyaltyUpdate(
-        'Loyalty product rule updated for "${product.name}"',
+        'Loyalty product rule updated for "$displayName"',
       );
       _productSearchController.clear();
       await _load();
@@ -444,16 +461,16 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
   }
 
   List<Product> get _productSearchResults {
-    final query = _productSearchController.text.trim().toLowerCase();
+    final query = _productSearchController.text.trim();
+    final queryLower = query.toLowerCase();
     if (query.isEmpty) return const [];
     final excluded = _excludedProducts.map((item) => item.value).toSet();
     return _products
         .where(
           (product) =>
               !excluded.contains(product.barcode) &&
-              (product.name.toLowerCase().contains(query) ||
-                  product.barcode.toLowerCase().contains(query) ||
-                  product.category.toLowerCase().contains(query)),
+              (ProductNameHelper.matchesProduct(product, query) ||
+                  product.category.toLowerCase().contains(queryLower)),
         )
         .take(8)
         .toList();
@@ -791,76 +808,6 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
                 ],
               ),
               const SizedBox(height: 18),
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(
-                    value: 'floor',
-                    label: Text('Floor'),
-                    icon: Icon(Icons.south_rounded),
-                  ),
-                  ButtonSegment(
-                    value: 'round',
-                    label: Text('Round'),
-                    icon: Icon(Icons.swap_vert_rounded),
-                  ),
-                  ButtonSegment(
-                    value: 'ceil',
-                    label: Text('Ceil'),
-                    icon: Icon(Icons.north_rounded),
-                  ),
-                ],
-                selected: {_roundingMode},
-                onSelectionChanged: (value) =>
-                    setState(() => _roundingMode = value.first),
-              ),
-              const SizedBox(height: 14),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 12,
-                ),
-                decoration: BoxDecoration(
-                  color: _surface,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: _border),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.account_balance_wallet_outlined,
-                      color: _textSecondary,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Customer Credit earning',
-                            style: TextStyle(
-                              color: _textPrimary,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          Text(
-                            'V1 keeps credit sales excluded from earning.',
-                            style: TextStyle(
-                              color: _textSecondary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    _statusChip(
-                      label: 'Locked',
-                      color: _textSecondary,
-                      icon: Icons.lock_rounded,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 18),
               Row(
                 children: [
                   Expanded(
@@ -1010,6 +957,7 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
                 const SizedBox(height: 16),
                 TextField(
                   controller: _productSearchController,
+                  focusNode: _productSearchFocusNode,
                   decoration: const InputDecoration(
                     labelText: 'Search product',
                     hintText: 'Name, barcode, or category',
@@ -1041,7 +989,10 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
                           child: const Icon(Icons.inventory_2_outlined),
                         ),
                         title: Text(
-                          product.name,
+                          ProductNameHelper.displayName(
+                            product,
+                            context.read<LanguageProvider>().language,
+                          ),
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
                         subtitle: Text(
@@ -1177,98 +1128,62 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen>
 
     return Scaffold(
       backgroundColor: _page,
+      appBar: AppBar(
+        title: const Text('Loyalty Settings'),
+        actions: [
+          TextButton.icon(
+            onPressed: () {
+              setState(() => _includeInactive = !_includeInactive);
+              _load();
+            },
+            icon: Icon(
+              _includeInactive
+                  ? Icons.visibility_rounded
+                  : Icons.visibility_off_rounded,
+            ),
+            label: Text(_includeInactive ? 'Showing Inactive' : 'Active Only'),
+          ),
+          const SizedBox(width: 6),
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: _load,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 10),
-              child: Row(
-                children: [
-                  IconButton(
-                    tooltip: 'Back',
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.arrow_back_rounded),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: _brand.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: _brand.withValues(alpha: 0.24)),
-                    ),
-                    child: const Icon(Icons.stars_rounded, color: _brand),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Loyalty Program',
-                          style: TextStyle(
-                            color: _textPrimary,
-                            fontSize: 22,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Manage earning rules, redemption limits, and excluded items.',
-                          style: TextStyle(
-                            color: _textSecondary,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  TextButton.icon(
-                    onPressed: () {
-                      setState(() => _includeInactive = !_includeInactive);
-                      _load();
-                    },
-                    icon: Icon(
-                      _includeInactive
-                          ? Icons.visibility_rounded
-                          : Icons.visibility_off_rounded,
-                    ),
-                    label: Text(
-                      _includeInactive ? 'Showing Inactive' : 'Active Only',
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    tooltip: 'Refresh',
-                    onPressed: _load,
-                    icon: const Icon(Icons.refresh_rounded),
-                  ),
-                ],
-              ),
-            ),
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 22),
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: _panel,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: _border),
-              ),
-              child: TabBar(
-                controller: _tabController,
-                indicatorSize: TabBarIndicatorSize.tab,
-                indicator: BoxDecoration(
-                  color: _brand.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: _brand.withValues(alpha: 0.28)),
+              padding: const EdgeInsets.fromLTRB(22, 14, 22, 10),
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _panel,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: _border),
                 ),
-                dividerColor: Colors.transparent,
-                tabs: const [
-                  Tab(icon: Icon(Icons.tune_rounded), text: 'Settings'),
-                  Tab(icon: Icon(Icons.category_outlined), text: 'Categories'),
-                  Tab(icon: Icon(Icons.inventory_2_outlined), text: 'Products'),
-                ],
+                child: TabBar(
+                  controller: _tabController,
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  indicator: BoxDecoration(
+                    color: _brand.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _brand.withValues(alpha: 0.28)),
+                  ),
+                  dividerColor: Colors.transparent,
+                  tabs: const [
+                    Tab(icon: Icon(Icons.tune_rounded), text: 'Settings'),
+                    Tab(
+                      icon: Icon(Icons.category_outlined),
+                      text: 'Categories',
+                    ),
+                    Tab(
+                      icon: Icon(Icons.inventory_2_outlined),
+                      text: 'Products',
+                    ),
+                  ],
+                ),
               ),
             ),
             Expanded(

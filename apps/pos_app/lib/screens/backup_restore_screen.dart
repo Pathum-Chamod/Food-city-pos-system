@@ -26,6 +26,7 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
   bool _isCreating = false;
   bool _isRestoring = false;
   bool _isSavingAutoSettings = false;
+  bool _isClearingDatabase = false;
 
   static const Color _brand = Color(0xFF2AAA8A);
   static const Color _blue = Color(0xFF4B8DFF);
@@ -335,6 +336,203 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     }
   }
 
+  Future<void> _confirmClearFullDatabase() async {
+    if (_isClearingDatabase || _isRestoring || _isCreating) return;
+
+    final pinController = TextEditingController();
+    final confirmController = TextEditingController();
+    String? errorText;
+    bool isVerifying = false;
+
+    final approved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            Future<void> verify() async {
+              final pin = pinController.text.trim();
+              final confirmation = confirmController.text.trim().toUpperCase();
+
+              if (!RegExp(r'^\d{4}$').hasMatch(pin)) {
+                setDialogState(() {
+                  errorText = 'Enter a valid 4-digit manager PIN.';
+                });
+                return;
+              }
+
+              if (confirmation != 'CLEAR') {
+                setDialogState(() {
+                  errorText = 'Type CLEAR to confirm this reset.';
+                });
+                return;
+              }
+
+              setDialogState(() {
+                isVerifying = true;
+                errorText = null;
+              });
+
+              final user = await DatabaseHelper.instance.findUserByPin(pin);
+              if (!dialogContext.mounted) return;
+
+              final isActive = ((user?['is_active'] as num?) ?? 0).toInt() == 1;
+              final hasFullAccess =
+                  ((user?['has_full_access'] as num?) ?? 0).toInt() == 1;
+              final role = (user?['role'] ?? '').toString();
+              final canClear =
+                  isActive &&
+                  PermissionService.roleCan(
+                    role,
+                    PosPermission.backupRestore,
+                    hasFullAccess: hasFullAccess,
+                  );
+
+              if (!canClear) {
+                setDialogState(() {
+                  isVerifying = false;
+                  errorText =
+                      'PIN must belong to an active manager or full-access user.';
+                });
+                return;
+              }
+
+              Navigator.pop(dialogContext, true);
+            }
+
+            return AlertDialog(
+              title: const Text('Clear Full Database?'),
+              content: SizedBox(
+                width: 520,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'This will remove products, customers, sales, inventory history, suppliers, held carts, shifts, and related records. User logins and backup ZIP files will remain.',
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'A safety backup is created before clearing.',
+                      style: TextStyle(
+                        color: _warning,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: pinController,
+                      autofocus: true,
+                      obscureText: true,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: 'Manager PIN',
+                        prefixIcon: const Icon(Icons.pin_outlined),
+                        errorText: errorText,
+                      ),
+                      onSubmitted: (_) {
+                        if (!isVerifying) verify();
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: confirmController,
+                      decoration: const InputDecoration(
+                        labelText: 'Type CLEAR',
+                        prefixIcon: Icon(Icons.warning_amber_rounded),
+                      ),
+                      onSubmitted: (_) {
+                        if (!isVerifying) verify();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isVerifying
+                      ? null
+                      : () => Navigator.pop(dialogContext, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(backgroundColor: _danger),
+                  onPressed: isVerifying ? null : verify,
+                  icon: isVerifying
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.delete_forever_rounded),
+                  label: const Text('Clear Database'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    pinController.dispose();
+    confirmController.dispose();
+
+    if (approved != true || !mounted) return;
+    await _clearFullDatabase();
+  }
+
+  Future<void> _clearFullDatabase() async {
+    final auth = context.read<AuthProvider>();
+    final actorUserId = auth.currentUser?.id;
+    final actorName = auth.currentUser?.name;
+    final currentUserName = _currentUserName;
+
+    setState(() {
+      _isClearingDatabase = true;
+    });
+
+    try {
+      final safetyBackup = await BackupRestoreService.instance.createBackup(
+        createdBy: currentUserName,
+        notes: 'Automatic safety backup before clearing full database',
+      );
+
+      if (!safetyBackup.isSuccess) {
+        if (!mounted) return;
+        _showMessage(
+          'Database was not cleared because safety backup failed: ${safetyBackup.message}',
+          color: _danger,
+        );
+        return;
+      }
+
+      await DatabaseHelper.instance.clearFullDatabaseData(
+        actorUserId: actorUserId,
+        actorName: actorName,
+      );
+
+      if (!mounted) return;
+      _showMessage(
+        'Full database cleared. Safety backup was created.',
+        color: _brand,
+      );
+      await _loadBackups();
+    } catch (e) {
+      if (!mounted) return;
+      _showMessage('Could not clear database: $e', color: _danger);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isClearingDatabase = false;
+        });
+      }
+    }
+  }
+
   void _showDetails(BackupFileInfo info) {
     final metadata = info.metadata;
     final validation = info.validation;
@@ -621,6 +819,78 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     );
   }
 
+  Widget _databaseDangerCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _danger.withValues(alpha: _isDark ? 0.12 : 0.07),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _danger.withValues(alpha: 0.26)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _danger.withValues(alpha: _isDark ? 0.16 : 0.10),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(Icons.delete_forever_rounded, color: _danger),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Clear Full Database',
+                  style: TextStyle(
+                    color: _textPrimary,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'Requires manager PIN every time and creates a safety backup first.',
+                  style: TextStyle(
+                    color: _textSecondary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: _danger,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+            onPressed: _isClearingDatabase || _isCreating || _isRestoring
+                ? null
+                : _confirmClearFullDatabase,
+            icon: _isClearingDatabase
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.lock_reset_rounded, size: 18),
+            label: Text(_isClearingDatabase ? 'Clearing...' : 'Clear Database'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _metric({
     required IconData icon,
     required String label,
@@ -733,47 +1003,77 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
               ],
             ),
           ),
-          const SizedBox(width: 12),
-          if (metadata != null)
-            SizedBox(
-              width: 220,
-              child: Wrap(
-                alignment: WrapAlignment.end,
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  _chip('${metadata.counts['products'] ?? 0} products', _blue),
-                  _chip(
-                    '${metadata.counts['customers'] ?? 0} customers',
-                    _brand,
+          const SizedBox(width: 16),
+          _backupActions(info: info, canRestore: valid && !_isRestoring),
+        ],
+      ),
+    );
+  }
+
+  Widget _backupActions({
+    required BackupFileInfo info,
+    required bool canRestore,
+  }) {
+    final buttonShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(14),
+    );
+
+    return SizedBox(
+      width: 286,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          if (info.isManualBackup)
+            Tooltip(
+              message: 'Delete manual backup',
+              child: InkWell(
+                onTap: () => _confirmDeleteManualBackup(info),
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: _danger.withValues(alpha: _isDark ? 0.16 : 0.09),
+                    borderRadius: BorderRadius.circular(14),
                   ),
-                  _chip('${metadata.counts['sales'] ?? 0} sales', _warning),
-                ],
+                  child: Icon(
+                    Icons.delete_outline_rounded,
+                    color: _danger,
+                    size: 20,
+                  ),
+                ),
               ),
-            ),
-          const SizedBox(width: 12),
+            )
+          else
+            const SizedBox(width: 44, height: 44),
+          const SizedBox(width: 8),
           OutlinedButton.icon(
             onPressed: () => _showDetails(info),
-            icon: const Icon(Icons.info_outline_rounded, size: 16),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _brand,
+              side: BorderSide(color: _brand.withValues(alpha: 0.42)),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              shape: buttonShape,
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+            icon: const Icon(Icons.info_outline_rounded, size: 17),
             label: const Text('Details'),
           ),
           const SizedBox(width: 8),
           FilledButton.icon(
-            onPressed: valid && !_isRestoring
-                ? () => _confirmAndRestore(info.file)
-                : null,
-            icon: const Icon(Icons.restore_rounded, size: 16),
+            onPressed: canRestore ? () => _confirmAndRestore(info.file) : null,
+            style: FilledButton.styleFrom(
+              backgroundColor: _brand,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: _border,
+              disabledForegroundColor: _textSecondary,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              shape: buttonShape,
+              textStyle: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+            icon: const Icon(Icons.restore_rounded, size: 17),
             label: const Text('Restore'),
           ),
-          if (info.isManualBackup) ...[
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: 'Delete manual backup',
-              onPressed: () => _confirmDeleteManualBackup(info),
-              icon: const Icon(Icons.delete_outline_rounded),
-              color: _danger,
-            ),
-          ],
         ],
       ),
     );
@@ -821,25 +1121,6 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
     );
   }
 
-  Widget _chip(String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: _isDark ? 0.16 : 0.09),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.22)),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontSize: 10,
-          fontWeight: FontWeight.w900,
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!context.watch<AuthProvider>().can(PosPermission.backupRestore)) {
@@ -858,13 +1139,15 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
         title: const Text('Backup & Restore'),
         actions: [
           TextButton.icon(
-            onPressed: _isCreating || _isRestoring ? null : _openBackupFolder,
+            onPressed: _isCreating || _isRestoring || _isClearingDatabase
+                ? null
+                : _openBackupFolder,
             icon: const Icon(Icons.folder_open_rounded),
             label: const Text('Open Folder'),
           ),
           const SizedBox(width: 8),
           TextButton.icon(
-            onPressed: _isCreating || _isRestoring
+            onPressed: _isCreating || _isRestoring || _isClearingDatabase
                 ? null
                 : _pickBackupToRestore,
             icon: const Icon(Icons.upload_file_rounded),
@@ -873,14 +1156,18 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
           const SizedBox(width: 8),
           IconButton(
             tooltip: 'Refresh',
-            onPressed: _isLoading || _isRestoring ? null : _loadBackups,
+            onPressed: _isLoading || _isRestoring || _isClearingDatabase
+                ? null
+                : _loadBackups,
             icon: const Icon(Icons.refresh_rounded),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _isCreating || _isRestoring ? null : _createBackup,
-        icon: _isCreating || _isRestoring
+        onPressed: _isCreating || _isRestoring || _isClearingDatabase
+            ? null
+            : _createBackup,
+        icon: _isCreating || _isRestoring || _isClearingDatabase
             ? const SizedBox(
                 width: 18,
                 height: 18,
@@ -890,6 +1177,8 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
         label: Text(
           _isRestoring
               ? 'Restoring...'
+              : _isClearingDatabase
+              ? 'Clearing...'
               : _isCreating
               ? 'Creating...'
               : 'Create Manual Backup',
@@ -903,6 +1192,8 @@ class _BackupRestoreScreenState extends State<BackupRestoreScreen> {
               _statusHeader(),
               const SizedBox(height: 18),
               _autoBackupCard(),
+              const SizedBox(height: 18),
+              _databaseDangerCard(),
               const SizedBox(height: 18),
               Container(
                 width: double.infinity,
