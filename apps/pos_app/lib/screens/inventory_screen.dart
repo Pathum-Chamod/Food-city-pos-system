@@ -7375,6 +7375,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       LayoutBuilder(
                         builder: (context, constraints) {
                           final compact = constraints.maxWidth < 1240;
+                          final laptopWide =
+                              constraints.maxWidth >= 1240 &&
+                              constraints.maxWidth < 1700;
                           final filters = Wrap(
                             spacing: 8,
                             runSpacing: 8,
@@ -7458,6 +7461,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               Expanded(child: filters),
                               const SizedBox(width: 16),
                               Expanded(
+                                flex: laptopWide ? 2 : 1,
                                 child: Align(
                                   alignment: Alignment.topRight,
                                   child: actions,
